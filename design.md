@@ -1106,6 +1106,46 @@ The one-file publication sequence is:
 - No manifest, README, source, or test file was changed in this review unit.
 - Identified `dev/Cargo.toml` publication metadata as the next one-file review.
 
+#### Cargo publication metadata completed
+
+- Added the required SPDX license expression `license = "MIT"` to
+  `dev/Cargo.toml`; the license file alone does not satisfy crates.io metadata
+  validation.
+- Added the author, package-root README, repository, docs.rs documentation URL,
+  five crates.io keywords, and valid science/data-structure categories.
+- Narrowed the description to the currently implemented typed,
+  template-defined system-state functionality.
+- Disabled automatic binary discovery so the placeholder `src/main.rs` is not
+  published as an executable target.
+- Added an explicit package include set containing:
+
+  ```text
+  library source
+  SystemState tests
+  canonical JSON fixture
+  package README
+  MIT license
+  ```
+
+- Explicitly excluded `src/main.rs`; targets, generated data, and legacy
+  content are also absent from the package.
+- Verified `cargo package --list` contains 17 files and no unexpected paths.
+- Ran the complete public Cargo test and rustdoc phases successfully.
+- Ran `cargo clippy --all-targets -- -D warnings` successfully.
+- Ran `cargo publish --dry-run --allow-dirty` successfully:
+
+  ```text
+  package: scientific-workflow 0.1.0
+  package size: 85.0 KiB
+  compressed size: 23.1 KiB
+  package verification build: passed
+  upload: intentionally aborted by dry run
+  ```
+
+- The crates.io metadata error is resolved. A normal publish should be
+  attempted only after these reviewed publication changes are committed, so
+  `--allow-dirty` is unnecessary for the real upload.
+
 #### crates.io transient publish failure
 
 - Recorded a failed publish request at `2026-07-30 22:55:12 UTC`.

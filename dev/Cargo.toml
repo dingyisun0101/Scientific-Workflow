@@ -3,7 +3,23 @@ name = "scientific-workflow"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "State, time-series, and execution primitives for scientific workflows"
+authors = ["Dingyi Sun"]
+description = "Typed, template-defined system states for scientific workflows"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/dingyisun0101/Scientific-Workflow"
+documentation = "https://docs.rs/scientific-workflow"
+keywords = ["science", "simulation", "workflow", "tensor", "state"]
+categories = ["science", "data-structures"]
+autobins = false
+include = [
+    "src/*.rs",
+    "src/**/*.rs",
+    "!src/main.rs",
+    "tests/**",
+    "README.md",
+    "LICENSE",
+]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
