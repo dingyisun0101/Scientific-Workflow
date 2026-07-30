@@ -3939,3 +3939,7 @@ Test files mirror the source organization:
 - Preserved the pre-cleanup commit graph on a local backup branch, removed
   `dev/target` from the Git index without deleting local build files, and
   prepared a parentless clean snapshot for the empty destination repository.
+- Published the parentless clean snapshot as the new repository's `main`
+  branch, then verified the local and remote commit IDs matched.
+- Configured local `main` to track `origin/main`; the working tree was clean
+  after publication.
