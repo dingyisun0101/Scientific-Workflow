@@ -1095,6 +1095,17 @@ The one-file publication sequence is:
 - No manifest, license, source, or repository-root README file was changed in
   this review unit.
 
+#### Package license restored
+
+- Added `dev/LICENSE` beside the crate manifest so Cargo includes the legal
+  grant in the publishable package.
+- Reused the legacy project's MIT license text and retained its 2026
+  `Dingyi Sun` copyright attribution.
+- Kept the license file independent of archived legacy paths, which are
+  intentionally ignored and absent from the published repository.
+- No manifest, README, source, or test file was changed in this review unit.
+- Identified `dev/Cargo.toml` publication metadata as the next one-file review.
+
 #### crates.io transient publish failure
 
 - Recorded a failed publish request at `2026-07-30 22:55:12 UTC`.
