@@ -1,0 +1,78 @@
+# ---------------------------------------------------------------------------
+# Rust and Cargo
+# ---------------------------------------------------------------------------
+
+# Cargo build, test, documentation, benchmark, and package output. The pattern
+# applies to the active crate and any future workspace members.
+**/target/
+
+# This repository currently publishes a reusable library. Cargo generates a
+# minimized lockfile while packaging, so the development lockfile is not
+# versioned. Revisit this rule if the repository gains a deployable binary.
+/dev/Cargo.lock
+
+# Backup files produced by rustfmt.
+**/*.rs.bk
+
+# Local archive retained for reference but excluded from the clean-slate
+# repository and published crate.
+/legacy/
+
+# ---------------------------------------------------------------------------
+# Generated scientific data
+# ---------------------------------------------------------------------------
+
+# Runtime output roots. JSON templates and committed fixtures elsewhere remain
+# trackable.
+**/output/
+**/outputs/
+**/results/
+**/runs/
+**/checkpoints/
+**/logs/
+**/generated/
+**/generated-data/
+**/generated_data/
+
+# Common generated numerical and columnar data formats.
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.parquet
+*.arrow
+*.feather
+*.ssts
+
+# Incomplete files used by atomic writers.
+*.partial
+*.tmp
+
+# ---------------------------------------------------------------------------
+# Tool caches and local environment
+# ---------------------------------------------------------------------------
+
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+coverage/
+*.profraw
+
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------
+
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+.DS_Store
+Thumbs.db

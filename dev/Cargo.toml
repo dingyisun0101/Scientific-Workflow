@@ -1,0 +1,14 @@
+[package]
+name = "scientific-workflow"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "State, time-series, and execution primitives for scientific workflows"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+physics_in_parallel = "3.0.3"

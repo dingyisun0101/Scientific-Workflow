@@ -1,0 +1,16 @@
+{
+  "fields": [
+    {
+      "name": "population",
+      "type": "physics_in_parallel.tensor.dense.u64.v1"
+    },
+    {
+      "name": "space",
+      "type": "physics_in_parallel.tensor.dense.u64.v1"
+    },
+    {
+      "name": "activity",
+      "type": "physics_in_parallel.tensor.dense.u8.v1"
+    }
+  ]
+}
