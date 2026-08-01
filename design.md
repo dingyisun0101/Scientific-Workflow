@@ -779,18 +779,146 @@ encoded byte length
 optional checksum
 ```
 
-The specification is stored once, not repeated in each state. Chunk files
-contain ordered state records and payload values. Missing state fields remain
-explicitly distinguishable from present payload data.
+`series.json` is the only metadata file in the completed dataset. The
+specification is stored once there and is never repeated in a chunk or state.
+It also owns every chunk-level fact needed without opening payload files:
+filename, ordinal, state count, first and last time index, encoded byte length,
+and any checksum.
+
+Chunk files contain only ordered keyed state records and their payloads. They
+do not repeat type tags, schema versions, chunk ordinals, counts, ranges, or
+codec configuration. Descriptive JSON keys are retained because they make raw
+scientific output inspectable and normally contribute little beside large
+payload arrays.
+
+The same rule applies inside each encoded tensor or other scientific payload:
+information that is constant for the dataset belongs once in `series.json`.
+This includes the codec identifier and version, scalar type, storage kind, and
+any shape or layout constraint declared constant by the field specification.
+Only information that can genuinely vary from state to state may accompany an
+individual payload. For example, a fixed-shape dense tensor can be encoded as
+only its values, while a dynamically shaped dense tensor must retain a compact
+shape vector beside its values. Codec encodings may retain concise descriptive
+object keys. Lean storage must not remove information needed for exact
+decoding.
 
 Each chunk is written to a temporary sibling path and atomically renamed before
 the manifest references it. The manifest is likewise replaced atomically.
-`finish()` flushes the final partial buffer and finalizes the manifest.
+Temporary staging files may exist during an active commit, but they are not
+dataset metadata and must be removed after successful commit or recognized as
+recoverable staging artifacts after interruption. `finish()` flushes the final
+partial buffer and finalizes the manifest. A successfully finalized output
+therefore contains exactly one metadata file, plus lean payload files.
 
 This format satisfies JSON write/read requirements while preserving real chunk
 boundaries and crash recovery. A later one-file JSON export can be offered as
 an interoperability operation, but it should not be the primary streaming
 storage format.
+
+### Approved storage shape: keyed payload records
+
+Human-readable keys are the accepted tradeoff for the JSON backend: large
+scientific arrays normally dominate the encoded size, repeated keys compress
+well, and inspecting a raw chunk should not require manually counting field
+positions.
+
+The currently recommended file responsibilities are:
+
+```text
+output/
+├── series.json                 # the only durable metadata file
+└── chunks/
+    ├── 000000.json             # payload records only
+    ├── 000001.json
+    └── ...
+```
+
+`series.json` should initially store only information needed to interpret,
+validate, and recover the dataset:
+
+```json
+{
+  "format": "scientific-workflow.state-series",
+  "version": 1,
+  "complete": false,
+  "spec": {
+    "fields": [
+      {
+        "name": "population",
+        "type": "physics_in_parallel.tensor.dense.u64.v1"
+      }
+    ]
+  },
+  "chunks": [
+    {
+      "file": "chunks/000000.json",
+      "states": 1024,
+      "first_index": 0,
+      "last_index": 1023,
+      "encoded_bytes": 4194304
+    }
+  ]
+}
+```
+
+Each descriptor stores its payload path explicitly. Metadata need not be
+aggressively compact, and explicit paths improve inspection and permit future
+layout changes without deriving names from array position. The manifest does
+not store the originating local template path because that path is not
+portable and is unnecessary for decoding. It also does not initially store
+creation timestamps, writer configuration, or chunk policy because these are
+provenance rather than decoding requirements. Checksums can be added as a
+versioned integrity feature; encoded byte length provides inexpensive initial
+truncation detection.
+
+Each chunk is one valid JSON array. The recommended state record is keyed:
+
+```json
+[
+  {
+    "time": {"index": 0, "physical": null},
+    "values": {
+      "population": {"shape": [2, 2], "data": [10, 11, 12, 13]},
+      "activity": {"shape": [2, 2], "data": [0, 1, 1, 0]}
+    }
+  }
+]
+```
+
+The `time`, `index`, `physical`, `values`, field-name, `shape`, and `data` keys
+make raw output understandable. The chunk still omits the StateSpec, type tags,
+codec versions, dtype, storage kind, chunk ordinal, count, range, and byte
+length because those facts are already fixed by `series.json`. With the current
+StateSpec, tensor shape is not declared constant and therefore remains beside
+each tensor. Dtype and dense storage are already identified by the field type
+tag and are not repeated.
+
+An absent entry in `values` represents an empty SystemState slot. This is
+preferable to encoding absence as JSON `null`, because a future general codec
+may legitimately use `null` as an encoded payload. Every allowed key remains
+discoverable from `spec.fields`, even when that state has no payload for it.
+
+For readability without excessive whitespace, `series.json` may be pretty
+printed while chunk arrays use one compact state record per line. A chunk stays
+valid JSON and can be streamed record by record; large numeric arrays do not
+receive indentation on every element.
+
+For durability, the recommended commit sequence is:
+
+1. write and synchronize a temporary chunk file;
+2. atomically rename it to the final filename recorded by the manifest;
+3. write a temporary `series.json` containing the new descriptor;
+4. synchronize and atomically replace the previous `series.json`.
+
+This rewrites the small metadata document after every committed chunk, but
+ensures a crash loses at most the active in-memory buffer. A crash between
+steps 2 and 4 can leave one unreferenced payload file; readers ignore it, and a
+resume/recovery operation may validate and remove or adopt it. Temporary files
+are staging artifacts, not additional metadata files, and must not remain in a
+successfully finalized dataset.
+
+This keyed representation and the single-metadata-file boundary are approved
+requirements for `format.rs`.
 
 ### Payload codec requirement
 
@@ -808,8 +936,112 @@ registered concrete type and returns a new internally erased owner.
 
 The JSON backend initially registers the selected
 `physics_in_parallel::math::Tensor` combinations. The registry belongs to the
-IO layer, not `SystemState`, so a future Protocol Buffers backend can reuse the
-same stable field tags without making JSON part of the state container.
+IO layer because decoding must choose a concrete Rust type from a stable tag.
+
+### Serializable payload contract
+
+SystemState payload versatility is defined in terms of Serde rather than a
+closed enum of supported scientific types. The insertion contract will be:
+
+```rust,ignore
+T: serde::Serialize + Clone + Send + 'static
+```
+
+`Serialize` makes any ordinary Serde-compatible Rust value eligible for the
+JSON writer. `Clone` is required by the previously agreed deep-cloning
+`SystemState::clone` contract, `Send` permits ownership transfer to a writer
+thread, and `'static` is required for safe runtime type erasure through `Any`.
+This is intentionally broad: scalars, strings, maps, user structs, and
+`physics_in_parallel` tensors can all use the same state API.
+
+Serialization capability must be retained behind the erased payload without
+serializing at insertion time. In particular, `SystemState::set` must not
+convert a payload into `serde_json::Value` or bytes: doing so would allocate,
+copy large tensor contents, discard the concrete value needed by typed access,
+and couple the state container to JSON. The private erased value instead
+stores the original owned `T` and exposes an object-safe borrowed Serde view
+using `erased-serde`.
+
+This separates writing from reconstruction:
+
+- writing may serialize the borrowed erased payload without cloning or knowing
+  `T` statically;
+- reading still resolves each stable field type tag through `CodecRegistry`,
+  whose registered decoder constructs the concrete `T` and moves it into the
+  state;
+- future Protocol Buffers support may register a different encoder and decoder
+  at the same stable-tag boundary without changing SystemState ownership.
+
+“Any serializable data” therefore means any owned type satisfying the four
+bounds above. A type that is serializable but not cloneable cannot be stored
+directly while `SystemState` promises deep `Clone`; callers may supply an
+explicit cloneable owner or representation if that case arises.
+
+The implementation remains subject to the one-file review sequence:
+
+1. `dev/Cargo.toml`: add `erased-serde`;
+2. `dev/src/system_state/value.rs`: retain an object-safe serialization view;
+3. `dev/tests/system_state/value.rs`: verify generic JSON serialization and
+   ownership preservation;
+4. `dev/src/system_state/state.rs`: apply the public `Serialize` insertion
+   bound and provide only the crate-private access needed by time-series IO;
+5. corresponding dedicated state and public integration tests.
+
+Time-series source implementation begins only after these state-layer review
+units pass formatting, tests, Clippy, and rustdoc validation.
+
+### `physics_in_parallel` serialization compatibility audit
+
+Version `3.0.3` is functionally compatible with the planned SystemState
+payload bounds. Its public `Tensor<T, Dense>` and `Tensor<T, Sparse>` facades
+are cloneable, their storage contract is `Send + Sync`, their scalar types are
+`Send + Sync + 'static`, and both tensor facades implement Serde `Serialize`
+and `Deserialize`. They can therefore be owned, cloned explicitly, moved
+between threads, type-erased, and reconstructed by a registered decoder.
+
+The current implementation is not yet suitable for high-performance series
+serialization:
+
+- dense `ToJsonPayload::to_json_payload` calls `to_vec` on both shape and data,
+  copying the complete tensor before Serde writes it;
+- facade `Tensor<T, Dense>::serialize` first calls `to_json_value`, adding an
+  intermediate `serde_json::Value` tree before the final serializer;
+- sparse serialization calls `to_dense`, so output cost and memory scale with
+  logical dense size rather than the number of stored nonzero entries;
+- the emitted `kind` discriminator repeats information already present in the
+  SystemState field's stable type tag.
+
+Consequently, no Scientific Workflow change is needed merely to compile with
+PiP tensors, but PiP needs a borrowed streaming serialization path before large
+tensor time-series IO can meet the no-full-payload-copy performance target.
+The recommended PiP changes are:
+
+1. serialize dense storage through borrowed `&[usize]` shape and `&[T]` data
+   views directly into the caller's Serde serializer;
+2. make the tensor facade delegate directly to storage serialization instead
+   of constructing `serde_json::Value`;
+3. retain allocating `to_json_value` and `to_json_string` helpers only as
+   explicitly allocating convenience APIs;
+4. represent sparse tensors by shape plus sparse indices/values rather than
+   densifying them; deterministic output may sort borrowed sparse entries
+   while avoiding a dense value allocation;
+5. expose a stable borrowed IO view or serializer adapter that the
+   Scientific Workflow tensor codec can use to omit redundant `kind` data
+   while retaining readable `shape` and `data` keys.
+
+Dense deserialization is already ownership-compatible: Serde constructs owned
+shape and data vectors and PiP moves those vectors into dense storage. Moving
+the reconstructed tensor into SystemState does not require another data-buffer
+copy.
+
+The zero-copy guarantee must be phrased precisely. Scientific Workflow can
+guarantee that insertion, borrowing, extraction, series rollover, and writer
+handoff do not clone a payload. It can also pass a borrowed erased payload to
+Serde without making an intermediate copy. It cannot guarantee that an
+arbitrary third-party type's own `Serialize` implementation is allocation- or
+copy-free; each payload implementation remains responsible for streaming its
+internal data efficiently. PiP requires the changes above to fulfill that
+responsibility.
 
 ### Proposed read interfaces
 
@@ -871,6 +1103,92 @@ Owns the unified `SeriesError` surface:
 - filesystem and JSON failures;
 - writer-finished or writer-failed state.
 
+This file is now implemented. It contains no tests or private disk-format
+types; its dedicated external test file is the next review unit.
+
+### Enum: `time_series::error::SeriesError`
+
+`SeriesError` is the non-exhaustive public error vocabulary shared by the
+in-memory series, codecs, JSON format, reader, and writer. It owns diagnostic
+context on failure paths and preserves lower-level error sources where one
+exists.
+
+Its variants are:
+
+- `SpecMismatch { index }`: the appended state does not share the series'
+  canonical StateSpec allocation;
+- `NonIncreasingTime { previous, next }`: an append would duplicate or reverse
+  the authoritative integer time order;
+- `MissingCodec { type_tag }` and `DuplicateCodec { type_tag }`: registry
+  lookup and registration failures;
+- `CodecTypeMismatch { field, type_tag, expected, actual }`: the template tag's
+  registered concrete type differs from the populated state value;
+- `EncodePayload` and `DecodePayload`: retain an arbitrary boxed, thread-safe
+  user-codec source error without making `SeriesError` generic;
+- `UnsupportedVersion`: the sole metadata file uses an unknown storage format;
+- `InvalidMetadata` and `InvalidChunk`: syntactically valid JSON violates a
+  versioned semantic invariant;
+- `MissingChunk` and `ChunkSizeMismatch`: a referenced payload file is absent
+  or has an unexpected encoded length;
+- `Io` and `Json`: preserve filesystem and Serde JSON sources together with
+  the affected path;
+- `State`: transparently preserves a lower-level `StateError`;
+- `WriterFinished` and `WriterFailed`: distinguish successful finalization
+  from the terminal state entered after a failed commit.
+
+The first commit failure itself returns the detailed originating error.
+`WriterFailed` is reserved for subsequent calls, while the writer retains the
+failed owned chunk rather than dropping payloads.
+
+#### Reference
+
+```text
+time_series::series::StateSeries::push
+    -> SeriesError::SpecMismatch
+time_series::series::StateSeries::push
+    -> SeriesError::NonIncreasingTime
+time_series::codec::CodecRegistry::register
+    -> SeriesError::DuplicateCodec
+time_series::codec::CodecRegistry::get
+    -> SeriesError::MissingCodec
+time_series::codec payload encoder
+    -> SeriesError::CodecTypeMismatch
+time_series::codec payload encoder
+    -> SeriesError::EncodePayload
+time_series::codec payload decoder
+    -> SeriesError::DecodePayload
+time_series::format metadata validation
+    -> SeriesError::UnsupportedVersion
+time_series::format metadata validation
+    -> SeriesError::InvalidMetadata
+time_series::format chunk validation
+    -> SeriesError::InvalidChunk
+time_series::reader::SeriesReader
+    -> SeriesError::MissingChunk
+time_series::reader::SeriesReader
+    -> SeriesError::ChunkSizeMismatch
+time_series::reader::SeriesReader
+    -> SeriesError::Io
+time_series::reader::SeriesReader
+    -> SeriesError::Json
+time_series::writer::SeriesWriter
+    -> SeriesError::Io
+time_series::writer::SeriesWriter
+    -> SeriesError::Json
+time_series codec state access
+    -> SeriesError::State
+time_series::writer::SeriesWriter::push
+    -> SeriesError::WriterFinished
+time_series::writer::SeriesWriter::finish
+    -> SeriesError::WriterFinished
+time_series::writer::SeriesWriter
+    -> SeriesError::WriterFailed
+```
+
+These references describe the approved consumers that will be implemented in
+later one-file review units. Until the facade is connected, `error.rs` remains
+intentionally unreachable from the compiled crate graph.
+
 This file comes first so every later module reports failures consistently.
 
 #### `src/time_series/codec.rs`
@@ -922,9 +1240,8 @@ Owns the private versioned Serde representations for:
 - `series.json`;
 - embedded `StateSpec`;
 - ordered chunk descriptors;
-- chunk JSON headers;
 - time-point records;
-- state payload maps.
+- positional state payload records.
 
 These are storage-format types, not public domain types. Keeping them separate
 prevents serde annotations and format-version concerns from leaking into
@@ -1145,6 +1462,193 @@ The one-file publication sequence is:
 - The crates.io metadata error is resolved. A normal publish should be
   attempted only after these reviewed publication changes are committed, so
   `--allow-dirty` is unnecessary for the real upload.
+
+#### Next publication review confirmed
+
+- Verified the license and Cargo publication metadata are committed on local
+  `main` and synchronized with `origin/main`.
+- Identified the repository-root `README.md` as the next file because it still
+  describes the temporary pre-facade test workflow and incorrectly says the
+  public Cargo integration target does not yet exist.
+- Planned to replace it with a concise repository landing page that points to
+  the publishable crate under `dev/`, summarizes the currently implemented
+  SystemState API, links the package README, and documents the standard Cargo
+  commands that now work.
+- No Rust source or package file was edited while confirming this next step.
+
+#### Active development sequence corrected
+
+- Corrected the previous prioritization: repository-root README cleanup and
+  placeholder-binary removal are optional packaging maintenance, not blockers
+  for time-series development.
+- Restored the agreed active sequence from completed SystemState work into
+  SSTS/time-series implementation.
+- Confirmed `dev/src/system_state/spec.rs` as the next implementation review
+  unit, adding only the crate-private layout-identity and embedded-JSON parsing
+  operations required by `StateSeries` and `SeriesReader`.
+- After that prerequisite, the first new time-series file remains
+  `dev/src/time_series/error.rs`.
+- No source file was edited while correcting the sequence.
+
+#### Time-series implementation starts directly
+
+- Removed the unnecessary requirement to modify `StateSpec` before creating
+  the time-series module.
+- Clarified why the possible helpers were discussed:
+
+  - layout identity will eventually make `StateSeries::push` schema checks
+    constant-time;
+  - embedded JSON parsing will eventually let `SeriesReader` restore the
+    manifest specification.
+
+- Neither capability is required by the first time-series files, and their
+  exact shape should be decided by the concrete consumer rather than added in
+  advance.
+- Revised the active order to:
+
+  1. `dev/src/time_series/error.rs`;
+  2. `dev/src/time_series/codec.rs`;
+  3. `dev/src/time_series/series.rs`;
+  4. add only any SystemState/StateSpec internal operation proven necessary by
+     those implementations;
+  5. `format.rs`, `writer.rs`, and `reader.rs`;
+  6. facade, library export, and dedicated tests.
+
+- Confirmed that the next implementation file is a new time-series file, not
+  another SystemState file.
+
+### Time-series acceptance contract restated
+
+The implementation must preserve the user's original requirements:
+
+1. The time series wraps an owned growable array of `SystemState` values.
+2. It exposes natural state-array access together with explicit IO entry
+   points.
+3. It manages automatic chunking by tracking its current size and triggering a
+   write when the configured threshold is reached.
+4. After rollover, it immediately continues with a new empty series sharing the
+   same specification, while the completed state array transfers to the writer
+   without cloning state payloads.
+5. Completed data can be written to JSON and reconstructed from JSON.
+6. The persisted dataset carries the `StateSpec` needed to reconstruct every
+   state layout.
+7. Canonical scientific payloads are `physics_in_parallel` tensors.
+8. Moving states into the series, into a completed chunk, and out to a writer
+   must not clone large tensor payloads.
+
+The agreed architectural refinements are:
+
+- `StateSeries` owns `Vec<SystemState>` and provides predictable in-memory
+  access.
+- `SeriesWriter` owns the active `StateSeries` and presents the automatic
+  append/flush interface.
+- Rollover uses ownership replacement (`mem::replace`/`mem::take` semantics),
+  not deep cloning followed by element-wise clearing.
+- A chunk is erased only after successful durable commit; IO failure must
+  retain or restore its ownership.
+- Chunk policy combines an exact maximum state count with an optional running
+  estimate of tensor bytes.
+- Time indices are strictly increasing but may contain gaps; integer index is
+  authoritative for ordering and chunk ranges.
+- Initial IO is synchronous and uses atomic temporary-file replacement.
+- Storage uses `series.json` as the dataset's sole metadata file plus separate
+  metadata-free JSON payload chunks, rather than one unsafe append-in-place
+  JSON array.
+- Payload chunks use compact positional records defined by the manifest's
+  version and field order. They never repeat field names, type tags, schema,
+  chunk descriptors, or codec configuration.
+- The specification is stored once per dataset and shared by every decoded
+  state.
+- `SeriesReader` supports reading one chunk, iterating chunks, selecting by
+  integer time range, and collecting a small dataset into memory.
+- A codec registry maps stable field type tags to concrete Rust types, JSON
+  encoders/decoders, and size estimators; `SystemState` remains generic.
+- JSON is the first correctness/interchange format. High-performance tensor
+  persistence and future Protocol Buffers encoding remain separate codec work.
+
+The source layout remains the compact six-file plan:
+
+```text
+time_series/
+├── error.rs
+├── codec.rs
+├── series.rs
+├── format.rs
+├── writer.rs
+└── reader.rs
+```
+
+All implementation continues one file per review, with tests only under the
+dedicated `tests/` tree.
+
+### Shared specification identity invariant
+
+Each state in one `StateSeries` must reference the exact same immutable
+specification allocation as the series itself.
+
+The current SystemState representation already avoids metadata duplication:
+
+```text
+StateSpec
+└── Arc<StateLayout>  # one pointer-sized handle
+
+StateLayout          # allocated once
+├── source
+├── fields
+└── name lookup map
+```
+
+Cloning `StateSpec` does not copy field names, type tags, the source path, or
+the lookup map. It copies one `Arc` handle and increments its strong count.
+Consequently, each standalone `SystemState` pays for one pointer-sized schema
+handle, not a schema copy.
+
+The series invariant is:
+
+```text
+Arc::ptr_eq(series.spec.inner, state.spec.inner) == true
+```
+
+Conceptually:
+
+```text
+                 ┌───────────────────┐
+series.spec ─────►                   │
+state[0].spec ───► shared StateLayout│
+state[1].spec ───►                   │
+chunk.spec ──────►                   │
+                 └───────────────────┘
+```
+
+`StateSeries::push` must reject a state whose specification is merely similar
+or independently loaded; accepted states must share pointer identity with the
+series specification. `SeriesReader` reconstructs one specification and uses
+it to construct every decoded state. Chunk rollover transfers states without
+changing any specification handles.
+
+A raw or borrowed pointer is not recommended:
+
+- a borrowed `&StateSpec` would give every state a lifetime and make a series
+  that owns both the spec and borrowing states self-referential;
+- a raw pointer could dangle when a state is moved out and the series is
+  dropped;
+- a `Weak` pointer remains pointer-sized, adds upgrade checks, and prevents a
+  standalone state from guaranteeing access to its layout;
+- wrapping `StateSpec` in another `Arc` would add an unnecessary allocation and
+  indirection because `StateSpec` already is the shared handle.
+
+The one-word `Arc` handle is retained so `pop`, `take`, chunk transfer, writer
+handoff, and standalone states remain safe and ergonomic. If profiling later
+shows that one word per state is material for extremely large streams of tiny
+states, a separate packed internal `StoredState` representation may detach the
+handle while inside a series and reattach it on extraction. That optimization
+would sacrifice direct `&SystemState` array access and is not justified before
+measurement.
+
+The implementation-facing identity method should be concise and crate-private,
+for example `StateSpec::shares_layout(&self, other: &Self)`, and backed by
+`Arc::ptr_eq`. It will be added when `StateSeries::push` is implemented rather
+than as unrelated preliminary work.
 
 #### crates.io transient publish failure
 
