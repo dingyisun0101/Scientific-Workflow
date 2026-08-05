@@ -15,7 +15,7 @@
 //! - heterogeneous concrete Rust payloads behind a typed API;
 //! - clone-free payload insertion, mutation, and extraction;
 //! - explicit deep cloning of complete states;
-//! - deterministic time-point metadata.
+//! - mutable, checked time-point progression.
 //!
 //! Type erasure and boxing remain internal to that module. Downstream crates
 //! work with their original concrete payload types.
@@ -29,10 +29,16 @@
 //! let spec = StateSpec::load("state.json")?;
 //! let mut state = spec.empty(TimePoint::new(0));
 //!
-//! state.set("population", vec![10_u64, 20, 30])?;
+//! assert!(
+//!     state
+//!         .set("population", vec![10_u64, 20, 30])?
+//!         .is_none()
+//! );
 //! state
 //!     .get_mut::<Vec<u64>>("population")?
 //!     .push(40);
+//! let time = state.advance(None)?;
+//! assert_eq!(time.index(), 1);
 //! let population = state.take::<Vec<u64>>("population")?;
 //!
 //! assert_eq!(population, vec![10, 20, 30, 40]);
@@ -40,7 +46,7 @@
 //! # }
 //! ```
 //!
-//! Future SSTS and dispatcher modules will build on the same ownership and
+//! Future time-series and dispatcher modules will build on the same ownership and
 //! module-boundary principles without changing the public state-value
 //! contract.
 

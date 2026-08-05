@@ -28,7 +28,7 @@ The runtime and analysis paths are deliberately different:
         -> selected fields are serialized while borrowed
         -> one owned encoded record enters a bounded queue
         -> StateWriter appends complete records
-        -> count-based rollover commits immutable chunks
+        -> exact encoded-byte rollover commits immutable chunks
 
     metadata.json plus committed chunks
         -> SeriesReader selects a stream and range
@@ -43,18 +43,22 @@ is an in-memory analysis working set; it is not a writer buffer.
 
 1. A SystemState has a fixed template-defined layout.
 2. StateSpec clones share one immutable Arc allocation.
-3. Moving payloads into and out of SystemState does not clone them.
-4. SystemState::clone is a deliberate deep clone of every populated payload.
-5. Serialization borrows payloads but necessarily produces encoded bytes.
-6. Each logical output stream has one StateSpec, cadence, path, writer, and
+3. An owning simulation may mutate every payload and the complete TimePoint;
+   StateSpec remains immutable.
+4. Moving payloads into and out of SystemState does not clone them.
+5. SystemState::clone creates a new erased box and calls T::clone for every
+   populated payload; concrete Clone semantics remain T-defined.
+6. Serialization borrows payloads but necessarily produces encoded bytes.
+7. Each logical output stream has one StateSpec, cadence, path, writer, and
    independent chunk sequence.
-7. One encoded partial state is one indivisible record.
-8. Chunk boundaries are determined only by states_per_chunk.
-9. Byte counts may bound queues and describe files, but never determine
-   chunk boundaries.
-10. No payload, field, JSON object, or protobuf message is split across chunks.
-11. Structural metadata is stored once in output-root metadata.json.
-12. Chunk files contain only minimally framed records.
+8. One encoded partial state is one indivisible record.
+9. Chunk boundaries are determined by exact encoded file bytes while records
+   remain indivisible.
+10. Every stream queue has finite record and encoded-byte capacity; submission
+    blocks under backpressure instead of growing memory without bound.
+11. No payload, field, or JSON record is split across chunks.
+12. Structural metadata is stored once in output-root metadata.json.
+13. Chunk files contain only minimally framed records.
 
 ## Crate layout
 
@@ -69,35 +73,119 @@ Target Rust 2024 layout:
     │   ├── state.rs
     │   └── value.rs
     ├── time_series.rs
-    └── time_series/
+    ├── time_series/
+    │   ├── error.rs
+    │   └── series.rs
+    ├── storage.rs
+    └── storage/
         ├── error.rs
-        ├── codec.rs
-        ├── series.rs
         ├── format.rs
+        ├── encoder.rs
         ├── writer.rs
+        ├── decoder.rs
         └── reader.rs
 
 Module-name files are preferred over mod.rs. Files named core.rs are avoided:
 system_state::state and time_series::series are clearer in diagnostics and
 documentation.
 
+Module ownership is strict. `system_state` defines only the live in-memory
+layout, time point, owned payload slots, typed access, cloning, and a private
+format-agnostic erased view of each payload's own Serialize implementation. It
+does not know about JSON, directories, metadata, streams, chunks, records, or
+reconstruction. `time_series` owns only the in-memory StateSeries analysis
+collection and its collection errors. It performs no serialization or IO.
+`storage` owns JSON encoding, metadata, directory readers, StateDecoder,
+DecodedRun, queues, chunks, and disk writers. Dependencies point from storage
+to system_state and time_series, and from time_series to system_state; neither
+lower-level module depends on storage.
+
+### File responsibilities
+
+- `src/lib.rs`: crate documentation and public module exports; it contains no
+  implementation logic.
+- `src/system_state.rs`: public system_state facade, workflow documentation,
+  private submodule declarations, and public type re-exports.
+- `src/system_state/spec.rs`: strict key-only JSON template parsing,
+  normalization, immutable Arc-shared layouts, field lookup, and template
+  round-trip output.
+- `src/system_state/state.rs`: TimePoint and the public owned SystemState typed
+  dictionary, time mutation, payload ownership operations, cloning, and the
+  crate-private serialization-view boundary.
+- `src/system_state/value.rs`: private boxed type erasure, downcasting,
+  per-payload cloning, diagnostics, and erased-serde borrowing.
+- `src/system_state/error.rs`: StateError and ownership-preserving SetError;
+  no storage errors belong here.
+- `src/time_series.rs`: public in-memory analysis facade only.
+- `src/time_series/series.rs`: StateSeries and borrowed series views.
+- `src/time_series/error.rs`: collection layout and ordering errors only.
+- `src/storage.rs`: public JSON storage facade.
+- `src/storage/format.rs`: metadata and JSONL record representations and
+  validation.
+- `src/storage/encoder.rs`: borrowed payload-to-EncodedRecord JSON encoding.
+- `src/storage/writer.rs`: bounded queues, byte-targeted chunks, atomic files,
+  RunOutput, and writer lifecycle.
+- `src/storage/reader.rs`: metadata/chunk discovery and raw JSON record reading.
+- `src/storage/decoder.rs`: key-typed StateDecoder and DecodedRun reconstruction.
+- `src/storage/error.rs`: JSON, metadata, directory, chunk, queue, writer,
+  reader, and decoder errors.
+
+Tests mirror those production scopes under `tests/system_state/`,
+`tests/time_series/`, and `tests/storage/`. Each top-level test file is the
+Cargo integration entry point for its subdirectory; `tests/fixtures/state.json`
+is the real key-only system-state template shared by public integration tests.
+
 ## System-state model
 
 ### Template
 
-The first layout is loaded from a strict JSON template:
+The first layout is loaded from a strict JSON template that describes only the
+keys in the simulation-owned dictionary. Each field may carry an optional
+human-facing description:
 
     {
       "fields": [
-        {"name": "population", "type": "vec.u64"},
-        {"name": "space", "type": "square-lattice.u64.v1"}
+        {
+          "name": "population",
+          "description": "Population count for each simulated region"
+        },
+        {
+          "name": "space",
+          "description": "Current spatial lattice"
+        }
       ]
     }
 
-Array order defines compact slot indices. Field names and stable type tags are
-trimmed. Empty names, duplicate names, empty tags, and unknown JSON properties
-are rejected. A type tag identifies persisted meaning; it is not a Rust type
-name.
+Array order defines compact slot indices. Field names are trimmed; empty and
+duplicate names and unknown JSON properties are rejected. `description` may be
+absent or null. Present descriptions are trimmed, and an empty or whitespace-
+only description normalizes to absence. A description is documentation only:
+it is never interpreted by the crate and cannot choose a decoder. `to_json`
+omits absent descriptions, so round trips preserve normalized meaning rather
+than insignificant nulls or whitespace. The state template deliberately
+contains no Rust type, TypeId, codec, encoding, or persisted schema identifier.
+
+JSON persistence uses Serde itself as the single universal codec. Every stored
+payload satisfies Serialize, and the private erased-value wrapper exposes that
+implementation through erased-serde. The writer can therefore borrow and
+serialize any populated field without a registry, a schema ID, a per-type
+adapter, or an intermediate serde_json::Value.
+
+Deserialization is necessarily typed, but the type is supplied only at the
+point where analysis requests a value:
+
+    let lattice = record.decode::<SquareLattice<u64>>("space")?;
+
+Serde constructs T directly from that field's JSON. The application does not
+register T and does not implement a custom codec. A reader cannot automatically
+reconstruct an entire heterogeneous SystemState because JSON and a natural-
+language description do not identify Rust types. Analysis APIs must therefore
+support typed field decoding or a caller-defined typed projection instead of
+pretending the file contains enough information for automatic reconstruction.
+
+The sole metadata file records field keys and descriptions, stream membership,
+time information, chunk ordering, and the encoding/version. Lean chunk records
+retain field keys but repeat no descriptions or type metadata.
 
 ### Ownership
 
@@ -107,9 +195,14 @@ set consumes a concrete value; take returns the same value and backing
 allocation. The box allocation and movement of a small owner are not copies of
 the scientific buffer.
 
-All stored values implement Any + Clone + Send + 'static. Clone is required
-only so SystemState can honor its public deep-clone contract. Send allows an
-owned state to cross a thread boundary. Sync is not required.
+All stored values implement Serialize + Clone + Send + 'static. The 'static
+bound supplies Any runtime identity. Serialize is the payload's own format-
+agnostic implementation; SystemState itself does not choose JSON or implement
+storage. Clone is required only so SystemState can clone every populated value.
+The crate invokes T::clone for each payload and never shares the erased box;
+types with internally shared owners such as Arc retain the semantics of their
+own Clone implementation. Send allows an owned state to cross a thread
+boundary. Sync is not required.
 
 ### Partial states
 
@@ -118,6 +211,203 @@ simulation's full state, and different streams may use different
 specifications. The writer-side borrowed sampling API is not finalized; it
 must serialize selected live fields without constructing an owned partial state
 that copies data needed by the simulation.
+
+### Simulation ownership model
+
+The primary runtime model is that a simulation directly owns one evolving
+SystemState containing its complete scientific state. Evolution mutates
+payloads in place through get_mut, replaces or extracts owners through set and
+take when required, and advances the state's coordinate through set_time or
+advance. StateSpec remains fixed for the lifetime of that state.
+
+    simulation
+        -> owns mutable SystemState
+        -> mutates payloads during evolution
+        -> advances TimePoint
+        -> lends selected fields to a cadence-specific JsonEncoder
+        -> resumes mutation after synchronous encoding completes
+
+StateSeries is not involved in this loop. It remains a decoded analysis
+container. SystemState::clone is also not part of ordinary evolution or
+sampling because it invokes Clone for all populated payloads.
+
+Ephemeral solver caches, thread pools, random-number engines, and control
+objects need not be stored in SystemState unless they are scientifically part
+of the state or must be persisted. The fixed template describes the evolving
+scientific data, not every implementation detail owned by the simulation.
+
+### Runtime value access
+
+The owning simulation addresses a field by its template key and supplies the
+exact concrete Rust type:
+
+    let mass = state.get::<f64>("mass")?;
+
+    *state.get_mut::<f64>("mass")? += mass_delta;
+
+    let lattice = state.get_mut::<SquareLattice<u64>>("space")?;
+    lattice.evolve(...);
+
+get returns &T and get_mut returns &mut T pointing directly into the stored
+payload. Neither operation clones, serializes, or replaces the value. set moves
+in a new owner and returns any displaced same-typed owner; take moves the owner
+out; clear drops it.
+
+The exact type is required. An unknown key, empty slot, or different concrete
+type returns StateError and leaves the state unchanged.
+
+#### Sequential mutable field borrowing
+
+The current get_mut API borrows the complete SystemState, so ordinary Rust
+borrowing cannot retain mutable references to two independently stored fields
+at once. This is the accepted public contract: callers mutate one field at a
+time and allow that borrow to end before accessing another. Sequential mutation
+is direct and efficient, and Copy values may be read out before mutating a
+different field. Data that intrinsically requires simultaneous mutable access
+belongs in one aggregate domain payload. SystemState will not add get2_mut or
+other multi-field borrowing variants.
+
+## Implementation-ready system-state refactor
+
+This section is the execution contract for the next code stage. It supersedes
+all transitional type-tag and codec assumptions still present in the current
+source. No time_series or storage source is changed while these files are
+reviewed one at a time.
+
+### Final public contract
+
+- The only public initial-construction path is
+  `StateSpec::load(path) -> StateSpec::empty(time) -> SystemState`.
+  `SystemState::new` remains crate-private.
+- A template declares ordered keys and optional descriptions only. It never
+  declares Rust types or storage codecs.
+- Slots may be empty. Layout, ordering, names, descriptions, and lookup indices
+  are immutable and shared through Arc.
+- `set<T>` is the sole payload-entry boundary and requires
+  `T: Serialize + Clone + Send + 'static`.
+- `get`, `get_mut`, `is`, and `take` continue to use exact runtime type identity.
+- `get_mut` permits one mutable field borrow at a time. No multi-field borrowing
+  API is added.
+- `set` and `take` preserve ownership and backing allocations; replacement
+  returns the previous T. No hot-path method calls Clone.
+- `SystemState::clone` allocates a new erased box and invokes Clone for each
+  populated T. Callers are prominently warned about cost and about T-defined
+  Clone semantics.
+- SystemState does not implement JSON encoding. A crate-private borrowed erased
+  Serialize view is its only storage-facing hook.
+- StateError contains only state/template/time failures. JSON record encoding,
+  directory, chunk, and decoder failures belong to storage errors.
+
+### Template normalization
+
+The accepted declaration is:
+
+    {
+      "name": "space",
+      "description": "Current spatial lattice"
+    }
+
+`name` is required, trimmed, and must be non-empty and unique after trimming.
+`description` is optional; absent, null, empty, and whitespace-only values all
+normalize to None. A non-empty value is trimmed and stored as Box<str>.
+Unknown properties at the document and field levels are rejected. Field array
+order determines indices. Empty field arrays remain valid. `to_json` emits the
+normalized strict representation, omits absent descriptions, indices, and
+source paths, and preserves declaration order.
+
+### Erased payload contract
+
+The private ErasedValue blanket implementation has the exact concrete bounds:
+
+    T: Serialize + Clone + Send + 'static
+
+It supplies clone_box, Any borrowed/mutable/owned views, diagnostic type name,
+and as_serialize. `as_serialize` performs an explicit coercion from concrete T
+to `&dyn erased_serde::Serialize`; it does not rely on trait-object upcasting.
+StateValue forwards this through `serializable`. SystemState forwards it through
+the crate-private `serializable(key)` accessor after ordinary unknown/missing
+field validation. No public erased type escapes the module.
+
+### Error cleanup
+
+`EmptyTypeTag` is removed after spec.rs stops referencing it.
+`FieldCountMismatch` is removed because no public or crate-private constructor
+accepts a caller-provided slot vector: StateDecoder reconstructs through
+StateSpec::empty and SystemState::set. No description-specific error is needed
+because empty descriptions normalize to absence.
+
+### Test contract
+
+No test is placed inside a production module. Focused suites remain under
+`tests/system_state/` and mirror the production filename. The top-level
+`tests/system_state.rs` integration target includes those focused suites so
+Cargo, not direct rustc commands, supplies serde and erased-serde dependencies.
+
+The completed refactor must test:
+
+- actual fixture loading with descriptions and without type tags;
+- absent, null, empty, whitespace-only, trimmed, duplicate-name, empty-name,
+  unknown-property, malformed-JSON, and empty-template behavior;
+- normalized `to_json` output and explicit semantic round-trip equality;
+- deterministic indices/lookups and Arc identity versus independent loads;
+- erased serialization of scalar, collection, custom, and tensor payloads
+  without Clone calls or serde_json::Value;
+- insertion, same-type replacement, mismatch rejection, get/get_mut, take,
+  clear, clear_all, empty derivation, time mutation, and error transactionality;
+- pointer/capacity preservation across set/take and rejected ownership recovery;
+- one-per-payload Clone invocation for explicit SystemState cloning;
+- bounded Debug output and precise Error::source behavior;
+- the public downstream workflow using the actual JSON fixture and a
+  physics_in_parallel tensor that satisfies the new Serialize bound.
+
+### One-file review order
+
+The implementation proceeds in this exact order. A file is reviewed before the
+next item begins; required later changes remain in todo.md.
+
+1. `src/system_state/spec.rs` — remove type tags, add descriptions, normalize
+   templates, and update internal documentation.
+2. `tests/fixtures/state.json` — convert the real fixture to keys plus useful
+   descriptions.
+3. `tests/system_state/spec.rs` — replace type-tag assertions with the complete
+   template-normalization and round-trip matrix.
+4. `src/system_state/error.rs` — remove obsolete EmptyTypeTag and
+   FieldCountMismatch while preserving SetError and time errors.
+5. `tests/system_state/error.rs` — align the focused error contract.
+6. `src/system_state/value.rs` — add the Serialize bound and borrowed erased
+   serialization view without altering ownership/downcast behavior.
+7. `tests/system_state/value.rs` — prove erased JSON serialization borrows the
+   original value and never invokes Clone.
+8. `src/system_state/state.rs` — enforce Serialize in set and add the
+   crate-private serializable accessor; keep the public mutation API unchanged.
+9. `tests/system_state/state.rs` — update test payloads to Serialize and cover
+   the new internal borrowing hook alongside all ownership/time contracts.
+10. `src/system_state.rs` — rewrite facade documentation and examples around
+    key-only templates and serializable payloads.
+11. `tests/system_state.rs` — include the focused suites and update the public
+    real-tensor integration workflow.
+12. `src/lib.rs` — update crate-level module boundaries and examples without
+    exporting unfinished time_series or storage modules.
+
+Breaking edits can temporarily invalidate later tests or the transitional
+time_series codec. This is expected under the one-file rule and is recorded in
+todo.md; no downstream source is patched early merely to keep a staged
+intermediate tree green.
+
+### System-state verification gate
+
+After item 12, run from `dev/`:
+
+    cargo fmt --check
+    cargo check --lib
+    cargo test --test system_state
+    cargo test --doc
+    cargo clippy --lib --test system_state -- -D warnings
+
+The full `cargo test` gate resumes only after the obsolete time_series codec
+and its direct tests are removed in their own stage. Until then, system-state
+verification deliberately selects the system_state integration target so the
+downstream-file rule remains intact.
 
 ## Public system-state API
 
@@ -129,12 +419,13 @@ behavior changes an architectural contract.
 ### FieldSpec
 
 One immutable normalized field declaration. Fields are stored in template
-order and carry a compact slot index, human-facing key, and stable codec tag.
+order and carry a compact slot index, human-facing key, and optional
+human-facing description. They carry no persisted or Rust type information.
 
 #### FieldSpec::new
 
-Private constructor that trims a validated name and type tag and assigns the
-template-order index.
+Private constructor that stores a validated normalized name, optional
+description, and template-order index.
 
 ##### Reference
 
@@ -157,19 +448,18 @@ Returns the normalized dictionary key.
 ##### Reference
 
     SystemState typed access -> FieldSpec::name
-    CodecRegistry -> TypedCodec::payload -> FieldSpec::name
     JSON encoder -> output field key
-    metadata writer -> embedded stream schema
+    stream definition -> state-key selection
 
-#### FieldSpec::type_tag
+#### FieldSpec::description
 
-Returns the stable serialization tag.
+Returns the optional natural-language payload description. The return value is
+documentation only and has no effect on runtime typing or serialization.
 
 ##### Reference
 
-    CodecRegistry lookup -> FieldSpec::type_tag
-    metadata writer -> embedded stream schema
-    reader -> codec selection
+    schema inspection and generated documentation -> FieldSpec::description
+    metadata writer -> optional human-facing field documentation
 
 ### StateSpec
 
@@ -186,6 +476,19 @@ Reads, parses, validates, and records the source path of a JSON template.
     program initialization -> StateSpec::load
     stream configuration -> StateSpec::load
     tests -> fixture loading and round trip
+
+#### StateSpec::parse
+
+Crate-private parser for a borrowed JSON template document. It applies the same
+strict parsing and semantic validation as load while recording a caller-supplied
+metadata path as provenance. This is the persistence-reader reconstruction
+boundary; public application initialization remains path-only.
+
+##### Reference
+
+    StateSpec::load -> StateSpec::parse
+    storage reader embedded template -> StateSpec::parse
+    focused specification tests -> StateSpec::parse
 
 #### StateSpec::empty
 
@@ -270,7 +573,7 @@ Performs constant-time Arc identity comparison.
 ##### Reference
 
     StateSeries::push -> StateSpec::shares_layout
-    writer exact-spec submission path -> StateSpec::shares_layout
+    storage exact-spec sampling validation -> StateSpec::shares_layout
     tests -> cloned versus independently loaded specifications
 
 #### StateSpec::index_of
@@ -299,7 +602,7 @@ Shares the immutable StateLayout through Arc.
     StateSpec::empty -> StateSpec::clone
     SystemState::empty and SystemState::clone -> StateSpec::clone
     StateSeries ownership -> retain canonical layout
-    writer/reader setup -> share stream schema
+    storage reader and encoder setup -> share state layout
 
 ### TimePoint
 
@@ -374,13 +677,59 @@ Creates a blank state at a new time while sharing this state's layout.
 
 #### SystemState::time
 
-Returns the immutable TimePoint.
+Returns the current TimePoint by value.
 
 ##### Reference
 
     StateSeries ordering and errors -> SystemState::time
     encoder -> record time
     analysis -> state coordinate
+
+#### SystemState::set_time
+
+Replaces the complete TimePoint and returns the previous value. Replacing one
+validated TimePoint at once keeps physical-time validation inside TimePoint
+construction and makes ownership-side time changes explicit.
+
+##### Reference
+
+    simulation initialization or discontinuous time change
+        -> SystemState::set_time
+        -> previous TimePoint
+
+    checkpoint restore -> SystemState::set_time
+
+#### SystemState::advance
+
+Atomically increments the integer index by one and optionally adds a finite
+delta to an existing physical coordinate. The proposed signature is:
+
+    advance(physical_delta: Option<f64>) -> Result<TimePoint, StateError>
+
+Success returns the new TimePoint. None increments only the integer index and
+preserves physical time. Some(delta) requires delta and the resulting physical
+coordinate to be finite. Integer overflow or invalid physical arithmetic leaves
+the original TimePoint unchanged.
+
+The recommended meaning of Some(delta) when physical time is currently absent
+is an error, not an implicit zero origin. A caller that knows the physical
+origin must establish it explicitly through set_time before advancing it.
+Negative finite deltas remain valid because the integer index, not physical
+time, defines ordering.
+
+##### Reference
+
+    simulation step without physical coordinate
+        -> SystemState::advance(None)
+
+    simulation step with physical timestep
+        -> SystemState::advance(Some(dt))
+        -> updated TimePoint
+
+    failed checked arithmetic
+        -> SystemState::advance
+        -> StateError
+        -> original TimePoint unchanged
 
 #### SystemState::spec
 
@@ -465,12 +814,14 @@ Target ownership-preserving assignment:
     occupied by another type -> leave old value and return incoming T in SetError
 
 No payload is cloned. Returning the displaced payload is intentional and must
-remain prominent in API documentation.
+remain prominent in API documentation. T must implement Serialize + Clone +
+Send + 'static. This is the only public operation that introduces a new
+concrete payload, so it is the single enforcement point for the complete stored
+payload contract.
 
 ##### Reference
 
     simulation and analysis -> SystemState::set
-    CodecRegistry decode -> SystemState::set
     tests -> insertion, replacement, rejection, and ownership recovery
 
 #### SystemState::get<T>
@@ -480,7 +831,6 @@ Borrows a populated field as exactly T.
 ##### Reference
 
     application and analysis -> SystemState::get
-    TypedCodec::payload -> SystemState::get
     tests -> typed immutable access
 
 #### SystemState::get_mut<T>
@@ -536,10 +886,24 @@ Private helper returning one populated mutable StateValue.
 
     SystemState::get_mut -> SystemState::value_mut
 
+#### SystemState::serializable
+
+Crate-private, format-agnostic accessor returning a populated field as
+`&dyn erased_serde::Serialize`. It delegates lookup and missing-value errors to
+SystemState::value. It does not allocate, clone, encode, or expose StateValue.
+
+##### Reference
+
+    storage::JsonEncoder field traversal -> SystemState::serializable
+        -> StateValue::serializable
+
 #### SystemState::clone
 
-Shares StateSpec and deep-clones every populated payload. This operation is
-potentially extremely expensive and is never the normal persistence path.
+Shares StateSpec and invokes T::clone once for every populated payload, creating
+a new erased box for each. It never aliases StateValue boxes. The semantic depth
+of a concrete payload clone is defined by that type's Clone implementation.
+This operation is potentially extremely expensive and is never the normal
+persistence path.
 
 ##### Reference
 
@@ -549,7 +913,7 @@ potentially extremely expensive and is never the normal persistence path.
 
 #### SystemState::fmt
 
-Debug output contains only time, schema source, field count, and loaded count.
+Debug output contains only time, template source, field count, and loaded count.
 
 ##### Reference
 
@@ -557,10 +921,13 @@ Debug output contains only time, schema source, field count, and loaded count.
 
 ### StateError
 
-Non-exhaustive public error enum for template IO/parsing, semantic template
-validation, unknown or empty fields, Rust type mismatches, and reconstructed
-slot-count mismatch. Wrapped IO and JSON errors remain available through
-Error::source.
+Non-exhaustive public error enum for template IO/parsing, empty or duplicate
+field names, unknown or empty fields, and Rust type mismatches. It also
+represents checked time-advance failures:
+TimeIndexOverflow records the current u64 index, MissingPhysicalTime rejects an
+implicit physical origin, and InvalidPhysicalAdvance records the current
+coordinate and rejected delta. Time errors are detected before mutation.
+Wrapped IO and JSON errors remain available through Error::source.
 
 ### SetError<T>
 
@@ -637,12 +1004,15 @@ hash map. It has no methods.
 ### StateTemplate, FieldDeclaration, and StateTemplateRef
 
 Private Serde representations for strict template decoding and borrowed
-template encoding. Their Serialize and Deserialize behavior is derived rather
-than manually implemented.
+template encoding. FieldDeclaration contains `name: String` and
+`description: Option<String>` with unknown properties denied. StateTemplateRef
+borrows normalized FieldSpec values and omits absent descriptions. Their
+Serialize and Deserialize behavior is derived rather than manually implemented.
 
 ### ErasedValue
 
-Private object-safe trait implemented for every Any + Clone + Send payload.
+Private object-safe trait implemented for every Serialize + Clone + Send +
+'static payload.
 
 #### ErasedValue::clone_box
 
@@ -683,6 +1053,16 @@ Returns the concrete Rust type name for diagnostics.
 ##### Reference
 
     StateValue::type_name -> ErasedValue::concrete_type_name
+
+#### ErasedValue::as_serialize
+
+Returns the concrete payload coerced to `&dyn erased_serde::Serialize` without
+trait-object upcasting. This explicit method remains compatible with the
+crate's Rust 1.85 MSRV.
+
+##### Reference
+
+    StateValue::serializable -> ErasedValue::as_serialize
 
 ### StateValue
 
@@ -749,6 +1129,15 @@ Consumes the wrapper and moves out T, or returns the wrapper unchanged.
     SystemState::take -> StateValue::downcast
     SystemState::set same-type replacement -> recover previous T
 
+#### StateValue::serializable
+
+Returns a borrowed erased-serde view of the original concrete payload. It does
+not serialize by itself and introduces no intermediate value.
+
+##### Reference
+
+    SystemState::serializable -> StateValue::serializable
+
 #### StateValue::clone
 
 Deep-clones the erased payload.
@@ -765,153 +1154,226 @@ Formats only the concrete type name.
 
     internal diagnostics -> Debug::fmt(StateValue)
 
-## Payload codecs
+## Payload serialization
 
-### CodecRegistry
+### Erased serialization
 
-Maps stable StateSpec type tags to concrete Serde-compatible Rust types. The
-registry is open to arbitrary application types. Encoding borrows values and
-does not create serde_json::Value. A payload's own Serialize implementation may
-still allocate or copy internally.
+StateValue privately combines runtime type erasure, per-payload cloning, and a
+borrowed erased-serde view. SystemState::set accepts any concrete T satisfying
+Serialize + Clone + Send + 'static. JsonEncoder asks each populated value for
+that view while borrowing the original payload. This is one internal blanket
+mechanism, not a user-visible codec.
 
-The target registry does not estimate sizes because chunking is count-based.
-Actual encoded length is known after serialization and may be used for queue
-backpressure and file metadata.
+The method chain is:
 
-#### CodecRegistry::new
+    JsonEncoder -> SystemState::serializable
+        -> StateValue::serializable
+        -> ErasedValue::as_serialize
 
-Creates an empty registry.
+JsonEncoder, not the erased-value method, supplies the JSON serializer.
 
-##### Reference
+### Typed decoding
 
-    program initialization -> CodecRegistry::new
-    tests -> isolated registry
+JSON readers preserve record boundaries and field names. They deserialize a
+field only when the analysis caller supplies T. T must implement
+DeserializeOwned; it need not be registered globally. A wrong requested type
+returns the ordinary Serde decoding error with stream, state, and field context.
 
-#### CodecRegistry::register<T>
+#### SerializedRecord::decode<T>
 
-Associates one unused stable tag with T, requiring Serialize,
-DeserializeOwned, Clone, Send, and 'static.
-
-##### Reference
-
-    application startup -> CodecRegistry::register
-    stream initialization -> verify every StateSpec tag is registered
-    tests -> scalar, collection, custom, and tensor codecs
-
-#### CodecRegistry::contains
-
-Reports whether a tag is registered.
+Deserializes one named JSON payload directly into caller-selected T. The exact
+record representation and final method name are deferred until the reader file
+is designed; this entry defines the required behavior, not a committed public
+type name.
 
 ##### Reference
 
-    stream configuration validation -> CodecRegistry::contains
-    callers and tests -> registry inspection
+    analysis field access -> SerializedRecord::decode
+    typed analysis projection -> SerializedRecord::decode
 
-#### CodecRegistry::len
+Only JSON encoding is in scope. No alternate binary encoding or related
+extension point is part of the present architecture.
 
-Returns registered-tag count.
+### End-to-end JSON workflow
+
+The simulation loads one key-only template, creates its live state, and moves
+ordinary Serde payloads into it. The following uses target writer/reader names
+to demonstrate responsibilities; their exact signatures are finalized only
+when their source files are reviewed.
+
+    let spec = StateSpec::load("state.json")?;
+    let mut state = spec.empty(TimePoint::from_physical(0, 0.0).unwrap());
+
+    state.set("signal", Signal::initial())?;
+    state.set("space", Space::initial())?;
+
+The run output is configured once with named streams, selected keys, maximum
+chunk file sizes, and finite queue limits. Construction validates all keys and
+writes the sole metadata.json before any record is accepted.
+
+    let mut output = RunOutput::builder("output/run-001", state.spec())
+        .stream("signal", ["signal"], ByteSize::mib(64))?
+        .stream("space", ["space"], ByteSize::mib(512))?
+        .build()?;
+
+The simulation mutates one live field at a time. It decides sampling cadence;
+the writer does not control evolution.
+
+    for _ in 0..steps {
+        state.get_mut::<Space>("space")?.evolve();
+        state.get_mut::<Signal>("signal")?.measure();
+        state.advance(Some(dt))?;
+
+        if state.time().index() % 10 == 0 {
+            output.sample("signal", &state)?;
+        }
+        if state.time().index() % 100 == 0 {
+            output.sample("space", &state)?;
+        }
+    }
+    output.finish()?;
+
+sample asks the stream's JsonEncoder to borrow and encode only the configured
+fields, then hands the complete EncodedRecord to StateWriter. After sample
+returns, the state is no longer borrowed and simulation may continue.
+StateWriter never sees a payload type and never invokes Serialize; it only
+queues and appends encoded bytes. The background worker seals a chunk only
+after its configured number of records and never splits a state.
+
+Analysis opens metadata and chunk files without a type registry. The concrete
+type is supplied only for a requested payload:
+
+    let run = RunReader::open("output/run-001")?;
+    for record in run.stream("space")? {
+        let time = record.time();
+        let space = record.decode::<Space>("space")?;
+        analyze(time, space);
+    }
+
+decode invokes Space's existing Deserialize implementation directly. A wrong
+T is a contextual JSON decoding error. Reading timestamps, inspecting keys, or
+skipping records requires no payload deserialization.
+
+## State decoder module
+
+`storage::decoder` provides one public facade for turning an output
+directory back into in-memory states. StateDecoder is simply a collection of
+field decoders keyed by the same names used by SystemState. The user declares
+that mapping once; StateDecoder handles metadata loading, stream discovery,
+chunk ordering, record parsing, decoder selection, and state construction.
+It is not part of `system_state` or `time_series`; no decoder type is
+re-exported from either in-memory module.
+
+    let decoder = StateDecoder::new()
+        .field::<Signal>("signal")?
+        .field::<Space>("space")?;
+
+    let run = decoder.decode("output/run-001")?;
+    let spaces: &StateSeries = run.stream("space")?;
+
+`field::<T>` creates the ordinary decoder automatically from T's Deserialize
+implementation. It is an explicit key-to-type declaration, not a custom codec
+implementation. A custom `field_with` closure remains available only for data
+migration or domain validation.
+
+Before reading chunk payloads, decode loads metadata and checks that every key
+actually emitted by the directory has a decoder. Missing decoders, duplicate
+decoder declarations, corrupt metadata, unknown chunk fields, and JSON type
+errors are reported with directory, stream, chunk, record, and field context.
+Extra decoder declarations are allowed so one StateDecoder can be reused for
+multiple compatible datasets that contain different subsets of known keys.
+
+Each output stream becomes a separate StateSeries because streams may have
+different cadences and time points. StateDecoder must not guess how to merge
+them. Every reconstructed SystemState shares the StateSpec recovered from the
+directory metadata, uses the record's TimePoint, populates the fields contained
+in that stream, and leaves other declared fields empty.
+
+The initial decode method eagerly loads all streams because its result is an
+in-memory decoded run. Large-dataset streaming can later be exposed as a
+separate method using the same decoder collection; it must not silently change
+decode into a lazy result. Restoration of each record is transactional: a
+partially decoded state is discarded on failure.
+
+Internally, decoder entries are heterogeneous object-safe functions stored in
+a HashMap keyed by field name. Each function borrows raw JSON, deserializes its
+concrete T directly, and moves T into the destination SystemState. No
+serde_json::Value, payload clone, stable type tag, or global codec registry is
+used.
+
+### StateDecoder
+
+Owns the reusable key-to-decoder collection. It is independent of a particular
+directory until decode is called.
+
+#### StateDecoder::new
+
+Creates an empty decoder collection.
 
 ##### Reference
 
-    CodecRegistry Debug -> CodecRegistry::len
-    diagnostics and tests -> CodecRegistry::len
+    analysis initialization -> StateDecoder::new
+    tests -> isolated decoder construction
 
-#### CodecRegistry::is_empty
+#### StateDecoder::field<T>
 
-Reports whether no codecs are registered.
-
-##### Reference
-
-    initialization validation and tests -> CodecRegistry::is_empty
-
-#### CodecRegistry::value
-
-Crate-private lookup returning a borrowed erased Serialize view for a populated
-SystemState field.
+Adds the default Serde JSON decoder for one field key and returns self for
+chaining. T must implement DeserializeOwned, Serialize, Clone, Send, and
+'static so the reconstructed payload satisfies SystemState's full contract.
 
 ##### Reference
 
-    JSON record encoder -> CodecRegistry::value
+    application decoder declaration -> StateDecoder::field
+    tests -> scalar, collection, custom struct, and tensor decoding
 
-#### CodecRegistry::decode
+#### StateDecoder::field_with<T, F>
 
-Crate-private dynamic decode followed by ownership transfer into SystemState.
-
-##### Reference
-
-    JSON record decoder -> CodecRegistry::decode -> SystemState::set
-
-#### CodecRegistry::insert
-
-Private duplicate-checking typed codec insertion.
+Adds an application-supplied raw-JSON-to-T conversion closure for one key. This
+is intended for migration and validation, not ordinary payload decoding.
 
 ##### Reference
 
-    CodecRegistry::register -> CodecRegistry::insert
+    persisted-version migration -> StateDecoder::field_with
+    domain validation during load -> StateDecoder::field_with
 
-#### CodecRegistry::get
+#### StateDecoder::decode
 
-Private exact-tag lookup returning MissingCodec when absent.
-
-##### Reference
-
-    CodecRegistry::value and decode -> CodecRegistry::get
-
-#### CodecRegistry::fmt
-
-Formats only the number of registered codecs.
+Accepts an output directory, validates complete decoder coverage from its sole
+metadata file, reads every declared stream and chunk in deterministic order,
+and returns a DecodedRun containing one StateSeries per stream.
 
 ##### Reference
 
-    diagnostics and assertion failures -> Debug::fmt(CodecRegistry)
+    analysis load -> StateDecoder::decode -> metadata and chunk readers
+    tests -> complete multi-stream directory reconstruction
 
-### ErasedCodec
+### DecodedRun
 
-Private object-safe codec interface behind CodecRegistry.
+Owns decoded StateSeries values indexed by stream name plus the validated run
+metadata required for inspection. It never merges streams implicitly.
 
-#### ErasedCodec::value
+#### DecodedRun::stream
 
-Validates the concrete payload type and returns a borrowed Serialize view.
-
-##### Reference
-
-    CodecRegistry::value -> ErasedCodec::value
-
-#### ErasedCodec::decode
-
-Deserializes one owned concrete value and inserts it into a state.
+Returns one decoded StateSeries by stream name.
 
 ##### Reference
 
-    CodecRegistry::decode -> ErasedCodec::decode
+    analysis -> StateDecoder::decode -> DecodedRun::stream
 
-### TypedCodec<T>
+### FieldDecoder
 
-Private implementation of ErasedCodec for one registered T.
+Private object-safe interface behind each StateDecoder entry.
 
-#### TypedCodec::payload
+#### FieldDecoder::decode_into
 
-Borrows T from a named field and converts a mismatch into CodecTypeMismatch.
-
-##### Reference
-
-    TypedCodec ErasedCodec::value -> TypedCodec::payload
-
-#### TypedCodec ErasedCodec::value
-
-Coerces a validated borrowed T into erased_serde::Serialize.
+Borrows one raw JSON field, constructs its concrete T, and transfers T into the
+matching destination SystemState slot.
 
 ##### Reference
 
-    CodecRegistry::value -> ErasedCodec::value -> TypedCodec::value
-
-#### TypedCodec ErasedCodec::decode
-
-Deserializes T and transfers it into SystemState.
-
-##### Reference
-
-    CodecRegistry::decode -> ErasedCodec::decode -> TypedCodec::decode
+    StateDecoder::decode record reconstruction
+        -> FieldDecoder::decode_into
+        -> SystemState::set
 
 ## StateSeries analysis interface
 
@@ -952,7 +1414,7 @@ Returns the canonical shared specification.
 ##### Reference
 
     SeriesRef construction -> StateSeries::spec
-    analysis and writer convenience validation -> StateSeries::spec
+    analysis and storage convenience validation -> StateSeries::spec
 
 #### StateSeries::view
 
@@ -961,7 +1423,7 @@ Creates a lightweight Copy read-only SeriesRef.
 ##### Reference
 
     analysis helper arguments -> StateSeries::view
-    optional StateWriter::submit_series -> StateSeries::view
+    optional RunOutput::sample_series -> StateSeries::view
     callers avoiding deep clone -> StateSeries::view
 
 #### StateSeries::len
@@ -1005,14 +1467,19 @@ Returns one immutable state by position.
 
     indexed analysis and tests -> StateSeries::get
 
-#### StateSeries::get_mut
+#### StateSeries field-level mutable access
 
-Planned narrow mutable access to one state. It permits payload mutation but not
-slice reordering; SystemState time and spec remain immutable.
+A later analysis method may mutably borrow one named payload from one stored
+state, but StateSeries must not return &mut SystemState because SystemState time
+is mutable and changing it could invalidate series ordering. Its exact method
+name and generic signature will be decided during the time_series stage.
 
 ##### Reference
 
-    analysis transform -> StateSeries::get_mut -> SystemState::get_mut
+    analysis transform
+        -> StateSeries field-level mutable access
+        -> SystemState::get_mut
+        -> mutate payload without exposing set_time or advance
 
 #### StateSeries::first
 
@@ -1276,7 +1743,8 @@ stream declares:
 - StateSpec for its partial records;
 - cadence description;
 - relative output directory or filename prefix;
-- states_per_chunk: NonZeroUsize;
+- max_chunk_bytes: NonZeroU64;
+- finite queue byte and record limits;
 - encoding and framing;
 - independent monotonically increasing chunk ordinal.
 
@@ -1290,15 +1758,16 @@ non-colliding destinations beneath the run output root.
 ### Sampling boundary
 
 The simulation owns and mutates its complete state. At a cadence boundary, a
-stream selects and serializes only its fields. Serialization is synchronous
-with respect to that borrowed data; submit returns only after the encoded
-record no longer borrows the simulation.
+stream's JsonEncoder selects and serializes only its fields. Encoding is
+synchronous with respect to that borrowed data; RunOutput::sample returns only
+after the EncodedRecord no longer borrows the simulation. StateWriter receives
+only that owned encoded record.
 
 The exact borrowed-field API remains the next design decision. It must:
 
-- accept arbitrary registered serializable values by reference;
-- validate field names, stable tags, and concrete Rust types;
-- encode in deterministic schema order;
+- accept arbitrary Serde-serializable values by reference;
+- validate selected field names and populated slots;
+- encode in deterministic template order;
 - avoid constructing an owned partial SystemState;
 - produce exactly one complete encoded record or no record on failure.
 
@@ -1312,55 +1781,112 @@ encoded field-record buffer. It is transport data, not a second public state
 model.
 
 EncodedRecord is indivisible. The queue moves it to one stream worker. Queue
-capacity is byte-weighted, optionally with a record-count cap. A record larger
-than the byte budget is accepted only when it is the sole pending record.
+capacity is bounded by both encoded bytes and record slots. A record larger
+than the queue byte budget is admitted only when it is the sole outstanding
+record, preventing permanent deadlock while preserving the no-split rule.
 
-### Count-based chunks
+### JsonEncoder
 
-Each StateWriter has states_per_chunk. Appending one complete EncodedRecord
-increments the active record count once. The chunk is sealed when the count
-reaches the configured limit.
+Private storage component that supplies serde_json's Serializer and record
+framing while borrowing the selected payloads' own Serialize implementations.
+It contains no payload-specific conversion logic.
 
-All ordinary non-final chunks contain exactly states_per_chunk records. The
-final chunk may be shorter. A durability operation may seal an underfilled
-chunk only if its contract explicitly says so. Different streams count
-independently.
+#### JsonEncoder::encode
 
-For JSON, the initial framing is compact JSON Lines: one complete object plus
-one newline per record. A future protobuf codec uses length-delimited messages.
-Chunk files contain no schema header and no repeated metadata.
+Borrows a SystemState and configured field selection, invokes each payload's
+erased Serialize implementation, and returns one owned EncodedRecord.
+
+##### Reference
+
+    RunOutput::sample -> JsonEncoder::encode -> EncodedRecord
+
+### Byte-targeted chunks
+
+Each StateWriter tracks the exact bytes already appended to its active JSONL
+file, including each newline. Before appending a record, it evaluates the
+complete encoded record length:
+
+1. if the active chunk is non-empty and appending would exceed
+   max_chunk_bytes, seal the active chunk first;
+2. append the complete record to the current or newly opened chunk;
+3. if the resulting size equals or exceeds max_chunk_bytes, seal that chunk.
+
+The maximum is exact for ordinary records but necessarily soft for one record
+larger than max_chunk_bytes because records may not be split. The recommended
+policy is to accept such a record as the sole record in an oversized chunk and
+record its exact size in metadata. Rejecting it would be the only way to make
+the maximum strict; silently splitting it is forbidden.
+
+Chunk record counts therefore vary with payload size. Different streams track
+bytes and roll over independently. A durability operation may seal a chunk
+below the target only if its contract explicitly says so.
+
+The framing is compact JSON Lines: one complete object plus one newline per
+record. Chunk files contain no schema header and no repeated metadata.
 
 ### StateWriter
 
-One non-Clone authority for one logical stream. It owns configuration, queue
-sender, worker lifecycle, chunk ordinal, active temporary file state, ordering
-state, and terminal error state. Committed chunks are immutable.
+One non-Clone authority for one logical stream. It owns configuration, bounded
+queue sender, worker lifecycle, chunk ordinal, exact active-file byte count,
+active temporary file state, ordering state, and terminal error state.
+Committed chunks are immutable.
 
 #### StateWriter::submit
 
-Borrows one partial sample, validates and serializes it, waits for queue
-capacity, and moves one EncodedRecord to the worker. Success means accepted,
-not durable.
+Accepts one already complete EncodedRecord, blocks until both one record slot
+and sufficient encoded-byte budget are available, and moves it to the worker.
+It performs no payload access or serialization. Success means accepted, not
+durable. If the worker terminates, blocked and future submissions wake and
+return the stored terminal error rather than waiting forever.
 
 ##### Reference
 
-    simulation cadence -> stream StateWriter::submit
-        -> borrowed field encoding
-        -> EncodedRecord
+    RunOutput::sample -> JsonEncoder::encode
+        -> StateWriter::submit(EncodedRecord)
         -> bounded queue
         -> active chunk
 
-#### StateWriter::submit_series
+### QueueBudget
 
-Optional convenience that borrows SeriesRef and submits every state through the
-ordinary single-state path. It does not preserve the analysis vector as a
-physical chunk.
+Private blocking byte-budget shared by a stream producer and worker. A bounded
+synchronous channel separately limits record count. Together they bound both
+large-record bytes and per-record allocation overhead.
+
+#### QueueBudget::acquire
+
+Blocks the submitting simulation thread until the encoded record fits the
+available byte budget. It returns an RAII QueuePermit attached to the queued
+record. An oversized record waits for exclusive access and receives one
+exclusive permit so it cannot deadlock permanently.
 
 ##### Reference
 
-    persist analysis result -> StateSeries::view
-        -> StateWriter::submit_series
-        -> StateWriter::submit for each state
+    StateWriter::submit -> QueueBudget::acquire -> QueuePermit
+
+#### QueueBudget::close
+
+Marks the budget closed and wakes every waiter. Waiters return the stream's
+terminal error or normal closed-state error.
+
+##### Reference
+
+    writer worker failure -> QueueBudget::close
+    StateWriter::finish -> QueueBudget::close
+
+### QueuePermit
+
+Private RAII ownership of one admitted record's byte budget. It is moved with
+the EncodedRecord and is never cloned.
+
+#### QueuePermit::drop
+
+Releases byte capacity and wakes blocked submitters after the worker finishes
+appending or rejects the record. Releasing after append, rather than merely
+after dequeue, bounds queued plus in-flight encoded bytes.
+
+##### Reference
+
+    writer append completion or failure -> drop(QueuePermit)
 
 #### StateWriter::flush
 
@@ -1382,37 +1908,50 @@ joins the worker, and returns final stream statistics or the terminal failure.
     successful run termination -> each StateWriter::finish
     run-level coordinator -> collect stream completion statistics
 
-### Run-level writer coordinator
+### RunOutput
 
-A run-level coordinator creates all StateWriter instances and owns the single
-metadata.json lifecycle. Its final public name is not yet fixed; RunWriter is
-used descriptively here.
+Run-level storage facade owning field selections, one JsonEncoder and
+StateWriter per stream, and the sole metadata.json lifecycle. It coordinates
+encoding and writing but preserves their internal separation.
 
-#### RunWriter::new
+#### RunOutput::builder
 
-Validates all stream definitions and paths, verifies required codecs, creates
-the output directory, and atomically writes metadata.json before submissions.
-
-##### Reference
-
-    simulation initialization -> RunWriter::new
-
-#### RunWriter::writer
-
-Returns the StateWriter for an exact configured stream name.
+Starts configuration for an output directory and StateSpec.
 
 ##### Reference
 
-    cadence setup -> RunWriter::writer("signal")
-    cadence setup -> RunWriter::writer("space")
+    simulation initialization -> RunOutput::builder
 
-#### RunWriter::finish
+#### RunOutput::sample
 
-Finishes every stream and performs the sole run-level completion transition.
+Selects one configured stream, asks its JsonEncoder to produce an
+EncodedRecord, then passes that record to its StateWriter.
 
 ##### Reference
 
-    successful simulation termination -> RunWriter::finish
+    simulation cadence -> RunOutput::sample
+        -> JsonEncoder::encode
+        -> StateWriter::submit
+
+#### RunOutput::sample_series
+
+Optional convenience that borrows SeriesRef and routes each state through
+RunOutput::sample. It does not make StateSeries responsible for serialization.
+
+##### Reference
+
+    persist analysis result -> StateSeries::view
+        -> RunOutput::sample_series
+        -> RunOutput::sample for each state
+
+#### RunOutput::finish
+
+Finishes every StateWriter and performs the sole run-level completion
+transition.
+
+##### Reference
+
+    successful simulation termination -> RunOutput::finish
 
 ## Storage format
 
@@ -1442,7 +1981,7 @@ Before accepting records, the writer records all information already known:
 - cadence description;
 - relative path and deterministic chunk naming;
 - encoding and framing;
-- states_per_chunk.
+- max_chunk_bytes and finite queue limits.
 
 No other metadata file exists in the output directory. Per-record field keys
 remain in JSON for readability.
@@ -1459,8 +1998,9 @@ Conceptual compact record:
 
     {"time":{"index":42,"physical":0.25},"values":{"population":[1,2,3]}}
 
-Only populated fields appear. The stream schema in metadata defines valid keys
-and codec tags. One newline terminates the complete object.
+Only populated fields selected for that stream appear. The state layout and
+stream field selection in metadata define valid keys. No type or codec tag is
+stored. One newline terminates the complete object.
 
 ## Reading and analysis
 
@@ -1515,9 +2055,8 @@ integrity fact, not a chunking policy.
 - SystemState: deep payload clone; avoid on hot paths.
 - StateSeries: deep clone of every state; use SeriesRef or Arc instead.
 - SeriesRef: Copy borrowed view.
-- CodecRegistry: normally built once and shared by Arc.
 - EncodedRecord: moved, not cloned.
-- StateWriter and RunWriter: non-Clone exclusive lifecycle authorities.
+- StateWriter and RunOutput: non-Clone exclusive lifecycle authorities.
 - Metadata transaction and active chunk: non-Clone.
 
 The normal persistence path borrows live values during encoding and then moves
@@ -1525,12 +2064,18 @@ encoded buffers. No deep state clone is used.
 
 ## Scientific tensor compatibility
 
-The core API is tensor-library agnostic. Any type satisfying the state and codec
-bounds can be stored and registered.
+The core API is tensor-library agnostic. Any type satisfying the SystemState
+and Serde bounds can be stored and written.
+
+The pinned development dependency `physics_in_parallel` 3.0.3 implements
+Serialize for Tensor<T, Dense>, Tensor<T, Sparse>, and SquareLattice<T> under
+their documented scalar bounds. The new SystemState::set bound therefore does
+not require an upstream crate change merely to store these payloads; the public
+integration test remains the compile-time gate.
 
 The current physics-in-parallel tensor and SquareLattice serialization creates
-intermediate owned payload data through to_vec. CodecRegistry borrowing cannot
-remove a copy performed inside that external Serialize implementation. A later
+intermediate owned payload data through to_vec. Erased borrowing cannot remove
+a copy performed inside that external Serialize implementation. A later
 integration stage must add a borrowed serializer or update that crate before
 claiming end-to-end copy-free tensor encoding.
 
@@ -1539,7 +2084,7 @@ Zero-copy guarantees therefore apply precisely to:
 - moving owned payloads into and out of SystemState;
 - borrowing payloads through get and get_mut;
 - moving SystemState values into analysis collections;
-- borrowing payloads at the registry boundary.
+- borrowing payloads at the erased-serialization boundary.
 
 They do not claim that JSON or every third-party Serialize implementation can
 encode without allocating or copying.
@@ -1560,30 +2105,29 @@ or StateWriter ownership rules.
 
 ## Implementation delta
 
-The following source changes are required to match this document. They are not
-authorized by this documentation cleanup and must be reviewed one production
-file at a time.
+The current system_state source still contains the type-tag template and lacks
+the final erased Serialize boundary; the implementation-ready section above is
+the next stage. After that stage, the existing time_series source must be
+reduced to the in-memory analysis layer and storage introduced in separate
+production-file review units:
 
-1. system_state/error.rs contains SetError, but system_state.rs does not export
-   it and state.rs does not yet use it.
-2. SystemState::set still returns Result<(), StateError>, drops a rejected
-   incoming payload, and drops a displaced payload. It must adopt the documented
-   Result<Option<T>, SetError<T>> contract.
-3. time_series is not exported from lib.rs.
-4. StateSeries lacks get_mut.
-5. StateSeries len, is_empty, and capacity currently use const Vec methods newer
+1. time_series is not exported from lib.rs.
+2. CodecRegistry and its stable-tag error variants implement the rejected
+   registration design and must be removed.
+3. StateSeries has no narrow field-level mutable analysis accessor; it must not
+   expose &mut SystemState because time is mutable.
+4. StateSeries len, is_empty, and capacity currently use const Vec methods newer
    than the crate's Rust 1.85 MSRV; const must be removed or MSRV reconsidered.
-6. PushError stores SystemState inline and currently triggers Clippy's
+5. PushError stores SystemState inline and currently triggers Clippy's
    result_large_err diagnostic.
-7. StateChunk and StateSeries::into_chunk implement the rejected writer-buffer
+6. StateChunk and StateSeries::into_chunk implement the rejected writer-buffer
    architecture and must be removed.
-8. CodecRegistry::register_with_size, CodecRegistry::estimate, SizeEstimator,
-   and ErasedCodec::estimate exist for rejected byte-based chunking and must be
-   removed unless a separate non-chunking use case is approved.
-9. SeriesError documentation and variants still refer to series.json rather
+7. CodecRegistry::register_with_size, CodecRegistry::estimate, SizeEstimator,
+   and ErasedCodec::estimate must be removed with the registry.
+8. SeriesError documentation and variants still refer to series.json rather
    than metadata.json.
-10. format.rs, writer.rs, reader.rs, borrowed partial-state encoding,
-    count-based chunks, queue backpressure, and metadata lifecycle are not yet
+9. storage format, encoder, writer, reader, borrowed partial-state encoding,
+    byte-targeted chunks, blocking queue backpressure, and metadata lifecycle are not yet
     implemented.
 
 ### Transitional APIs scheduled for removal
@@ -1597,7 +2141,8 @@ Obsolete private callback alias returning an estimated byte count from a
 borrowed T.
 
 It has no methods. CodecRegistry::register_with_size stores it and
-TypedCodec::estimate invokes it. Count-based chunking removes both uses.
+TypedCodec::estimate invokes it. Exact post-encoding byte accounting removes
+both uses.
 
 #### CodecRegistry::register_with_size
 
@@ -1798,27 +2343,36 @@ Source files contain thorough Rustdoc and no embedded test modules. Test layout:
     │   ├── state.rs
     │   └── value.rs
     ├── time_series.rs
-    └── time_series/
+    ├── time_series/
+    │   ├── error.rs
+    │   └── series.rs
+    ├── storage.rs
+    └── storage/
+        ├── decoder.rs
+        ├── encoder.rs
         ├── error.rs
-        ├── codec.rs
-        └── series.rs
+        ├── format.rs
+        ├── reader.rs
+        └── writer.rs
 
 Single-module tests mirror the source filename. Tests spanning modules use a
 concise integration name. The package README owns user-facing test commands.
 
-Before each reviewed source change:
+For each review unit:
 
 1. update this document with the intended contract;
-2. edit one production file;
-3. add or update the corresponding dedicated tests;
-4. run focused tests, full tests, rustfmt checks, and Clippy proportionate to
-   the change;
-5. wait for review before moving to the next production file.
+2. edit exactly the one scheduled file;
+3. run whatever focused checks are valid at that staged boundary;
+4. wait for review before moving to the next scheduled file, including its
+   separate dedicated-test review unit.
 
-## Next design decision
+Run the complete stage verification only after all scheduled system_state files
+and tests have been reviewed. Transitional downstream failures are not repaired
+out of order.
 
-Before implementing format.rs or writer.rs, define the borrowed partial-state
-submission surface. It is the boundary that determines whether a simulation can
-serialize selected live fields without copying them into an owned snapshot.
-After that decision, reconcile the staged SystemState::set and StateSeries APIs,
-then implement record format, writer, and reader in that order.
+This ordering rule applies across the entire project. When a reviewed file
+requires changes in a downstream file, that downstream file remains untouched
+until its own review unit. The required change is recorded in both todo.md and
+the relevant design section. Documentation files may be updated alongside the
+single active production file because they record, rather than implement, the
+dependency.

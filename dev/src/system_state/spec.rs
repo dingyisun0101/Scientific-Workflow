@@ -12,22 +12,21 @@
 //! ```json
 //! {
 //!   "fields": [
-//!     {"name": "population", "type": "vec.u64"},
-//!     {"name": "space", "type": "example.lattice.v1"}
+//!     {
+//!       "name": "population",
+//!       "description": "Population count for each simulated region"
+//!     },
+//!     {"name": "space"}
 //!   ]
 //! }
 //! ```
 //!
 //! Array order is significant. It assigns each field a zero-based index used
-//! by the compact payload-slot vector in `SystemState`. Names and type tags are
-//! trimmed before validation and storage. Unknown JSON properties are rejected
-//! so misspelled template configuration cannot be silently ignored.
-//!
-//! # Type tags
-//!
-//! A field's `type` is a stable serialization tag, not a Rust type name.
-//! Runtime Rust types are still checked by `SystemState` through `TypeId`.
-//! Connecting stable tags to codecs is a later storage-layer responsibility.
+//! by the compact payload-slot vector in `SystemState`. Names and present
+//! descriptions are trimmed. Missing, null, empty, and whitespace-only
+//! descriptions all normalize to no description. Unknown JSON properties are
+//! rejected so misspelled template configuration cannot be silently ignored.
+//! Payload types and storage encodings deliberately do not belong here.
 //!
 //! # Sharing and performance
 //!
@@ -35,6 +34,14 @@
 //! counted layout. Cloning it never duplicates field names or lookup tables.
 //! Field lookup uses a hash map, while iteration preserves JSON declaration
 //! order through the field slice.
+//!
+//! # Construction boundary
+//!
+//! Public callers load the first specification from a JSON template path using
+//! [`StateSpec::load`]. A crate-private byte parser applies the identical
+//! validation path for persistence readers that recover an embedded template
+//! from the sole dataset metadata file. Keeping that parser crate-private
+//! preserves the public file-template initialization contract.
 
 use std::collections::HashMap;
 use std::fs;
@@ -56,17 +63,20 @@ pub struct FieldSpec {
     #[serde(skip)]
     index: usize,
     name: Box<str>,
-    #[serde(rename = "type")]
-    type_tag: Box<str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<Box<str>>,
 }
 
 impl FieldSpec {
     /// Constructs one normalized field definition.
-    fn new(index: usize, name: &str, type_tag: &str) -> Self {
+    fn new(index: usize, name: &str, description: Option<&str>) -> Self {
         Self {
             index,
             name: name.trim().into(),
-            type_tag: type_tag.trim().into(),
+            description: description
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(Into::into),
         }
     }
 
@@ -80,12 +90,12 @@ impl FieldSpec {
         &self.name
     }
 
-    /// Returns the stable codec type tag declared by the template.
+    /// Returns the optional natural-language description of the payload.
     ///
-    /// The tag identifies serialized meaning across processes and versions. It
-    /// must not be interpreted as `std::any::type_name::<T>()`.
-    pub fn type_tag(&self) -> &str {
-        &self.type_tag
+    /// Descriptions are documentation only. They do not identify a Rust type,
+    /// select a decoder, or affect typed access through `SystemState`.
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
     }
 }
 
@@ -114,21 +124,41 @@ impl StateSpec {
     /// - [`StateError::TemplateRead`] when the file cannot be read;
     /// - [`StateError::TemplateParse`] when JSON syntax or structure is invalid;
     /// - [`StateError::EmptyFieldName`] for an empty normalized field name;
-    /// - [`StateError::DuplicateField`] for repeated normalized names;
-    /// - [`StateError::EmptyTypeTag`] for an empty normalized type tag.
+    /// - [`StateError::DuplicateField`] for repeated normalized names.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, StateError> {
-        let path = path.as_ref();
-        let bytes = fs::read(path).map_err(|source| StateError::TemplateRead {
-            path: path.to_path_buf(),
-            source,
+        let source = path.as_ref().to_path_buf();
+        let bytes = fs::read(&source).map_err(|error| StateError::TemplateRead {
+            path: source.clone(),
+            source: error,
         })?;
+
+        Self::parse(source, &bytes)
+    }
+
+    /// Parses and validates a specification from an in-memory JSON document.
+    ///
+    /// This is the internal reconstruction boundary for a future persistence
+    /// reader. `source` identifies the containing metadata file for provenance
+    /// and errors; it need not be a standalone state-template path. Parsing
+    /// uses the same strict Serde representation and semantic validation as
+    /// [`StateSpec::load`].
+    ///
+    /// The method is crate-private so application code cannot bypass the
+    /// required public initialization from a JSON template file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StateError::TemplateParse`] for invalid JSON structure or
+    /// syntax and the same semantic template variants documented by
+    /// [`StateSpec::load`]. The input bytes are borrowed only for this call.
+    pub(crate) fn parse(source: PathBuf, bytes: &[u8]) -> Result<Self, StateError> {
         let template: StateTemplate =
-            serde_json::from_slice(&bytes).map_err(|source| StateError::TemplateParse {
-                path: path.to_path_buf(),
-                source,
+            serde_json::from_slice(bytes).map_err(|error| StateError::TemplateParse {
+                path: source.clone(),
+                source: error,
             })?;
 
-        Self::from_template(path.to_path_buf(), template)
+        Self::from_template(source, template)
     }
 
     /// Creates an empty SystemState that shares this specification.
@@ -148,7 +178,7 @@ impl StateSpec {
     /// destination path becomes the source when the JSON is loaded again.
     ///
     /// Serialization borrows the immutable field slice and does not clone
-    /// field names or type tags.
+    /// field names or descriptions. Absent descriptions are omitted.
     ///
     /// # Errors
     ///
@@ -180,9 +210,8 @@ impl StateSpec {
 
     /// Reports whether the template declares no fields.
     ///
-    /// Empty templates are structurally valid. They can represent a
-    /// time-bearing event stream whose payload schema will be extended in a
-    /// later template revision.
+    /// Empty templates are structurally valid and can represent time-bearing
+    /// event records without scientific payloads.
     pub fn is_empty(&self) -> bool {
         self.inner.fields.is_empty()
     }
@@ -203,12 +232,12 @@ impl StateSpec {
     /// This is an identity comparison, not structural equality. Two templates
     /// loaded independently may declare identical fields but still return
     /// `false`; states derived by cloning one `StateSpec` return `true` without
-    /// comparing field names, type tags, source paths, or lookup maps.
+    /// comparing field names, descriptions, source paths, or lookup maps.
     ///
     /// Identity is useful when building a homogeneous collection of states.
     /// Once a collection accepts only states sharing its canonical layout,
-    /// later indexing and serialization can rely on one field order and one
-    /// stable-tag mapping without repeating structural comparisons.
+    /// later indexing and serialization can rely on one field order without
+    /// repeating structural comparisons.
     pub fn shares_layout(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -238,20 +267,13 @@ impl StateSpec {
                 return Err(StateError::EmptyFieldName { index });
             }
 
-            let type_tag = declaration.type_tag.trim();
-            if type_tag.is_empty() {
-                return Err(StateError::EmptyTypeTag {
-                    field: name.to_owned(),
-                });
-            }
-
             if by_name.contains_key(name) {
                 return Err(StateError::DuplicateField {
                     field: name.to_owned(),
                 });
             }
 
-            let field = FieldSpec::new(index, name, type_tag);
+            let field = FieldSpec::new(index, name, declaration.description.as_deref());
             by_name.insert(field.name.clone(), index);
             fields.push(field);
         }
@@ -291,10 +313,9 @@ struct StateTemplate {
 struct FieldDeclaration {
     /// Human-facing dictionary key.
     name: String,
-    /// Stable serialization tag; `type` is renamed because it is a Rust
-    /// keyword.
-    #[serde(rename = "type")]
-    type_tag: String,
+    /// Optional human-facing payload documentation.
+    #[serde(default)]
+    description: Option<String>,
 }
 
 /// Borrowed serialization view of a validated state specification.

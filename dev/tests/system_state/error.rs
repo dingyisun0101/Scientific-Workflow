@@ -1,9 +1,9 @@
 //! Contract tests for the private system_state/error.rs implementation.
 //!
-//! This suite includes the production error module directly so the staged
-//! SetError type can be reviewed before the public facade and SystemState::set
-//! begin using it. The tests deliberately use a payload without Debug to prove
-//! that diagnostics remain bounded and independent of scientific data.
+//! This suite includes the production error module directly and exercises its
+//! ownership, formatting, source-chain, and checked-time diagnostics in
+//! isolation. The tests deliberately use a payload without Debug to prove that
+//! rejection diagnostics remain bounded and independent of scientific data.
 //!
 //! These tests verify:
 //!
@@ -12,7 +12,8 @@
 //! - bounded Debug output without a T: Debug requirement;
 //! - Display delegation and standard error-source traversal;
 //! - preservation of nested filesystem error sources;
-//! - Send support whenever the rejected payload is Send.
+//! - Send support whenever the rejected payload is Send;
+//! - exact context and source behavior for checked time-advance failures.
 
 use std::error::Error as _;
 use std::io;
@@ -137,4 +138,44 @@ fn set_error_is_send_for_send_payloads() {
     fn assert_send<T: Send>() {}
 
     assert_send::<SetError<OpaquePayload>>();
+}
+
+#[test]
+fn time_advance_errors_preserve_context_without_wrapped_sources() {
+    let overflow = StateError::TimeIndexOverflow { index: u64::MAX };
+    assert_eq!(
+        overflow.to_string(),
+        "cannot advance state time index 18446744073709551615: the next index exceeds u64::MAX"
+    );
+    assert!(overflow.source().is_none());
+    assert!(matches!(
+        overflow,
+        StateError::TimeIndexOverflow { index } if index == u64::MAX
+    ));
+
+    let missing = StateError::MissingPhysicalTime { index: 17 };
+    assert_eq!(
+        missing.to_string(),
+        "cannot advance physical time at state index 17: no physical coordinate is present"
+    );
+    assert!(missing.source().is_none());
+    assert!(matches!(
+        missing,
+        StateError::MissingPhysicalTime { index } if index == 17
+    ));
+
+    let invalid = StateError::InvalidPhysicalAdvance {
+        current: 1.25,
+        delta: f64::INFINITY,
+    };
+    let display = invalid.to_string();
+    assert!(display.contains("cannot advance physical time 1.25"));
+    assert!(display.contains("by inf"));
+    assert!(display.contains("delta and resulting coordinate must be finite"));
+    assert!(invalid.source().is_none());
+    assert!(matches!(
+        invalid,
+        StateError::InvalidPhysicalAdvance { current, delta }
+            if current == 1.25 && delta == f64::INFINITY
+    ));
 }

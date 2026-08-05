@@ -15,10 +15,25 @@
 //!
 //! # Ownership and cloning
 //!
-//! `set` consumes a payload, and `take` returns that same owned payload without
-//! calling `Clone`. Moving a complete state into an SSTS or writer similarly
-//! moves ownership. Explicitly cloning a `SystemState` is different: it shares
-//! the immutable specification but deep-clones every populated payload.
+//! `set` consumes a payload without cloning it. Initial insertion returns
+//! `None`, replacement returns ownership of the previous same-typed payload,
+//! and rejection returns ownership of the unchanged incoming payload through
+//! [`SetError`]. `take` moves a stored payload back to the caller. These
+//! operations preserve the backing allocations of ordinary scientific owners
+//! such as `Vec<T>` and tensor containers.
+//!
+//! Explicitly cloning a `SystemState` is different: it shares the immutable
+//! specification but deep-clones every populated payload. Persistence should
+//! borrow a live state during synchronous serialization rather than invoke
+//! this expensive clone.
+//!
+//! # Mutation
+//!
+//! The owning simulation can replace, borrow mutably, extract, or clear every
+//! payload. It can also replace the complete time point with `set_time` or
+//! advance it transactionally with `advance`. The [`StateSpec`] is deliberately
+//! immutable because changing field order or identity would invalidate the
+//! state's slot layout and every downstream schema assumption.
 //!
 //! # Type safety
 //!
@@ -30,7 +45,7 @@
 use std::any::{Any, type_name};
 use std::fmt;
 
-use super::error::StateError;
+use super::error::{SetError, StateError};
 use super::spec::{FieldSpec, StateSpec};
 use super::value::StateValue;
 
@@ -39,7 +54,7 @@ use super::value::StateValue;
 /// `index` is always present and provides deterministic ordering, chunk
 /// boundaries, and checkpoint identity. `physical` optionally records a
 /// finite domain time such as seconds or model time. Time-axis units belong to
-/// SSTS metadata so they are not repeated in every state.
+/// stream metadata so they are not repeated in every state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TimePoint {
     index: u64,
@@ -55,7 +70,7 @@ impl TimePoint {
         }
     }
 
-    /// Creates a time point with an optional finite physical coordinate.
+    /// Creates a time point with a finite physical coordinate.
     ///
     /// Returns `None` for `NaN` or either infinity. Negative finite values are
     /// accepted because some scientific coordinate systems use an origin after
@@ -112,6 +127,81 @@ impl SystemState {
     /// Returns this state's temporal coordinate.
     pub const fn time(&self) -> TimePoint {
         self.time
+    }
+
+    /// Replaces this state's complete temporal coordinate.
+    ///
+    /// The previous [`TimePoint`] is returned by value. Both coordinates are
+    /// small `Copy` values, so replacement performs no heap allocation and
+    /// does not inspect, move, or clone any scientific payload.
+    ///
+    /// Replacing the complete value rather than exposing its individual fields
+    /// ensures that a physical coordinate can enter a state only through the
+    /// finite-value validation performed by [`TimePoint::from_physical`].
+    ///
+    /// # Collection invariants
+    ///
+    /// A state stored inside a time-ordered collection must not be passed as
+    /// `&mut SystemState` to external callers: changing its time could violate
+    /// collection ordering. The owning simulation may freely call this method
+    /// before submitting a state or encoded sample.
+    pub fn set_time(&mut self, time: TimePoint) -> TimePoint {
+        std::mem::replace(&mut self.time, time)
+    }
+
+    /// Advances the integer index by one and optionally advances physical time.
+    ///
+    /// Passing `None` increments only the authoritative integer index and
+    /// preserves the current optional physical coordinate. Passing
+    /// `Some(delta)` additionally requires an existing physical coordinate,
+    /// a finite `delta`, and a finite sum. Negative and zero finite deltas are
+    /// valid because integer index—not physical time—defines record ordering.
+    ///
+    /// On success, the new [`TimePoint`] is stored and returned. All validation
+    /// occurs before assignment, so every error leaves the original time point
+    /// unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    ///
+    /// - [`StateError::TimeIndexOverflow`] when the current index is
+    ///   `u64::MAX`;
+    /// - [`StateError::MissingPhysicalTime`] when a delta is supplied but the
+    ///   current state has no physical coordinate;
+    /// - [`StateError::InvalidPhysicalAdvance`] when the delta or resulting
+    ///   coordinate is not finite.
+    pub fn advance(&mut self, physical_delta: Option<f64>) -> Result<TimePoint, StateError> {
+        let next_index = self
+            .time
+            .index
+            .checked_add(1)
+            .ok_or(StateError::TimeIndexOverflow {
+                index: self.time.index,
+            })?;
+
+        let next_physical = match (self.time.physical, physical_delta) {
+            (physical, None) => physical,
+            (None, Some(_)) => {
+                return Err(StateError::MissingPhysicalTime {
+                    index: self.time.index,
+                });
+            }
+            (Some(current), Some(delta)) => {
+                let next = current + delta;
+                if !delta.is_finite() || !next.is_finite() {
+                    return Err(StateError::InvalidPhysicalAdvance { current, delta });
+                }
+                Some(next)
+            }
+        };
+
+        let next = TimePoint {
+            index: next_index,
+            physical: next_physical,
+        };
+        self.time = next;
+        Ok(next)
     }
 
     /// Returns the shared immutable field specification.
@@ -177,24 +267,77 @@ impl SystemState {
         Ok(self.values[index].as_ref().is_some_and(StateValue::is::<T>))
     }
 
-    /// Sets or replaces the payload in a declared field.
+    /// Sets or replaces a payload while preserving ownership on every outcome.
     ///
-    /// `payload` moves into the state and is never cloned. If the slot was
-    /// already populated, its previous value is dropped. Call [`take`](Self::take)
-    /// first when the previous payload must be retained.
+    /// `payload` moves into this operation and is never cloned:
+    ///
+    /// - an empty declared slot receives it and returns `Ok(None)`;
+    /// - a slot containing exactly `T` receives it and returns the displaced
+    ///   payload as `Ok(Some(previous))`;
+    /// - an undeclared key returns `Err(SetError<T>)` containing the unchanged
+    ///   incoming payload;
+    /// - a slot containing another concrete type remains unchanged and returns
+    ///   the incoming payload in `SetError<T>`.
+    ///
+    /// Returning a previous payload is deliberate assignment behavior. A
+    /// caller that does not need that owner should discard it explicitly:
+    ///
+    /// ```no_run
+    /// # use scientific_workflow::system_state::{StateSpec, TimePoint};
+    /// # fn example(spec: &StateSpec) -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut state = spec.empty(TimePoint::new(0));
+    /// drop(state.set("population", vec![1_u64, 2, 3])?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Same-type validation occurs before the occupied slot is changed.
+    /// Consequently, rejection cannot discard or temporarily remove the
+    /// existing scientific value.
     ///
     /// # Errors
     ///
-    /// Returns [`StateError::UnknownField`] when `key` was not declared by the
-    /// JSON template. The payload is dropped with the returned error because
-    /// this minimal API does not expose the internal erased-value wrapper.
-    pub fn set<T>(&mut self, key: &str, payload: T) -> Result<(), StateError>
+    /// Returns [`SetError`] containing:
+    ///
+    /// - [`StateError::UnknownField`] when `key` is undeclared;
+    /// - [`StateError::TypeMismatch`] when an occupied slot contains a
+    ///   different concrete Rust type.
+    ///
+    /// In both cases [`SetError::into_parts`] recovers the unchanged incoming
+    /// `T` without cloning it.
+    pub fn set<T>(&mut self, key: &str, payload: T) -> Result<Option<T>, SetError<T>>
     where
         T: Any + Clone + Send,
     {
-        let index = self.spec.index_of(key)?;
-        self.values[index] = Some(StateValue::new(payload));
-        Ok(())
+        let index = match self.spec.index_of(key) {
+            Ok(index) => index,
+            Err(error) => return Err(SetError::new(error, payload)),
+        };
+
+        let Some(previous) = self.values[index].as_ref() else {
+            self.values[index] = Some(StateValue::new(payload));
+            return Ok(None);
+        };
+
+        if !previous.is::<T>() {
+            return Err(SetError::new(
+                StateError::TypeMismatch {
+                    field: key.to_owned(),
+                    expected: type_name::<T>(),
+                    actual: previous.type_name(),
+                },
+                payload,
+            ));
+        }
+
+        let previous = self.values[index]
+            .replace(StateValue::new(payload))
+            .expect("the occupied slot was validated immediately before replacement");
+
+        match previous.downcast::<T>() {
+            Ok(previous) => Ok(Some(previous)),
+            Err(_) => unreachable!("a matching StateValue failed its consuming downcast"),
+        }
     }
 
     /// Borrows a populated field as the exact Rust type `T`.

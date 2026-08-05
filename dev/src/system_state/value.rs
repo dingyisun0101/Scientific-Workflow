@@ -29,13 +29,23 @@
 //!
 //! # Threading
 //!
-//! Stored values must implement [`Send`] so a complete state or SSTS chunk can
-//! transfer ownership to a writer thread. [`Sync`] is intentionally not
-//! required: the workflow moves payload ownership between stages rather than
-//! sharing mutable state concurrently.
+//! Stored values must implement [`Send`] so an owned `SystemState` can transfer
+//! between threads when an application requires it. [`Sync`] is intentionally
+//! not required: an owning simulation mutates payloads exclusively, while the
+//! persistence hot path borrows them synchronously only for encoding. Encoded
+//! bytes—not `StateValue` objects—enter the background writer queue.
+//!
+//! # Serialization boundary
+//!
+//! Every stored payload supplies its ordinary Serde [`Serialize`]
+//! implementation. The erased wrapper exposes that implementation as a
+//! borrowed trait object, but it never selects a format or creates encoded
+//! bytes. The storage layer later supplies the JSON serializer.
 
 use std::any::{Any, TypeId, type_name};
 use std::fmt;
+
+use serde::Serialize;
 
 /// Object-safe behavior required from every erased payload.
 ///
@@ -58,11 +68,18 @@ trait ErasedValue: Any + Send {
 
     /// Returns the fully qualified Rust name of the concrete payload type.
     fn concrete_type_name(&self) -> &'static str;
+
+    /// Borrows the concrete payload through erased Serde serialization.
+    ///
+    /// This explicit concrete-to-trait-object coercion avoids depending on
+    /// trait-object upcasting and therefore remains compatible with the
+    /// crate's Rust 1.85 minimum version.
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize;
 }
 
 impl<T> ErasedValue for T
 where
-    T: Any + Clone + Send,
+    T: Serialize + Clone + Send + 'static,
 {
     fn clone_box(&self) -> Box<dyn ErasedValue> {
         Box::new(self.clone())
@@ -83,6 +100,10 @@ where
     fn concrete_type_name(&self) -> &'static str {
         type_name::<T>()
     }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
 }
 
 /// An owned, cloneable, type-erased system-state payload.
@@ -101,7 +122,7 @@ impl StateValue {
     /// so an enclosing `SystemState` can honor an explicit clone request.
     pub(crate) fn new<T>(value: T) -> Self
     where
-        T: Any + Clone + Send,
+        T: Serialize + Clone + Send + 'static,
     {
         Self {
             inner: Box::new(value),
@@ -115,9 +136,8 @@ impl StateValue {
 
     /// Returns the fully qualified Rust name of the stored concrete type.
     ///
-    /// Type names are intended for diagnostics only. Persisted formats must
-    /// use stable codec tags from `StateSpec`, because Rust type-name spelling
-    /// is not a compatibility contract.
+    /// Type names are intended for in-process diagnostics only and are never
+    /// written as persistence metadata.
     pub(crate) fn type_name(&self) -> &'static str {
         self.inner.concrete_type_name()
     }
@@ -167,6 +187,15 @@ impl StateValue {
             Ok(value) => Ok(*value),
             Err(_) => unreachable!("matching TypeId failed its Any downcast"),
         }
+    }
+
+    /// Borrows the original payload through erased Serde serialization.
+    ///
+    /// This operation does not clone, move, encode, or allocate. The returned
+    /// trait object remains tied to this wrapper's borrow; a storage encoder
+    /// supplies the actual serializer and framing.
+    pub(crate) fn serializable(&self) -> &dyn erased_serde::Serialize {
+        self.inner.as_serialize()
     }
 }
 

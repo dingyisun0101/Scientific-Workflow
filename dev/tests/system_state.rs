@@ -12,10 +12,12 @@
 //! - time-point and state construction;
 //! - real `physics_in_parallel` tensor insertion, borrowing, mutation,
 //!   cloning, and owned extraction;
+//! - ownership-preserving replacement and rejection;
+//! - checked mutable simulation time;
 //! - public errors for unknown, missing, and mismatched fields.
 //!
 //! Payload persistence is intentionally outside this contract. The JSON
-//! fixture defines the state schema; a later SSTS codec will encode tensor
+//! fixture defines the state schema; a later time-series codec will encode tensor
 //! payloads.
 
 use std::fs;
@@ -110,6 +112,17 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert!(state.is_blank());
     assert!(!state.has("population").expect("field must be declared"));
 
+    // The owning simulation may replace or advance time without touching
+    // payload layout. Checked advancement returns the new complete coordinate.
+    let replacement_time = TimePoint::new(10);
+    assert_eq!(state.set_time(replacement_time), initial_time);
+    assert_eq!(state.set_time(initial_time), replacement_time);
+    let advanced = state
+        .advance(Some(0.25))
+        .expect("finite physical time must advance");
+    assert_eq!(advanced.index(), 1);
+    assert_eq!(advanced.physical(), Some(0.5));
+
     // Empty and unknown fields produce distinct public errors before any
     // tensor is inserted.
     assert!(matches!(
@@ -120,6 +133,18 @@ fn tensor_state_round_trip_integrates_public_modules() {
         state.get::<Tensor<u64, Dense>>("temperature"),
         Err(StateError::UnknownField { ref field }) if field == "temperature"
     ));
+
+    let rejected = vec![1_u64, 2, 3];
+    let rejected_pointer = rejected.as_ptr();
+    let rejection = state
+        .set("temperature", rejected)
+        .expect_err("an undeclared field must reject and return its payload");
+    assert!(matches!(
+        rejection.error(),
+        StateError::UnknownField { field } if field == "temperature"
+    ));
+    let (_, rejected) = rejection.into_parts();
+    assert_eq!(rejected.as_ptr(), rejected_pointer);
 
     // Construct realistic rank-one and rank-two tensors. Moving these values
     // into SystemState transfers their owned backing allocations.
@@ -139,15 +164,45 @@ fn tensor_state_round_trip_integrates_public_modules() {
     activity.set(&[1], 0);
     activity.set(&[2], 1);
 
-    state
-        .set("population", population)
-        .expect("population tensor must move into its declared slot");
-    state
-        .set("space", space)
-        .expect("space tensor must move into its declared slot");
-    state
-        .set("activity", activity)
-        .expect("activity tensor must move into its declared slot");
+    assert!(
+        state
+            .set("population", population)
+            .expect("population tensor must move into its declared slot")
+            .is_none()
+    );
+    assert!(
+        state
+            .set("space", space)
+            .expect("space tensor must move into its declared slot")
+            .is_none()
+    );
+    assert!(
+        state
+            .set("activity", activity)
+            .expect("activity tensor must move into its declared slot")
+            .is_none()
+    );
+
+    let rejection = state
+        .set("population", String::from("wrong concrete type"))
+        .expect_err("an occupied field must reject a different concrete type");
+    assert!(matches!(
+        rejection.error(),
+        StateError::TypeMismatch {
+            field,
+            expected,
+            actual,
+        } if field == "population"
+            && *expected == std::any::type_name::<String>()
+            && *actual == std::any::type_name::<Tensor<u64, Dense>>()
+    ));
+    let (_, rejected) = rejection.into_parts();
+    assert_eq!(rejected, "wrong concrete type");
+    assert!(
+        state
+            .is::<Tensor<u64, Dense>>("population")
+            .expect("rejected replacement must preserve the tensor")
+    );
 
     assert_eq!(state.loaded(), 3);
     assert!(!state.is_blank());

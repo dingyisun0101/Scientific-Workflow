@@ -2,9 +2,8 @@
 //!
 //! These tests live outside the source tree by project convention. The value
 //! implementation is included directly because `StateValue` is deliberately
-//! crate-private and the public `SystemState` facade has not been implemented
-//! yet. Once that facade exists, broader ownership behavior will also be
-//! covered through public integration tests.
+//! crate-private. Broader ownership behavior is independently covered through
+//! the public `SystemState` integration test.
 //!
 //! The tests focus on the guarantees that justify the erased-value layer:
 //!
@@ -12,12 +11,59 @@
 //! - explicit clones create independent payloads;
 //! - consuming extraction preserves owned backing allocations;
 //! - failed downcasts return the original erased owner;
+//! - erased serialization borrows the original value without cloning it;
 //! - erased values remain transferable between threads.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use serde::{Serialize, Serializer};
 
 #[path = "../../src/system_state/value.rs"]
 mod value;
 
 use value::StateValue;
+
+/// Serializable payload whose Clone calls are externally observable.
+struct CloneTracked {
+    values: Vec<u64>,
+    clones: Arc<AtomicUsize>,
+}
+
+impl CloneTracked {
+    /// Creates a payload and its independent clone counter.
+    fn new(values: Vec<u64>) -> (Self, Arc<AtomicUsize>) {
+        let clones = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                values,
+                clones: Arc::clone(&clones),
+            },
+            clones,
+        )
+    }
+}
+
+impl Clone for CloneTracked {
+    /// Records deliberate payload cloning.
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::SeqCst);
+        Self {
+            values: self.values.clone(),
+            clones: Arc::clone(&self.clones),
+        }
+    }
+}
+
+impl Serialize for CloneTracked {
+    /// Serializes only the scientific values; the test counter is not data.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.values.serialize(serializer)
+    }
+}
 
 #[test]
 fn borrowed_downcasts_access_the_original_payload() {
@@ -75,6 +121,42 @@ fn failed_consuming_downcast_returns_the_original_value() {
 
     assert!(value.is::<Vec<u64>>());
     assert_eq!(value.downcast_ref::<Vec<u64>>(), Some(&vec![1, 2, 3]));
+}
+
+#[test]
+fn erased_serialization_borrows_without_cloning_or_replacing_the_payload() {
+    let (payload, clones) = CloneTracked::new(vec![3, 5, 8]);
+    let original_pointer = payload.values.as_ptr();
+    let mut value = StateValue::new(payload);
+    let mut encoded = Vec::new();
+    let mut serializer = serde_json::Serializer::new(&mut encoded);
+
+    erased_serde::serialize(value.serializable(), &mut serializer)
+        .expect("borrowed erased payload must serialize");
+
+    assert_eq!(encoded, br#"[3,5,8]"#);
+    assert_eq!(clones.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        value
+            .downcast_ref::<CloneTracked>()
+            .expect("serialization must preserve the concrete value")
+            .values
+            .as_ptr(),
+        original_pointer
+    );
+
+    value
+        .downcast_mut::<CloneTracked>()
+        .expect("payload must remain mutable after serialization")
+        .values
+        .push(13);
+    assert_eq!(
+        value
+            .downcast_ref::<CloneTracked>()
+            .expect("payload type must remain unchanged")
+            .values,
+        vec![3, 5, 8, 13]
+    );
 }
 
 #[test]

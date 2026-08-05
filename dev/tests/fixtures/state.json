@@ -2,15 +2,15 @@
   "fields": [
     {
       "name": "population",
-      "type": "physics_in_parallel.tensor.dense.u64.v1"
+      "description": "Population count at each modeled location"
     },
     {
       "name": "space",
-      "type": "physics_in_parallel.tensor.dense.u64.v1"
+      "description": "Spatial lattice values for the current state"
     },
     {
       "name": "activity",
-      "type": "physics_in_parallel.tensor.dense.u8.v1"
+      "description": "Activity flag at each modeled location"
     }
   ]
 }

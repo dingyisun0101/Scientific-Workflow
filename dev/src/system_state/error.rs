@@ -1,17 +1,18 @@
 //! Errors produced while defining and manipulating system states.
 //!
 //! This module keeps the SystemState error surface in one place so template
-//! loading, layout validation, and typed payload access report failures
-//! consistently. The variants are deliberately specific enough for callers to
-//! inspect programmatically while their display messages retain the field or
-//! path context needed for logs.
+//! loading, layout validation, time advancement, and typed payload access
+//! report failures consistently. The variants are deliberately specific
+//! enough for callers to inspect programmatically while their display messages
+//! retain the field, path, or time context needed for logs.
 //!
 //! # Error sources
 //!
 //! Filesystem and JSON failures preserve their original errors through
 //! [`std::error::Error::source`]. Semantic template failures and state-access
 //! failures do not wrap another error because they are detected directly by
-//! this crate.
+//! this crate. Checked time-advance failures likewise retain their complete
+//! numeric context directly in [`StateError`].
 //!
 //! # Performance
 //!
@@ -34,7 +35,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// A failure encountered while loading a state template or accessing a state.
+/// A failure encountered while defining, accessing, or advancing a state.
 ///
 /// `StateError` is non-exhaustive because later workflow features may add
 /// validation failures without forcing downstream crates to update exhaustive
@@ -77,13 +78,6 @@ pub enum StateError {
         field: String,
     },
 
-    /// A field definition used an empty or whitespace-only codec type tag.
-    #[error("state template field `{field}` has an empty type tag")]
-    EmptyTypeTag {
-        /// Name of the field with the invalid type tag.
-        field: String,
-    },
-
     /// An operation addressed a key that is absent from the template layout.
     #[error("state template does not declare field `{field}`")]
     UnknownField {
@@ -110,18 +104,43 @@ pub enum StateError {
         actual: &'static str,
     },
 
-    /// A reconstructed state supplied a slot count incompatible with its
-    /// template layout.
+    /// Incrementing the authoritative integer time index would overflow `u64`.
     ///
-    /// Normal state creation allocates the correct number of slots. This
-    /// variant primarily protects deserialization and future storage backends
-    /// from constructing structurally invalid states.
-    #[error("state payload has {actual} field slots, but its template declares {expected}")]
-    FieldCountMismatch {
-        /// Number of fields declared by the template.
-        expected: usize,
-        /// Number of payload slots supplied for the state.
-        actual: usize,
+    /// `SystemState::advance` will detect this condition before mutating the
+    /// state, so the original time point remains unchanged.
+    #[error("cannot advance state time index {index}: the next index exceeds u64::MAX")]
+    TimeIndexOverflow {
+        /// Current index that cannot be incremented.
+        index: u64,
+    },
+
+    /// A physical-time delta was requested for a state without a physical
+    /// coordinate.
+    ///
+    /// Absence is not interpreted as zero: callers must establish a known
+    /// origin explicitly before advancing physical time.
+    #[error(
+        "cannot advance physical time at state index {index}: no physical coordinate is present"
+    )]
+    MissingPhysicalTime {
+        /// Integer index at which physical advancement was requested.
+        index: u64,
+    },
+
+    /// A physical-time delta or its sum with the current coordinate is not
+    /// finite.
+    ///
+    /// Both operands are retained for diagnosis. This variant covers a
+    /// non-finite input delta and finite operands whose addition overflows to
+    /// infinity. The state remains unchanged.
+    #[error(
+        "cannot advance physical time {current} by {delta}: the delta and resulting coordinate must be finite"
+    )]
+    InvalidPhysicalAdvance {
+        /// Current finite physical coordinate.
+        current: f64,
+        /// Requested delta, which may itself be non-finite.
+        delta: f64,
     },
 }
 
@@ -152,10 +171,6 @@ pub struct SetError<T> {
     payload: T,
 }
 
-#[expect(
-    dead_code,
-    reason = "the separately reviewed SystemState::set change will call this staged API"
-)]
 impl<T> SetError<T> {
     /// Creates an ownership-preserving set rejection.
     ///
