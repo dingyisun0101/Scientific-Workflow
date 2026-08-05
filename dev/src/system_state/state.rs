@@ -41,9 +41,18 @@
 //! mismatch reports both type names. A failed consuming `take` restores the
 //! original erased payload to its slot before returning the error, so an
 //! incorrect type request cannot discard scientific data.
+//!
+//! # Serialization capability
+//!
+//! New payloads must implement Serde [`Serialize`]. A crate-private accessor
+//! exposes that existing implementation as a borrowed erased trait object for
+//! the storage encoder. `SystemState` itself does not select JSON, frame
+//! records, or perform IO.
 
 use std::any::{Any, type_name};
 use std::fmt;
+
+use serde::Serialize;
 
 use super::error::{SetError, StateError};
 use super::spec::{FieldSpec, StateSpec};
@@ -307,7 +316,7 @@ impl SystemState {
     /// `T` without cloning it.
     pub fn set<T>(&mut self, key: &str, payload: T) -> Result<Option<T>, SetError<T>>
     where
-        T: Any + Clone + Send,
+        T: Serialize + Clone + Send + 'static,
     {
         let index = match self.spec.index_of(key) {
             Ok(index) => index,
@@ -465,6 +474,26 @@ impl SystemState {
             .ok_or_else(|| StateError::MissingValue {
                 field: key.to_owned(),
             })
+    }
+
+    /// Borrows one populated payload through erased Serde serialization.
+    ///
+    /// This crate-private method is the complete format-agnostic boundary used
+    /// by the storage encoder. It performs the same declared-field and
+    /// populated-slot validation as [`SystemState::get`], but it neither
+    /// downcasts nor exposes the private [`StateValue`] wrapper.
+    ///
+    /// The returned object refers directly to the stored concrete payload. No
+    /// clone, allocation, encoding, or ownership transfer occurs here.
+    #[allow(
+        dead_code,
+        reason = "reserved for storage::JsonEncoder, which is implemented in the next module stage"
+    )]
+    pub(crate) fn serializable(
+        &self,
+        key: &str,
+    ) -> Result<&dyn erased_serde::Serialize, StateError> {
+        Ok(self.value(key)?.serializable())
     }
 }
 

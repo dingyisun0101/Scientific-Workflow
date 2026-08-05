@@ -409,6 +409,20 @@ and its direct tests are removed in their own stage. Until then, system-state
 verification deliberately selects the system_state integration target so the
 downstream-file rule remains intact.
 
+### Verified implementation status
+
+The complete system_state refactor now implements this contract. Focused Cargo
+test results are: 6 specification tests, 4 error tests, 7 erased-value tests,
+and 15 state tests. The joint `tests/system_state.rs` target runs those 32 tests
+plus one public physics_in_parallel tensor workflow, for 33 passing tests.
+Three Rust doctests also pass. `cargo fmt --check`, `cargo check --lib`, and
+Clippy over the library and joint system_state target with warnings denied all
+pass.
+
+The crate-private serialization view carries a temporary justified dead-code
+allowance because the storage module is intentionally not implemented early.
+That allowance is removed when JsonEncoder becomes its first production caller.
+
 ## Public system-state API
 
 The method catalog covers every explicitly declared production method in the
@@ -2067,17 +2081,84 @@ encoded buffers. No deep state clone is used.
 The core API is tensor-library agnostic. Any type satisfying the SystemState
 and Serde bounds can be stored and written.
 
-The pinned development dependency `physics_in_parallel` 3.0.3 implements
+The pinned development dependency `physics_in_parallel` 3.0.4 implements
 Serialize for Tensor<T, Dense>, Tensor<T, Sparse>, and SquareLattice<T> under
 their documented scalar bounds. The new SystemState::set bound therefore does
 not require an upstream crate change merely to store these payloads; the public
-integration test remains the compile-time gate.
+integration test remains the compile-time gate. During coordinated local
+development, Cargo resolves version 3.0.4 from `../../pip`; the version remains
+specified so the path can be removed after that release is published.
 
-The current physics-in-parallel tensor and SquareLattice serialization creates
-intermediate owned payload data through to_vec. Erased borrowing cannot remove
-a copy performed inside that external Serialize implementation. A later
-integration stage must add a borrowed serializer or update that crate before
-claiming end-to-end copy-free tensor encoding.
+Until that release, the local `../../pip` checkout is the authoritative
+development dependency. Changes to scientific payload contracts may update
+`physics_in_parallel` and `scientific-workflow` together, with tests in both
+crates serving as the joint compatibility gate. Migration back to the registry
+is a separate release step: publish the coordinated PiP version, replace the
+path dependency with its crates.io version, refresh the lockfile, and rerun both
+test suites before publishing Scientific Workflow.
+
+Current readiness: local integration and Cargo packaging are ready. All 152 PiP
+tests, the 33-test SystemState integration target, `cargo package`, and
+`cargo publish --dry-run` pass. Registry publication remains intentionally
+deferred. Before that release, commit the 3.0.4 changes and resolve the crate's
+pre-existing MSRV inconsistency: its manifest declares Rust 1.85, while existing
+engine code uses `slice::get_disjoint_mut`, stabilized in Rust 1.86. Existing
+Clippy warnings should also be triaged as release hygiene, although they do not
+block packaging or local use.
+
+The upstream compatibility and optimization requirements are distinct:
+
+- Compatibility requires no change. The existing implementations satisfy
+  SystemState::set and StateDecoder's future typed Deserialize requirements.
+- Copy-efficient dense encoding required an upstream change. That change is
+  implemented in the local 3.0.4 source and preserves the existing JSON schema.
+
+physics_in_parallel contains `FlatPayloadRef<'a, T>` with borrowed `kind`,
+`shape`, and `data` fields. Version 3.0.4 now uses it as follows:
+
+1. Dense tensor storage serializes a borrowed shape and data slice. The public
+   dense tensor facade delegates directly to storage instead of constructing a
+   `serde_json::Value`.
+2. Square lattices and vector lists serialize borrowed buffers and retain their
+   existing kind tags and flat schemas.
+3. Matrix backends can expose optional contiguous row-major storage. Dense
+   matrices use that borrowed slice; sparse and structured backends retain the
+   logical-entry fallback.
+4. Convenience methods explicitly returning an owned `Value`, `String`, or
+   `FlatPayload` still allocate because ownership is their stated contract.
+5. Sparse tensor storage remains a separate decision. Its current Serialize calls `to_dense()`,
+   allocating the full logical tensor. Either stream the existing dense JSON
+   sequence through a custom borrowed Serialize wrapper for format stability,
+   or introduce a genuinely sparse JSON representation. The latter is more
+   efficient but is a persisted-format change and requires matching Deserialize
+   plus deterministic entry ordering.
+
+Concretely, the current sparse tensor wire object is
+`{"kind":"tensor_sparse","shape":[...],"data":[...]}`. `data` contains every
+logical element in row-major order, including implicit zeros. Serialization
+materializes a temporary dense tensor and dense data vector; deserialization
+first owns that dense vector and then builds sparse storage from it. The public
+`Tensor<T, Sparse>` facade now avoids an additional `serde_json::Value`, but it
+delegates to this still-densifying storage serializer. SystemState itself moves
+sparse tensor ownership without copying on `set` and `take`; the extra
+allocation occurs only when JSON serialization begins. Sparse matrices likewise
+retain their logical-dense JSON fallback.
+
+The detailed sparse-format task list is maintained locally in `pip/todo.md`.
+PiP intentionally ignores that coordination file through `/todo.md` in its
+`.gitignore`; this design document remains the tracked cross-crate architectural
+record.
+
+Deserialization may allocate the final owned Vec<T>; that allocation becomes
+the reconstructed tensor backing store and is not an avoidable intermediate
+copy. `FlatPayload<T>` already transfers its owned vectors into the tensor or
+lattice constructors on the read path.
+
+The 3.0.4 tests explicitly preserve dense and sparse tensor schemas, round-trip
+through `serde_json::to_writer` and `from_slice`, preserve lattice and matrix
+schemas, and exercise vector-list serialization through engine attributes. All
+152 upstream tests pass. A future allocation benchmark should quantify the
+removed dense intermediates and the remaining sparse cost.
 
 Zero-copy guarantees therefore apply precisely to:
 
@@ -2105,11 +2186,9 @@ or StateWriter ownership rules.
 
 ## Implementation delta
 
-The current system_state source still contains the type-tag template and lacks
-the final erased Serialize boundary; the implementation-ready section above is
-the next stage. After that stage, the existing time_series source must be
-reduced to the in-memory analysis layer and storage introduced in separate
-production-file review units:
+The system_state source now matches the implementation-ready contract above.
+The existing time_series source must next be reduced to the in-memory analysis
+layer and storage introduced in separate production-file review units:
 
 1. time_series is not exported from lib.rs.
 2. CodecRegistry and its stable-tag error variants implement the rejected

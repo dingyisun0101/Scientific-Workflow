@@ -74,6 +74,10 @@ trait ErasedValue: Any + Send {
     /// This explicit concrete-to-trait-object coercion avoids depending on
     /// trait-object upcasting and therefore remains compatible with the
     /// crate's Rust 1.85 minimum version.
+    #[allow(
+        dead_code,
+        reason = "called through the crate-private storage boundary before storage is exported"
+    )]
     fn as_serialize(&self) -> &dyn erased_serde::Serialize;
 }
 
@@ -194,6 +198,10 @@ impl StateValue {
     /// This operation does not clone, move, encode, or allocate. The returned
     /// trait object remains tied to this wrapper's borrow; a storage encoder
     /// supplies the actual serializer and framing.
+    #[allow(
+        dead_code,
+        reason = "called through the crate-private storage boundary before storage is exported"
+    )]
     pub(crate) fn serializable(&self) -> &dyn erased_serde::Serialize {
         self.inner.as_serialize()
     }

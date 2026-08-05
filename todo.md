@@ -5,7 +5,7 @@ Only the active production file may be edited; downstream items remain here
 until their own one-file review unit. design.md remains the architectural source
 of truth.
 
-## Next stage: system_state clean-slate refactor
+## Completed stage: system_state clean-slate refactor
 
 ### Confirmed scope: JSON only
 
@@ -54,7 +54,7 @@ of truth.
 - Do not edit time_series or storage source during this stage, even when an
   intermediate system_state change invalidates transitional code.
 
-### 1. src/system_state/spec.rs
+### 1. src/system_state/spec.rs — complete
 
 - Remove `type_tag`, the JSON `type` property, Type-tag documentation, and
   `FieldSpec::type_tag`.
@@ -66,13 +66,13 @@ of truth.
   property rejection, Arc-shared StateLayout, path-only public load, crate-
   private parse, empty template support, and normalized to_json.
 
-### 2. tests/fixtures/state.json
+### 2. tests/fixtures/state.json — complete
 
 - Replace every type tag with a concise natural-language field description.
 - Keep the existing population, space, and activity key order so tensor and
   ownership integration coverage remains comparable.
 
-### 3. tests/system_state/spec.rs
+### 3. tests/system_state/spec.rs — complete
 
 - Replace all type-tag assertions with description assertions.
 - Cover absent, null, empty, whitespace-only, trimmed, and ordinary
@@ -81,7 +81,7 @@ of truth.
   template, deterministic index/lookup, parse/load parity, source provenance,
   and Arc identity coverage.
 
-### 4. src/system_state/error.rs
+### 4. src/system_state/error.rs — complete
 
 - Remove `EmptyTypeTag` after spec.rs no longer references it.
 - Remove unused `FieldCountMismatch`; restoration always allocates through
@@ -89,12 +89,12 @@ of truth.
 - Preserve ownership-returning SetError, IO/JSON sources, typed access errors,
   and transactional time errors unchanged.
 
-### 5. tests/system_state/error.rs
+### 5. tests/system_state/error.rs — complete
 
 - Remove obsolete variant expectations and retain SetError ownership,
   formatting, source-chain, Send, and time-error coverage.
 
-### 6. src/system_state/value.rs
+### 6. src/system_state/value.rs — complete
 
 - Change the erased blanket bound to
   `T: Serialize + Clone + Send + 'static`.
@@ -104,14 +104,14 @@ of truth.
   mismatch recovery, bounded Debug, and one T::clone call per explicit clone.
 - Remove all stable-tag and codec wording.
 
-### 7. tests/system_state/value.rs
+### 7. tests/system_state/value.rs — complete
 
 - Make focused payload fixtures Serialize without hiding Clone counters.
 - Serialize borrowed erased views with serde_json and explicitly verify output,
   pointer identity, zero Clone calls, and continued typed access afterward.
 - Retain ownership/downcast/type/debug/Send tests.
 
-### 8. src/system_state/state.rs
+### 8. src/system_state/state.rs — complete
 
 - Require `Serialize + Clone + Send + 'static` only where a new payload enters
   through `set`; typed inspection and extraction retain their minimal bounds.
@@ -122,7 +122,7 @@ of truth.
   Clone, and bounded Debug.
 - Document sequential mutable access and exact T-defined Clone semantics.
 
-### 9. tests/system_state/state.rs
+### 9. tests/system_state/state.rs — complete
 
 - Make every inserted test payload Serialize.
 - Add coverage for the crate-private serializable accessor, including unknown
@@ -132,7 +132,7 @@ of truth.
   recovery, mismatch restoration, empty derivation, clone counts, time
   transactionality, clearing, and bounded Debug.
 
-### 10. src/system_state.rs
+### 10. src/system_state.rs — complete
 
 - Rewrite module workflow and examples for key-only templates and
   Serialize-compatible payloads.
@@ -140,7 +140,7 @@ of truth.
 - Keep only FieldSpec, StateSpec, SystemState, TimePoint, StateError, and
   SetError public re-exports; value erasure stays private.
 
-### 11. tests/system_state.rs
+### 11. tests/system_state.rs — complete
 
 - Include the four focused files under `tests/system_state/` so
   `cargo test --test system_state` runs them with Cargo-managed dependencies.
@@ -148,7 +148,7 @@ of truth.
 - Preserve the downstream tensor lifecycle and explicit template round-trip
   equality; compilation must prove the tensor satisfies Serialize.
 
-### 12. src/lib.rs
+### 12. src/lib.rs — complete
 
 - Update crate-level examples, payload bounds, and module-responsibility text.
 - Export only system_state during this stage. Do not expose staged time_series
@@ -163,7 +163,30 @@ of truth.
 - Do not use full `cargo test` as the stage gate until the obsolete direct
   time_series codec tests are removed in their own stage.
 
+Verified results:
+
+- focused suites: spec 6, error 4, value 7, state 15;
+- joint system_state target: 33 passed;
+- doctests: 3 passed;
+- formatting, library check, and Clippy with warnings denied: passed.
+- root and crate READMEs were aligned with the completed contract.
+
 ## Deferred stage: time_series reconciliation and storage separation
+
+### External integration: physics_in_parallel serialization
+
+- Completed in local `physics_in_parallel` 3.0.4: dense tensor storage, dense
+  tensor facades, SquareLattice, VectorList, and contiguous dense Matrix
+  serialization now borrow their buffers and preserve the existing JSON schema.
+- Completed: Scientific Workflow resolves the local 3.0.4 source and its 33-test
+  SystemState integration target passes with a real tensor payload.
+- Choose the sparse persisted representation deliberately: streaming dense JSON
+  preserves format but remains O(logical size), while true sparse JSON requires
+  a matching versioned Deserialize implementation and deterministic ordering.
+- Remaining: add allocation benchmarks, publish `physics_in_parallel` 3.0.4,
+  then remove the temporary local path from the versioned dev dependency.
+- Until publication, keep `../../pip` as the authoritative dependency and test
+  coordinated contract changes in both crates before considering them complete.
 
 ### src/time_series/codec.rs
 
@@ -178,6 +201,9 @@ of truth.
 ### src/storage/encoder.rs
 
 - Accept a borrowed simulation-owned SystemState at a sampling boundary.
+- Remove the temporary justified `dead_code` allowances from
+  `SystemState::serializable`, `StateValue::serializable`, and
+  `ErasedValue::as_serialize` when JsonEncoder makes the boundary live.
 - Encode only the fields declared by that logical stream without cloning or
   taking payload ownership.
 - End every payload borrow before sample returns so the simulation can resume

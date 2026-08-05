@@ -188,10 +188,7 @@ fn in_memory_parse_reports_the_supplied_metadata_path() {
 #[test]
 fn semantic_validation_is_shared_by_load_and_parse() {
     let cases = [
-        (
-            br#"{"fields":[{"name":" "}]}"#.as_slice(),
-            "empty name",
-        ),
+        (br#"{"fields":[{"name":" "}]}"#.as_slice(), "empty name"),
         (
             br#"{"fields":[{"name":"x"},{"name":" x "}]}"#.as_slice(),
             "duplicate normalized name",
@@ -257,7 +254,10 @@ fn descriptions_and_names_are_normalized_deterministically() {
             {"name": "whitespace"}
         ]
     });
-    assert_eq!(normalized, expected, "normalized round trip must be explicit");
+    assert_eq!(
+        normalized, expected,
+        "normalized round trip must be explicit"
+    );
 }
 
 #[test]

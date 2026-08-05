@@ -17,8 +17,25 @@
 //! - public errors for unknown, missing, and mismatched fields.
 //!
 //! Payload persistence is intentionally outside this contract. The JSON
-//! fixture defines the state schema; a later time-series codec will encode tensor
-//! payloads.
+//! fixture defines only the in-memory field layout; the future storage module
+//! will borrow each tensor's existing Serialize implementation.
+
+#![allow(
+    clippy::duplicate_mod,
+    reason = "focused suites intentionally include private production files in isolated namespaces"
+)]
+
+// Cargo discovers this top-level integration target. These path modules make
+// the focused, filename-mirroring suites under `tests/system_state/` part of
+// the same Cargo-managed test binary without placing tests in production code.
+#[path = "system_state/error.rs"]
+mod error_tests;
+#[path = "system_state/spec.rs"]
+mod spec_tests;
+#[path = "system_state/state.rs"]
+mod state_tests;
+#[path = "system_state/value.rs"]
+mod value_tests;
 
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,20 +61,20 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert_eq!(fields[0].index(), 0);
     assert_eq!(fields[0].name(), "population");
     assert_eq!(
-        fields[0].type_tag(),
-        "physics_in_parallel.tensor.dense.u64.v1"
+        fields[0].description(),
+        Some("Population count at each modeled location")
     );
     assert_eq!(fields[1].index(), 1);
     assert_eq!(fields[1].name(), "space");
     assert_eq!(
-        fields[1].type_tag(),
-        "physics_in_parallel.tensor.dense.u64.v1"
+        fields[1].description(),
+        Some("Spatial lattice values for the current state")
     );
     assert_eq!(fields[2].index(), 2);
     assert_eq!(fields[2].name(), "activity");
     assert_eq!(
-        fields[2].type_tag(),
-        "physics_in_parallel.tensor.dense.u8.v1"
+        fields[2].description(),
+        Some("Activity flag at each modeled location")
     );
     assert!(specification.contains("population"));
     assert_eq!(

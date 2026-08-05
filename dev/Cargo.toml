@@ -28,4 +28,4 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
-physics_in_parallel = "3.0.3"
+physics_in_parallel = { version = "3.0.4", path = "../../pip" }

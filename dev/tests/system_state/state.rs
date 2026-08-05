@@ -18,12 +18,15 @@
 //! - extraction preserves owned backing allocations;
 //! - failed typed extraction restores the original payload;
 //! - explicit state cloning deeply clones populated payloads;
+//! - erased serialization borrows payloads without cloning or replacement;
 //! - empty-state derivation shares only immutable layout metadata;
 //! - field-access failures remain precise and non-destructive;
 //! - debug formatting never traverses scientific payloads.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use serde::{Serialize, Serializer};
 
 #[path = "../../src/system_state/error.rs"]
 #[allow(dead_code, unfulfilled_lint_expectations)]
@@ -156,6 +159,16 @@ impl Clone for CloneTracked {
             values: self.values.clone(),
             clones: Arc::clone(&self.clones),
         }
+    }
+}
+
+impl Serialize for CloneTracked {
+    /// Serializes scientific values while excluding the test-only counter.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.values.serialize(serializer)
     }
 }
 
@@ -350,6 +363,59 @@ fn set_mutate_and_take_transfer_payload_without_cloning() {
     assert_eq!(extracted.values, vec![11, 20, 30, 40]);
     assert!(!state.has("population").expect("field is declared"));
     assert!(state.is_blank());
+}
+
+#[test]
+fn serializable_borrows_the_original_payload_and_preserves_mutability() {
+    let (payload, clones) = CloneTracked::new(vec![2, 4, 8]);
+    let original_pointer = payload.values.as_ptr();
+    let mut state = blank_state(0);
+    state
+        .set("population", payload)
+        .expect("declared field must accept payload");
+    let mut encoded = Vec::new();
+    let mut serializer = serde_json::Serializer::new(&mut encoded);
+
+    erased_serde::serialize(
+        state
+            .serializable("population")
+            .expect("populated field must expose Serialize"),
+        &mut serializer,
+    )
+    .expect("borrowed field must serialize");
+
+    assert_eq!(encoded, br#"[2,4,8]"#);
+    assert_eq!(clones.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        state
+            .get::<CloneTracked>("population")
+            .expect("serialization must preserve the concrete payload")
+            .values
+            .as_ptr(),
+        original_pointer
+    );
+
+    state
+        .get_mut::<CloneTracked>("population")
+        .expect("payload must remain mutable")
+        .values
+        .push(16);
+    assert_eq!(
+        state
+            .get::<CloneTracked>("population")
+            .expect("payload must remain populated")
+            .values,
+        vec![2, 4, 8, 16]
+    );
+
+    assert!(matches!(
+        state.serializable("space"),
+        Err(StateError::MissingValue { field }) if field == "space"
+    ));
+    assert!(matches!(
+        state.serializable("unknown"),
+        Err(StateError::UnknownField { field }) if field == "unknown"
+    ));
 }
 
 #[test]

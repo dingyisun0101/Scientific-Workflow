@@ -14,9 +14,15 @@
 //!    [`SystemState::advance`].
 //! 5. Create later blank states with [`SystemState::empty`].
 //!
-//! The template fixes field names, field order, and stable serialization type
-//! tags. Individual payload slots may be empty, but callers cannot add,
-//! remove, or reorder fields after the template is loaded.
+//! The template fixes field names, field order, and optional human-facing
+//! descriptions. It contains no Rust type or storage codec information.
+//! Individual payload slots may be empty, but callers cannot add, remove, or
+//! reorder fields after the template is loaded.
+//!
+//! Every inserted payload implements Serde `Serialize`, `Clone`, `Send`, and
+//! `'static`. Serialization is supplied by the payload type itself; this
+//! module only retains a private borrowed erased view for the future storage
+//! encoder. It does not select JSON framing or perform IO.
 //!
 //! # Ownership
 //!
@@ -29,8 +35,9 @@
 //! [`SystemState::take`] moves a stored payload back to the caller. Together,
 //! `set` and `take` allow large scientific allocations to cross the state
 //! boundary without copying their contents. Explicitly cloning a
-//! [`SystemState`] is intentionally different: populated payloads are deeply
-//! cloned so the resulting states can be mutated independently.
+//! [`SystemState`] is intentionally different: it creates a new erased box and
+//! invokes each populated payload's `Clone` implementation. Clone depth is
+//! therefore defined by the concrete payload type.
 //!
 //! The public insertion contract deliberately makes replacement visible:
 //!
@@ -63,6 +70,11 @@
 //! methods. Template parsing representations, compact field indices, and
 //! name-to-slot lookup tables are likewise hidden behind the public types
 //! re-exported below.
+//!
+//! Mutable payload access intentionally borrows one field at a time. Callers
+//! must end one `get_mut` borrow before requesting another; tightly coupled
+//! data that requires simultaneous mutation should be stored in one aggregate
+//! payload.
 
 mod error;
 mod spec;

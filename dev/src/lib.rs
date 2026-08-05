@@ -3,7 +3,7 @@
 //! `scientific-workflow` provides the data and execution foundations needed to
 //! describe scientific systems, record their evolution, and organize scoped
 //! computational work. The crate is intentionally divided by responsibility:
-//! state representation, state time series, dispatch, persistence, and
+//! state representation, in-memory state time series, storage, dispatch, and
 //! language bridges remain separate modules rather than accumulating behind
 //! one monolithic interface.
 //!
@@ -12,9 +12,10 @@
 //! The first implemented module is [`system_state`]. It provides:
 //!
 //! - JSON-defined, immutable field layouts;
+//! - optional natural-language field descriptions without persisted Rust types;
 //! - heterogeneous concrete Rust payloads behind a typed API;
 //! - clone-free payload insertion, mutation, and extraction;
-//! - explicit deep cloning of complete states;
+//! - explicit per-payload cloning of complete states;
 //! - mutable, checked time-point progression.
 //!
 //! Type erasure and boxing remain internal to that module. Downstream crates
@@ -46,8 +47,9 @@
 //! # }
 //! ```
 //!
-//! Future time-series and dispatcher modules will build on the same ownership and
-//! module-boundary principles without changing the public state-value
-//! contract.
+//! Future modules preserve strict boundaries: `time_series` is an in-memory
+//! analysis collection, `storage` owns JSON encoding and disk IO, and the
+//! dispatcher organizes scoped workflow execution. None changes the public
+//! state-value ownership contract.
 
 pub mod system_state;
