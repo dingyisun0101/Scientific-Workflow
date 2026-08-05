@@ -18,7 +18,17 @@
 //! These errors are constructed only on failure paths. Owned paths and field
 //! names are retained to make an error independent of the state or template
 //! that produced it; successful state access does not allocate error context.
+//!
+//! # Ownership-preserving insertion failures
+//!
+//! [`SetError`] is generic because it returns ownership of a payload that
+//! [`SystemState::set`](super::state::SystemState::set) could not accept. Its
+//! diagnostics deliberately omit the payload value, so scientific data does
+//! not need to implement [`Debug`](std::fmt::Debug) and is never traversed or
+//! copied merely to format an error.
 
+use std::error::Error;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
@@ -113,4 +123,101 @@ pub enum StateError {
         /// Number of payload slots supplied for the state.
         actual: usize,
     },
+}
+
+/// A failed [`SystemState::set`](super::state::SystemState::set) operation that
+/// retains ownership of the unchanged incoming payload.
+///
+/// A set operation can fail before moving `payload` into a state because the
+/// requested field is undeclared or because an existing field contains a
+/// different concrete Rust type. Returning only [`StateError`] in those cases
+/// would drop the caller's payload while unwinding the failed call. `SetError`
+/// instead keeps the rejection reason and original `T` together, following the
+/// ownership-preserving pattern of channel send errors.
+///
+/// The payload remains private so diagnostics cannot accidentally expose or
+/// traverse large scientific data. Borrow it through [`SetError::payload`] or
+/// recover ownership of both components through [`SetError::into_parts`].
+/// Neither operation invokes [`Clone`].
+///
+/// # Formatting
+///
+/// [`Display`](fmt::Display) delegates to the contained [`StateError`]. The
+/// bounded [`Debug`](fmt::Debug) representation includes only that error and
+/// the compile-time Rust type name of `T`; it never requires `T: Debug` or
+/// formats the payload value.
+#[must_use = "the rejected payload remains owned by this error until it is recovered or dropped"]
+pub struct SetError<T> {
+    error: StateError,
+    payload: T,
+}
+
+#[expect(
+    dead_code,
+    reason = "the separately reviewed SystemState::set change will call this staged API"
+)]
+impl<T> SetError<T> {
+    /// Creates an ownership-preserving set rejection.
+    ///
+    /// This constructor is crate-private because only SystemState validation
+    /// may determine that a payload was rejected. Public callers receive a
+    /// `SetError<T>` from [`SystemState::set`](super::state::SystemState::set)
+    /// and recover its contents through the accessors below.
+    pub(crate) const fn new(error: StateError, payload: T) -> Self {
+        Self { error, payload }
+    }
+
+    /// Returns the state-validation error that rejected the payload.
+    ///
+    /// Borrowing the reason leaves the incoming payload owned by this error,
+    /// allowing callers to inspect the failure before deciding how to recover
+    /// or dispose of the scientific data.
+    pub const fn error(&self) -> &StateError {
+        &self.error
+    }
+
+    /// Returns the unchanged rejected payload by shared reference.
+    ///
+    /// The returned reference points to the same concrete `T` moved into
+    /// [`SystemState::set`](super::state::SystemState::set). No payload clone,
+    /// serialization, downcast, or backing-buffer copy occurs.
+    pub const fn payload(&self) -> &T {
+        &self.payload
+    }
+
+    /// Consumes the rejection and returns its reason and original payload.
+    ///
+    /// The tuple is ordered as `(StateError, T)`, matching the borrowed
+    /// [`SetError::error`] then [`SetError::payload`] inspection order. The
+    /// payload moves directly out of the error and retains its original owned
+    /// allocations.
+    pub fn into_parts(self) -> (StateError, T) {
+        (self.error, self.payload)
+    }
+}
+
+impl<T> fmt::Debug for SetError<T> {
+    /// Formats bounded diagnostic context without requiring or inspecting
+    /// `T: Debug`.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SetError")
+            .field("error", &self.error)
+            .field("payload_type", &std::any::type_name::<T>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> fmt::Display for SetError<T> {
+    /// Delegates the user-facing message to the state-validation reason.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.error, formatter)
+    }
+}
+
+impl<T> Error for SetError<T> {
+    /// Exposes the contained [`StateError`] for standard error-chain traversal.
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.error)
+    }
 }

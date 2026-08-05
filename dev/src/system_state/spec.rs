@@ -198,6 +198,21 @@ impl StateSpec {
         self.inner.by_name.contains_key(name)
     }
 
+    /// Reports whether two specification handles share one immutable layout.
+    ///
+    /// This is an identity comparison, not structural equality. Two templates
+    /// loaded independently may declare identical fields but still return
+    /// `false`; states derived by cloning one `StateSpec` return `true` without
+    /// comparing field names, type tags, source paths, or lookup maps.
+    ///
+    /// Identity is useful when building a homogeneous collection of states.
+    /// Once a collection accepts only states sharing its canonical layout,
+    /// later indexing and serialization can rely on one field order and one
+    /// stable-tag mapping without repeating structural comparisons.
+    pub fn shares_layout(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Resolves a declared field name to its payload-slot index.
     ///
     /// This is crate-private because compact indices are an implementation
