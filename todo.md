@@ -171,7 +171,26 @@ Verified results:
 - formatting, library check, and Clippy with warnings denied: passed.
 - root and crate READMEs were aligned with the completed contract.
 
-## Deferred stage: time_series reconciliation and storage separation
+## Next stage: time_series reconciliation
+
+Implement one reviewed file at a time:
+
+1. Refactor `src/time_series/error.rs` to collection-only errors. — complete
+2. Rewrite `tests/time_series/error.rs`. — complete
+3. Refactor `src/time_series/series.rs`, remove StateChunk, add narrow
+   `field_mut`, and make PushError small without losing ownership. — complete
+4. Rewrite `tests/time_series/series.rs`. — complete
+5. Delete obsolete `src/time_series/codec.rs`. — complete
+6. Delete obsolete `tests/time_series/codec.rs`.
+7. Create the public `src/time_series.rs` facade.
+8. Rewrite the unified `tests/time_series.rs` target.
+9. Export the module from `src/lib.rs`, update README instructions, and run all
+   stage verification commands.
+
+Do not add serialization, decoding, chunks, queues, metadata, or filesystem IO
+to this module. Those belong to the later `storage` stage.
+
+## Deferred stage: storage separation
 
 ### External integration: physics_in_parallel serialization
 

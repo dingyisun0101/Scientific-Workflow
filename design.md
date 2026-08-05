@@ -423,6 +423,18 @@ The crate-private serialization view carries a temporary justified dead-code
 allowance because the storage module is intentionally not implemented early.
 That allowance is removed when JsonEncoder becomes its first production caller.
 
+### SystemState completion boundary
+
+No functional work remains inside `src/system_state/`. Its specification,
+errors, erased payload ownership, mutable typed access, time handling, borrowed
+serialization boundary, public facade, fixtures, and focused/joint tests are
+complete. The only deferred source cleanup is removal of three justified
+`dead_code` allowances on the serialization boundary; that happens when
+`storage::JsonEncoder` becomes their production caller and is therefore storage
+work, not another SystemState redesign. Reader reconstruction through the
+crate-private `StateSpec::parse` is likewise implemented later by
+`storage::reader` without changing the SystemState contract.
+
 ## Public system-state API
 
 The method catalog covers every explicitly declared production method in the
@@ -1481,17 +1493,18 @@ Returns one immutable state by position.
 
     indexed analysis and tests -> StateSeries::get
 
-#### StateSeries field-level mutable access
+#### StateSeries::field_mut
 
-A later analysis method may mutably borrow one named payload from one stored
-state, but StateSeries must not return &mut SystemState because SystemState time
-is mutable and changing it could invalidate series ordering. Its exact method
-name and generic signature will be decided during the time_series stage.
+Mutably borrows one named payload of concrete type `T` at a zero-based series
+position. It returns `PositionOutOfBounds` when the position is absent and wraps
+unknown, missing, or mismatched SystemState fields in position-aware
+`FieldAccess`. StateSeries never returns `&mut SystemState`, because mutable
+time access could invalidate series ordering.
 
 ##### Reference
 
     analysis transform
-        -> StateSeries field-level mutable access
+        -> StateSeries::field_mut
         -> SystemState::get_mut
         -> mutate payload without exposing set_time or advance
 
@@ -2208,6 +2221,98 @@ layer and storage introduced in separate production-file review units:
 9. storage format, encoder, writer, reader, borrowed partial-state encoding,
     byte-targeted chunks, blocking queue backpressure, and metadata lifecycle are not yet
     implemented.
+
+### Next active module: time_series
+
+The time-series stage produces a deliberately small in-memory analysis module.
+Its final production surface contains `time_series.rs`, `time_series/error.rs`,
+and `time_series/series.rs`; `codec.rs` is deleted rather than replaced.
+
+The work is performed in these review units:
+
+1. Refactor `time_series/error.rs` down to collection errors: incompatible
+   shared layout, non-increasing index, analysis position out of bounds, and a
+   position-aware wrapper around `StateError` for field mutation. Persistence,
+   codec, filesystem, JSON, chunk, and writer errors move to the future storage
+   module instead of remaining here.
+2. Rewrite `tests/time_series/error.rs` to mirror that reduced contract.
+3. Refactor `time_series/series.rs`: retain owned `StateSeries`, borrowed Copy
+   `SeriesRef`, strict shared-layout identity, increasing integer indices,
+   ownership-moving push/pop/consumption, and explicitly expensive deep Clone.
+   Remove `StateChunk` and `into_chunk`; remove unsupported const qualifiers;
+   box the rejected state inside `PushError` to keep `Result` small while still
+   returning ownership without cloning.
+4. Add `StateSeries::field_mut<T>(position, key)` as the only mutable analysis
+   boundary. It delegates to `SystemState::get_mut` but never exposes
+   `&mut SystemState`, so callers cannot invalidate series time ordering or
+   replace a state with a foreign layout.
+5. Rewrite `tests/time_series/series.rs` around the final ownership, ordering,
+   field-mutation, view, iteration, allocation-reuse, and bounded-Debug
+   contracts. Remove every chunk assertion.
+6. Delete `time_series/codec.rs` and its dedicated test. Payload reconstruction
+   belongs to `storage::StateDecoder`; time_series knows nothing about JSON or
+   concrete payload decoders.
+7. Create `time_series.rs` as the documented public facade and export only
+   `SeriesError`, `PushError`, `SeriesRef`, and `StateSeries`.
+8. Rewrite `tests/time_series.rs` as a public, unified in-memory workflow using
+   the real JSON StateSpec fixture and serializable payloads, without codecs,
+   chunks, files, or writer behavior.
+9. Export `time_series` from `lib.rs`, update README test instructions, and run
+   formatting, library checks, focused tests, doctests, Clippy with warnings
+   denied, and the complete test suite.
+
+This stage does not implement sampling, encoding, decoding, queues, file-size
+chunking, metadata, or disk IO. Those are all owned by the subsequent `storage`
+module.
+
+`time_series/codec.rs` has now been deleted. Its former registry, erased codec,
+stable-tag lookup, JSON value conversion, decoding, and size-estimation APIs
+have no successor within time_series. The following dedicated codec-test file
+is intentionally left for its own deletion review unit.
+
+#### `time_series/error.rs` implementation decision
+
+`SeriesError` is now a non-exhaustive four-variant analysis error:
+
+- `SpecMismatch { index }` reports rejected shared-layout identity;
+- `NonIncreasingTime { previous, next }` reports append ordering;
+- `PositionOutOfBounds { position, len }` reports a missing zero-based analysis
+  position; and
+- `FieldAccess { position, source: StateError }` adds series position while
+  preserving the typed state-access source.
+
+The file imports no filesystem, path, JSON, codec, chunk, or writer types. It
+declares no methods; downstream construction occurs directly at
+`StateSeries::push` and `StateSeries::field_mut`.
+
+#### `time_series/series.rs` implementation decision
+
+The production collection now matches the analysis-only contract. `StateChunk`
+and `StateSeries::into_chunk` are removed. `StateSeries::field_mut<T>` first
+validates the zero-based collection position, then delegates to
+`SystemState::get_mut`, wrapping its typed error with the position. No complete
+mutable state is exposed. StateSeries collection accessors are ordinary methods
+rather than relying on newer const `Vec` APIs. `PushError` stores the rejected
+state in a failure-only `Box<SystemState>` so the common `Result<(), PushError>`
+representation stays small; `into_parts` moves the original state back out and
+does not clone its payloads.
+
+The dedicated `tests/time_series/series.rs` suite now exercises every retained
+collection, view, and push-error method. Its nine tests cover shared-layout and
+ordering rejection, typed field mutation and all error classes, payload pointer
+preservation, clone counts, vector allocation preservation, capacity reuse,
+borrowed and owned iteration, bounded Debug output, and thread transferability.
+It contains no codec, chunk, or persistence fixture.
+
+The next review unit is `tests/time_series/error.rs`. Its focused contract will
+cover the exact context and messages of all four variants, verify that
+`FieldAccess` exposes its `StateError` through `Error::source`, and prove
+`SeriesError: Send + Sync`. It will contain no persistence or codec fixtures.
+
+That focused suite is now implemented with five tests. It uses the real
+SystemState error module, verifies both display and structured variant context,
+checks typed source downcasting, demonstrates the required non-exhaustive match
+fallback, and enforces `Send + Sync` at compile time.
 
 ### Transitional APIs scheduled for removal
 

@@ -1,54 +1,37 @@
-//! Contract tests for the private time_series/series.rs implementation.
+//! Contract tests for `time_series/series.rs`.
 //!
-//! The public time-series facade remains intentionally unwired while its
-//! component files are reviewed individually. This suite therefore includes
-//! the production series and error modules directly, while its test-only
-//! system_state facade re-exports the crate's real public SystemState types at
-//! the path expected by those production modules.
+//! The public facade remains disconnected while component files are reviewed.
+//! This suite includes the reviewed production files directly and re-exports
+//! the crate's real SystemState types at their expected crate-root path.
 //!
-//! These tests verify:
-//!
-//! - construction, reservation, indexing, and immutable iteration;
-//! - exact shared-layout identity rather than structural schema equality;
-//! - strictly increasing integer indices with gaps permitted;
-//! - recovery of an unchanged rejected state from series::PushError;
-//! - clone-free payload movement through append, removal, iteration, and chunk
-//!   ownership boundaries;
-//! - the currently documented deep-clone behavior of StateSeries::clone;
-//! - lightweight SeriesRef copying, cloning, access, and chunk projection;
-//! - destructive clearing with allocation reuse;
-//! - bounded diagnostics that never format scientific payload contents.
+//! Coverage includes collection invariants, ownership-preserving rejection,
+//! clone-free state movement, explicit deep cloning, narrow field mutation,
+//! lightweight views, allocation reuse, iteration, and bounded diagnostics.
+//! Codecs, chunks, encoded sizes, files, and writers are intentionally absent.
 
 use std::error::Error as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Reproduces the crate-root path imported by the private production modules.
-///
-/// Re-exporting instead of substituting test doubles ensures that series
-/// validation exercises the real StateSpec, SystemState, and TimePoint
-/// implementations, including their internal shared-layout identity.
+use serde::{Serialize, Serializer};
+
+/// Supplies the real public state API at the path imported by production code.
 mod system_state {
     pub use scientific_workflow::system_state::*;
 }
 
 #[path = "../../src/time_series/error.rs"]
-#[allow(dead_code)]
 mod error;
 
 #[path = "../../src/time_series/series.rs"]
 mod series;
 
 use error::SeriesError;
-use series::StateSeries;
-use system_state::{StateSpec, SystemState, TimePoint};
+use series::{PushError, StateSeries};
+use system_state::{StateError, StateSpec, SystemState, TimePoint};
 
-/// An owned scientific payload whose explicit deep clones are observable.
-///
-/// Pointer comparisons on values distinguish ownership movement from buffer
-/// copying. The shared counter independently detects calls to Clone, avoiding
-/// assumptions about allocator behavior.
+/// Scientific payload whose backing allocation and deep clones are observable.
 #[derive(Debug)]
 struct TrackedPayload {
     values: Vec<u64>,
@@ -56,7 +39,7 @@ struct TrackedPayload {
 }
 
 impl TrackedPayload {
-    /// Creates a payload and returns a separate observer for clone calls.
+    /// Returns a payload plus an independently held clone counter.
     fn new(values: Vec<u64>) -> (Self, Arc<AtomicUsize>) {
         let clones = Arc::new(AtomicUsize::new(0));
         (
@@ -70,7 +53,7 @@ impl TrackedPayload {
 }
 
 impl Clone for TrackedPayload {
-    /// Records the explicit deep clone required by cloned states or series.
+    /// Records and performs the deep copy required by SystemState cloning.
     fn clone(&self) -> Self {
         self.clones.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -80,153 +63,302 @@ impl Clone for TrackedPayload {
     }
 }
 
-/// Returns the repository fixture through an absolute Cargo-derived path.
+impl Serialize for TrackedPayload {
+    /// Serializes only scientific data, excluding test instrumentation.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.values.serialize(serializer)
+    }
+}
+
+/// Resolves the checked-in template independently of the process directory.
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state.json")
 }
 
-/// Loads a fresh canonical specification from the actual JSON fixture.
+/// Loads a new canonical shared layout.
 fn load_spec() -> StateSpec {
     StateSpec::load(fixture_path()).expect("the checked-in state template must load")
 }
 
-/// Creates one blank state sharing spec and carrying the supplied index.
+/// Creates an empty state sharing `spec` at `index`.
 fn blank_state(spec: &StateSpec, index: u64) -> SystemState {
     spec.empty(TimePoint::new(index))
 }
 
-/// Creates one populated state without cloning the supplied payload.
+/// Creates a populated state without cloning `payload`.
 fn populated_state(spec: &StateSpec, index: u64, payload: TrackedPayload) -> SystemState {
     let mut state = blank_state(spec, index);
-    state
-        .set("population", payload)
-        .expect("the fixture must declare the population field");
+    drop(
+        state
+            .set("population", payload)
+            .expect("the fixture must declare an empty population field"),
+    );
     state
 }
 
 #[test]
-fn construction_reservation_and_borrowed_access_are_consistent() {
+fn construction_capacity_access_and_borrowed_iteration_follow_vec_semantics() {
     let spec = load_spec();
+    let empty = StateSeries::new(spec.clone());
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+    assert_eq!(empty.capacity(), 0);
+    assert!(empty.spec().shares_layout(&spec));
+    assert!(empty.get(0).is_none());
+    assert!(empty.first().is_none());
+    assert!(empty.last().is_none());
+
     let mut series = StateSeries::with_capacity(spec.clone(), 3);
-
-    assert!(series.is_empty());
-    assert_eq!(series.len(), 0);
     assert!(series.capacity() >= 3);
-    assert!(series.spec().shares_layout(&spec));
-    assert!(series.get(0).is_none());
-    assert!(series.first().is_none());
-    assert!(series.last().is_none());
-
-    let previous_capacity = series.capacity();
+    let original_capacity = series.capacity();
     series.reserve(5);
-    assert!(series.capacity() >= previous_capacity);
+    assert!(series.capacity() >= original_capacity);
     assert!(series.capacity() >= series.len() + 5);
-
-    series
-        .push(blank_state(&spec, 2))
-        .expect("the first shared-layout state must append");
+    series.push(blank_state(&spec, 2)).expect("append 2");
     series
         .push(blank_state(&spec, 5))
-        .expect("strictly increasing indices may contain gaps");
+        .expect("index gaps are valid");
 
     assert_eq!(series.len(), 2);
     assert_eq!(series.get(0).map(|state| state.time().index()), Some(2));
+    assert_eq!(series.get(1).map(|state| state.time().index()), Some(5));
+    assert!(series.get(2).is_none());
     assert_eq!(series.first().map(|state| state.time().index()), Some(2));
     assert_eq!(series.last().map(|state| state.time().index()), Some(5));
-
-    let through_iter: Vec<_> = series.iter().map(|state| state.time().index()).collect();
-    let through_borrow: Vec<_> = (&series)
-        .into_iter()
-        .map(|state| state.time().index())
-        .collect();
-    assert_eq!(through_iter, vec![2, 5]);
-    assert_eq!(through_borrow, through_iter);
     assert_eq!(series.states().len(), 2);
+    assert_eq!(
+        series
+            .iter()
+            .map(|state| state.time().index())
+            .collect::<Vec<_>>(),
+        vec![2, 5]
+    );
+    assert_eq!(
+        (&series)
+            .into_iter()
+            .map(|state| state.time().index())
+            .collect::<Vec<_>>(),
+        vec![2, 5]
+    );
 }
 
 #[test]
-fn lightweight_views_borrow_complete_series_without_cloning_payloads() {
-    /// Invokes Clone through a generic boundary so the test verifies the trait
-    /// contract without triggering a clone-on-Copy lint at the call site.
+fn field_mut_changes_only_one_payload_and_contextualizes_every_failure() {
+    let spec = load_spec();
+    let (payload, clones) = TrackedPayload::new(vec![3, 5, 8]);
+    let mut series = StateSeries::new(spec.clone());
+    series
+        .push(populated_state(&spec, 10, payload))
+        .expect("append populated state");
+    series
+        .push(blank_state(&spec, 20))
+        .expect("append blank state");
+
+    series
+        .field_mut::<TrackedPayload>(0, "population")
+        .expect("mutably borrow the stored payload")
+        .values
+        .push(13);
+    assert_eq!(
+        series
+            .get(0)
+            .unwrap()
+            .get::<TrackedPayload>("population")
+            .unwrap()
+            .values,
+        vec![3, 5, 8, 13]
+    );
+    assert_eq!(series.first().unwrap().time().index(), 10);
+    assert_eq!(series.last().unwrap().time().index(), 20);
+    assert_eq!(clones.load(Ordering::SeqCst), 0);
+
+    assert!(matches!(
+        series.field_mut::<TrackedPayload>(2, "population"),
+        Err(SeriesError::PositionOutOfBounds {
+            position: 2,
+            len: 2
+        })
+    ));
+    assert!(matches!(
+        series.field_mut::<TrackedPayload>(1, "population"),
+        Err(SeriesError::FieldAccess {
+            position: 1,
+            source: StateError::MissingValue { ref field }
+        }) if field == "population"
+    ));
+    assert!(matches!(
+        series.field_mut::<Vec<u64>>(0, "population"),
+        Err(SeriesError::FieldAccess {
+            position: 0,
+            source: StateError::TypeMismatch { ref field, .. }
+        }) if field == "population"
+    ));
+    assert!(matches!(
+        series.field_mut::<TrackedPayload>(0, "undeclared"),
+        Err(SeriesError::FieldAccess {
+            position: 0,
+            source: StateError::UnknownField { ref field }
+        }) if field == "undeclared"
+    ));
+}
+
+#[test]
+fn push_pop_and_rejection_preserve_payload_ownership() {
+    let canonical = load_spec();
+    let independent = load_spec();
+    let (payload, clones) = TrackedPayload::new(vec![21, 34]);
+    let original_buffer = payload.values.as_ptr();
+    let mut series = StateSeries::new(canonical.clone());
+
+    let rejection = series
+        .push(populated_state(&independent, 7, payload))
+        .expect_err("independent layouts must be rejected");
+    assert!(matches!(
+        rejection.error(),
+        SeriesError::SpecMismatch { index: 7 }
+    ));
+    assert_eq!(rejection.state().time().index(), 7);
+    assert_eq!(rejection.to_string(), rejection.error().to_string());
+    assert_eq!(
+        rejection.source().unwrap().to_string(),
+        rejection.error().to_string()
+    );
+    assert!(!format!("{rejection:?}").contains("21"));
+
+    let (reason, mut state) = rejection.into_parts();
+    assert!(matches!(reason, SeriesError::SpecMismatch { index: 7 }));
+    let recovered_payload = state.take::<TrackedPayload>("population").unwrap();
+    assert_eq!(recovered_payload.values.as_ptr(), original_buffer);
+    assert_eq!(clones.load(Ordering::SeqCst), 0);
+    assert!(series.is_empty());
+}
+
+#[test]
+fn successful_push_and_pop_move_the_original_buffer_without_cloning() {
+    let spec = load_spec();
+    let (payload, clones) = TrackedPayload::new(vec![3, 5, 8, 13]);
+    let buffer = payload.values.as_ptr();
+    let mut series = StateSeries::new(spec.clone());
+    series
+        .push(populated_state(&spec, 0, payload))
+        .expect("canonical state must append");
+    assert_eq!(
+        series
+            .first()
+            .unwrap()
+            .get::<TrackedPayload>("population")
+            .unwrap()
+            .values
+            .as_ptr(),
+        buffer
+    );
+    let mut state = series.pop().unwrap();
+    let payload = state.take::<TrackedPayload>("population").unwrap();
+    assert_eq!(payload.values.as_ptr(), buffer);
+    assert_eq!(clones.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn non_increasing_indices_return_unchanged_states() {
+    let spec = load_spec();
+    let mut series = StateSeries::new(spec.clone());
+    series
+        .push(blank_state(&spec, 9))
+        .expect("append initial state");
+
+    for next in [9, 4] {
+        let rejection = series
+            .push(blank_state(&spec, next))
+            .expect_err("reject index");
+        assert!(matches!(
+            rejection.error(),
+            SeriesError::NonIncreasingTime { previous: 9, next: found } if *found == next
+        ));
+        let (_, state) = rejection.into_parts();
+        assert_eq!(state.time().index(), next);
+        assert_eq!(series.len(), 1);
+    }
+}
+
+#[test]
+fn explicit_clone_deep_clones_payloads_but_shares_the_layout() {
+    let spec = load_spec();
+    let (payload, clones) = TrackedPayload::new(vec![55, 89, 144]);
+    let mut original = StateSeries::new(spec.clone());
+    original
+        .push(populated_state(&spec, 1, payload))
+        .expect("append");
+    original.push(blank_state(&spec, 2)).expect("append blank");
+    let original_buffer = original
+        .first()
+        .unwrap()
+        .get::<TrackedPayload>("population")
+        .unwrap()
+        .values
+        .as_ptr();
+
+    let cloned = original.clone();
+    let cloned_payload = cloned
+        .first()
+        .unwrap()
+        .get::<TrackedPayload>("population")
+        .unwrap();
+    assert_eq!(clones.load(Ordering::SeqCst), 1);
+    assert!(cloned.spec().shares_layout(original.spec()));
+    assert_ne!(cloned_payload.values.as_ptr(), original_buffer);
+    assert_eq!(cloned_payload.values, vec![55, 89, 144]);
+}
+
+#[test]
+fn series_ref_is_copy_and_borrows_original_states_without_cloning() {
     fn clone_value<T: Clone>(value: &T) -> T {
         value.clone()
     }
-
-    /// Requires both lightweight marker traits at compile time.
     fn assert_copy_clone<T: Copy + Clone>(_: T) {}
 
     let spec = load_spec();
-    let (payload, clones) = TrackedPayload::new(vec![987_654_321, 610]);
-    let payload_buffer = payload.values.as_ptr();
+    let (payload, clones) = TrackedPayload::new(vec![987_654_321]);
     let mut series = StateSeries::new(spec.clone());
     series
         .push(populated_state(&spec, 3, payload))
-        .expect("the first populated state must append");
-    series
-        .push(blank_state(&spec, 8))
-        .expect("the later blank state may follow an index gap");
+        .expect("append");
+    series.push(blank_state(&spec, 8)).expect("append later");
 
     let view = series.view();
     assert_copy_clone(view);
     let copied = view;
     let cloned = clone_value(&view);
-
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
     assert!(view.spec().shares_layout(&spec));
     assert_eq!(view.len(), 2);
     assert!(!view.is_empty());
     assert_eq!(view.states().as_ptr(), series.states().as_ptr());
-    assert_eq!(view.get(0).map(|state| state.time().index()), Some(3));
+    assert_eq!(view.get(0).unwrap().time().index(), 3);
     assert!(view.get(2).is_none());
-    assert_eq!(view.first().map(|state| state.time().index()), Some(3));
-    assert_eq!(view.last().map(|state| state.time().index()), Some(8));
+    assert_eq!(view.first().unwrap().time().index(), 3);
+    assert_eq!(view.last().unwrap().time().index(), 8);
     assert_eq!(
-        copied
-            .iter()
-            .map(|state| state.time().index())
-            .collect::<Vec<_>>(),
+        copied.iter().map(|s| s.time().index()).collect::<Vec<_>>(),
         vec![3, 8]
     );
     assert_eq!(
         cloned
             .into_iter()
-            .map(|state| state.time().index())
-            .collect::<Vec<_>>(),
-        vec![3, 8]
-    );
-    assert_eq!(
-        view.get(0)
-            .expect("the populated state must remain borrowed")
-            .get::<TrackedPayload>("population")
-            .expect("the view must expose the original typed payload")
-            .values
-            .as_ptr(),
-        payload_buffer
-    );
-
-    let debug = format!("{view:?}");
-    assert!(debug.contains("SeriesRef"));
-    assert!(debug.contains("states: 2"));
-    assert!(debug.contains("first_index: Some(3)"));
-    assert!(debug.contains("last_index: Some(8)"));
-    assert!(!debug.contains("987654321"));
-    assert!(!debug.contains("population"));
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-
-    let chunk = series.into_chunk(11, 4_096);
-    let chunk_view = chunk.view();
-    assert_eq!(chunk.ordinal(), 11);
-    assert_eq!(chunk.estimated_bytes(), 4_096);
-    assert_eq!(chunk_view.states().as_ptr(), chunk.states().as_ptr());
-    assert!(chunk_view.spec().shares_layout(&spec));
-    assert_eq!(
-        chunk_view
-            .iter()
-            .map(|state| state.time().index())
+            .map(|s| s.time().index())
             .collect::<Vec<_>>(),
         vec![3, 8]
     );
     assert_eq!(clones.load(Ordering::SeqCst), 0);
+
+    for debug in [format!("{view:?}"), format!("{series:?}")] {
+        assert!(debug.contains("states: 2"));
+        assert!(debug.contains("first_index: Some(3)"));
+        assert!(debug.contains("last_index: Some(8)"));
+        assert!(!debug.contains("987654321"));
+        assert!(!debug.contains("population"));
+    }
 
     let empty = StateSeries::new(spec);
     let empty_view = empty.view();
@@ -234,279 +366,46 @@ fn lightweight_views_borrow_complete_series_without_cloning_payloads() {
     assert_eq!(empty_view.len(), 0);
     assert!(empty_view.first().is_none());
     assert!(empty_view.last().is_none());
-    assert_eq!(empty_view.iter().count(), 0);
 }
 
 #[test]
-fn append_and_pop_move_the_original_payload_without_cloning() {
+fn clear_and_owned_extraction_preserve_reusable_allocations() {
     let spec = load_spec();
-    let (payload, clones) = TrackedPayload::new(vec![3, 5, 8, 13]);
-    let original_buffer = payload.values.as_ptr();
-    let state = populated_state(&spec, 0, payload);
-    let mut series = StateSeries::new(spec);
-
-    series
-        .push(state)
-        .expect("a state derived from the canonical spec must append");
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        series
-            .first()
-            .expect("the appended state must exist")
-            .get::<TrackedPayload>("population")
-            .expect("the payload must remain typed")
-            .values
-            .as_ptr(),
-        original_buffer
-    );
-
-    let mut recovered = series.pop().expect("pop must return the appended state");
-    let recovered_payload = recovered
-        .take::<TrackedPayload>("population")
-        .expect("take must return the original concrete payload");
-
-    assert_eq!(recovered_payload.values.as_ptr(), original_buffer);
-    assert_eq!(recovered_payload.values, vec![3, 5, 8, 13]);
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-    assert!(series.is_empty());
-}
-
-#[test]
-fn structurally_equal_but_independently_loaded_specs_are_rejected_without_data_loss() {
-    let canonical = load_spec();
-    let independent = load_spec();
-    assert!(!canonical.shares_layout(&independent));
-
-    let (payload, clones) = TrackedPayload::new(vec![21, 34]);
-    let original_buffer = payload.values.as_ptr();
-    let rejected_state = populated_state(&independent, 7, payload);
-    let mut series = StateSeries::new(canonical);
-
-    let rejection = series
-        .push(rejected_state)
-        .expect_err("structural equality must not replace shared identity");
-    assert!(matches!(
-        rejection.error(),
-        SeriesError::SpecMismatch { index: 7 }
-    ));
-    assert_eq!(rejection.state().time().index(), 7);
-    assert_eq!(
-        rejection
-            .state()
-            .get::<TrackedPayload>("population")
-            .expect("the rejected state must retain its payload")
-            .values
-            .as_ptr(),
-        original_buffer
-    );
-    assert_eq!(
-        rejection.to_string(),
-        "state at time index 7 does not share the series specification"
-    );
-    assert!(rejection.source().is_some());
-
-    let (reason, mut state) = rejection.into_parts();
-    assert!(matches!(reason, SeriesError::SpecMismatch { index: 7 }));
-    let payload = state
-        .take::<TrackedPayload>("population")
-        .expect("the caller must recover the unchanged rejected owner");
-    assert_eq!(payload.values.as_ptr(), original_buffer);
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-    assert!(series.is_empty());
-}
-
-#[test]
-fn ordering_rejects_duplicates_and_regressions_but_accepts_gaps() {
-    let spec = load_spec();
-    let mut series = StateSeries::new(spec.clone());
-    series
-        .push(blank_state(&spec, 10))
-        .expect("the first index establishes ordering");
-
-    for next in [10, 9] {
-        let rejection = series
-            .push(blank_state(&spec, next))
-            .expect_err("non-increasing indices must be rejected");
-        assert!(matches!(
-            rejection.error(),
-            SeriesError::NonIncreasingTime {
-                previous: 10,
-                next: rejected,
-            } if *rejected == next
-        ));
-        let (_, state) = rejection.into_parts();
-        assert_eq!(state.time().index(), next);
-    }
-
-    series
-        .push(blank_state(&spec, 15))
-        .expect("an increasing index gap must be accepted");
-    assert_eq!(
-        series
-            .iter()
-            .map(|state| state.time().index())
-            .collect::<Vec<_>>(),
-        vec![10, 15]
-    );
-
-    let removed = series.pop().expect("the last state must be removable");
-    assert_eq!(removed.time().index(), 15);
-    series
-        .push(blank_state(&spec, 11))
-        .expect("ordering must compare against the new last state after pop");
-}
-
-#[test]
-fn consuming_collection_paths_preserve_state_and_payload_allocations() {
-    let spec = load_spec();
-    let (payload, clones) = TrackedPayload::new(vec![55, 89]);
-    let payload_buffer = payload.values.as_ptr();
-    let mut series = StateSeries::new(spec.clone());
-    series
-        .push(populated_state(&spec, 1, payload))
-        .expect("the populated state must append");
-    let state_buffer = series.states().as_ptr();
-
-    let states = series.into_states();
-    assert_eq!(states.as_ptr(), state_buffer);
-    assert_eq!(
-        states[0]
-            .get::<TrackedPayload>("population")
-            .expect("the moved state must retain its payload")
-            .values
-            .as_ptr(),
-        payload_buffer
-    );
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-
-    let mut rebuilt = StateSeries::new(states[0].spec().clone());
-    for state in states {
-        rebuilt
-            .push(state)
-            .expect("moved states must retain the canonical layout");
-    }
-    let indices: Vec<_> = rebuilt
-        .into_iter()
-        .map(|state| state.time().index())
-        .collect();
-    assert_eq!(indices, vec![1]);
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-}
-
-#[test]
-fn explicit_series_clone_deep_clones_payloads_and_preserves_independence() {
-    let spec = load_spec();
-    let (payload, clones) = TrackedPayload::new(vec![1, 2, 3]);
-    let original_buffer = payload.values.as_ptr();
-    let mut original = StateSeries::new(spec.clone());
-    original
-        .push(populated_state(&spec, 4, payload))
-        .expect("the populated state must append");
-
-    let cloned = original.clone();
-    assert_eq!(clones.load(Ordering::SeqCst), 1);
-
-    let mut cloned_state = cloned
-        .into_states()
-        .pop()
-        .expect("the cloned series must contain a cloned state");
-    let cloned_payload = cloned_state
-        .get_mut::<TrackedPayload>("population")
-        .expect("the cloned payload must retain its concrete type");
-    assert_ne!(cloned_payload.values.as_ptr(), original_buffer);
-    cloned_payload.values[0] = 99;
-
-    let original_payload = original
-        .first()
-        .expect("the original state must remain present")
-        .get::<TrackedPayload>("population")
-        .expect("the original payload must remain present");
-    assert_eq!(original_payload.values, vec![1, 2, 3]);
-}
-
-#[test]
-fn clear_drops_states_but_retains_layout_and_vector_allocation() {
-    let spec = load_spec();
-    let mut series = StateSeries::with_capacity(spec.clone(), 4);
-    series
+    let mut reusable = StateSeries::with_capacity(spec.clone(), 4);
+    reusable.push(blank_state(&spec, 100)).expect("append");
+    let capacity = reusable.capacity();
+    reusable.clear();
+    assert!(reusable.is_empty());
+    assert_eq!(reusable.capacity(), capacity);
+    reusable
         .push(blank_state(&spec, 1))
-        .expect("the shared-layout state must append");
-    let allocation = series.states().as_ptr();
-    let capacity = series.capacity();
+        .expect("empty series accepts any index");
 
-    series.clear();
+    let mut extracted = StateSeries::with_capacity(spec.clone(), 3);
+    extracted.push(blank_state(&spec, 2)).expect("append");
+    extracted.push(blank_state(&spec, 4)).expect("append");
+    let buffer = extracted.states().as_ptr();
+    let states = extracted.into_states();
+    assert_eq!(states.as_ptr(), buffer);
+    assert_eq!(
+        states.iter().map(|s| s.time().index()).collect::<Vec<_>>(),
+        vec![2, 4]
+    );
 
-    assert!(series.is_empty());
-    assert_eq!(series.capacity(), capacity);
-    assert_eq!(series.states().as_ptr(), allocation);
-    assert!(series.spec().shares_layout(&spec));
-    series
-        .push(blank_state(&spec, 0))
-        .expect("a cleared series must accept a fresh first index");
-
-    let debug = format!("{series:?}");
-    assert!(debug.contains("StateSeries"));
-    assert!(debug.contains("states: 1"));
-    assert!(debug.contains("first_index: Some(0)"));
-    assert!(!debug.contains("population"));
+    let mut iterable = StateSeries::new(spec.clone());
+    iterable.push(blank_state(&spec, 6)).expect("append");
+    iterable.push(blank_state(&spec, 9)).expect("append");
+    assert_eq!(
+        iterable
+            .into_iter()
+            .map(|s| s.time().index())
+            .collect::<Vec<_>>(),
+        vec![6, 9]
+    );
 }
 
 #[test]
-fn chunk_conversion_moves_the_original_series_and_reports_bounded_context() {
-    let spec = load_spec();
-    let (payload, clones) = TrackedPayload::new(vec![144, 233]);
-    let payload_buffer = payload.values.as_ptr();
-    let mut series = StateSeries::new(spec.clone());
-    series
-        .push(populated_state(&spec, 20, payload))
-        .expect("the first state must append");
-    series
-        .push(blank_state(&spec, 25))
-        .expect("the second state may follow a gap");
-    let state_buffer = series.states().as_ptr();
-
-    let chunk = series.into_chunk(6, 65_536);
-    assert_eq!(chunk.ordinal(), 6);
-    assert_eq!(chunk.len(), 2);
-    assert!(!chunk.is_empty());
-    assert_eq!(chunk.estimated_bytes(), 65_536);
-    assert_eq!(chunk.first_index(), Some(20));
-    assert_eq!(chunk.last_index(), Some(25));
-    assert!(chunk.spec().shares_layout(&spec));
-    assert_eq!(chunk.states().as_ptr(), state_buffer);
-    assert_eq!(chunk.get(1).map(|state| state.time().index()), Some(25));
-    assert_eq!(
-        chunk
-            .iter()
-            .map(|state| state.time().index())
-            .collect::<Vec<_>>(),
-        vec![20, 25]
-    );
-    assert_eq!((&chunk).into_iter().count(), 2);
-    assert_eq!(
-        chunk
-            .get(0)
-            .expect("the first chunk state must exist")
-            .get::<TrackedPayload>("population")
-            .expect("the moved payload must remain typed")
-            .values
-            .as_ptr(),
-        payload_buffer
-    );
-
-    let debug = format!("{chunk:?}");
-    assert!(debug.contains("StateChunk"));
-    assert!(debug.contains("ordinal: 6"));
-    assert!(debug.contains("estimated_bytes: 65536"));
-    assert!(!debug.contains("144"));
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-
-    let recovered = chunk.into_series();
-    assert_eq!(recovered.states().as_ptr(), state_buffer);
-    assert_eq!(clones.load(Ordering::SeqCst), 0);
-
-    let empty = StateSeries::new(spec).into_chunk(7, 0);
-    assert!(empty.is_empty());
-    assert_eq!(empty.first_index(), None);
-    assert_eq!(empty.last_index(), None);
+fn push_error_remains_thread_transferable() {
+    fn assert_send<T: Send>() {}
+    assert_send::<PushError>();
 }
