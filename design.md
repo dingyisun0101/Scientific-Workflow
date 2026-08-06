@@ -76,6 +76,7 @@ stream is the authoritative sampled history.
 
     scientific-workflow/
     ├── design.md                 authoritative architecture and references
+    ├── tests.md                  integration-test architecture and coverage
     ├── todo.md                   next-stage and deferred work only
     ├── README.md                 repository test entry points
     └── dev/
@@ -105,12 +106,10 @@ stream is the authoritative sampled history.
         │       └── reader.rs     verified eager reconstruction
         └── tests/
             ├── fixtures/state.json
-            ├── system_state.rs
-            ├── system_state/{error,spec,state,value}.rs
-            ├── time_series.rs
-            ├── time_series/{error,series}.rs
-            ├── storage.rs
-            └── storage/{decoder,encoder,error,format,reader,writer}.rs
+            ├── state_workflow.rs
+            ├── analysis_workflow.rs
+            ├── storage_workflow.rs
+            └── storage_resilience.rs
 
 Rust 2024 split-module layout is used. There are no `mod.rs` files. Storage is
 intentionally not exported from `lib.rs` until the next run-level facade makes
@@ -1266,13 +1265,137 @@ Before beginning the run-level facade:
 
 The unified storage target must prove both default decoder round trips and a
 real PiP tensor workflow using application-provided per-key decoders. It prints
-bounded logs under `cargo test --test storage -- --nocapture` and removes all
+bounded logs under `cargo test --test storage_workflow -- --nocapture` and removes all
 temporary output afterward.
 
-Current closeout result: 54 storage tests, 33 system-state tests, and 15
-time-series tests pass (102 total integration tests). Formatting and Clippy
-across all targets pass with warnings denied. `cargo package --list` confirms a
-clean package inventory. Archive preparation is deferred only because the
-agreed local `physics_in_parallel` 3.0.4 development dependency is not yet on
-crates.io, whose latest matching candidate is 3.0.3; do not replace the local
-dependency before the coordinated PiP publication.
+## Integration-test architecture
+
+The detailed and authoritative test architecture is maintained in `tests.md`.
+This section records only its relationship to the crate architecture; when test
+scope or file allocation changes, update `tests.md` first and keep this summary
+consistent.
+
+The former focused file-mirroring suites were useful during production-file
+review and have now been replaced by four behavior-oriented Cargo integration
+targets plus the real JSON fixture:
+
+    tests/
+    ├── fixtures/state.json
+    ├── state_workflow.rs
+    ├── analysis_workflow.rs
+    ├── storage_workflow.rs
+    └── storage_resilience.rs
+
+Every target prints a short stable report under `--nocapture`. Logs contain
+counts, indices, byte sizes, chunk facts, pointer/clone evidence, and expected
+error classes; they never dump full scientific payloads or nondeterministic
+thread timing.
+
+### state_workflow.rs
+
+One realistic simulation-state lifecycle using the checked-in template and PiP
+tensors. It covers template semantic round trip, shared layouts, typed insertion
+and sequential mutation, time advancement, zero-copy extraction with allocation
+identity, explicit deep-clone accounting, rejected-set payload recovery, and
+bounded diagnostics.
+
+Key log output:
+
+    [template] fields=3 round_trip=true
+    [state] index=... loaded=... mutation=verified
+    [ownership] set_take_pointer_preserved=true clone_calls=...
+    [result] state_workflow=passed
+
+### analysis_workflow.rs
+
+Builds an ordered `StateSeries` from evolving states, verifies move-based push
+and pop, shared-layout and increasing-time rejection with ownership recovery,
+borrowed `SeriesRef` traversal, narrow field mutation, capacity reuse, and the
+explicit cost boundary of deep cloning.
+
+Key log output:
+
+    [series] states=... indices=[...]
+    [invariants] layout_rejection=true ordering_rejection=true
+    [ownership] push_pop_preserved=true clone_calls=...
+    [result] analysis_workflow=passed
+
+### storage_workflow.rs
+
+The principal success-path test. It evolves one live state, samples multiple
+streams at different cadences, uses borrowed encoding and bounded writers,
+commits one metadata file, verifies automatic byte chunking, then reconstructs
+complete series. It exercises `StringDecoder`, `VecF64Decoder`, and an
+application-provided PiP tensor decoder. It explicitly asserts semantic JSON
+metadata round trip and typed payload equality.
+
+Key log output:
+
+    [sample] stream=... index=... encoded_bytes=...
+    [writer] stream=... records=... chunks=... bytes=...
+    [chunk] file=... records=... indices=.....=... checksum_verified=true
+    [readback] stream=... states=... typed_round_trip=true
+    [result] storage_workflow=passed
+
+### storage_resilience.rs
+
+One failure-oriented target retaining only cross-boundary risks: strict queue
+byte rejection, non-increasing writer indices, existing-output refusal,
+incomplete metadata, missing decoder coverage, wrong payload type with source
+context, missing/size-changed/checksum-corrupt chunks, and worker termination.
+Each case asserts the exact `StorageError` class and the most important owned
+context without exhaustively snapshotting every display string.
+
+Key log output:
+
+    [expected-error] case=... variant=... context_verified=true
+    [integrity] missing=true size=true checksum=true
+    [backpressure] oversized_rejected=true ordering_rejected=true
+    [result] storage_resilience=passed
+
+Trivial getter, formatting, constructor, and one-variant tests are removed when
+the same behavior is naturally exercised by these workflows. High-risk
+properties remain explicit assertions rather than being considered covered
+merely because a method was called. The four targets run independently and
+clean up their own precisely owned temporary directories.
+
+### Consolidated coverage rule
+
+The four-file design must cover the complete implemented API surface, but it
+does not recreate one test per method:
+
+- every public structure is constructed or obtained in at least one workflow;
+- every public method is invoked in its natural scenario;
+- ownership, mutation, ordering, serialization, backpressure, integrity, and
+  reconstruction methods receive explicit semantic assertions;
+- trivial accessors may be checked together in one workflow section;
+- `Debug`, `Display`, iterator, and `Error::source` implementations are invoked
+  only where their bounded output or source preservation is part of a useful
+  diagnostic;
+- crate-private and private helpers are not tested directly merely to increase
+  coverage. They are covered through public or staged boundary outcomes, such
+  as checksum verification proving `ActiveChunk::append/seal` and reader
+  corruption tests proving borrowed-record validation;
+- not every `StorageError` variant needs an isolated constructor test. Every
+  failure family and every externally reachable high-risk branch must be
+  represented.
+
+Required method allocation:
+
+| Workflow | Structures and API families exercised |
+|---|---|
+| `state_workflow` | `FieldSpec`, `StateSpec`, `TimePoint`, `SystemState`, `StateError`, `SetError`; all public spec, time, state-access, ownership, clear, clone, and inspection methods |
+| `analysis_workflow` | `StateSeries`, `SeriesRef`, `PushError`, `SeriesError`; all public construction, capacity, lookup, iteration, mutation, append/rejection, extraction, clear, and clone methods |
+| `storage_workflow` | metadata/format structures, `EncodedRecord`, `JsonEncoder`, `WriterConfig`, `StateWriter`, `WriterSummary`, `PayloadDecoder`, `Decoders`, both default decoders, and `SeriesReader`; every success-path method including `read_all` |
+| `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
+
+The finished source reads as four coherent workflows rather than an API census.
+The old aggregators and focused subdirectories have been removed.
+
+Current test architecture: four logged integration tests across four files plus
+four doctests. Each workflow passes independently and the consolidated
+all-target suite passes. Formatting and Clippy across all targets pass with
+warnings denied. Archive preparation remains deferred only because the agreed local
+`physics_in_parallel` 3.0.4 development dependency is not yet on crates.io,
+whose latest matching candidate is 3.0.3; do not replace the local dependency
+before the coordinated PiP publication.

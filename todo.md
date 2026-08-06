@@ -34,10 +34,11 @@ Before code, decide only these remaining public API details:
 
 ## Storage tests for the next stage
 
-- Add `tests/storage/run_output.rs` for lifecycle, metadata atomicity, stream
-  routing, existing-path refusal, and failure behavior.
-- Extend the unified logged workflow to use `RunOutput` instead of manually
+- Extend `tests/storage_workflow.rs` to use `RunOutput` instead of manually
   coordinating encoders, writers, and metadata.
+- Add `RunOutput` lifecycle, metadata atomicity, stream routing, existing-path
+  refusal, and failure behavior to `storage_workflow.rs` and
+  `storage_resilience.rs`; retain the four-file test architecture.
 - Export `storage` from `lib.rs` only after its complete public lifecycle passes.
 - Update crate and repository READMEs with the final public storage example.
 

@@ -159,34 +159,45 @@ scientific payload types without registering codecs.
 From the package directory:
 
 ```bash
-cargo test
+cargo test --all-targets --no-fail-fast --locked
 ```
 
-The system-state integration target loads an actual JSON template, runs all
-focused module suites, and exercises the complete state lifecycle using
-`physics_in_parallel` tensor payloads:
+The permanent suite contains four logged integration workflows. Run each with
+`--nocapture` to display its stable semantic report.
+
+Simulation-owned state:
 
 ```bash
-cargo test --test system_state
+cargo test --test state_workflow -- --nocapture
 ```
 
-The time-series target runs its focused error and collection suites plus a
-public cross-module ownership workflow:
+In-memory analysis series:
 
 ```bash
-cargo test --test time_series
+cargo test --test analysis_workflow -- --nocapture
 ```
 
-The staged storage target runs focused format, encoder, writer, decoder, and
-reader contracts. Its logged workflow uses real tensor payloads, two sampling
-cadences, JSON encoding, bounded writers, automatic chunking, one metadata
-file, integrity verification, default String/Vec<f64> decoder round trips, and
-custom per-key tensor reconstruction. Pass `--nocapture` to display bounded
-phase, sample, chunk, readback, and result summaries:
+Successful storage and typed reconstruction:
 
 ```bash
-cargo test --test storage -- --nocapture
+cargo test --test storage_workflow -- --nocapture
 ```
+
+Storage failure and corruption handling:
+
+```bash
+cargo test --test storage_resilience -- --nocapture
+```
+
+Doctests and lint gate:
+
+```bash
+cargo test --doc --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+The repository-level `tests.md` documents complete method allocation, indirect
+private coverage, logging rules, and completion criteria.
 
 ## License
 

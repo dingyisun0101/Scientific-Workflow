@@ -1,8 +1,7 @@
-//! Public end-to-end contract test for the SystemState module.
+//! Logged integration workflow for simulation-owned system state.
 //!
 //! This integration test imports the package exactly as a downstream Rust
-//! crate would. It does not include private source files, use test-only module
-//! stubs, or access the erased payload representation.
+//! crate would and reports stable semantic results under `--nocapture`.
 //!
 //! The test connects every current production layer:
 //!
@@ -20,28 +19,33 @@
 //! fixture defines only the in-memory field layout; the future storage module
 //! will borrow each tensor's existing Serialize implementation.
 
-#![allow(
-    clippy::duplicate_mod,
-    reason = "focused suites intentionally include private production files in isolated namespaces"
-)]
-
-// Cargo discovers this top-level integration target. These path modules make
-// the focused, filename-mirroring suites under `tests/system_state/` part of
-// the same Cargo-managed test binary without placing tests in production code.
-#[path = "system_state/error.rs"]
-mod error_tests;
-#[path = "system_state/spec.rs"]
-mod spec_tests;
-#[path = "system_state/state.rs"]
-mod state_tests;
-#[path = "system_state/value.rs"]
-mod value_tests;
-
+use std::error::Error as _;
 use std::fs;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use physics_in_parallel::math::{Dense, Tensor};
 use scientific_workflow::system_state::{FieldSpec, StateError, StateSpec, SystemState, TimePoint};
+use serde::Serialize;
+
+/// Serializable payload whose Clone implementation exposes expensive copying.
+#[derive(Debug, Serialize)]
+struct CloneTracked {
+    values: Vec<u64>,
+    #[serde(skip)]
+    clones: Arc<AtomicUsize>,
+}
+
+impl Clone for CloneTracked {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::Relaxed);
+        Self {
+            values: self.values.clone(),
+            clones: Arc::clone(&self.clones),
+        }
+    }
+}
 
 /// Canonical state template resolved independently of the process working
 /// directory.
@@ -94,6 +98,10 @@ fn tensor_state_round_trip_integrates_public_modules() {
     let serialized_json: serde_json::Value =
         serde_json::from_str(&serialized).expect("serialized template must be valid JSON");
     assert_eq!(serialized_json, original_json);
+    println!(
+        "[template] fields={} round_trip=true shared_layout=true",
+        specification.len()
+    );
 
     // Reload the generated JSON from a distinct path to verify the complete
     // filesystem round trip and deterministic field reconstruction.
@@ -115,6 +123,31 @@ fn tensor_state_round_trip_integrates_public_modules() {
         StateSpec::load(&round_trip_path).expect("round-trip template must load successfully");
     assert_eq!(restored.source(), round_trip_path);
     assert_eq!(restored.fields(), specification.fields());
+    assert!(!restored.shares_layout(&specification));
+    assert!(specification.clone().shares_layout(&specification));
+
+    let missing_template = round_trip_directory.join("missing.json");
+    let read_error = StateSpec::load(&missing_template).unwrap_err();
+    assert!(matches!(read_error, StateError::TemplateRead { .. }));
+    assert!(read_error.source().is_some());
+    let malformed_template = round_trip_directory.join("malformed.json");
+    fs::write(&malformed_template, b"{").unwrap();
+    let parse_error = StateSpec::load(&malformed_template).unwrap_err();
+    assert!(matches!(parse_error, StateError::TemplateParse { .. }));
+    assert!(parse_error.source().is_some());
+    let duplicate_template = round_trip_directory.join("duplicate.json");
+    fs::write(
+        &duplicate_template,
+        br#"{"fields":[{"name":"x"},{"name":" x "}]}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        StateSpec::load(&duplicate_template),
+        Err(StateError::DuplicateField { field }) if field == "x"
+    ));
+
+    assert!(TimePoint::from_physical(0, f64::NAN).is_none());
+    assert!(TimePoint::from_physical(0, f64::INFINITY).is_none());
 
     // State construction retains both the exact integer index and optional
     // finite physical coordinate.
@@ -125,6 +158,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert_eq!(state.time().index(), 0);
     assert_eq!(state.time().physical(), Some(0.25));
     assert_eq!(state.len(), 3);
+    assert!(!state.is_empty());
     assert_eq!(state.loaded(), 0);
     assert!(state.is_blank());
     assert!(!state.has("population").expect("field must be declared"));
@@ -139,6 +173,20 @@ fn tensor_state_round_trip_integrates_public_modules() {
         .expect("finite physical time must advance");
     assert_eq!(advanced.index(), 1);
     assert_eq!(advanced.physical(), Some(0.5));
+    let before_failed_advance = state.time();
+    assert!(state.advance(Some(f64::INFINITY)).is_err());
+    assert_eq!(state.time(), before_failed_advance);
+    let mut overflow = specification.empty(TimePoint::new(u64::MAX));
+    assert!(matches!(
+        overflow.advance(None),
+        Err(StateError::TimeIndexOverflow { index: u64::MAX })
+    ));
+    assert_eq!(overflow.time().index(), u64::MAX);
+    let mut no_physical = specification.empty(TimePoint::new(3));
+    assert!(matches!(
+        no_physical.advance(Some(0.25)),
+        Err(StateError::MissingPhysicalTime { index: 3 })
+    ));
 
     // Empty and unknown fields produce distinct public errors before any
     // tensor is inserted.
@@ -160,6 +208,10 @@ fn tensor_state_round_trip_integrates_public_modules() {
         rejection.error(),
         StateError::UnknownField { field } if field == "temperature"
     ));
+    assert_eq!(rejection.payload().as_ptr(), rejected_pointer);
+    assert!(format!("{rejection:?}").contains("SetError"));
+    assert!(rejection.to_string().contains("temperature"));
+    assert!(rejection.source().is_some());
     let (_, rejected) = rejection.into_parts();
     assert_eq!(rejected.as_ptr(), rejected_pointer);
 
@@ -249,6 +301,19 @@ fn tensor_state_round_trip_integrates_public_modules() {
         21
     );
 
+    // A failed owning downcast restores the original payload transactionally.
+    assert!(matches!(
+        state.take::<Tensor<u8, Dense>>("population"),
+        Err(StateError::TypeMismatch { .. })
+    ));
+    assert_eq!(
+        state
+            .get::<Tensor<u64, Dense>>("population")
+            .unwrap()
+            .get(&[1]),
+        21
+    );
+
     // A failed typed borrow must report both exact Rust types and leave the
     // activity tensor unchanged.
     let mismatch = state
@@ -319,6 +384,69 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert_eq!(state.loaded(), 0);
     assert!(state.is_blank());
 
+    // Ordinary vector payloads make allocation identity directly observable.
+    let owned = vec![3_u64, 5, 8, 13];
+    let owned_pointer = owned.as_ptr();
+    assert!(state.set("population", owned).unwrap().is_none());
+    let replacement = vec![21_u64, 34];
+    let previous = state
+        .set("population", replacement)
+        .unwrap()
+        .expect("same-type replacement must return the previous vector");
+    assert_eq!(previous.as_ptr(), owned_pointer);
+    let replacement_pointer = state.get::<Vec<u64>>("population").unwrap().as_ptr();
+    let extracted = state.take::<Vec<u64>>("population").unwrap();
+    assert_eq!(extracted.as_ptr(), replacement_pointer);
+
+    let clones = Arc::new(AtomicUsize::new(0));
+    assert!(
+        state
+            .set(
+                "population",
+                CloneTracked {
+                    values: vec![1, 1, 2, 3, 5],
+                    clones: Arc::clone(&clones),
+                },
+            )
+            .unwrap()
+            .is_none()
+    );
+    let mut cloned = state.clone();
+    assert_eq!(clones.load(Ordering::Relaxed), 1);
+    cloned
+        .get_mut::<CloneTracked>("population")
+        .unwrap()
+        .values
+        .push(8);
+    assert_eq!(
+        state
+            .get::<CloneTracked>("population")
+            .unwrap()
+            .values
+            .len(),
+        5
+    );
+    assert_eq!(
+        cloned
+            .get::<CloneTracked>("population")
+            .unwrap()
+            .values
+            .len(),
+        6
+    );
+    assert!(state.clear("population").unwrap());
+    assert!(!state.clear("population").unwrap());
+
+    assert!(state.set("space", vec![1_u8]).unwrap().is_none());
+    assert!(
+        state
+            .set("activity", String::from("active"))
+            .unwrap()
+            .is_none()
+    );
+    state.clear_all();
+    assert!(state.is_blank());
+
     // Derived states share immutable schema storage but begin with no payloads.
     let later = state.empty(TimePoint::new(1));
     assert_eq!(later.time().index(), 1);
@@ -326,6 +454,26 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert!(later.is_blank());
     assert_eq!(later.fields(), state.fields());
     assert!(std::ptr::eq(later.spec().fields(), state.spec().fields()));
+
+    let debug = format!("{state:?}");
+    assert!(debug.contains("SystemState"));
+    assert!(!debug.contains("active"));
+
+    println!(
+        "[state] index={} physical={:?} loaded={} mutation_verified=true",
+        advanced.index(),
+        advanced.physical(),
+        3
+    );
+    println!("[ownership] pointer_preserved=true rejected_payload_recovered=true");
+    println!(
+        "[validation] read_error=true parse_error=true duplicate_error=true time_transactional=true"
+    );
+    println!(
+        "[clone] payload_clone_calls={} independent=true",
+        clones.load(Ordering::Relaxed)
+    );
+    println!("[result] state_workflow=passed");
 
     fs::remove_dir_all(round_trip_directory)
         .expect("temporary round-trip directory must be removed");

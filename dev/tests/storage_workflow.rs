@@ -1,7 +1,6 @@
-//! Unified executable workflow for every implemented crate layer.
+//! Logged successful persistence and reconstruction workflow.
 //!
-//! Focused suites remain under `tests/storage/` and are included in this Cargo
-//! target. The final test is deliberately demonstrative: it loads the checked-
+//! This test is deliberately demonstrative: it loads the checked-
 //! in template, evolves real `physics_in_parallel` tensors in one live state,
 //! retains explicit analysis snapshots, samples two logical streams at
 //! different cadences, encodes without cloning, writes bounded byte-targeted
@@ -11,26 +10,8 @@
 //! Run with `--nocapture` to display its concise execution log:
 //!
 //! ```text
-//! cargo test --test storage -- --nocapture
+//! cargo test --test storage_workflow -- --nocapture
 //! ```
-
-#![allow(
-    clippy::duplicate_mod,
-    reason = "focused staged suites intentionally include the same private production modules"
-)]
-
-#[path = "storage/decoder.rs"]
-mod decoder_tests;
-#[path = "storage/encoder.rs"]
-mod encoder_tests;
-#[path = "storage/error.rs"]
-mod error_tests;
-#[path = "storage/format.rs"]
-mod format_tests;
-#[path = "storage/reader.rs"]
-mod reader_tests;
-#[path = "storage/writer.rs"]
-mod writer_tests;
 
 use std::fs;
 use std::num::NonZeroU64;
@@ -86,7 +67,7 @@ mod storage {
     pub mod writer;
 }
 
-use storage::decoder::Decoders;
+use storage::decoder::{Decoders, StringDecoder, VecF64Decoder};
 use storage::encoder::JsonEncoder;
 use storage::format::{FieldMetadata, RunMetadata, RunStatus, StreamMetadata, TimeAxis};
 use storage::reader::SeriesReader;
@@ -200,11 +181,127 @@ fn log_summary(summary: &WriterSummary) {
     }
 }
 
+fn default_decoders_round_trip_typed_payloads() {
+    let run = TempRun::new();
+    let metadata_path = run.0.join("metadata.json");
+    let spec = StateSpec::parse(
+        metadata_path.clone(),
+        br#"{"fields":[{"name":"values","description":"Numeric sample"},{"name":"label","description":"Sample label"}]}"#,
+    )
+    .expect("default-decoder state schema must parse");
+    let encoder = JsonEncoder::new("samples", &spec, ["values", "label"]).unwrap();
+    let config = WriterConfig::new(
+        "samples",
+        run.0.join("samples"),
+        NonZeroU64::new(96).unwrap(),
+        NonZeroU64::new(4_096).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config.stream(), "samples");
+    assert_eq!(config.directory(), run.0.join("samples"));
+    assert_eq!(config.max_chunk_bytes().get(), 96);
+    assert_eq!(config.queue_bytes().get(), 4_096);
+    let writer = StateWriter::start(config).unwrap();
+
+    let expected = [
+        (1_u64, vec![1.25, -2.5], "first".to_owned()),
+        (4_u64, Vec::new(), "final \u{4e16}\u{754c}\nline".to_owned()),
+        (7_u64, vec![9.0], String::new()),
+    ];
+    for (index, values, label) in &expected {
+        let mut state = spec.empty(TimePoint::from_physical(*index, *index as f64 / 4.0).unwrap());
+        assert!(state.set("values", values.clone()).unwrap().is_none());
+        assert!(state.set("label", label.clone()).unwrap().is_none());
+        let record = encoder.encode(&state).unwrap();
+        println!(
+            "[sample] stream=samples index={} encoded_bytes={}",
+            index,
+            record.len()
+        );
+        writer.submit(record).unwrap();
+    }
+    let summary = writer.finish().unwrap();
+
+    let mut metadata = RunMetadata::running(
+        TimeAxis {
+            index_name: "step".to_owned(),
+            index_unit: None,
+            physical_name: Some("time".to_owned()),
+            physical_unit: Some("s".to_owned()),
+        },
+        Map::new(),
+        vec![StreamMetadata {
+            name: "samples".to_owned(),
+            directory: "samples".to_owned(),
+            cadence: Some("selected steps".to_owned()),
+            fields: stream_fields(&encoder),
+            max_chunk_bytes: 96,
+            queue_bytes: 4_096,
+            chunks: summary.chunks().to_vec(),
+        }],
+    );
+    metadata.status = RunStatus::Complete;
+    let metadata_bytes = write_metadata(&metadata_path, &metadata);
+
+    let mut decoders = Decoders::new();
+    assert!(decoders.is_empty());
+    decoders
+        .add::<Vec<f64>, _>("values", VecF64Decoder)
+        .unwrap();
+    decoders.add::<String, _>("label", StringDecoder).unwrap();
+    assert_eq!(decoders.len(), 2);
+    assert!(decoders.contains("values"));
+    assert!(decoders.contains("label"));
+    let mut keys = decoders.keys().collect::<Vec<_>>();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["label", "values"]);
+
+    let reader = SeriesReader::open(&run.0, decoders).unwrap();
+    assert_eq!(reader.root(), run.0.as_path());
+    assert_eq!(reader.streams().collect::<Vec<_>>(), vec!["samples"]);
+    assert!(format!("{reader:?}").contains("SeriesReader"));
+    let series = reader.read("samples").unwrap();
+    assert_eq!(series.len(), expected.len());
+    for (state, (index, values, label)) in series.iter().zip(&expected) {
+        assert_eq!(state.time().index(), *index);
+        assert_eq!(state.get::<Vec<f64>>("values").unwrap(), values);
+        assert_eq!(state.get::<String>("label").unwrap(), label);
+    }
+    let all = reader.read_all().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].0, "samples");
+    assert_eq!(all[0].1.len(), expected.len());
+
+    let framed = storage::format::EncodedRecord::new(TimePoint::new(99), b"{}".to_vec());
+    assert_eq!(framed.time().index(), 99);
+    assert_eq!(framed.len(), 3);
+    assert_eq!(framed.bytes(), b"{}\n");
+    assert!(format!("{framed:?}").contains("EncodedRecord"));
+    assert_eq!(framed.into_bytes(), b"{}\n");
+
+    println!(
+        "[writer] stream=samples records={} chunks={} bytes={}",
+        summary.records(),
+        summary.chunks().len(),
+        summary.bytes()
+    );
+    println!(
+        "[metadata] files=1 bytes={} semantic_round_trip=true status=complete",
+        metadata_bytes
+    );
+    println!(
+        "[readback] stream=samples states={} typed_round_trip=true",
+        series.len()
+    );
+}
+
 #[test]
 fn complete_scientific_workflow_is_consistent_and_observable() {
     const SIGNAL_CHUNK_BYTES: u64 = 256;
     const SPACE_CHUNK_BYTES: u64 = 128;
     const QUEUE_BYTES: u64 = 1_048_576;
+
+    default_decoders_round_trip_typed_payloads();
 
     let run = TempRun::new();
     let metadata_path = run.0.join("metadata.json");
@@ -530,8 +627,5 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         decoded_signal.len(),
         decoded_space.len()
     );
-    println!(
-        "[result] forward workflow verified; output={} (removed after test)",
-        run.0.display()
-    );
+    println!("[result] storage_workflow=passed");
 }

@@ -1,73 +1,61 @@
 # Scientific Workflow
 
-## Running Tests
-
-The Rust crate is located in `dev/`. Run test commands from that directory:
+The Rust crate is located in `dev/`. Run commands from that directory:
 
 ```bash
 cd dev
 ```
 
-### Complete system-state suite
+## Integration tests
 
-The Cargo integration entry point includes every focused suite under
-`tests/system_state/` plus the public tensor-backed integration workflow:
+The permanent suite contains four logged, behavior-oriented workflows rather
+than source-file-level tests.
 
-```bash
-cargo test --test system_state
-```
-
-Focused suites can be selected by module path:
+### Simulation state
 
 ```bash
-cargo test --test system_state 'spec_tests::'
-cargo test --test system_state 'error_tests::'
-cargo test --test system_state 'value_tests::'
-cargo test --test system_state 'state_tests::'
+cargo test --test state_workflow -- --nocapture
 ```
 
-### Complete in-memory time-series suite
+Loads the real JSON template and verifies mutable live-state evolution,
+zero-copy payload ownership, validation failures, transactional time, and
+explicit deep-clone behavior.
 
-The time-series target includes the focused collection and error suites plus a
-public SystemState-to-StateSeries ownership workflow:
+### Analysis series
 
 ```bash
-cargo test --test time_series
+cargo test --test analysis_workflow -- --nocapture
 ```
 
-Focused suites can be selected by module path:
+Verifies ordered collection invariants, move-based ownership, borrowed views,
+narrow field mutation, rejection recovery, capacity reuse, and deep cloning.
+
+### Successful storage workflow
 
 ```bash
-cargo test --test time_series 'error_tests::'
-cargo test --test time_series 'series_tests::'
+cargo test --test storage_workflow -- --nocapture
 ```
 
-### Complete staged storage suite
+Runs default decoder round trips and a multi-stream PiP tensor workflow through
+borrowed encoding, bounded writing, automatic chunking, metadata, integrity
+verification, and typed reconstruction.
 
-The storage target includes focused format, encoder, writer, decoder, and
-reader suites plus a logged end-to-end tensor workflow:
+### Storage resilience
 
 ```bash
-cargo test --test storage
+cargo test --test storage_resilience -- --nocapture
 ```
 
-Display bounded sampling, chunk, metadata, and typed reconstruction logs:
+Injects configuration, writer, decoder, record, and chunk-integrity failures
+and verifies contextual errors without exposing partial results.
+
+## Complete verification
 
 ```bash
-cargo test --test storage -- --nocapture
+cargo test --all-targets --no-fail-fast --locked
+cargo test --doc --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
-Focused storage suites can be selected by module path:
-
-```bash
-cargo test --test storage 'decoder_tests::'
-cargo test --test storage 'reader_tests::'
-```
-
-Tests remain organized under subdirectories:
-
-- A test covering one source file mirrors its source filename. For example,
-  `src/system_state/value.rs` is tested by
-  `tests/system_state/value.rs`.
-- A test covering multiple source files uses a concise filename describing the
-  behavior under test.
+The detailed coverage allocation and logging contract are documented in
+[`tests.md`](tests.md).
