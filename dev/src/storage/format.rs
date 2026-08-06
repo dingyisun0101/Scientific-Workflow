@@ -524,11 +524,6 @@ impl EncodedRecord {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
-    /// Consumes the record and returns its complete framed buffer.
-    pub(crate) fn into_bytes(self) -> Vec<u8> {
-        self.bytes
-    }
 }
 
 impl fmt::Debug for EncodedRecord {

@@ -1,610 +1,324 @@
-//! Logged successful persistence and reconstruction workflow.
+//! Logged end-to-end persistence and reconstruction through the public API.
 //!
-//! This test is deliberately demonstrative: it loads the checked-
-//! in template, evolves real `physics_in_parallel` tensors in one live state,
-//! retains explicit analysis snapshots, samples two logical streams at
-//! different cadences, encodes without cloning, writes bounded byte-targeted
-//! chunks, commits the sole metadata document, and reconstructs typed analysis
-//! series through per-key decoders and the all-in-one reader.
-//!
-//! Run with `--nocapture` to display its concise execution log:
+//! Run with:
 //!
 //! ```text
 //! cargo test --test storage_workflow -- --nocapture
 //! ```
 
+use std::fmt::Write as _;
 use std::fs;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use physics_in_parallel::math::{Dense, Tensor};
-use serde_json::{Map, Value, json};
-
-// Storage is not exported from lib.rs during staged review. Compiling the real
-// source modules here preserves crate-private visibility between SystemState
-// and JsonEncoder without broadening the public API merely for a test.
-#[allow(dead_code)]
-mod system_state {
-    #[path = "../../src/system_state/error.rs"]
-    mod error;
-    #[path = "../../src/system_state/spec.rs"]
-    mod spec;
-    #[path = "../../src/system_state/state.rs"]
-    mod state;
-    #[path = "../../src/system_state/value.rs"]
-    mod value;
-
-    pub use error::StateError;
-    pub use spec::StateSpec;
-    pub use state::{SystemState, TimePoint};
-}
-
-#[allow(dead_code)]
-mod time_series {
-    #[path = "../../src/time_series/error.rs"]
-    mod error;
-    #[path = "../../src/time_series/series.rs"]
-    mod series;
-
-    pub use error::SeriesError;
-    pub use series::StateSeries;
-}
-
-#[allow(dead_code)]
-mod storage {
-    #[path = "../../src/storage/decoder.rs"]
-    pub mod decoder;
-    #[path = "../../src/storage/encoder.rs"]
-    pub mod encoder;
-    #[path = "../../src/storage/error.rs"]
-    pub mod error;
-    #[path = "../../src/storage/format.rs"]
-    pub mod format;
-    #[path = "../../src/storage/reader.rs"]
-    pub mod reader;
-    #[path = "../../src/storage/writer.rs"]
-    pub mod writer;
-}
-
-use storage::decoder::{Decoders, StringDecoder, VecF64Decoder};
-use storage::encoder::JsonEncoder;
-use storage::format::{FieldMetadata, RunMetadata, RunStatus, StreamMetadata, TimeAxis};
-use storage::reader::SeriesReader;
-use storage::writer::{StateWriter, WriterConfig, WriterSummary};
-use system_state::{StateSpec, TimePoint};
-use time_series::StateSeries;
+use scientific_workflow::prelude::*;
+use serde::{Serialize, Serializer};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// Removes one precisely owned integration directory after the test.
-struct TempRun(PathBuf);
+/// Owns one collision-resistant test workspace and its absent run child.
+struct TempWorkspace {
+    root: PathBuf,
+}
 
-impl TempRun {
-    /// Creates a collision-resistant run root beneath the platform temp root.
+impl TempWorkspace {
     fn new() -> Self {
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "scientific-workflow-storage-integration-{}-{sequence}",
+        let root = std::env::temp_dir().join(format!(
+            "scientific-workflow-public-storage-{}-{sequence}",
             std::process::id()
         ));
-        fs::create_dir(&path).expect("the unique integration root must be created");
-        Self(path)
+        fs::create_dir(&root).expect("unique workspace must be creatable");
+        Self { root }
+    }
+
+    fn run(&self) -> PathBuf {
+        self.root.join("run")
     }
 }
 
-impl Drop for TempRun {
+impl Drop for TempWorkspace {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.0) {
+        if let Err(error) = fs::remove_dir_all(&self.root) {
             eprintln!(
-                "[cleanup] failed to remove integration directory {}: {error}",
-                self.0.display()
+                "[cleanup] failed to remove {}: {error}",
+                self.root.display()
             );
         }
     }
 }
 
-/// Resolves the canonical state template independently of the process cwd.
+/// JSON-array payload whose explicit clone operation is observable.
+#[derive(Debug)]
+struct TrackedVec {
+    values: Vec<f64>,
+    clones: Arc<AtomicUsize>,
+}
+
+impl Clone for TrackedVec {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::SeqCst);
+        Self {
+            values: self.values.clone(),
+            clones: Arc::clone(&self.clones),
+        }
+    }
+}
+
+impl Serialize for TrackedVec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.values.serialize(serializer)
+    }
+}
+
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state.json")
 }
 
-/// Builds persisted field declarations directly from validated state metadata.
-fn stream_fields(encoder: &JsonEncoder) -> Vec<FieldMetadata> {
-    encoder
-        .fields()
-        .map(|name| {
-            let field = encoder
-                .spec()
-                .get(name)
-                .expect("encoder fields were validated against this specification");
-            FieldMetadata {
-                name: name.to_owned(),
-                description: field.description().map(str::to_owned),
-            }
-        })
-        .collect()
-}
-
-/// Writes the authoritative metadata file and returns its exact byte length.
-fn write_metadata(path: &Path, metadata: &RunMetadata) -> u64 {
-    metadata
-        .validate(path)
-        .expect("metadata must be valid before every commit");
-    let bytes = serde_json::to_vec_pretty(metadata).expect("metadata must serialize");
-    fs::write(path, &bytes).expect("metadata commit must be writable");
-    bytes.len() as u64
-}
-
-/// Reads every complete record named by one stream's committed inventory.
-fn read_records(root: &Path, stream: &StreamMetadata) -> Vec<Value> {
-    stream
-        .chunks
+fn stream_metadata<'a>(metadata: &'a Value, name: &str) -> &'a Value {
+    metadata["streams"]
+        .as_array()
+        .unwrap()
         .iter()
-        .flat_map(|chunk| {
-            let path = root.join(&stream.directory).join(&chunk.file);
-            let bytes = fs::read(&path).expect("committed chunk must be readable");
-            assert_eq!(bytes.len() as u64, chunk.bytes);
-            bytes
-                .split(|byte| *byte == b'\n')
-                .filter(|line| !line.is_empty())
-                .map(|line| {
-                    serde_json::from_slice::<Value>(line)
-                        .expect("every complete JSONL record must parse")
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+        .find(|stream| stream["name"] == name)
+        .expect("configured stream must occur in metadata")
 }
 
-/// Prints stable, bounded completion facts without dumping scientific payloads.
-fn log_summary(summary: &WriterSummary) {
-    println!(
-        "[writer:{}] records={} chunks={} bytes={}",
-        summary.stream(),
-        summary.records(),
-        summary.chunks().len(),
-        summary.bytes()
-    );
-    for chunk in summary.chunks() {
-        let checksum_prefix = &chunk.checksum[..chunk.checksum.len().min(23)];
+/// Verifies persisted chunk descriptors against actual immutable files.
+fn verify_chunks(run: &Path, stream: &Value) -> (u64, u64) {
+    let directory = stream["directory"].as_str().unwrap();
+    let chunks = stream["chunks"].as_array().unwrap();
+    let mut total_records = 0_u64;
+    let mut total_bytes = 0_u64;
+
+    for (ordinal, chunk) in chunks.iter().enumerate() {
+        let file = chunk["file"].as_str().unwrap();
+        assert_eq!(file, format!("chunk-{ordinal:06}.jsonl"));
+        let path = run.join(directory).join(file);
+        let bytes = fs::read(&path).expect("committed chunk must be readable");
+        assert_eq!(bytes.len() as u64, chunk["bytes"].as_u64().unwrap());
+        assert!(bytes.ends_with(b"\n"));
+        let records = bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty());
+        let records = records
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len() as u64, chunk["records"].as_u64().unwrap());
+        assert_eq!(records.first().unwrap()["index"], chunk["first_index"]);
+        assert_eq!(records.last().unwrap()["index"], chunk["last_index"]);
+        let checksum = sha256_checksum(&bytes);
+        assert_eq!(checksum, chunk["checksum"].as_str().unwrap());
+        total_records += records.len() as u64;
+        total_bytes += bytes.len() as u64;
         println!(
-            "[chunk:{}] file={} records={} bytes={} indices={}..={} checksum={}...",
-            summary.stream(),
-            chunk.file,
-            chunk.records,
-            chunk.bytes,
-            chunk.first_index,
-            chunk.last_index,
-            checksum_prefix
+            "[chunk] stream={} file={file} records={} bytes={} checksum_verified=true",
+            stream["name"].as_str().unwrap(),
+            records.len(),
+            bytes.len()
         );
     }
-}
-
-fn default_decoders_round_trip_typed_payloads() {
-    let run = TempRun::new();
-    let metadata_path = run.0.join("metadata.json");
-    let spec = StateSpec::parse(
-        metadata_path.clone(),
-        br#"{"fields":[{"name":"values","description":"Numeric sample"},{"name":"label","description":"Sample label"}]}"#,
-    )
-    .expect("default-decoder state schema must parse");
-    let encoder = JsonEncoder::new("samples", &spec, ["values", "label"]).unwrap();
-    let config = WriterConfig::new(
-        "samples",
-        run.0.join("samples"),
-        NonZeroU64::new(96).unwrap(),
-        NonZeroU64::new(4_096).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(config.stream(), "samples");
-    assert_eq!(config.directory(), run.0.join("samples"));
-    assert_eq!(config.max_chunk_bytes().get(), 96);
-    assert_eq!(config.queue_bytes().get(), 4_096);
-    let writer = StateWriter::start(config).unwrap();
-
-    let expected = [
-        (1_u64, vec![1.25, -2.5], "first".to_owned()),
-        (4_u64, Vec::new(), "final \u{4e16}\u{754c}\nline".to_owned()),
-        (7_u64, vec![9.0], String::new()),
-    ];
-    for (index, values, label) in &expected {
-        let mut state = spec.empty(TimePoint::from_physical(*index, *index as f64 / 4.0).unwrap());
-        assert!(state.set("values", values.clone()).unwrap().is_none());
-        assert!(state.set("label", label.clone()).unwrap().is_none());
-        let record = encoder.encode(&state).unwrap();
-        println!(
-            "[sample] stream=samples index={} encoded_bytes={}",
-            index,
-            record.len()
-        );
-        writer.submit(record).unwrap();
-    }
-    let summary = writer.finish().unwrap();
-
-    let mut metadata = RunMetadata::running(
-        TimeAxis {
-            index_name: "step".to_owned(),
-            index_unit: None,
-            physical_name: Some("time".to_owned()),
-            physical_unit: Some("s".to_owned()),
-        },
-        Map::new(),
-        vec![StreamMetadata {
-            name: "samples".to_owned(),
-            directory: "samples".to_owned(),
-            cadence: Some("selected steps".to_owned()),
-            fields: stream_fields(&encoder),
-            max_chunk_bytes: 96,
-            queue_bytes: 4_096,
-            chunks: summary.chunks().to_vec(),
-        }],
-    );
-    metadata.status = RunStatus::Complete;
-    let metadata_bytes = write_metadata(&metadata_path, &metadata);
-
-    let mut decoders = Decoders::new();
-    assert!(decoders.is_empty());
-    decoders
-        .add::<Vec<f64>, _>("values", VecF64Decoder)
-        .unwrap();
-    decoders.add::<String, _>("label", StringDecoder).unwrap();
-    assert_eq!(decoders.len(), 2);
-    assert!(decoders.contains("values"));
-    assert!(decoders.contains("label"));
-    let mut keys = decoders.keys().collect::<Vec<_>>();
-    keys.sort_unstable();
-    assert_eq!(keys, vec!["label", "values"]);
-
-    let reader = SeriesReader::open(&run.0, decoders).unwrap();
-    assert_eq!(reader.root(), run.0.as_path());
-    assert_eq!(reader.streams().collect::<Vec<_>>(), vec!["samples"]);
-    assert!(format!("{reader:?}").contains("SeriesReader"));
-    let series = reader.read("samples").unwrap();
-    assert_eq!(series.len(), expected.len());
-    for (state, (index, values, label)) in series.iter().zip(&expected) {
-        assert_eq!(state.time().index(), *index);
-        assert_eq!(state.get::<Vec<f64>>("values").unwrap(), values);
-        assert_eq!(state.get::<String>("label").unwrap(), label);
-    }
-    let all = reader.read_all().unwrap();
-    assert_eq!(all.len(), 1);
-    assert_eq!(all[0].0, "samples");
-    assert_eq!(all[0].1.len(), expected.len());
-
-    let framed = storage::format::EncodedRecord::new(TimePoint::new(99), b"{}".to_vec());
-    assert_eq!(framed.time().index(), 99);
-    assert_eq!(framed.len(), 3);
-    assert_eq!(framed.bytes(), b"{}\n");
-    assert!(format!("{framed:?}").contains("EncodedRecord"));
-    assert_eq!(framed.into_bytes(), b"{}\n");
-
-    println!(
-        "[writer] stream=samples records={} chunks={} bytes={}",
-        summary.records(),
-        summary.chunks().len(),
-        summary.bytes()
-    );
-    println!(
-        "[metadata] files=1 bytes={} semantic_round_trip=true status=complete",
-        metadata_bytes
-    );
-    println!(
-        "[readback] stream=samples states={} typed_round_trip=true",
-        series.len()
-    );
+    (total_records, total_bytes)
 }
 
 #[test]
 fn complete_scientific_workflow_is_consistent_and_observable() {
-    const SIGNAL_CHUNK_BYTES: u64 = 256;
-    const SPACE_CHUNK_BYTES: u64 = 128;
-    const QUEUE_BYTES: u64 = 1_048_576;
+    const SIGNAL_CHUNK_BYTES: u64 = 110;
+    const SPACE_CHUNK_BYTES: u64 = 64;
+    const QUEUE_BYTES: u64 = 16_384;
 
-    default_decoders_round_trip_typed_payloads();
+    let workspace = TempWorkspace::new();
+    let run_path = workspace.run();
+    let spec = StateSpec::load(fixture_path()).expect("checked-in template must load");
+    let clones = Arc::new(AtomicUsize::new(0));
 
-    let run = TempRun::new();
-    let metadata_path = run.0.join("metadata.json");
-    let template_path = fixture_path();
-    let spec = StateSpec::load(&template_path).expect("the canonical template must load");
-    let template_json: Value = serde_json::from_str(&spec.to_json().unwrap()).unwrap();
-    let fixture_json: Value = serde_json::from_slice(&fs::read(&template_path).unwrap()).unwrap();
-    assert_eq!(template_json, fixture_json);
-    println!(
-        "[setup] template={} fields={:?}",
-        template_path.display(),
-        spec.fields()
-            .iter()
-            .map(|field| field.name())
-            .collect::<Vec<_>>()
-    );
+    let signal = StreamConfig::new(
+        "signal",
+        ["activity", "population"],
+        NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
+        NonZeroU64::new(QUEUE_BYTES).unwrap(),
+    )
+    .directory("streams/signals")
+    .cadence("every simulation step");
+    let space = StreamConfig::new(
+        "space",
+        ["space"],
+        NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
+        NonZeroU64::new(QUEUE_BYTES).unwrap(),
+    )
+    .cadence("every two simulation steps");
 
-    let signal_encoder = JsonEncoder::new("signal", &spec, ["activity", "population"]).unwrap();
-    let space_encoder = JsonEncoder::new("space", &spec, ["space"]).unwrap();
-    assert_eq!(
-        signal_encoder.fields().collect::<Vec<_>>(),
-        vec!["population", "activity"]
-    );
-    println!(
-        "[setup] streams=signal{:?}, space{:?}; queue_bytes={QUEUE_BYTES}",
-        signal_encoder.fields().collect::<Vec<_>>(),
-        space_encoder.fields().collect::<Vec<_>>()
-    );
+    let mut annotations = Map::new();
+    annotations.insert("seed".to_owned(), Value::from(42));
+    annotations.insert("program".to_owned(), Value::from("public-api-demo"));
+    let output = RunOutputBuilder::new(&run_path, &spec)
+        .time_axis(
+            TimeAxis::new("simulation_step")
+                .index_unit("step")
+                .physical_name("time")
+                .physical_unit("s"),
+        )
+        .run_metadata(annotations)
+        .stream(signal)
+        .stream(space)
+        .start()
+        .expect("valid run must start");
+    assert_eq!(output.root(), run_path);
+    assert_eq!(output.streams().collect::<Vec<_>>(), ["signal", "space"]);
+    assert!(run_path.join("metadata.json").is_file());
 
-    let mut population = Tensor::<u64, Dense>::zeros(&[3]);
-    population.set(&[0], 10);
-    population.set(&[1], 20);
-    population.set(&[2], 30);
-    let mut space = Tensor::<u64, Dense>::zeros(&[2, 2]);
-    space.set(&[0, 0], 1);
-    space.set(&[0, 1], 2);
-    space.set(&[1, 0], 3);
-    space.set(&[1, 1], 4);
-    let mut activity = Tensor::<u8, Dense>::zeros(&[3]);
-    activity.set(&[0], 1);
-    activity.set(&[1], 0);
-    activity.set(&[2], 1);
-
+    let mut lattice = Tensor::<u64, Dense>::zeros(&[2, 2]);
+    for (coordinate, value) in [([0, 0], 1), ([0, 1], 2), ([1, 0], 3), ([1, 1], 4)] {
+        lattice.set(&coordinate, value);
+    }
     let mut live = spec.empty(TimePoint::from_physical(0, 0.0).unwrap());
-    assert!(live.set("population", population).unwrap().is_none());
-    assert!(live.set("space", space).unwrap().is_none());
-    assert!(live.set("activity", activity).unwrap().is_none());
-    assert_eq!(live.loaded(), spec.len());
-    assert!(live.spec().shares_layout(&spec));
-    let blank = live.empty(TimePoint::new(999));
-    assert!(blank.is_blank());
-    assert!(blank.spec().shares_layout(&spec));
-    println!(
-        "[state] initialized index={} physical={:?} loaded={}/{}",
-        live.time().index(),
-        live.time().physical(),
-        live.loaded(),
-        live.len()
-    );
-
-    let signal_metadata = StreamMetadata {
-        name: "signal".to_owned(),
-        directory: "signal".to_owned(),
-        cadence: Some("every simulation step".to_owned()),
-        fields: stream_fields(&signal_encoder),
-        max_chunk_bytes: SIGNAL_CHUNK_BYTES,
-        queue_bytes: QUEUE_BYTES,
-        chunks: Vec::new(),
-    };
-    let space_metadata = StreamMetadata {
-        name: "space".to_owned(),
-        directory: "space".to_owned(),
-        cadence: Some("every two simulation steps".to_owned()),
-        fields: stream_fields(&space_encoder),
-        max_chunk_bytes: SPACE_CHUNK_BYTES,
-        queue_bytes: QUEUE_BYTES,
-        chunks: Vec::new(),
-    };
-    let mut run_attributes = Map::new();
-    run_attributes.insert("seed".to_owned(), Value::from(42));
-    run_attributes.insert("program".to_owned(), Value::from("integration-demo"));
-    let mut metadata = RunMetadata::running(
-        TimeAxis {
-            index_name: "simulation_step".to_owned(),
-            index_unit: Some("step".to_owned()),
-            physical_name: Some("time".to_owned()),
-            physical_unit: Some("s".to_owned()),
+    live.set(
+        "population",
+        TrackedVec {
+            values: vec![10.0, 20.0, 30.0],
+            clones: Arc::clone(&clones),
         },
-        run_attributes,
-        vec![signal_metadata, space_metadata],
-    );
-    let initial_metadata_bytes = write_metadata(&metadata_path, &metadata);
-    println!(
-        "[metadata] initialized path={} bytes={} status=running streams={}",
-        metadata_path.display(),
-        initial_metadata_bytes,
-        metadata.streams.len()
-    );
-
-    let signal_writer = StateWriter::start(
-        WriterConfig::new(
-            "signal",
-            run.0.join("signal"),
-            NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
-            NonZeroU64::new(QUEUE_BYTES).unwrap(),
-        )
-        .unwrap(),
     )
-    .expect("signal writer must start");
-    let space_writer = StateWriter::start(
-        WriterConfig::new(
-            "space",
-            run.0.join("space"),
-            NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
-            NonZeroU64::new(QUEUE_BYTES).unwrap(),
-        )
-        .unwrap(),
-    )
-    .expect("space writer must start");
+    .unwrap();
+    live.set("space", lattice).unwrap();
+    live.set("activity", String::from("initial")).unwrap();
 
-    let mut analysis = StateSeries::with_capacity(spec.clone(), 4);
-    for sample in 0..4_u64 {
-        assert_eq!(live.time().index(), sample);
-        let signal_record = signal_encoder
-            .encode(&live)
-            .expect("signal payloads must encode by borrow");
-        let signal_bytes = signal_record.len();
-        signal_writer
-            .submit(signal_record)
-            .expect("signal record must be admitted");
-
-        let mut space_bytes = None;
-        if sample % 2 == 0 {
-            let record = space_encoder
-                .encode(&live)
-                .expect("space payload must encode by borrow");
-            space_bytes = Some(record.len());
-            space_writer
-                .submit(record)
-                .expect("space record must be admitted");
+    for index in 0..4_u64 {
+        output.sample("signal", &live).unwrap();
+        if index % 2 == 0 {
+            output.sample("space", &live).unwrap();
         }
-
-        // Deep cloning is explicit and used only because this test also builds
-        // the analysis-oriented in-memory series. The hot persistence path
-        // above encoded the live state directly without this clone.
-        analysis
-            .push(live.clone())
-            .expect("increasing snapshots with shared layout must append");
+        assert_eq!(clones.load(Ordering::SeqCst), 0);
         println!(
-            "[sample] index={} physical={:.2} signal_bytes={} space_bytes={}",
-            live.time().index(),
+            "[sample] index={index} physical={:.2} signal=true space={}",
             live.time().physical().unwrap(),
-            signal_bytes,
-            space_bytes.map_or_else(|| "skipped".to_owned(), |bytes| bytes.to_string())
+            index % 2 == 0
         );
 
-        if sample < 3 {
-            let population = live
-                .get_mut::<Tensor<u64, Dense>>("population")
-                .expect("population tensor must remain mutable");
-            population.set(&[0], population.get(&[0]) + 1);
-            let space = live
-                .get_mut::<Tensor<u64, Dense>>("space")
-                .expect("space tensor must remain mutable");
-            space.set(&[0, 0], space.get(&[0, 0]) + 10);
-            let activity = live
-                .get_mut::<Tensor<u8, Dense>>("activity")
-                .expect("activity tensor must remain mutable");
-            activity.set(&[1], (sample as u8 + 1) % 2);
-            live.advance(Some(0.25))
-                .expect("simulation and physical time must advance");
+        if index < 3 {
+            live.get_mut::<TrackedVec>("population").unwrap().values[0] += 1.0;
+            let lattice = live.get_mut::<Tensor<u64, Dense>>("space").unwrap();
+            lattice.set(&[0, 0], lattice.get(&[0, 0]) + 10);
+            *live.get_mut::<String>("activity").unwrap() = format!("step-{index} 世界");
+            live.advance(Some(0.25)).unwrap();
         }
     }
+    assert!(matches!(
+        output.sample("absent", &live),
+        Err(StorageError::UnknownStream { stream }) if stream == "absent"
+    ));
+    output.finish().expect("all writers must drain and finish");
+    assert_eq!(clones.load(Ordering::SeqCst), 0);
 
-    let signal_summary = signal_writer.finish().expect("signal output must finish");
-    let space_summary = space_writer.finish().expect("space output must finish");
-    log_summary(&signal_summary);
-    log_summary(&space_summary);
-    assert_eq!(signal_summary.records(), 4);
-    assert_eq!(space_summary.records(), 2);
-    assert!(signal_summary.chunks().len() >= 2);
-    assert!(space_summary.chunks().len() >= 2);
+    let metadata_bytes = fs::read(run_path.join("metadata.json")).unwrap();
+    let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
+    assert_eq!(metadata["status"]["state"], "complete");
+    assert_eq!(metadata["run"]["seed"], 42);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&serde_json::to_vec_pretty(&metadata).unwrap()).unwrap(),
+        metadata
+    );
+    let signal_metadata = stream_metadata(&metadata, "signal");
+    let space_metadata = stream_metadata(&metadata, "space");
+    assert_eq!(signal_metadata["directory"], "streams/signals");
+    assert_eq!(signal_metadata["fields"][0]["name"], "population");
+    assert_eq!(signal_metadata["fields"][1]["name"], "activity");
+    let (signal_records, signal_bytes) = verify_chunks(&run_path, signal_metadata);
+    let (space_records, space_bytes) = verify_chunks(&run_path, space_metadata);
+    assert_eq!(signal_records, 4);
+    assert_eq!(space_records, 2);
+    assert!(signal_metadata["chunks"].as_array().unwrap().len() >= 2);
+    assert!(
+        space_metadata["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|chunk| {
+                chunk["records"] == 1 && chunk["bytes"].as_u64().unwrap() > SPACE_CHUNK_BYTES
+            })
+    );
 
-    metadata
-        .stream_mut("signal")
-        .unwrap()
-        .chunks
-        .clone_from(&signal_summary.chunks().to_vec());
-    metadata
-        .stream_mut("space")
-        .unwrap()
-        .chunks
-        .clone_from(&space_summary.chunks().to_vec());
-    metadata.status = RunStatus::Complete;
-    let final_metadata_bytes = write_metadata(&metadata_path, &metadata);
+    let files = walk_files(&run_path);
+    assert_eq!(
+        files
+            .iter()
+            .filter(|path| path.file_name().unwrap() == "metadata.json")
+            .count(),
+        1
+    );
+    assert!(
+        files
+            .iter()
+            .all(|path| { !path.file_name().unwrap().to_string_lossy().contains(".tmp") })
+    );
     println!(
-        "[metadata] committed bytes={} status=complete signal_chunks={} space_chunks={}",
-        final_metadata_bytes,
-        signal_summary.chunks().len(),
-        space_summary.chunks().len()
+        "[metadata] files={} bytes={} semantic_round_trip=true status=complete",
+        files.len(),
+        metadata_bytes.len()
+    );
+    println!(
+        "[writer] signal_records={signal_records} signal_bytes={signal_bytes} space_records={space_records} space_bytes={space_bytes}"
     );
 
-    let restored: RunMetadata =
-        serde_json::from_slice(&fs::read(&metadata_path).expect("metadata must be readable"))
-            .expect("metadata must parse");
-    restored
-        .validate(&metadata_path)
-        .expect("restored metadata must remain valid");
-    assert_eq!(restored, metadata);
-    assert_eq!(restored.stream("signal").unwrap().queue_bytes, QUEUE_BYTES);
-
-    let signal_records = read_records(&run.0, restored.stream("signal").unwrap());
-    let space_records = read_records(&run.0, restored.stream("space").unwrap());
+    assert_eq!(VecF64Decoder.decode("[1.25,-2.5]").unwrap(), [1.25, -2.5]);
+    assert!(VecF64Decoder.decode("[]").unwrap().is_empty());
     assert_eq!(
-        signal_records
-            .iter()
-            .map(|record| record["index"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        vec![0, 1, 2, 3]
+        StringDecoder.decode(r#""hello 世界""#).unwrap(),
+        "hello 世界"
     );
-    assert_eq!(
-        space_records
-            .iter()
-            .map(|record| record["index"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        vec![0, 2]
-    );
-    assert_eq!(
-        signal_records[0]["values"]["population"]["data"],
-        json!([10, 20, 30])
-    );
-    assert_eq!(
-        signal_records[3]["values"]["population"]["data"],
-        json!([13, 20, 30])
-    );
-    assert_eq!(
-        space_records[1]["values"]["space"]["data"],
-        json!([21, 2, 3, 4])
-    );
-
-    assert_eq!(analysis.len(), 4);
-    assert_eq!(analysis.view().first().unwrap().time().index(), 0);
-    assert_eq!(analysis.view().last().unwrap().time().index(), 3);
-    assert_eq!(
-        analysis
-            .first()
-            .unwrap()
-            .get::<Tensor<u64, Dense>>("population")
-            .unwrap()
-            .get(&[0]),
-        10
-    );
-    analysis
-        .field_mut::<Tensor<u64, Dense>>(0, "population")
-        .unwrap()
-        .set(&[0], 999);
-    assert_eq!(
-        analysis
-            .first()
-            .unwrap()
-            .get::<Tensor<u64, Dense>>("population")
-            .unwrap()
-            .get(&[0]),
-        999
-    );
-    assert_eq!(signal_records[0]["values"]["population"]["data"][0], 10);
-
+    assert!(StringDecoder.decode(r#""""#).unwrap().is_empty());
     let mut decoders = Decoders::with_capacity(3);
+    assert!(decoders.is_empty());
+    decoders.add("population", VecF64Decoder).unwrap();
+    decoders.add("activity", StringDecoder).unwrap();
     decoders
-        .add::<Tensor<u64, Dense>, _>("population", |raw: &str| {
-            serde_json::from_str::<Tensor<u64, Dense>>(raw)
-        })
+        .add::<Tensor<u64, Dense>, _>("space", |raw: &str| serde_json::from_str(raw))
         .unwrap();
-    decoders
-        .add::<Tensor<u64, Dense>, _>("space", |raw: &str| {
-            serde_json::from_str::<Tensor<u64, Dense>>(raw)
-        })
-        .unwrap();
-    decoders
-        .add::<Tensor<u8, Dense>, _>("activity", |raw: &str| {
-            serde_json::from_str::<Tensor<u8, Dense>>(raw)
-        })
-        .unwrap();
-    let reader = SeriesReader::open(&run.0, decoders).expect("completed run must open");
-    let decoded_signal = reader
-        .read("signal")
-        .expect("custom tensor decoders must reconstruct signal");
-    let decoded_space = reader
-        .read("space")
-        .expect("custom tensor decoder must reconstruct space");
-    assert_eq!(decoded_signal.len(), 4);
-    assert_eq!(decoded_space.len(), 2);
+    assert_eq!(decoders.len(), 3);
+    assert!(decoders.contains("space"));
+    let mut decoder_keys = decoders.keys().collect::<Vec<_>>();
+    decoder_keys.sort_unstable();
+    assert_eq!(decoder_keys, ["activity", "population", "space"]);
+
+    let reader = SeriesReader::open(&run_path, decoders).unwrap();
+    assert_eq!(reader.root(), run_path);
+    assert_eq!(reader.streams().collect::<Vec<_>>(), ["signal", "space"]);
+    assert!(format!("{reader:?}").contains("SeriesReader"));
+    let signal_series = reader.read("signal").unwrap();
+    assert_eq!(signal_series.len(), 4);
+    assert_eq!(signal_series.first().unwrap().time().index(), 0);
+    assert_eq!(signal_series.last().unwrap().time().index(), 3);
     assert_eq!(
-        decoded_signal
+        signal_series
             .last()
             .unwrap()
-            .get::<Tensor<u64, Dense>>("population")
-            .unwrap()
-            .get(&[0]),
-        13
+            .get::<Vec<f64>>("population")
+            .unwrap()[0],
+        13.0
     );
     assert_eq!(
-        decoded_space
+        signal_series
+            .last()
+            .unwrap()
+            .get::<String>("activity")
+            .unwrap(),
+        "step-2 世界"
+    );
+    let all = reader.read_all().unwrap();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].0, "signal");
+    assert_eq!(all[1].0, "space");
+    assert_eq!(
+        all[1]
+            .1
             .last()
             .unwrap()
             .get::<Tensor<u64, Dense>>("space")
@@ -612,20 +326,37 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .get(&[0, 0]),
         21
     );
-
     println!(
-        "[readback] signal_indices={:?} space_indices={:?} analysis_states={} decoded_signal={} decoded_space={}",
-        signal_records
-            .iter()
-            .map(|record| record["index"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        space_records
-            .iter()
-            .map(|record| record["index"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        analysis.len(),
-        decoded_signal.len(),
-        decoded_space.len()
+        "[readback] signal_states={} space_states={} typed_round_trip=true clone_calls={}",
+        signal_series.len(),
+        all[1].1.len(),
+        clones.load(Ordering::SeqCst)
     );
     println!("[result] storage_workflow=passed");
+}
+
+/// Returns every regular file recursively for sidecar/temp-file assertions.
+fn walk_files(root: &Path) -> Vec<PathBuf> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+fn sha256_checksum(bytes: &[u8]) -> String {
+    let mut checksum = String::from("sha256:");
+    for byte in Sha256::digest(bytes) {
+        write!(&mut checksum, "{byte:02x}").unwrap();
+    }
+    checksum
 }

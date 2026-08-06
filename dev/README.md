@@ -26,9 +26,9 @@ making them suitable for large arrays and tensors.
 - Exact-byte automatic chunking with indivisible JSONL records.
 - SHA-256-verified eager reconstruction through per-key payload decoders.
 
-The storage implementation is verified internally but remains staged outside
-the public crate API until the next run-level facade owns metadata and writer
-lifecycle. Workflow dispatch remains a later development stage.
+The public `RunOutput` facade owns multi-stream metadata, bounded writers, and
+their completion or failure lifecycle. Workflow dispatch remains a later
+development stage.
 
 ## Installation
 
@@ -67,10 +67,11 @@ through typed access, and descriptions are documentation only.
 ## Basic Usage
 
 ```rust,no_run
-use scientific_workflow::system_state::{StateSpec, TimePoint};
+use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = StateSpec::load("state.json")?;
+    std::fs::create_dir_all("output")?;
     let mut state = spec.empty(TimePoint::new(0));
 
     drop(state.set("population", vec![10_u64, 20, 30])?);
@@ -99,8 +100,7 @@ state shares the series' exact specification allocation and that simulation
 indices increase strictly. Index gaps are allowed.
 
 ```rust,no_run
-use scientific_workflow::system_state::{StateSpec, TimePoint};
-use scientific_workflow::time_series::StateSeries;
+use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = StateSpec::load("state.json")?;
@@ -136,7 +136,7 @@ tensor:
 
 ```rust,ignore
 use physics_in_parallel::math::{Dense, Tensor};
-use scientific_workflow::system_state::{StateSpec, TimePoint};
+use scientific_workflow::prelude::*;
 
 let spec = StateSpec::load("state.json")?;
 let mut state = spec.empty(TimePoint::new(0));
@@ -153,6 +153,47 @@ let population = state.take::<Tensor<u64, Dense>>("population")?;
 The tensor crate is not a required runtime dependency of
 `scientific-workflow`; applications use their own concrete serializable
 scientific payload types without registering codecs.
+
+## Persistent Output
+
+One import brings the complete supported state, analysis, storage, reader, and
+decoder API into scope:
+
+```rust,no_run
+use std::num::NonZeroU64;
+use scientific_workflow::prelude::*;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let spec = StateSpec::load("state.json")?;
+    let stream = StreamConfig::new(
+        "signal",
+        ["population"],
+        NonZeroU64::new(64 * 1024 * 1024).unwrap(),
+        NonZeroU64::new(256 * 1024 * 1024).unwrap(),
+    )
+    .cadence("every simulation step");
+
+    let output = RunOutput::builder("output/run-001", &spec)
+        .time_axis(TimeAxis::new("step").physical_name("time").physical_unit("s"))
+        .stream(stream)
+        .start()?;
+
+    let mut state = spec.empty(TimePoint::from_physical(0, 0.0).unwrap());
+    drop(state.set("population", vec![10.0_f64, 20.0, 30.0])?);
+    output.sample("signal", &state)?;
+    output.finish()?;
+
+    let mut decoders = Decoders::new();
+    decoders.add("population", VecF64Decoder)?;
+    let series = SeriesReader::open("output/run-001", decoders)?.read("signal")?;
+    assert_eq!(series.len(), 1);
+    Ok(())
+}
+```
+
+`sample` borrows selected payloads only while producing owned encoded bytes.
+It then applies bounded blocking backpressure through the selected writer.
+`finish` drains every stream and atomically publishes completed metadata.
 
 ## Testing
 

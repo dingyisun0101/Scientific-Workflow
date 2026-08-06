@@ -37,8 +37,9 @@ cargo test --test storage_workflow -- --nocapture
 ```
 
 Runs default decoder round trips and a multi-stream PiP tensor workflow through
-borrowed encoding, bounded writing, automatic chunking, metadata, integrity
-verification, and typed reconstruction.
+the public prelude and `RunOutput`, including borrowed encoding, bounded
+writing, automatic chunking, metadata, integrity verification, and typed
+reconstruction.
 
 ### Storage resilience
 
@@ -59,3 +60,9 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 
 The detailed coverage allocation and logging contract are documented in
 [`tests.md`](tests.md).
+
+Downstream crates can bring the complete supported API into scope with:
+
+```rust
+use scientific_workflow::prelude::*;
+```

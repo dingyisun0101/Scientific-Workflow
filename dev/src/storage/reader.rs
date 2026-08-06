@@ -75,7 +75,7 @@ impl SeriesReader {
     ///
     /// Returns [`StorageError::Io`] when `metadata.json` cannot be read,
     /// [`StorageError::Json`] when it is not syntactically valid JSON, semantic
-    /// metadata errors from [`RunMetadata::validate`], or
+    /// metadata errors from internal `RunMetadata::validate`, or
     /// [`StorageError::RunIncomplete`] unless status is complete.
     pub fn open(root: impl AsRef<Path>, decoders: Decoders) -> Result<Self, StorageError> {
         let root = root.as_ref().to_path_buf();

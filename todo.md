@@ -3,45 +3,6 @@
 Only incomplete, next-stage, or explicitly deferred work belongs here. The
 implemented architecture and per-method references live in `design.md`.
 
-## Next stage: run-level storage facade
-
-Create `dev/src/storage.rs` after discussing the final public builder and
-metadata transaction API.
-
-Required responsibilities:
-
-- declare and curate public storage re-exports;
-- configure a run root and one or more logical streams;
-- validate each stream's exact selected keys and byte limits;
-- own one `JsonEncoder` and `StateWriter` per stream;
-- atomically write the sole initial `metadata.json` with `Running` status
-  before accepting samples;
-- route `sample(stream, &SystemState)` through the selected encoder and writer;
-- preserve writer backpressure and surface terminal errors;
-- finish all writers and atomically replace metadata with complete chunk
-  inventories and `Complete` status;
-- define failure metadata behavior without hiding the originating error;
-- reject sampling after finish and repeated finish operations;
-- never clone, retain, or take ownership of scientific payloads.
-
-Before code, decide only these remaining public API details:
-
-1. builder names and ownership flow;
-2. stream configuration representation;
-3. atomic metadata temporary-file and synchronization policy;
-4. finish/failure transition behavior;
-5. which currently crate-private storage types become public.
-
-## Storage tests for the next stage
-
-- Extend `tests/storage_workflow.rs` to use `RunOutput` instead of manually
-  coordinating encoders, writers, and metadata.
-- Add `RunOutput` lifecycle, metadata atomicity, stream routing, existing-path
-  refusal, and failure behavior to `storage_workflow.rs` and
-  `storage_resilience.rs`; retain the four-file test architecture.
-- Export `storage` from `lib.rs` only after its complete public lifecycle passes.
-- Update crate and repository READMEs with the final public storage example.
-
 ## Deferred decoder catalog
 
 The main-development defaults are intentionally limited to:
@@ -77,6 +38,18 @@ prematurely.
   demonstrate that eager `StateSeries` reconstruction is insufficient;
 - alternate encodings only after JSON workflow stability; protobuf remains out
   of current scope.
+
+## Simulator integration gate
+
+The scientific-workflow side is ready. Coordinate one simulator migration that:
+
+- adds local `scientific-workflow` and PiP 3.0.4 path dependencies;
+- replaces simulator's fixed `io::SystemState` ownership boundary;
+- replaces separate `SignalWriter` and `SpaceWriter` formats with named
+  `RunOutput` streams;
+- supplies custom decoders for `Vec<usize>`, PiP lattice, and activity payloads;
+- proves save, chunk, readback, and resume behavior before removing simulator's
+  old IO implementation.
 
 ## Project rules
 

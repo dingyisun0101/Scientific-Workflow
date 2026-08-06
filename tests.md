@@ -9,7 +9,7 @@ works as a scientific workflow system, not merely call isolated getters.
 The consolidated suite must:
 
 - exercise every implemented public structure and method;
-- cover staged storage structures through their real module boundaries;
+- cover storage exclusively through its supported public facade;
 - explicitly verify high-risk ownership, mutation, ordering, serialization,
   backpressure, chunk integrity, and reconstruction contracts;
 - test private helpers indirectly through observable behavior;
@@ -181,15 +181,15 @@ multiple logical streams at different cadences, encode borrowed payloads,
 write byte-targeted chunks through bounded queues, commit one metadata file,
 and reconstruct typed analysis series.
 
-Until `storage` is exported from `lib.rs`, this target may include the staged
-storage source graph exactly once. After `RunOutput` is public, it must use the
-ordinary crate API instead.
+The target imports `scientific_workflow::prelude::*` and never includes private
+source files. This makes the test a compile-time audit of the supported public
+surface.
 
 ### Required behavior
 
 - Configure at least two streams with different field selections and cadences.
 - Prove encoding does not clone or retain the simulation payload borrow.
-- Submit owned records through the bounded writer.
+- Submit samples through `RunOutput` and its bounded writer boundary.
 - Produce multiple chunks through exact-byte rollover without splitting a
   record.
 - Include one record larger than the chunk target but smaller than the queue
@@ -208,36 +208,20 @@ ordinary crate API instead.
 
 ### Structures and methods
 
-Format structures:
+Public run configuration and lifecycle:
 
-- `RunMetadata::running`, `validate`, `stream`, and `stream_mut`;
-- `RunStatus` lifecycle validation through metadata commits and reader open;
-- `RecordFormat`, `TimeAxis`, `StreamMetadata`, `FieldMetadata`, and
-  `ChunkMetadata` through valid construction and validation;
-- `EncodedRecord::new`, `time`, `len`, `bytes`, `into_bytes`, and bounded
-  `Debug`;
-- `chunk_filename` through actual writer output.
+- `TimeAxis::new`, `default`, `index_unit`, `physical_name`, and
+  `physical_unit`;
+- `StreamConfig::new`, `directory`, and `cadence`;
+- `RunOutputBuilder::new`, `time_axis`, `run_metadata`, `stream`, and `start`;
+- `RunOutput::builder`, `root`, `streams`, `sample`, `finish`, and `fail` across
+  the successful and resilience workflows.
 
-`JsonEncoder`:
-
-- `new`, `stream`, `spec`, `fields`, and `encode`.
-- Private `RecordRef`, `ValuesRef`, and `ErasedRef` are covered by exact encoded
-  JSON and zero-clone assertions.
-
-`WriterConfig`:
-
-- `new`, `stream`, `directory`, `max_chunk_bytes`, and `queue_bytes`.
-
-`StateWriter`:
-
-- `start`, `submit`, `finish`, and drop cleanup.
-- Private admission, worker, queue, `Shared`, `QueueState`, and `ActiveChunk`
-  operations are covered by FIFO ordering, byte rollover, checksums, atomic
-  final filenames, and absence of temporary files.
-
-`WriterSummary`:
-
-- `stream`, `chunks`, `records`, and `bytes`.
+Private format, encoder, record, writer configuration, writer queue, summary,
+and metadata transaction structures are covered only through observable public
+outcomes: canonical field order, zero payload clones, exact JSONL framing,
+FIFO ordering, byte rollover, checksums, deterministic filenames, absence of
+temporary files, atomic lifecycle metadata, and typed reader reconstruction.
 
 Decoder structures:
 
@@ -257,11 +241,11 @@ Decoder structures:
 
 ### Log contract
 
-    [sample] stream=... index=... encoded_bytes=...
-    [writer] stream=... records=... chunks=... bytes=...
-    [chunk] file=... records=... indices=.....=... checksum_verified=true
-    [metadata] files=1 semantic_round_trip=true status=complete
-    [readback] stream=... states=... typed_round_trip=true
+    [sample] index=... physical=... signal=true space=...
+    [writer] signal_records=... signal_bytes=... space_records=... space_bytes=...
+    [chunk] stream=... file=... records=... bytes=... checksum_verified=true
+    [metadata] files=... bytes=... semantic_round_trip=true status=complete
+    [readback] signal_states=... space_states=... typed_round_trip=true clone_calls=0
     [result] storage_workflow=passed
 
 ## Test 4: storage_resilience.rs
@@ -274,11 +258,11 @@ large exact-display snapshots.
 
 ### Required behavior
 
-- Refuse an existing writer output directory.
+- Refuse an existing run output directory.
 - Reject empty/invalid stream configuration.
 - Reject one record larger than the strict queue byte budget immediately.
 - Reject duplicate or decreasing writer indices.
-- Exercise a writer terminal failure and verify it wakes/propagates rather
+- Exercise a writer terminal failure through `RunOutput` and verify it propagates rather
   than silently succeeding.
 - Reject unknown streams and missing decoder coverage before chunk decoding.
 - Reject empty and duplicate decoder keys.
@@ -343,8 +327,9 @@ through the operation that produces it.
    mapped into the four scenarios.
 6. Old aggregators and test subdirectories removed after replacements passed.
 7. README and architecture documentation updated to the consolidated layout.
-8. Full formatting, all-target, doctest, and Clippy verification remains the
-   final closeout gate for this migration.
+8. Storage tests migrated from source-path harnesses to the public prelude.
+9. Full formatting, all-target, doctest, and Clippy verification is the final
+   closeout gate for every later change.
 
 The migration preserved old tests until all four replacements compiled and ran.
 

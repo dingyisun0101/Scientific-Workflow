@@ -27,10 +27,16 @@
 //! mutation without exposing mutable state time. It deliberately performs no
 //! serialization, chunking, or filesystem IO.
 //!
+//! [`storage`] provides named partial-state streams, borrowed JSON encoding,
+//! bounded asynchronous persistence, byte-targeted chunking, atomic run
+//! metadata, per-key payload decoders, and verified analysis reconstruction.
+//! Import [`prelude`] when an application wants the complete supported API in
+//! scope without listing each module separately.
+//!
 //! # Basic use
 //!
 //! ```no_run
-//! use scientific_workflow::system_state::{StateSpec, TimePoint};
+//! use scientific_workflow::prelude::*;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let spec = StateSpec::load("state.json")?;
@@ -53,9 +59,10 @@
 //! # }
 //! ```
 //!
-//! Future modules preserve strict boundaries: `storage` owns JSON encoding and
-//! disk IO, and the dispatcher organizes scoped workflow execution. Neither
-//! changes the public state-value ownership contract.
+//! Future dispatcher functionality will organize scoped workflow execution
+//! without changing the public state-value ownership or storage contracts.
 
+pub mod prelude;
+pub mod storage;
 pub mod system_state;
 pub mod time_series;

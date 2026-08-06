@@ -102,56 +102,18 @@ impl WriterConfig {
             queue_bytes,
         })
     }
-
-    /// Returns the logical stream name.
-    pub(crate) fn stream(&self) -> &str {
-        &self.stream
-    }
-
-    /// Returns the stream's output directory.
-    pub(crate) fn directory(&self) -> &Path {
-        &self.directory
-    }
-
-    /// Returns the preferred maximum chunk size.
-    pub(crate) fn max_chunk_bytes(&self) -> NonZeroU64 {
-        self.max_chunk_bytes
-    }
-
-    /// Returns the strict outstanding encoded-byte limit.
-    pub(crate) fn queue_bytes(&self) -> NonZeroU64 {
-        self.queue_bytes
-    }
 }
 
-/// Final immutable statistics and chunk inventory for one stream.
+/// Final immutable chunk inventory for one stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WriterSummary {
-    stream: String,
     chunks: Vec<ChunkMetadata>,
-    records: u64,
-    bytes: u64,
 }
 
 impl WriterSummary {
-    /// Returns the logical stream represented by this summary.
-    pub(crate) fn stream(&self) -> &str {
-        &self.stream
-    }
-
     /// Returns committed chunks in increasing ordinal order.
     pub(crate) fn chunks(&self) -> &[ChunkMetadata] {
         &self.chunks
-    }
-
-    /// Returns the total number of committed records.
-    pub(crate) fn records(&self) -> u64 {
-        self.records
-    }
-
-    /// Returns the exact total bytes across committed chunks.
-    pub(crate) fn bytes(&self) -> u64 {
-        self.bytes
     }
 }
 
@@ -473,8 +435,6 @@ fn write_records(
 ) -> Result<WriterSummary, StorageError> {
     let mut chunks = Vec::new();
     let mut active: Option<ActiveChunk> = None;
-    let mut total_records = 0_u64;
-    let mut total_bytes = 0_u64;
 
     loop {
         let Some(record) = next_record(shared) else {
@@ -504,17 +464,6 @@ fn write_records(
             .as_mut()
             .expect("active chunk was just initialized")
             .append(stream, &record)?;
-        total_records =
-            total_records
-                .checked_add(1)
-                .ok_or_else(|| StorageError::ByteCountOverflow {
-                    stream: stream.to_owned(),
-                })?;
-        total_bytes = total_bytes.checked_add(record_bytes).ok_or_else(|| {
-            StorageError::ByteCountOverflow {
-                stream: stream.to_owned(),
-            }
-        })?;
         // Release the owned encoded allocation before advertising its byte
         // permits to blocked producers.
         drop(record);
@@ -528,12 +477,7 @@ fn write_records(
         }
     }
     seal_active(&mut active, &mut chunks)?;
-    Ok(WriterSummary {
-        stream: stream.to_owned(),
-        chunks,
-        records: total_records,
-        bytes: total_bytes,
-    })
+    Ok(WriterSummary { chunks })
 }
 
 /// Removes the next record or returns `None` after a closed queue is drained.
@@ -574,6 +518,13 @@ fn seal_active(
 
 /// Creates a new stream directory while distinguishing existing output.
 fn create_output_directory(path: &Path) -> Result<(), StorageError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| StorageError::Io {
+            operation: "create stream parent directories",
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
     match fs::create_dir(path) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {

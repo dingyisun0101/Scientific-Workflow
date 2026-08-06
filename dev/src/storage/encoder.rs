@@ -43,14 +43,15 @@ use super::format::EncodedRecord;
 
 /// Reusable borrowed-state encoder for one logical output stream.
 ///
-/// The encoder owns only small immutable configuration: a stream name, a cheap
-/// shared [`StateSpec`] handle, and selected field names. It owns no payload,
-/// output buffer, mutable scratch space, queue, or file handle. Consequently,
-/// separate sampling calls allocate only their resulting encoded buffer.
+/// The encoder owns only a stream name and selected field names. The
+/// [`StateSpec`] supplied to construction is borrowed for validation and then
+/// released; the run coordinator remains the sole owner of its shared layout
+/// handle. The encoder owns no payload, output buffer, mutable scratch space,
+/// queue, or file handle. Consequently, separate sampling calls allocate only
+/// their resulting encoded buffer.
 #[derive(Clone, Debug)]
 pub(crate) struct JsonEncoder {
     stream: Box<str>,
-    spec: StateSpec,
     fields: Box<[Box<str>]>,
 }
 
@@ -59,7 +60,7 @@ impl JsonEncoder {
     ///
     /// `fields` may arrive in arbitrary order. Each exact field name must occur
     /// once in `spec`; successful construction stores names in template order.
-    /// The supplied [`StateSpec`] is cloned only as an `Arc`-backed handle.
+    /// Normal builds retain no [`StateSpec`] handle after validation.
     /// Scientific payloads do not exist at this stage and cannot be copied.
     ///
     /// # Errors
@@ -116,19 +117,8 @@ impl JsonEncoder {
 
         Ok(Self {
             stream: stream.into(),
-            spec: spec.clone(),
             fields,
         })
-    }
-
-    /// Returns the normalized logical stream name used in diagnostics.
-    pub(crate) fn stream(&self) -> &str {
-        &self.stream
-    }
-
-    /// Returns the shared specification against which selection was validated.
-    pub(crate) fn spec(&self) -> &StateSpec {
-        &self.spec
     }
 
     /// Iterates selected field names in canonical template order.
@@ -138,8 +128,8 @@ impl JsonEncoder {
 
     /// Encodes one borrowed state as a compact, complete JSONL record.
     ///
-    /// The state need not share the exact `StateSpec` allocation retained by
-    /// this encoder. Each selected name is checked against the supplied state,
+    /// The state need not share the `StateSpec` allocation used during encoder
+    /// construction. Each selected name is checked against the supplied state,
     /// allowing an independently reconstructed but compatible partial state to
     /// be encoded safely. Extra state fields are ignored.
     ///

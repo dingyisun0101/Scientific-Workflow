@@ -22,9 +22,9 @@ Implemented and verified:
 - storage format, borrowed encoder, bounded writer, decoder registry, two
   default decoders, and eager reader.
 
-The next stage is the run-level storage facade. It will connect existing
-encoders and writers, own the sole `metadata.json` lifecycle, and expose the
-storage module from `lib.rs`.
+The run-level storage facade is implemented and public. It connects private
+encoders and writers, owns the sole `metadata.json` lifecycle, and is available
+together with every supported crate API through `scientific_workflow::prelude`.
 
 ## End-to-end workflow
 
@@ -84,6 +84,7 @@ stream is the authoritative sampled history.
         ├── README.md             crate-facing usage and test documentation
         ├── src/
         │   ├── lib.rs            crate documentation and public module exports
+        │   ├── prelude.rs        explicit complete end-user API re-exports
         │   ├── system_state.rs   system-state facade and re-exports
         │   ├── system_state/
         │   │   ├── error.rs      state and ownership-preserving set errors
@@ -94,6 +95,7 @@ stream is the authoritative sampled history.
         │   ├── time_series/
         │   │   ├── error.rs      collection/access errors
         │   │   └── series.rs     StateSeries, SeriesRef, and PushError
+        │   ├── storage.rs        public run, reader, and decoder facade
         │   └── storage/
         │       ├── error.rs      complete storage error vocabulary
         │       ├── format.rs     metadata and encoded-record contract
@@ -111,9 +113,9 @@ stream is the authoritative sampled history.
             ├── storage_workflow.rs
             └── storage_resilience.rs
 
-Rust 2024 split-module layout is used. There are no `mod.rs` files. Storage is
-intentionally not exported from `lib.rs` until the next run-level facade makes
-its lifecycle safe as a public API.
+Rust 2024 split-module layout is used. There are no `mod.rs` files. `lib.rs`
+exports all three functional modules and the explicit prelude; storage internals
+remain private behind `storage.rs`.
 
 ## System state
 
@@ -727,7 +729,7 @@ Creates initial running metadata from time, run attributes, and streams.
 
 ##### Reference
 
-    next-stage RunOutput construction -> RunMetadata::running
+    RunOutput::start -> RunMetadata::running
 
 #### RunMetadata::validate
 
@@ -841,14 +843,6 @@ Return temporal coordinate, exact framed length, and borrowed bytes.
 
     StateWriter admission, ordering, chunk rollover, and append
 
-#### EncodedRecord::into_bytes
-
-Moves out the complete framed allocation.
-
-##### Reference
-
-    ownership tests and future alternate sink integration
-
 #### chunk_filename
 
 Returns deterministic `chunk-NNNNNN.jsonl` naming.
@@ -861,8 +855,10 @@ Returns deterministic `chunk-NNNNNN.jsonl` naming.
 
 ### JsonEncoder
 
-Crate-private immutable configuration for one stream. It borrows selected live
-payloads and produces one owned `EncodedRecord` without cloning them.
+Crate-private immutable configuration for one stream. It retains only the
+stream name and canonical selected keys, borrows selected live payloads, and
+produces one owned `EncodedRecord` without cloning them. The construction
+`StateSpec` is not retained in production.
 
 #### JsonEncoder::new
 
@@ -871,15 +867,15 @@ template order.
 
 ##### Reference
 
-    next-stage RunOutput stream construction
+    RunOutput::start -> JsonEncoder::new
 
-#### JsonEncoder::stream / spec / fields
+#### JsonEncoder::fields
 
-Expose immutable normalized configuration.
+Iterates selected names in canonical template order for metadata construction.
 
 ##### Reference
 
-    metadata construction, diagnostics, and tests
+    RunOutput::start -> JsonEncoder::fields
 
 #### JsonEncoder::encode
 
@@ -916,14 +912,6 @@ Validates configuration without filesystem mutation.
 
     RunOutput construction -> WriterConfig::new
 
-#### WriterConfig::stream / directory / max_chunk_bytes / queue_bytes
-
-Expose validated writer configuration.
-
-##### Reference
-
-    StateWriter::start and metadata construction
-
 ### StateWriter
 
 Non-Clone exclusive writer with one worker thread and bounded FIFO. It receives
@@ -931,7 +919,8 @@ only `EncodedRecord`, never a payload or serializer.
 
 #### StateWriter::start
 
-Creates a new stream directory and starts its worker; existing output is never
+Creates safe missing relative parent directories, exclusively creates the final
+stream directory, and starts its worker; existing stream output is never
 overwritten.
 
 ##### Reference
@@ -950,7 +939,7 @@ FIFO admission. Impossible oversized records fail immediately.
 #### StateWriter::finish
 
 Closes admission, drains work, seals the final chunk, joins the worker, and
-returns `WriterSummary`.
+returns the committed chunk inventory in `WriterSummary`.
 
 ##### Reference
 
@@ -966,11 +955,12 @@ Private terminal lifecycle that wakes waiters and prevents detached workers.
 
 ### WriterSummary
 
-Final stream name, ordered chunk inventory, total records, and exact bytes.
+Final ordered chunk inventory transferred into run metadata. Aggregate counts
+remain derivable from chunk descriptors and are not duplicated.
 
-#### WriterSummary::stream / chunks / records / bytes
+#### WriterSummary::chunks
 
-Expose immutable completion facts.
+Borrows committed chunks in ordinal order.
 
 ##### Reference
 
@@ -1232,25 +1222,326 @@ errors preserve their source chains. No variant owns scientific payload data.
 
     every storage Result boundary -> StorageError
 
-## Next stage: run-level storage facade
+## Run-level storage facade
 
-The next production module is `src/storage.rs`. It will expose a minimal public
-facade around already verified primitives.
+`src/storage.rs` is the only intended downstream entry point for persistence.
+Its child modules remain private and it re-exports only reader, decoder, and
+error types that form part of the supported public workflow. Low-level
+encoding, framing, queue, writer, checksum, and raw metadata types remain
+implementation details.
 
-Planned `RunOutput` responsibilities:
+### `TimeAxis`
 
-- validate the run root and stream declarations;
-- build one `JsonEncoder` and `StateWriter` per stream;
-- write initial `Running` metadata before sampling;
-- route `sample(stream, &state)` through encoder then writer;
-- finish every writer, collect summaries, atomically commit `Complete` metadata;
-- commit `Failed` metadata when a reportable terminal workflow error occurs;
-- prevent repeated finish/sample lifecycle misuse;
-- never own or clone a simulation payload.
+Public run-level documentation for integer simulation time and optional
+physical time. It owns only small labels and units; it never stores a time
+sample.
 
-The design decision required before implementation is the exact builder and
-atomic metadata-commit API. Existing encoder, writer, decoder, and reader
-contracts do not need restructuring.
+#### `TimeAxis::new`
+
+Creates an index-only declaration. Complete semantic validation is deferred to
+run startup so fluent configuration remains infallible.
+
+##### Reference
+
+    RunOutputBuilder::default time -> TimeAxis::default -> TimeAxis::new
+    downstream run configuration -> TimeAxis::new
+
+#### `TimeAxis::index_unit`
+
+Fluently declares the optional simulation-index unit.
+
+##### Reference
+
+    downstream run configuration -> TimeAxis::index_unit
+
+#### `TimeAxis::physical_name`
+
+Fluently declares the optional physical-coordinate name.
+
+##### Reference
+
+    downstream run configuration -> TimeAxis::physical_name
+
+#### `TimeAxis::physical_unit`
+
+Fluently declares the physical unit; startup requires a physical name.
+
+##### Reference
+
+    downstream run configuration -> TimeAxis::physical_unit
+
+#### `TimeAxis::default`
+
+Uses `index` with no unit or physical coordinate.
+
+##### Reference
+
+    RunOutputBuilder::new -> TimeAxis::default
+
+#### `TimeAxis::into_stored`
+
+Moves public configuration into the private versioned metadata representation.
+
+##### Reference
+
+    RunOutput::start -> TimeAxis::into_stored
+
+### `StreamConfig`
+
+Owns one logical stream's exact selected keys, safe relative directory,
+optional cadence description, soft chunk-byte target, and strict queue-byte
+budget. Non-zero byte types reject zero limits at the public boundary.
+
+#### `StreamConfig::new`
+
+Creates a declaration whose directory initially equals its stream name.
+
+##### Reference
+
+    downstream run construction -> StreamConfig::new
+
+#### `StreamConfig::directory`
+
+Overrides the relative output directory. Startup rejects unsafe paths and
+directory collisions.
+
+##### Reference
+
+    downstream stream path customization -> StreamConfig::directory
+
+#### `StreamConfig::cadence`
+
+Adds descriptive cadence metadata without scheduling samples.
+
+##### Reference
+
+    downstream cadence documentation -> StreamConfig::cadence
+
+### `RunOutputBuilder`
+
+Owns unopened run configuration and a cheap shared `StateSpec` handle.
+
+#### `RunOutputBuilder::new`
+
+Creates a builder with default time documentation, empty run metadata, and no
+streams.
+
+##### Reference
+
+    RunOutput::builder -> RunOutputBuilder::new
+    direct downstream construction -> RunOutputBuilder::new
+
+#### `RunOutputBuilder::time_axis`
+
+Replaces temporal-coordinate documentation.
+
+##### Reference
+
+    downstream run configuration -> RunOutputBuilder::time_axis
+
+#### `RunOutputBuilder::run_metadata`
+
+Moves arbitrary JSON-compatible run metadata into the builder. It remains
+separate from scientific payload records.
+
+##### Reference
+
+    dispatcher fixed/sweep provenance -> RunOutputBuilder::run_metadata
+    simulation run annotations -> RunOutputBuilder::run_metadata
+
+#### `RunOutputBuilder::stream`
+
+Appends one stream in deterministic metadata order. Cross-stream conflicts are
+validated together at startup.
+
+##### Reference
+
+    downstream run configuration -> RunOutputBuilder::stream
+
+#### `RunOutputBuilder::start`
+
+Delegates complete validation, exclusive filesystem creation, writer startup,
+and initial atomic metadata publication to `RunOutput`.
+
+##### Reference
+
+    configured builder -> RunOutputBuilder::start -> RunOutput::start
+
+### `RunOutput`
+
+Non-clone exclusive owner of all active writer handles and the sole legal
+terminal metadata transition. It never owns or retains a `SystemState`.
+
+#### `RunOutput::builder`
+
+Provides the concise public construction entry point.
+
+##### Reference
+
+    downstream simulation setup -> RunOutput::builder
+
+#### `RunOutput::root`
+
+Borrows the configured output root.
+
+##### Reference
+
+    diagnostics and run logging -> RunOutput::root
+
+#### `RunOutput::streams`
+
+Iterates names in deterministic declaration order.
+
+##### Reference
+
+    diagnostics and run logging -> RunOutput::streams
+
+#### `RunOutput::sample`
+
+Looks up one stream, borrows selected live-state payloads for encoding, ends
+those borrows, then submits the owned encoded record. Submission is the
+blocking backpressure boundary.
+
+##### Reference
+
+    simulation cadence event -> RunOutput::sample -> JsonEncoder::encode
+    RunOutput::sample -> StateWriter::submit
+
+#### `RunOutput::finish`
+
+Consumes the coordinator, drains all streams, installs their chunk inventories,
+and atomically publishes `Complete`. On writer failure it attempts `Failed`
+metadata without hiding the first writer error.
+
+##### Reference
+
+    successful simulation termination -> RunOutput::finish
+
+#### `RunOutput::fail`
+
+Consumes the coordinator, drains all streams, and publishes an explicit
+non-empty failed reason. A concurrent writer failure takes precedence.
+
+##### Reference
+
+    simulation-level terminal error -> RunOutput::fail
+
+#### `RunOutput::start`
+
+Privately validates all configuration before mutation, creates the root
+exclusively, starts one writer per stream, and atomically commits `Running`
+before returning the coordinator.
+
+##### Reference
+
+    RunOutputBuilder::start -> RunOutput::start
+
+#### `RunOutput::finish_writers`
+
+Privately drains every writer even after an earlier failure, transfers
+successful chunk descriptors into metadata, and retains the first error.
+
+##### Reference
+
+    RunOutput::finish -> RunOutput::finish_writers
+    RunOutput::fail -> RunOutput::finish_writers
+
+### `ActiveStream`
+
+Private pairing of one immutable borrowed-state encoder and one exclusive
+bounded writer. There is exactly one entry for each running metadata stream.
+
+### Metadata transaction helpers
+
+`ensure_absent` performs the read-only preflight; `create_root` closes its race
+with exclusive creation. `commit_metadata` validates and serializes a snapshot,
+while `write_and_replace_metadata` exclusively creates a temporary sibling,
+syncs it, renames it over the authoritative file, and syncs the root directory.
+
+##### Reference
+
+    RunOutput::start -> ensure_absent -> create_root
+    RunOutput lifecycle transition -> commit_metadata -> write_and_replace_metadata
+
+## Public API and prelude
+
+The crate provides `scientific_workflow::prelude`, allowing downstream code to
+import the complete intended end-user API with:
+
+```rust
+use scientific_workflow::prelude::*;
+```
+
+The prelude is an explicit, curated list of crate-owned public types and
+traits. It must not use wildcard re-exports from internal modules and must not
+re-export general external traits such as `serde::Serialize`. This keeps
+compiler errors, generated documentation, and future API reviews precise.
+
+The state and analysis portion includes:
+
+- `FieldSpec`, `StateSpec`, `SystemState`, and `TimePoint`;
+- `SetError` and `StateError`;
+- `StateSeries`, `SeriesRef`, `PushError`, and `SeriesError`.
+
+The storage portion includes:
+
+- `RunOutput`, `RunOutputBuilder`, `StreamConfig`, and `TimeAxis`;
+- `StorageError`;
+- `SeriesReader`, `Decoders`, and `PayloadDecoder`;
+- `StringDecoder` and `VecF64Decoder`.
+
+Low-level encoding, queue, chunk-format, and metadata implementation types are
+not prelude members. `JsonEncoder`, `StateWriter`, `EncodedRecord`, and raw
+metadata structures remain private implementation details behind `RunOutput`.
+Both storage integration tests import only the public prelude, so an omitted or
+accidentally private supported type is detected by compilation.
+
+##### Reference
+
+    downstream simulation and analysis modules -> use scientific_workflow::prelude::*
+    public API integration tests -> use scientific_workflow::prelude::*
+    crate root -> pub mod prelude
+
+## Simulator integration readiness
+
+The crate is architecture-compatible with simulator, but full integration is
+not ready yet.
+
+Ready now:
+
+- public `StateSpec`, `SystemState`, and `TimePoint` can represent and mutate a
+  simulator-owned live state;
+- arbitrary simulator payloads satisfying `Serialize + Clone + Send + 'static`
+  can occupy exact template keys;
+- borrowed encoding, bounded writer behavior, chunk integrity, custom decoder
+  registration, and typed series reconstruction are implemented and verified;
+- application-specific decoder closures can reconstruct `Vec<usize>`, PiP
+  lattices, activity status, or simulator aggregate payloads without adding
+  built-in decoders.
+
+Remaining simulator-side migration work:
+
+- simulator still owns a separate fixed `io::SystemState` and separate
+  `SignalWriter`/`SpaceWriter` formats, so it is not using the agreed live-state
+  ownership model;
+- simulator depends on registry PiP 3.0.3, while coordinated local development
+  uses PiP 3.0.4.
+
+The crate-side migration boundary is now ready. Simulator can replace its fixed
+snapshot struct and two specialized writers as one coherent migration without
+depending on crate-private storage internals or maintaining two new formats.
+
+Simulator migration will require:
+
+1. add path dependencies on local `scientific-workflow` and PiP 3.0.4 during
+   coordinated development;
+2. define the simulator state template and exact stream field selections;
+3. make `EcoSystem` own or directly expose the scientific-workflow live state
+   instead of exporting a lattice-cloning snapshot;
+4. route signal and space cadence decisions through `RunOutput::sample`;
+5. register simulator-specific decoders for resume and analysis;
+6. replace legacy signal/space loaders only after new-format round-trip and
+   resume integration tests pass.
 
 ## Verification gate
 
@@ -1331,10 +1622,10 @@ metadata round trip and typed payload equality.
 
 Key log output:
 
-    [sample] stream=... index=... encoded_bytes=...
-    [writer] stream=... records=... chunks=... bytes=...
-    [chunk] file=... records=... indices=.....=... checksum_verified=true
-    [readback] stream=... states=... typed_round_trip=true
+    [sample] index=... physical=... signal=true space=...
+    [writer] signal_records=... signal_bytes=... space_records=... space_bytes=...
+    [chunk] stream=... file=... records=... bytes=... checksum_verified=true
+    [readback] signal_states=... space_states=... typed_round_trip=true clone_calls=0
     [result] storage_workflow=passed
 
 ### storage_resilience.rs
@@ -1373,7 +1664,7 @@ does not recreate one test per method:
   only where their bounded output or source preservation is part of a useful
   diagnostic;
 - crate-private and private helpers are not tested directly merely to increase
-  coverage. They are covered through public or staged boundary outcomes, such
+  coverage. They are covered through public boundary outcomes, such
   as checksum verification proving `ActiveChunk::append/seal` and reader
   corruption tests proving borrowed-record validation;
 - not every `StorageError` variant needs an isolated constructor test. Every
@@ -1386,16 +1677,16 @@ Required method allocation:
 |---|---|
 | `state_workflow` | `FieldSpec`, `StateSpec`, `TimePoint`, `SystemState`, `StateError`, `SetError`; all public spec, time, state-access, ownership, clear, clone, and inspection methods |
 | `analysis_workflow` | `StateSeries`, `SeriesRef`, `PushError`, `SeriesError`; all public construction, capacity, lookup, iteration, mutation, append/rejection, extraction, clear, and clone methods |
-| `storage_workflow` | metadata/format structures, `EncodedRecord`, `JsonEncoder`, `WriterConfig`, `StateWriter`, `WriterSummary`, `PayloadDecoder`, `Decoders`, both default decoders, and `SeriesReader`; every success-path method including `read_all` |
+| `storage_workflow` | `TimeAxis`, `StreamConfig`, `RunOutputBuilder`, `RunOutput`, `PayloadDecoder`, `Decoders`, both default decoders, and `SeriesReader`; every public success-path method including `read_all`, with private encoding/writing/format behavior verified through files and readback |
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
 
 The finished source reads as four coherent workflows rather than an API census.
 The old aggregators and focused subdirectories have been removed.
 
 Current test architecture: four logged integration tests across four files plus
-four doctests. Each workflow passes independently and the consolidated
+production doctests. Each workflow passes independently and the consolidated
 all-target suite passes. Formatting and Clippy across all targets pass with
-warnings denied. Archive preparation remains deferred only because the agreed local
-`physics_in_parallel` 3.0.4 development dependency is not yet on crates.io,
-whose latest matching candidate is 3.0.3; do not replace the local dependency
-before the coordinated PiP publication.
+warnings denied. Archive preparation remains deferred only because the agreed
+local `physics_in_parallel` 3.0.4 development dependency is not yet on
+crates.io, whose latest matching candidate is 3.0.3; do not replace the local
+dependency before the coordinated PiP publication.
