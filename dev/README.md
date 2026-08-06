@@ -21,9 +21,14 @@ making them suitable for large arrays and tensors.
   `physics_in_parallel` tensors.
 - Ordered state-series collection with strict shared-layout identity.
 - Lightweight copyable series views and field-level analysis mutation.
+- Borrowed JSON encoding without payload cloning.
+- Finite byte- and record-bounded asynchronous writers.
+- Exact-byte automatic chunking with indivisible JSONL records.
+- SHA-256-verified eager reconstruction through per-key payload decoders.
 
-Persistent storage, automatic chunking, and workflow dispatch are under active
-development and are not part of the published API described below.
+The storage implementation is verified internally but remains staged outside
+the public crate API until the next run-level facade owns metadata and writer
+lifecycle. Workflow dispatch remains a later development stage.
 
 ## Installation
 
@@ -170,6 +175,17 @@ public cross-module ownership workflow:
 
 ```bash
 cargo test --test time_series
+```
+
+The staged storage target runs focused format, encoder, writer, decoder, and
+reader contracts. Its logged workflow uses real tensor payloads, two sampling
+cadences, JSON encoding, bounded writers, automatic chunking, one metadata
+file, integrity verification, default String/Vec<f64> decoder round trips, and
+custom per-key tensor reconstruction. Pass `--nocapture` to display bounded
+phase, sample, chunk, readback, and result summaries:
+
+```bash
+cargo test --test storage -- --nocapture
 ```
 
 ## License

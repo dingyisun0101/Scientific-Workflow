@@ -42,6 +42,28 @@ cargo test --test time_series 'error_tests::'
 cargo test --test time_series 'series_tests::'
 ```
 
+### Complete staged storage suite
+
+The storage target includes focused format, encoder, writer, decoder, and
+reader suites plus a logged end-to-end tensor workflow:
+
+```bash
+cargo test --test storage
+```
+
+Display bounded sampling, chunk, metadata, and typed reconstruction logs:
+
+```bash
+cargo test --test storage -- --nocapture
+```
+
+Focused storage suites can be selected by module path:
+
+```bash
+cargo test --test storage 'decoder_tests::'
+cargo test --test storage 'reader_tests::'
+```
+
 Tests remain organized under subdirectories:
 
 - A test covering one source file mirrors its source filename. For example,

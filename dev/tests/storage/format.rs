@@ -10,15 +10,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-mod system_state {
-    pub use scientific_workflow::system_state::*;
-}
-
-#[allow(unused_imports)]
-mod time_series {
-    pub use scientific_workflow::time_series::*;
-}
-
 // This suite exercises the format layer, which intentionally uses only the
 // metadata-validation subset of the shared storage error vocabulary.
 #[allow(dead_code)]
@@ -27,12 +18,12 @@ mod error;
 #[path = "../../src/storage/format.rs"]
 mod format;
 
+use crate::system_state::TimePoint;
 use error::StorageError;
 use format::{
     ChunkMetadata, EncodedRecord, FORMAT_NAME, FORMAT_VERSION, FieldMetadata, PAYLOAD_ENCODING,
-    RECORD_FRAMING, RawRecord, RunMetadata, RunStatus, StreamMetadata, TimeAxis, chunk_filename,
+    RECORD_FRAMING, RunMetadata, RunStatus, StreamMetadata, TimeAxis, chunk_filename,
 };
-use system_state::TimePoint;
 
 /// Stable provenance used by semantic metadata validation.
 fn metadata_path() -> PathBuf {
@@ -360,35 +351,6 @@ fn chunk_validation_enforces_names_ordinals_ranges_and_checksums() {
     let mut overlap = metadata;
     overlap.streams[0].chunks[1].first_index = 4;
     assert!(invalid_reason(overlap.validate(&metadata_path()).unwrap_err()).contains("not after"));
-}
-
-#[test]
-fn raw_records_reconstruct_time_and_move_json_values() {
-    let raw: RawRecord = serde_json::from_value(json!({
-        "index": 12,
-        "physical": 0.25,
-        "values": {
-            "population": [1, 2, 3],
-            "active": true
-        }
-    }))
-    .expect("valid raw record");
-    assert_eq!(raw.time(), TimePoint::from_physical(12, 0.25).unwrap());
-    let values = raw.into_values();
-    assert_eq!(values["population"], json!([1, 2, 3]));
-    assert_eq!(values["active"], true);
-
-    let index_only: RawRecord = serde_json::from_value(json!({"index": 3, "values": {}})).unwrap();
-    assert_eq!(index_only.time(), TimePoint::new(3));
-
-    assert!(
-        serde_json::from_value::<RawRecord>(json!({
-            "index": 1,
-            "values": {},
-            "unknown": 2
-        }))
-        .is_err()
-    );
 }
 
 #[test]

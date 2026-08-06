@@ -489,38 +489,6 @@ impl ChunkMetadata {
     }
 }
 
-/// One parsed JSONL record before concrete payload reconstruction.
-#[derive(Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawRecord {
-    /// Authoritative integer simulation index.
-    pub(crate) index: u64,
-    /// Optional finite physical coordinate.
-    #[serde(default)]
-    pub(crate) physical: Option<f64>,
-    /// Raw JSON payloads indexed by persisted field key.
-    pub(crate) values: Map<String, Value>,
-}
-
-impl RawRecord {
-    /// Reconstructs the validated in-memory time coordinate.
-    ///
-    /// JSON numbers cannot represent NaN or infinity, so a present parsed
-    /// physical value is finite and accepted by `TimePoint::from_physical`.
-    pub(crate) fn time(&self) -> TimePoint {
-        match self.physical {
-            Some(physical) => TimePoint::from_physical(self.index, physical)
-                .expect("serde_json parsed a non-finite JSON number"),
-            None => TimePoint::new(self.index),
-        }
-    }
-
-    /// Consumes the raw record and returns its field-value map.
-    pub(crate) fn into_values(self) -> Map<String, Value> {
-        self.values
-    }
-}
-
 /// One complete owned JSONL record moved through a writer queue.
 ///
 /// The type is intentionally non-Clone. Its buffer is created once by the

@@ -10,20 +10,12 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod system_state {
-    pub use scientific_workflow::system_state::*;
-}
-
-mod time_series {
-    pub use scientific_workflow::time_series::*;
-}
-
 #[path = "../../src/storage/error.rs"]
 mod error;
 
+use crate::system_state::StateError;
+use crate::time_series::SeriesError;
 use error::StorageError;
-use system_state::StateError;
-use time_series::SeriesError;
 
 #[derive(Debug)]
 struct DecoderFailure(&'static str);

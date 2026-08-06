@@ -1,284 +1,88 @@
 # Scientific Workflow TODO
 
-This file records downstream work discovered while reviewing an earlier file.
-Only the active production file may be edited; downstream items remain here
-until their own one-file review unit. design.md remains the architectural source
-of truth.
+Only incomplete, next-stage, or explicitly deferred work belongs here. The
+implemented architecture and per-method references live in `design.md`.
 
-## Completed stage: system_state clean-slate refactor
+## Next stage: run-level storage facade
 
-### Confirmed scope: JSON only
+Create `dev/src/storage.rs` after discussing the final public builder and
+metadata transaction API.
 
-- Implement and document JSON persistence only.
-- Do not design alternate binary encodings or reserve public abstractions for
-  hypothetical future formats.
+Required responsibilities:
 
-### Confirmed module boundary
+- declare and curate public storage re-exports;
+- configure a run root and one or more logical streams;
+- validate each stream's exact selected keys and byte limits;
+- own one `JsonEncoder` and `StateWriter` per stream;
+- atomically write the sole initial `metadata.json` with `Running` status
+  before accepting samples;
+- route `sample(stream, &SystemState)` through the selected encoder and writer;
+- preserve writer backpressure and surface terminal errors;
+- finish all writers and atomically replace metadata with complete chunk
+  inventories and `Complete` status;
+- define failure metadata behavior without hiding the originating error;
+- reject sampling after finish and repeated finish operations;
+- never clone, retain, or take ownership of scientific payloads.
 
-- Keep SystemState independent of directories, metadata, streams, chunks,
-  readers, and reconstruction orchestration.
-- Keep time_series limited to the in-memory StateSeries collection; it performs
-  no JSON serialization, decoding, directory access, or disk IO.
-- Add a separate `storage` module for JsonEncoder, StateWriter, StateDecoder,
-  DecodedRun, metadata, readers, chunks, and directory lifecycle.
-- Payload types own their Serialize implementations. JsonEncoder supplies only
-  the JSON serializer and framing; StateWriter accepts only completed encoded
-  records and writes bytes.
+Before code, decide only these remaining public API details:
 
-### Confirmed storage limits
+1. builder names and ownership flow;
+2. stream configuration representation;
+3. atomic metadata temporary-file and synchronization policy;
+4. finish/failure transition behavior;
+5. which currently crate-private storage types become public.
 
-- Configure each stream with max_chunk_bytes; calculate rollover from exact
-  encoded JSONL bytes rather than a state-count limit.
-- Never split an EncodedRecord. One record larger than max_chunk_bytes becomes
-  one oversized chunk and its exact size is recorded.
-- Bound each queue by a user-configured encoded-byte budget and an internal
-  fixed limit of 1,024 accepted but uncommitted records. The fixed count is not
-  part of public configuration or persisted metadata.
-- StateWriter::submit blocks until capacity is released, and writer termination
-  wakes blocked submitters with the terminal error. Both permits remain held
-  until append commits, so the record currently being written is also counted.
+## Storage tests for the next stage
 
-### Confirmed design: sequential mutable field access
+- Add `tests/storage/run_output.rs` for lifecycle, metadata atomicity, stream
+  routing, existing-path refusal, and failure behavior.
+- Extend the unified logged workflow to use `RunOutput` instead of manually
+  coordinating encoders, writers, and metadata.
+- Export `storage` from `lib.rs` only after its complete public lifecycle passes.
+- Update crate and repository READMEs with the final public storage example.
 
-- SystemState intentionally exposes one mutable payload borrow at a time.
-- Do not add get2_mut or related multi-field borrowing APIs.
-- Tightly coupled values that require simultaneous mutation should be grouped
-  into one application-defined aggregate payload.
+## Deferred decoder catalog
 
-### Refactor rule
+The main-development defaults are intentionally limited to:
 
-- Edit exactly one file at a time and wait for user review before continuing.
-- Never edit a downstream file early. Record each newly discovered dependency
-  under its scheduled file below and in design.md.
-- Production modules contain no tests. Focused tests live under
-  `tests/system_state/` and mirror their production filenames.
-- Do not edit time_series or storage source during this stage, even when an
-  intermediate system_state change invalidates transitional code.
+- `StringDecoder`;
+- `VecF64Decoder`.
 
-### 1. src/system_state/spec.rs — complete
+After core development, consider additional decoders only when their concrete
+wire conversion or validation behavior is well defined. Application-specific
+payloads, including PiP tensors, already work through registered closures or
+named `PayloadDecoder<T>` implementations.
 
-- Remove `type_tag`, the JSON `type` property, Type-tag documentation, and
-  `FieldSpec::type_tag`.
-- Add `description: Option<Box<str>>` and
-  `FieldSpec::description() -> Option<&str>`.
-- Accept absent/null descriptions; trim present descriptions and normalize
-  empty or whitespace-only descriptions to None.
-- Keep required trimmed unique names, deterministic indices, strict unknown-
-  property rejection, Arc-shared StateLayout, path-only public load, crate-
-  private parse, empty template support, and normalized to_json.
+## Deferred PiP work
 
-### 2. tests/fixtures/state.json — complete
+`physics_in_parallel` remains a local development dependency at `../pip` until
+its coordinated version is published. Sparse tensor behavior and its remaining
+publication work are tracked in the sibling PiP repository's `todo.md`, which
+is intentionally ignored there.
 
-- Replace every type tag with a concise natural-language field description.
-- Keep the existing population, space, and activity key order so tensor and
-  ownership integration coverage remains comparable.
+Current publication gate: `cargo package --allow-dirty --no-verify --locked`
+cannot resolve `physics_in_parallel = ^3.0.4` from crates.io because the registry
+currently offers 3.0.3. `cargo package --list --allow-dirty` succeeds and the
+package inventory is correct. After PiP 3.0.4 is published, rerun the archive
+and publish dry-run checks without changing the local-development workflow
+prematurely.
 
-### 3. tests/system_state/spec.rs — complete
+## Deferred project stages
 
-- Replace all type-tag assertions with description assertions.
-- Cover absent, null, empty, whitespace-only, trimmed, and ordinary
-  descriptions; normalized semantic round trip must be explicitly equal.
-- Retain malformed JSON, unknown properties, empty/duplicate names, empty
-  template, deterministic index/lookup, parse/load parity, source provenance,
-  and Arc identity coverage.
+- dispatcher accepting `fixed.json` and `sweep.json`;
+- scoped execution, logging, and run organization;
+- Python API and Rust/Python bridge;
+- optional out-of-core reader method on `SeriesReader` if analysis workloads
+  demonstrate that eager `StateSeries` reconstruction is insufficient;
+- alternate encodings only after JSON workflow stability; protobuf remains out
+  of current scope.
 
-### 4. src/system_state/error.rs — complete
+## Project rules
 
-- Remove `EmptyTypeTag` after spec.rs no longer references it.
-- Remove unused `FieldCountMismatch`; restoration always allocates through
-  StateSpec::empty and inserts through SystemState::set.
-- Preserve ownership-returning SetError, IO/JSON sources, typed access errors,
-  and transactional time errors unchanged.
-
-### 5. tests/system_state/error.rs — complete
-
-- Remove obsolete variant expectations and retain SetError ownership,
-  formatting, source-chain, Send, and time-error coverage.
-
-### 6. src/system_state/value.rs — complete
-
-- Change the erased blanket bound to
-  `T: Serialize + Clone + Send + 'static`.
-- Add `ErasedValue::as_serialize` and `StateValue::serializable`, returning a
-  borrowed `&dyn erased_serde::Serialize` without trait-object upcasting.
-- Preserve exact TypeId checks, typed borrowed/mutable/owned downcasts,
-  mismatch recovery, bounded Debug, and one T::clone call per explicit clone.
-- Remove all stable-tag and codec wording.
-
-### 7. tests/system_state/value.rs — complete
-
-- Make focused payload fixtures Serialize without hiding Clone counters.
-- Serialize borrowed erased views with serde_json and explicitly verify output,
-  pointer identity, zero Clone calls, and continued typed access afterward.
-- Retain ownership/downcast/type/debug/Send tests.
-
-### 8. src/system_state/state.rs — complete
-
-- Require `Serialize + Clone + Send + 'static` only where a new payload enters
-  through `set`; typed inspection and extraction retain their minimal bounds.
-- Add crate-private `serializable(key)` delegating to `value` and
-  `StateValue::serializable`; it must allocate and clone nothing.
-- Keep all public names and ownership behavior: empty, time, set_time, advance,
-  spec, structural inspection, has/is, set/get/get_mut/take, clear/clear_all,
-  Clone, and bounded Debug.
-- Document sequential mutable access and exact T-defined Clone semantics.
-
-### 9. tests/system_state/state.rs — complete
-
-- Make every inserted test payload Serialize.
-- Add coverage for the crate-private serializable accessor, including unknown
-  and missing fields, exact JSON, zero Clone calls, and post-serialization
-  mutability.
-- Retain pointer/capacity preservation, replacement return, rejected payload
-  recovery, mismatch restoration, empty derivation, clone counts, time
-  transactionality, clearing, and bounded Debug.
-
-### 10. src/system_state.rs — complete
-
-- Rewrite module workflow and examples for key-only templates and
-  Serialize-compatible payloads.
-- Remove stable-tag, codec, and automatic reconstruction language.
-- Keep only FieldSpec, StateSpec, SystemState, TimePoint, StateError, and
-  SetError public re-exports; value erasure stays private.
-
-### 11. tests/system_state.rs — complete
-
-- Include the four focused files under `tests/system_state/` so
-  `cargo test --test system_state` runs them with Cargo-managed dependencies.
-- Update the real fixture and FieldSpec assertions to descriptions.
-- Preserve the downstream tensor lifecycle and explicit template round-trip
-  equality; compilation must prove the tensor satisfies Serialize.
-
-### 12. src/lib.rs — complete
-
-- Update crate-level examples, payload bounds, and module-responsibility text.
-- Export only system_state during this stage. Do not expose staged time_series
-  or not-yet-created storage modules.
-
-### Verification after item 12
-
-- Run `cargo fmt --check`.
-- Run `cargo check --lib`.
-- Run `cargo test --test system_state` and `cargo test --doc`.
-- Run `cargo clippy --lib --test system_state -- -D warnings`.
-- Do not use full `cargo test` as the stage gate until the obsolete direct
-  time_series codec tests are removed in their own stage.
-
-Verified results:
-
-- focused suites: spec 6, error 4, value 7, state 15;
-- joint system_state target: 33 passed;
-- doctests: 3 passed;
-- formatting, library check, and Clippy with warnings denied: passed.
-- root and crate READMEs were aligned with the completed contract.
-
-## Completed stage: time_series reconciliation
-
-Implement one reviewed file at a time:
-
-1. Refactor `src/time_series/error.rs` to collection-only errors. — complete
-2. Rewrite `tests/time_series/error.rs`. — complete
-3. Refactor `src/time_series/series.rs`, remove StateChunk, add narrow
-   `field_mut`, and make PushError small without losing ownership. — complete
-4. Rewrite `tests/time_series/series.rs`. — complete
-5. Delete obsolete `src/time_series/codec.rs`. — complete
-6. Delete obsolete `tests/time_series/codec.rs`. — complete
-7. Create the public `src/time_series.rs` facade. — complete
-8. Rewrite the unified `tests/time_series.rs` target. — complete
-9. Export the module from `src/lib.rs`, update README instructions, and run all
-   stage verification commands. — complete
-
-Do not add serialization, decoding, chunks, queues, metadata, or filesystem IO
-to this module. Those belong to the later `storage` stage.
-
-Verified results:
-
-- focused and unified time-series target: 15 passed;
-- system-state regression target: 33 passed;
-- doctests: 4 passed;
-- complete all-target suite: passed;
-- formatting, all-target checks, and Clippy with warnings denied: passed;
-- `cargo package` remains deferred until local `physics_in_parallel` 3.0.4 is
-  published, because crates.io currently resolves only version 3.0.3.
-
-## Next stage: storage separation
-
-### src/storage/error.rs — complete
-
-- Added the non-exhaustive `StorageError` boundary without exporting storage
-  yet.
-- Kept scientific payloads out of every variant.
-- Preserved IO, JSON, SystemState, StateSeries, custom decoder, and shared
-  terminal-worker sources.
-- Covered configuration, metadata, chunk integrity, encoding, decoding, exact
-  byte accounting, bounded queues, and writer lifecycle context.
-- Dedicated `tests/storage/error.rs`: complete; 7 tests pass with warnings
-  denied.
-
-### src/storage/format.rs — complete
-
-- Added version-one metadata, lifecycle, record-format, time-axis, stream,
-  field, and chunk representations.
-- Added safe relative-path, deterministic filename, checksum, limits, ordering,
-  and metadata semantic validation without filesystem access.
-- Added parsed `RawRecord` and non-Clone newline-framed `EncodedRecord`.
-- Dedicated `tests/storage/format.rs`: complete; all 11 tests pass with
-  warnings denied. The suite is intentionally in-memory and leaves filesystem
-  integrity checks to the reader and writer stages.
-- Revised after review: removed user-configurable `queue_records` from
-  `StreamMetadata`; its focused tests must be updated in their next review unit.
-
-### External integration: physics_in_parallel serialization
-
-- Completed in local `physics_in_parallel` 3.0.4: dense tensor storage, dense
-  tensor facades, SquareLattice, VectorList, and contiguous dense Matrix
-  serialization now borrow their buffers and preserve the existing JSON schema.
-- Completed: Scientific Workflow resolves the local 3.0.4 source and its 33-test
-  SystemState integration target passes with a real tensor payload.
-- Choose the sparse persisted representation deliberately: streaming dense JSON
-  preserves format but remains O(logical size), while true sparse JSON requires
-  a matching versioned Deserialize implementation and deterministic ordering.
-- Remaining: add allocation benchmarks, publish `physics_in_parallel` 3.0.4,
-  then remove the temporary local path from the versioned dev dependency.
-- Until publication, keep `../../pip` as the authoritative dependency and test
-  coordinated contract changes in both crates before considering them complete.
-
-### src/storage/reader.rs
-
-- Reconstruct each embedded stream schema through crate-private
-  StateSpec::parse using metadata.json as the provenance path.
-
-### src/storage/encoder.rs
-
-- Accept a borrowed simulation-owned SystemState at a sampling boundary.
-- Remove the temporary justified `dead_code` allowances from
-  `SystemState::serializable`, `StateValue::serializable`, and
-  `ErasedValue::as_serialize` when JsonEncoder makes the boundary live.
-- Encode only the fields declared by that logical stream without cloning or
-  taking payload ownership.
-- End every payload borrow before sample returns so the simulation can resume
-  in-place evolution immediately after encoded-record queue acceptance.
-
-### src/storage/writer.rs
-
-- Complete: accepts only complete EncodedRecord values without accessing
-  payload types or invoking Serialize.
-- Complete: blocks on a fixed 1,024-record bound plus caller-configured strict
-  byte bound; oversized records fail immediately and worker failure wakes all
-  waiters.
-- Complete: writes FIFO JSONL records, performs exact byte-targeted rollover,
-  never splits a record, synchronizes and atomically renames chunks, and emits
-  SHA-256-backed ChunkMetadata and WriterSummary.
-- Dedicated `tests/storage/writer.rs`: 8 focused cases pass.
-- Unified `tests/storage.rs`: 27 storage cases pass, including a joint workflow
-  across real SystemState, StateSeries, format validation, writer output,
-  metadata round trip, and raw JSONL parsing.
-- Full all-target suite (75 tests), formatting, and Clippy pass with warnings
-  denied.
-
-### src/time_series/series.rs
-
-- Do not expose &mut SystemState because set_time and advance can invalidate
-  ordering.
-- Design a narrow field-level mutable analysis accessor during the time_series
-  stage.
+- Keep production tests under `tests/`, never inside module files.
+- Single-file tests mirror the source filename; cross-module tests use concise
+  behavior names.
+- Preserve user changes and ignore `legacy/`, targets, and generated run data.
+- Update `design.md` and this TODO when architectural scope changes.
+- During ordinary development, edit one production/test file per review unit;
+  batch work only when explicitly authorized.

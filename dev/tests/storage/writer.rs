@@ -11,15 +11,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 
-mod system_state {
-    pub use scientific_workflow::system_state::*;
-}
-
-#[allow(unused_imports)]
-mod time_series {
-    pub use scientific_workflow::time_series::*;
-}
-
 #[allow(dead_code)]
 #[path = "../../src/storage/error.rs"]
 mod error;
@@ -30,9 +21,9 @@ mod format;
 #[path = "../../src/storage/writer.rs"]
 mod writer;
 
+use crate::system_state::TimePoint;
 use error::StorageError;
 use format::EncodedRecord;
-use system_state::TimePoint;
 use writer::{MAX_OUTSTANDING_RECORDS, StateWriter, WriterConfig};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
