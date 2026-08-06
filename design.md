@@ -16,8 +16,8 @@ Current scope:
 - one-file-at-a-time implementation and review;
 - tests live under tests, never inside production modules.
 
-The implemented crate currently exports system_state. Time-series source files
-are staged but not yet exported from lib.rs.
+The implemented crate exports `system_state` and `time_series`. Persistent JSON
+storage is the next module stage.
 
 ## Architecture
 
@@ -1234,8 +1234,9 @@ when their source files are reviewed.
     state.set("space", Space::initial())?;
 
 The run output is configured once with named streams, selected keys, maximum
-chunk file sizes, and finite queue limits. Construction validates all keys and
-writes the sole metadata.json before any record is accepted.
+chunk file sizes, and per-stream encoded-byte queue limits. The library fixes
+the independent record-count bound at 1,024. Construction validates all keys
+and writes the sole metadata.json before any record is accepted.
 
     let mut output = RunOutput::builder("output/run-001", state.spec())
         .stream("signal", ["signal"], ByteSize::mib(64))?
@@ -1712,7 +1713,9 @@ Ownership-preserving StateSeries::push failure.
 
 #### PushError::new
 
-Private constructor combining SeriesError and rejected SystemState.
+Private constructor combining SeriesError and a failure-only boxed rejected
+SystemState. Boxing keeps the successful `Result` representation small; it does
+not clone the state or its payloads.
 
 ##### Reference
 
@@ -1743,6 +1746,15 @@ Consumes the error and recovers SeriesError plus SystemState.
 
     caller recovery and tests -> PushError::into_parts
 
+#### PushError Debug::fmt
+
+Formats the rejection reason and bounded structural SystemState diagnostics.
+Payload values are never formatted.
+
+##### Reference
+
+    diagnostics and assertion failures -> Debug::fmt(PushError)
+
 #### PushError Display::fmt
 
 Delegates to SeriesError.
@@ -1761,6 +1773,80 @@ Returns the contained SeriesError.
 
 ## Streaming persistence
 
+### Storage module file boundaries
+
+The storage stage uses one public facade plus six focused implementation files:
+
+```text
+src/
+├── storage.rs
+└── storage/
+    ├── error.rs
+    ├── format.rs
+    ├── encoder.rs
+    ├── writer.rs
+    ├── reader.rs
+    └── decoder.rs
+```
+
+- `storage.rs` is documentation and public re-exports only. It explains the
+  sampling, writing, and reconstruction workflows but contains no IO logic.
+- `error.rs` owns storage-specific failures and context: output paths, stream
+  names, record indices, chunk ordinals, metadata validation, JSON errors,
+  queue shutdown, writer termination, and decoder failures. SystemState and
+  StateSeries retain their own errors.
+- `format.rs` owns the versioned persisted contract and lean runtime envelopes:
+  metadata, logical stream declarations, embedded key/description schemas,
+  chunk descriptors, completion state, raw JSON record framing, and
+  `EncodedRecord`. It validates data structures but never opens files or starts
+  threads.
+- `encoder.rs` owns `JsonEncoder`. It synchronously borrows a live
+  `SystemState`, selects the fields declared for one logical stream, invokes
+  each payload's existing `Serialize` implementation, and returns one complete
+  owned `EncodedRecord`. It does not clone or take payloads, retain state
+  borrows, decide chunk boundaries, or perform disk IO.
+- `writer.rs` owns `StateWriter`, its worker lifecycle, bounded record and byte
+  backpressure, exact-byte chunk rollover, atomic chunk commit, atomic updates
+  of the single `metadata.json`, and the multi-stream `RunOutput` coordinator.
+  It accepts only completed `EncodedRecord` values and never sees concrete
+  payload types or calls `Serialize`.
+- `reader.rs` owns read-only filesystem mechanics: opening and validating
+  `metadata.json`, deterministic stream/chunk discovery, byte-length and
+  integrity checks, range selection, and lazy raw-record iteration. It returns
+  borrowed or owned raw JSON record material and never chooses concrete payload
+  types.
+- `decoder.rs` owns `StateDecoder`, its explicit key-to-concrete-type decoder
+  declarations, typed payload reconstruction, and `DecodedRun`. It applies the
+  right decoder to each field, builds SystemState values through ownership
+  transfer, and optionally collects each logical stream into `StateSeries`.
+
+Dependency direction is one-way:
+
+```text
+SystemState ──> JsonEncoder ──> EncodedRecord ──> StateWriter ──> disk
+disk ──> raw reader ──> StateDecoder ──> SystemState ──> StateSeries
+```
+
+The writer never depends on StateSeries. The reader never depends on payload
+types. The decoder never writes files. `format.rs` and `error.rs` are shared
+support layers and do not depend on writer or reader lifecycle objects.
+
+The output directory contains exactly one metadata file. It is created
+atomically with structural run and stream declarations before sampling begins,
+then atomically replaced as committed chunk descriptors and final completion
+state become authoritative. Chunk files contain only complete JSONL records;
+there are no per-chunk metadata sidecars. One record is never split. Chunk
+rollover uses the exact framed byte length, and an oversized record becomes the
+sole record in its chunk.
+
+Backpressure is finite in two independent dimensions: an internal fixed limit
+of 1,024 accepted but uncommitted records prevents pathological tiny-record
+backlogs, and a caller-configured byte budget bounds encoded payload memory.
+The record-count limit is a library safety policy, not user configuration and
+not persisted metadata. Submission blocks until both constraints are satisfied.
+Writer termination wakes blocked submitters and returns the terminal writer
+error rather than deadlocking or growing memory without bound.
+
 ### Logical streams
 
 Different partial-state cadences or output paths are different streams. A
@@ -1771,7 +1857,7 @@ stream declares:
 - cadence description;
 - relative output directory or filename prefix;
 - max_chunk_bytes: NonZeroU64;
-- finite queue byte and record limits;
+- caller-configured queue byte limit;
 - encoding and framing;
 - independent monotonically increasing chunk ordinal.
 
@@ -1853,18 +1939,30 @@ record. Chunk files contain no schema header and no repeated metadata.
 
 ### StateWriter
 
-One non-Clone authority for one logical stream. It owns configuration, bounded
-queue sender, worker lifecycle, chunk ordinal, exact active-file byte count,
-active temporary file state, ordering state, and terminal error state.
-Committed chunks are immutable.
+One non-Clone authority for one logical stream. It owns the strict byte limit,
+shared bounded FIFO, worker lifecycle, admission ordering, terminal error, and
+successful summary transition. It receives only complete EncodedRecord values
+and never accesses SystemState, payload types, or Serde.
+
+#### StateWriter::start
+
+Creates a previously absent stream directory and starts one named worker
+thread. Existing output is rejected rather than overwritten. Chunk files are
+created lazily, so finishing an empty writer leaves an empty stream directory.
+
+##### Reference
+
+    RunOutput construction -> WriterConfig::new -> StateWriter::start
+    focused writer setup -> StateWriter::start
 
 #### StateWriter::submit
 
-Accepts one already complete EncodedRecord, blocks until both one record slot
-and sufficient encoded-byte budget are available, and moves it to the worker.
-It performs no payload access or serialization. Success means accepted, not
-durable. If the worker terminates, blocked and future submissions wake and
-return the stored terminal error rather than waiting forever.
+Consumes one already complete EncodedRecord. It immediately rejects a record
+larger than the strict byte budget or an index not greater than the last
+accepted index. Otherwise it waits until both the fixed 1,024-record limit and
+configured byte limit admit the record, then moves it into the FIFO. Success
+means accepted, not durable. Worker failure wakes waiters with the shared
+terminal cause.
 
 ##### Reference
 
@@ -1873,67 +1971,184 @@ return the stored terminal error rather than waiting forever.
         -> bounded queue
         -> active chunk
 
-### QueueBudget
-
-Private blocking byte-budget shared by a stream producer and worker. A bounded
-synchronous channel separately limits record count. Together they bound both
-large-record bytes and per-record allocation overhead.
-
-#### QueueBudget::acquire
-
-Blocks the submitting simulation thread until the encoded record fits the
-available byte budget. It returns an RAII QueuePermit attached to the queued
-record. An oversized record waits for exclusive access and receives one
-exclusive permit so it cannot deadlock permanently.
-
-##### Reference
-
-    StateWriter::submit -> QueueBudget::acquire -> QueuePermit
-
-#### QueueBudget::close
-
-Marks the budget closed and wakes every waiter. Waiters return the stream's
-terminal error or normal closed-state error.
-
-##### Reference
-
-    writer worker failure -> QueueBudget::close
-    StateWriter::finish -> QueueBudget::close
-
-### QueuePermit
-
-Private RAII ownership of one admitted record's byte budget. It is moved with
-the EncodedRecord and is never cloned.
-
-#### QueuePermit::drop
-
-Releases byte capacity and wakes blocked submitters after the worker finishes
-appending or rejects the record. Releasing after append, rather than merely
-after dequeue, bounds queued plus in-flight encoded bytes.
-
-##### Reference
-
-    writer append completion or failure -> drop(QueuePermit)
-
-#### StateWriter::flush
-
-Waits for all records accepted before the call to satisfy the defined
-durability boundary. Whether flush seals an underfilled chunk must be fixed
-before implementation; it cannot be ambiguous.
-
-##### Reference
-
-    checkpoint or explicit durability boundary -> StateWriter::flush
-
 #### StateWriter::finish
 
-Rejects new submissions, drains the queue, commits the final non-empty chunk,
-joins the worker, and returns final stream statistics or the terminal failure.
+Consumes the exclusive writer, rejects further admission, drains accepted
+records, seals the final non-empty chunk, joins the worker, and returns
+WriterSummary. A worker failure is returned as WriterTerminated; a panic is
+returned as WriterPanicked.
 
 ##### Reference
 
     successful run termination -> each StateWriter::finish
     run-level coordinator -> collect stream completion statistics
+
+#### StateWriter::close_admission
+
+Private lifecycle transition that closes the queue and wakes both the worker
+and capacity waiters.
+
+##### Reference
+
+    StateWriter::finish -> StateWriter::close_admission
+    StateWriter::drop -> StateWriter::close_admission
+
+#### StateWriter::join_worker
+
+Private one-shot join operation that consumes the stored JoinHandle and maps an
+unexpected panic into WriterPanicked.
+
+##### Reference
+
+    StateWriter::finish -> StateWriter::join_worker
+    StateWriter::drop -> StateWriter::join_worker
+
+#### StateWriter::drop
+
+Performs best-effort close, drain, and join when the caller omits finish. Drop
+cannot report a storage failure, so explicit finish remains required for a
+successful run.
+
+##### Reference
+
+    abandoned StateWriter -> Drop::drop(StateWriter)
+
+### WriterConfig
+
+Cloneable, payload-free startup values for one stream: diagnostic stream name,
+new output directory, nonzero chunk target, and nonzero strict queue-byte
+budget. There is deliberately no user-configurable record limit.
+
+#### WriterConfig::new
+
+Constructs configuration without filesystem access and rejects empty stream or
+directory values. NonZeroU64 enforces positive byte settings.
+
+##### Reference
+
+    RunOutput construction -> WriterConfig::new -> StateWriter::start
+
+#### WriterConfig::stream
+
+Returns the logical stream name.
+
+##### Reference
+
+    configuration inspection and tests -> WriterConfig::stream
+
+#### WriterConfig::directory
+
+Returns the target stream directory.
+
+##### Reference
+
+    configuration inspection and tests -> WriterConfig::directory
+
+#### WriterConfig::max_chunk_bytes
+
+Returns the nonzero soft chunk rollover target.
+
+##### Reference
+
+    configuration inspection and tests -> WriterConfig::max_chunk_bytes
+
+#### WriterConfig::queue_bytes
+
+Returns the nonzero strict outstanding-byte budget.
+
+##### Reference
+
+    configuration inspection and tests -> WriterConfig::queue_bytes
+
+### WriterSummary
+
+Small cloneable result containing stream identity, committed ChunkMetadata in
+ordinal order, total record count, and exact total encoded bytes. It contains
+no payload bytes.
+
+#### WriterSummary::stream
+
+Returns the completed logical stream name.
+
+##### Reference
+
+    run-level completion bookkeeping -> WriterSummary::stream
+
+#### WriterSummary::chunks
+
+Borrows the committed chunk inventory for insertion into metadata.json.
+
+##### Reference
+
+    RunOutput metadata commit -> WriterSummary::chunks
+
+#### WriterSummary::records
+
+Returns total committed records.
+
+##### Reference
+
+    completion diagnostics and tests -> WriterSummary::records
+
+#### WriterSummary::bytes
+
+Returns exact bytes across committed chunks.
+
+##### Reference
+
+    completion diagnostics and tests -> WriterSummary::bytes
+
+### Shared and QueueState
+
+Private synchronization state implemented with one Mutex and two Condvars.
+QueueState owns the FIFO, outstanding record and byte counts, last accepted
+index, admission flag, authoritative terminal error, and final summary.
+
+#### Shared::new
+
+Creates one open, empty coordination state.
+
+##### Reference
+
+    StateWriter::start -> Shared::new
+
+### ActiveChunk
+
+Worker-only non-Clone state for a temporary chunk: paths, file handle, SHA-256
+hasher, exact counts, and first/last indices.
+
+#### ActiveChunk::create
+
+Creates a deterministic temporary file with create_new and refuses an existing
+committed filename.
+
+##### Reference
+
+    writer append loop -> ActiveChunk::create
+
+#### ActiveChunk::append
+
+Writes one complete framed record, updates SHA-256 from the same byte slice,
+and advances checked record, byte, and time statistics.
+
+##### Reference
+
+    writer append loop -> ActiveChunk::append
+
+#### ActiveChunk::seal
+
+Synchronizes the temporary file, atomically renames it to its deterministic
+committed name, finalizes the lowercase SHA-256 digest, and returns
+ChunkMetadata.
+
+##### Reference
+
+    byte rollover or writer drain -> ActiveChunk::seal -> ChunkMetadata
+
+The current writer intentionally has no flush method. `submit` is an admission
+boundary and `finish` is the durability/completion boundary. A future explicit
+checkpoint API may seal an underfilled chunk, but that policy is not implied by
+the current interface.
 
 ### RunOutput
 
@@ -2008,7 +2223,8 @@ Before accepting records, the writer records all information already known:
 - cadence description;
 - relative path and deterministic chunk naming;
 - encoding and framing;
-- max_chunk_bytes and finite queue limits.
+- max_chunk_bytes and the configured queue byte limit. The fixed 1,024-record
+  safety bound is runtime policy and is not repeated in metadata.
 
 No other metadata file exists in the output directory. Per-record field keys
 remain in JSON for readability.
@@ -2066,10 +2282,302 @@ Optional eager convenience that collects a selected range into StateSeries.
 
 ### SeriesError
 
-Non-exhaustive public error enum spanning series invariants, codec registration
-and type mismatches, record encoding/decoding, format version, metadata and
-chunk validation, missing files, byte-length mismatch, filesystem/JSON errors,
-wrapped StateError, and terminal writer lifecycle.
+Non-exhaustive public error enum limited to StateSeries layout identity,
+increasing-index ordering, analysis position bounds, and position-aware typed
+field access.
+
+### StorageError
+
+Non-exhaustive public error enum for persistent storage only. Its variants are
+grouped into configuration/lifecycle, persisted format and integrity,
+state-borrowing and field processing, filesystem/JSON mechanics, and bounded
+writer-worker lifecycle. IO, JSON, StateError, SeriesError, custom decoder, and
+terminal worker errors preserve their source chains. No variant owns a
+scientific payload.
+
+`WriterTerminated` shares one authoritative terminal `StorageError` through an
+Arc so blocked submitters can wake with the same cause without making the enum
+Clone. `SeriesInvariant` retains only the SeriesError after dropping the
+newly-decoded rejected state, preventing corrupt input from being retained as a
+potentially huge error payload.
+
+`StorageError` declares no inherent methods. Each detecting boundary constructs
+the precise variant directly.
+
+The dedicated `tests/storage/error.rs` suite covers every variant in seven
+tests. It verifies exact context, typed and object-safe sources, shared terminal
+error Arc identity, non-exhaustive matching, and `Send + Sync` without mutating
+the filesystem.
+
+#### Reference
+
+    format validation -> UnsupportedVersion / InvalidMetadata / integrity variants
+    JsonEncoder -> StateAccess / EncodeField
+    StateWriter and RunOutput -> configuration / queue / worker variants
+    raw reader -> IO / JSON / chunk integrity variants
+    StateDecoder -> decoder registration / DecodeField / SeriesInvariant
+
+### Persisted format types
+
+`format.rs` defines crate-private Serde representations and validates them
+without filesystem access.
+
+#### RunMetadata
+
+The complete single-file metadata document: format/version, lifecycle status,
+record format, time-axis description, arbitrary JSON run attributes, and
+ordered stream declarations.
+
+#### RunMetadata::running
+
+Builds the initial running snapshot using the supported format constants.
+
+##### Reference
+
+    RunOutput initialization -> RunMetadata::running
+
+#### RunMetadata::validate
+
+Validates the complete in-memory document using a supplied provenance path.
+
+##### Reference
+
+    writer before atomic metadata commit -> RunMetadata::validate
+    reader after JSON parsing -> RunMetadata::validate
+
+#### RunMetadata::stream
+
+Finds an immutable stream declaration by configured name.
+
+##### Reference
+
+    reader stream selection -> RunMetadata::stream
+
+#### RunMetadata::stream_mut
+
+Finds a mutable stream declaration so a writer can append committed chunk
+descriptors before revalidation and atomic metadata replacement.
+
+##### Reference
+
+    writer commit bookkeeping -> RunMetadata::stream_mut
+
+#### RunStatus
+
+Tagged `running`, `complete`, or `failed { message }` lifecycle state. Its
+private validation rejects an empty failure explanation.
+
+##### Reference
+
+    writer lifecycle updates -> RunStatus
+    reader completion policy -> RunStatus
+
+#### RunStatus::validate
+
+Rejects an empty message on failed lifecycle state.
+
+##### Reference
+
+    RunMetadata::validate -> RunStatus::validate
+
+#### RecordFormat
+
+Declares JSON payload encoding and JSON Lines framing once per run. Its private
+constructor and validator enforce the version-one constants.
+
+##### Reference
+
+    RunMetadata::running -> RecordFormat::json_lines
+    RunMetadata::validate -> RecordFormat::validate
+
+#### RecordFormat::json_lines
+
+Constructs the supported JSON and JSON Lines declaration.
+
+##### Reference
+
+    RunMetadata::running -> RecordFormat::json_lines
+
+#### RecordFormat::validate
+
+Rejects encoding or framing labels unsupported by this version.
+
+##### Reference
+
+    RunMetadata::validate -> RecordFormat::validate
+
+#### TimeAxis
+
+Names the mandatory integer coordinate and optional physical coordinate with
+optional units. Private validation rejects empty labels and a physical unit
+without a physical coordinate name.
+
+##### Reference
+
+    RunMetadata configuration -> TimeAxis
+    RunMetadata::validate -> TimeAxis::validate
+
+#### TimeAxis::validate
+
+Rejects empty present labels and a physical unit without a physical name.
+
+##### Reference
+
+    RunMetadata::validate -> TimeAxis::validate
+
+#### StreamMetadata
+
+One logical stream's name, safe relative directory, cadence description,
+ordered key/description schema, chunk and queue byte limits, and committed chunk
+inventory. The fixed internal record-count limit is intentionally absent from
+metadata. Private validation checks byte limits, unique fields, safe paths,
+contiguous chunk ordinals, and increasing cross-chunk indices.
+
+##### Reference
+
+    RunOutput configuration -> StreamMetadata
+    StateWriter commit -> StreamMetadata::chunks
+    RunMetadata::validate -> StreamMetadata::validate
+
+#### StreamMetadata::validate
+
+Checks the safe directory, nonzero limits, normalized unique fields, contiguous
+chunk ordinals, and increasing cross-chunk index ranges.
+
+##### Reference
+
+    RunMetadata::validate -> StreamMetadata::validate
+
+#### FieldMetadata
+
+One persisted key and optional natural-language description. It contains no
+Rust type or decoder tag. Private validation rejects empty normalized content.
+
+##### Reference
+
+    stream field selection -> FieldMetadata
+    decoder declaration validation -> FieldMetadata
+
+#### FieldMetadata::validate
+
+Rejects an empty field name or empty present description.
+
+##### Reference
+
+    StreamMetadata::validate -> FieldMetadata::validate
+
+#### ChunkMetadata
+
+One immutable committed chunk's ordinal, deterministic filename, record count,
+exact bytes, algorithm-prefixed checksum, and first/last integer indices.
+Private validation rejects empty chunks, reversed ranges, invalid checksums, and
+non-deterministic names.
+
+##### Reference
+
+    StateWriter chunk seal -> ChunkMetadata
+    raw reader integrity check -> ChunkMetadata
+
+#### ChunkMetadata::validate
+
+Checks ordinal, deterministic filename, nonzero records and bytes, ordered
+index range, and algorithm-prefixed lowercase hexadecimal checksum.
+
+##### Reference
+
+    StreamMetadata::validate -> ChunkMetadata::validate
+
+#### RawRecord
+
+Parsed but untyped JSON record containing integer time, optional physical time,
+and a key-to-JSON-value map.
+
+#### RawRecord::time
+
+Reconstructs `TimePoint`; JSON numeric parsing already excludes non-finite
+physical values.
+
+##### Reference
+
+    StateDecoder record reconstruction -> RawRecord::time
+
+#### RawRecord::into_values
+
+Moves the JSON field map to decoder dispatch without cloning its value tree.
+
+##### Reference
+
+    StateDecoder field loop -> RawRecord::into_values
+
+#### EncodedRecord
+
+Non-Clone queue message owning a `TimePoint` and one complete framed JSONL byte
+buffer.
+
+#### EncodedRecord::new
+
+Accepts compact object bytes and appends the sole framing newline.
+
+##### Reference
+
+    JsonEncoder successful encoding -> EncodedRecord::new
+
+#### EncodedRecord::time
+
+Returns the complete temporal coordinate used for writer ordering.
+
+##### Reference
+
+    StateWriter ordering -> EncodedRecord::time
+
+#### EncodedRecord::len
+
+Returns exact framed bytes, including the newline.
+
+##### Reference
+
+    queue budget and chunk rollover -> EncodedRecord::len
+
+#### EncodedRecord::bytes
+
+Borrows the indivisible record for checksumming and append.
+
+##### Reference
+
+    checksum and append -> EncodedRecord::bytes
+
+#### EncodedRecord::into_bytes
+
+Moves out the framed allocation for a consuming writer adapter.
+
+##### Reference
+
+    consuming writer adapter -> EncodedRecord::into_bytes
+
+#### EncodedRecord Debug::fmt
+
+Formats only time and byte length, never payload bytes.
+
+##### Reference
+
+    writer diagnostics and tests -> Debug::fmt(EncodedRecord)
+
+#### chunk_filename
+
+Returns `chunk-{ordinal:06}.jsonl`, expanding naturally beyond six digits.
+
+##### Reference
+
+    StateWriter chunk creation -> chunk_filename
+    ChunkMetadata validation -> chunk_filename
+
+The dedicated `tests/storage/format.rs` suite covers semantic JSON round trips,
+stream lookup and mutation, every metadata validation class, deterministic
+chunk names, raw time/value reconstruction, allocation-moving encoded framing,
+bounded Debug output, and validation without filesystem access.
+All 11 focused tests pass when compiled with warnings denied; the staged test
+harness uses the crate's real public state and series types while including only
+the not-yet-exported storage files under review.
 
 All metadata-related variants refer to metadata.json. Chunk byte length is an
 integrity fact, not a chunking policy.
@@ -2088,6 +2596,43 @@ integrity fact, not a chunking policy.
 
 The normal persistence path borrows live values during encoding and then moves
 encoded buffers. No deep state clone is used.
+
+The handoff into a stream writer is exactly one complete `EncodedRecord` per
+sample. A writer is already bound to its logical output stream, so the record
+does not repeat a stream name or schema. The writer may inspect the record's
+time and framed byte length for ordering, queue accounting, and chunk rollover,
+but it treats the encoded bytes as opaque. It never receives a `SystemState`,
+borrows a scientific payload, or invokes `Serialize`.
+
+### Writer backpressure
+
+Each stream writer has two finite admission limits: a library-defined maximum
+of 1,024 outstanding records and a caller-configured maximum of outstanding
+encoded bytes. `StateWriter::submit` examines the incoming
+`EncodedRecord::len` and waits on a condition variable while accepting it would
+exceed either limit. Once admitted, the call transfers the record into the
+writer's FIFO and returns; the simulation may then continue.
+
+An admitted record retains one record permit and its exact number of byte
+permits until the worker has committed it to the chunk file, not merely until
+the worker removes it from the in-memory queue. This bounds all accepted but
+uncommitted data, including the record currently being written. After commit,
+the worker releases both permits and wakes blocked submitters. The queue
+preserves admission order. Callers producing one logical stream concurrently
+must establish sampling order before submission; the writer validates ordering
+but does not guess the intended order of racing samples.
+
+A record larger than the writer's entire byte budget cannot ever satisfy the
+admission condition and must fail immediately with a size-limit error rather
+than deadlock. It may still exceed the preferred chunk target: because records
+are indivisible, such a record occupies a one-record oversized chunk. Chunk
+size is therefore a rollover target, whereas queue byte capacity is a strict
+memory bound.
+
+If the worker fails, it stores one terminal error and wakes every blocked
+submitter. Current and future submissions then return `WriterTerminated`
+instead of waiting indefinitely. Writer shutdown similarly stops admission,
+drains already accepted records, commits metadata, and joins the worker.
 
 ## Scientific tensor compatibility
 
@@ -2199,30 +2744,13 @@ or StateWriter ownership rules.
 
 ## Implementation delta
 
-The system_state source now matches the implementation-ready contract above.
-The existing time_series source must next be reduced to the in-memory analysis
-layer and storage introduced in separate production-file review units:
+The `system_state` and `time_series` sources now match their contracts above.
+The remaining implementation delta is the complete `storage` module: format,
+encoder, writer, decoder, reader, borrowed partial-state encoding, byte-targeted
+chunks, bounded blocking backpressure, metadata lifecycle, and storage-specific
+errors are not yet implemented.
 
-1. time_series is not exported from lib.rs.
-2. CodecRegistry and its stable-tag error variants implement the rejected
-   registration design and must be removed.
-3. StateSeries has no narrow field-level mutable analysis accessor; it must not
-   expose &mut SystemState because time is mutable.
-4. StateSeries len, is_empty, and capacity currently use const Vec methods newer
-   than the crate's Rust 1.85 MSRV; const must be removed or MSRV reconsidered.
-5. PushError stores SystemState inline and currently triggers Clippy's
-   result_large_err diagnostic.
-6. StateChunk and StateSeries::into_chunk implement the rejected writer-buffer
-   architecture and must be removed.
-7. CodecRegistry::register_with_size, CodecRegistry::estimate, SizeEstimator,
-   and ErasedCodec::estimate must be removed with the registry.
-8. SeriesError documentation and variants still refer to series.json rather
-   than metadata.json.
-9. storage format, encoder, writer, reader, borrowed partial-state encoding,
-    byte-targeted chunks, blocking queue backpressure, and metadata lifecycle are not yet
-    implemented.
-
-### Next active module: time_series
+### Completed module: time_series
 
 The time-series stage produces a deliberately small in-memory analysis module.
 Its final production surface contains `time_series.rs`, `time_series/error.rs`,
@@ -2267,8 +2795,11 @@ module.
 
 `time_series/codec.rs` has now been deleted. Its former registry, erased codec,
 stable-tag lookup, JSON value conversion, decoding, and size-estimation APIs
-have no successor within time_series. The following dedicated codec-test file
-is intentionally left for its own deletion review unit.
+have no successor within time_series.
+
+The obsolete `tests/time_series/codec.rs` suite has also been deleted. The
+unified public target now includes only the focused error and series suites plus
+one cross-module ownership workflow.
 
 #### `time_series/error.rs` implementation decision
 
@@ -2304,215 +2835,20 @@ preservation, clone counts, vector allocation preservation, capacity reuse,
 borrowed and owned iteration, bounded Debug output, and thread transferability.
 It contains no codec, chunk, or persistence fixture.
 
-The next review unit is `tests/time_series/error.rs`. Its focused contract will
-cover the exact context and messages of all four variants, verify that
-`FieldAccess` exposes its `StateError` through `Error::source`, and prove
-`SeriesError: Send + Sync`. It will contain no persistence or codec fixtures.
-
-That focused suite is now implemented with five tests. It uses the real
-SystemState error module, verifies both display and structured variant context,
-checks typed source downcasting, demonstrates the required non-exhaustive match
-fallback, and enforces `Send + Sync` at compile time.
-
-### Transitional APIs scheduled for removal
-
-These source items are documented here only so their current references are not
-ambiguous. They are not part of the target architecture.
-
-### SizeEstimator<T>
-
-Obsolete private callback alias returning an estimated byte count from a
-borrowed T.
-
-It has no methods. CodecRegistry::register_with_size stores it and
-TypedCodec::estimate invokes it. Exact post-encoding byte accounting removes
-both uses.
-
-#### CodecRegistry::register_with_size
-
-Registers a codec plus a size estimator.
-
-##### Reference
-
-    current codec tests -> CodecRegistry::register_with_size
-    current CodecRegistry::insert
-    target architecture -> remove
-
-#### CodecRegistry::estimate
-
-Runs a registered estimate for a field.
-
-##### Reference
-
-    current codec tests -> CodecRegistry::estimate
-    target architecture -> remove
-
-#### ErasedCodec::estimate
-
-Object-safe estimator dispatch.
-
-##### Reference
-
-    CodecRegistry::estimate -> ErasedCodec::estimate
-    target architecture -> remove
-
-#### TypedCodec ErasedCodec::estimate
-
-Validates T and runs the optional estimator.
-
-##### Reference
-
-    ErasedCodec::estimate -> TypedCodec::estimate
-    target architecture -> remove
-
-#### StateSeries::into_chunk
-
-Moves an analysis series into the obsolete StateChunk wrapper.
-
-##### Reference
-
-    current series tests and future-unused writer hook -> StateSeries::into_chunk
-    target architecture -> remove
-
-### StateChunk
-
-Obsolete owner of ordinal, StateSeries, and estimated bytes. Streaming writers
-queue EncodedRecord values instead.
-
-#### StateChunk::new
-
-Constructs the obsolete wrapper.
-
-##### Reference
-
-    StateSeries::into_chunk -> StateChunk::new
-    target architecture -> remove
-
-#### StateChunk::ordinal
-
-Returns its ordinal.
-
-##### Reference
-
-    current series tests -> StateChunk::ordinal
-    target architecture -> remove
-
-#### StateChunk::spec
-
-Delegates to the wrapped series.
-
-##### Reference
-
-    current series tests -> StateChunk::spec
-    target architecture -> remove
-
-#### StateChunk::view
-
-Delegates to StateSeries::view.
-
-##### Reference
-
-    current series tests -> StateChunk::view
-    target architecture -> remove
-
-#### StateChunk::len
-
-Delegates to StateSeries::len.
-
-##### Reference
-
-    current tests and Debug -> StateChunk::len
-    target architecture -> remove
-
-#### StateChunk::is_empty
-
-Delegates to StateSeries::is_empty.
-
-##### Reference
-
-    current series tests -> StateChunk::is_empty
-    target architecture -> remove
-
-#### StateChunk::estimated_bytes
-
-Returns the obsolete rollover estimate.
-
-##### Reference
-
-    current series tests and Debug -> StateChunk::estimated_bytes
-    target architecture -> remove
-
-#### StateChunk::first_index
-
-Returns the first wrapped state index.
-
-##### Reference
-
-    current series tests and Debug -> StateChunk::first_index
-    target architecture -> remove
-
-#### StateChunk::last_index
-
-Returns the last wrapped state index.
-
-##### Reference
-
-    current series tests and Debug -> StateChunk::last_index
-    target architecture -> remove
-
-#### StateChunk::get
-
-Delegates indexed access to StateSeries.
-
-##### Reference
-
-    current series tests -> StateChunk::get
-    target architecture -> remove
-
-#### StateChunk::states
-
-Delegates slice access to StateSeries.
-
-##### Reference
-
-    current series tests -> StateChunk::states
-    target architecture -> remove
-
-#### StateChunk::iter
-
-Delegates borrowed iteration to StateSeries.
-
-##### Reference
-
-    current borrowed IntoIterator and tests -> StateChunk::iter
-    target architecture -> remove
-
-#### StateChunk::into_series
-
-Recovers the wrapped analysis series.
-
-##### Reference
-
-    current series tests -> StateChunk::into_series
-    target architecture -> remove
-
-#### StateChunk::fmt
-
-Formats obsolete chunk context.
-
-##### Reference
-
-    current diagnostics and tests -> Debug::fmt(StateChunk)
-    target architecture -> remove
-
-#### borrowed StateChunk::into_iter
-
-Iterates wrapped states.
-
-##### Reference
-
-    current for state in &chunk -> borrowed IntoIterator
-    target architecture -> remove
+The focused error suite contains five tests covering exact variant context,
+source preservation, non-exhaustive matching, and `Send + Sync`. The focused
+series suite contains nine tests covering every retained collection, view, and
+push-error method. The unified target adds one public SystemState-to-StateSeries
+ownership and mutation workflow.
+
+The completed module is exported from `lib.rs` and documented in the crate and
+repository READMEs. Verification passes for formatting, all-target checks,
+15 time-series tests, 33 system-state tests, the complete all-target test suite,
+four doctests, and Clippy across all targets with warnings denied. Cargo package
+verification is intentionally deferred only because the coordinated local
+`physics_in_parallel` 3.0.4 dev dependency is not yet published on crates.io;
+the registry currently offers 3.0.3. This does not affect local compilation or
+the storage-stage dependency graph.
 
 ## Verification and review
 

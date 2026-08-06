@@ -1,9 +1,7 @@
 //! Contract tests for `time_series/error.rs`.
 //!
-//! The public time-series facade remains disconnected until every component
-//! file has completed review. This focused suite therefore includes the
-//! production error module directly and supplies the real SystemState error at
-//! the crate-root path expected by that module.
+//! This focused suite exercises the public error surface against the real
+//! SystemState error type.
 //!
 //! The tests cover only in-memory collection concerns:
 //!
@@ -18,21 +16,8 @@
 
 use std::error::Error as _;
 
-#[path = "../../src/system_state/error.rs"]
-#[allow(dead_code)]
-mod state_error;
-
-/// Reproduces the crate-root import used by the production time-series error
-/// module without substituting a test double for `StateError`.
-mod system_state {
-    pub use super::state_error::StateError;
-}
-
-#[path = "../../src/time_series/error.rs"]
-mod error;
-
-use error::SeriesError;
-use system_state::StateError;
+use scientific_workflow::system_state::StateError;
+use scientific_workflow::time_series::SeriesError;
 
 #[test]
 fn append_invariant_errors_retain_exact_time_context() {

@@ -7,9 +7,9 @@
 //! language bridges remain separate modules rather than accumulating behind
 //! one monolithic interface.
 //!
-//! # Current module
+//! # Current modules
 //!
-//! The first implemented module is [`system_state`]. It provides:
+//! [`system_state`] provides:
 //!
 //! - JSON-defined, immutable field layouts;
 //! - optional natural-language field descriptions without persisted Rust types;
@@ -20,6 +20,12 @@
 //!
 //! Type erasure and boxing remain internal to that module. Downstream crates
 //! work with their original concrete payload types.
+//!
+//! [`time_series`] provides the in-memory analysis collection for complete,
+//! ordered states. It enforces shared-layout identity and increasing simulation
+//! indices, offers a lightweight borrowed view, and permits field-level
+//! mutation without exposing mutable state time. It deliberately performs no
+//! serialization, chunking, or filesystem IO.
 //!
 //! # Basic use
 //!
@@ -47,9 +53,9 @@
 //! # }
 //! ```
 //!
-//! Future modules preserve strict boundaries: `time_series` is an in-memory
-//! analysis collection, `storage` owns JSON encoding and disk IO, and the
-//! dispatcher organizes scoped workflow execution. None changes the public
-//! state-value ownership contract.
+//! Future modules preserve strict boundaries: `storage` owns JSON encoding and
+//! disk IO, and the dispatcher organizes scoped workflow execution. Neither
+//! changes the public state-value ownership contract.
 
 pub mod system_state;
+pub mod time_series;

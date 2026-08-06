@@ -31,11 +31,12 @@ of truth.
   encoded JSONL bytes rather than a state-count limit.
 - Never split an EncodedRecord. One record larger than max_chunk_bytes becomes
   one oversized chunk and its exact size is recorded.
-- Bound each queue by encoded bytes and record slots. StateWriter::submit blocks
-  until capacity is released, and writer termination wakes blocked submitters
-  with the terminal error.
-- Implement byte backpressure with an RAII QueuePermit released after append;
-  use a bounded synchronous channel for the independent record-count limit.
+- Bound each queue by a user-configured encoded-byte budget and an internal
+  fixed limit of 1,024 accepted but uncommitted records. The fixed count is not
+  part of public configuration or persisted metadata.
+- StateWriter::submit blocks until capacity is released, and writer termination
+  wakes blocked submitters with the terminal error. Both permits remain held
+  until append commits, so the record currently being written is also counted.
 
 ### Confirmed design: sequential mutable field access
 
@@ -171,7 +172,7 @@ Verified results:
 - formatting, library check, and Clippy with warnings denied: passed.
 - root and crate READMEs were aligned with the completed contract.
 
-## Next stage: time_series reconciliation
+## Completed stage: time_series reconciliation
 
 Implement one reviewed file at a time:
 
@@ -181,16 +182,51 @@ Implement one reviewed file at a time:
    `field_mut`, and make PushError small without losing ownership. — complete
 4. Rewrite `tests/time_series/series.rs`. — complete
 5. Delete obsolete `src/time_series/codec.rs`. — complete
-6. Delete obsolete `tests/time_series/codec.rs`.
-7. Create the public `src/time_series.rs` facade.
-8. Rewrite the unified `tests/time_series.rs` target.
+6. Delete obsolete `tests/time_series/codec.rs`. — complete
+7. Create the public `src/time_series.rs` facade. — complete
+8. Rewrite the unified `tests/time_series.rs` target. — complete
 9. Export the module from `src/lib.rs`, update README instructions, and run all
-   stage verification commands.
+   stage verification commands. — complete
 
 Do not add serialization, decoding, chunks, queues, metadata, or filesystem IO
 to this module. Those belong to the later `storage` stage.
 
-## Deferred stage: storage separation
+Verified results:
+
+- focused and unified time-series target: 15 passed;
+- system-state regression target: 33 passed;
+- doctests: 4 passed;
+- complete all-target suite: passed;
+- formatting, all-target checks, and Clippy with warnings denied: passed;
+- `cargo package` remains deferred until local `physics_in_parallel` 3.0.4 is
+  published, because crates.io currently resolves only version 3.0.3.
+
+## Next stage: storage separation
+
+### src/storage/error.rs — complete
+
+- Added the non-exhaustive `StorageError` boundary without exporting storage
+  yet.
+- Kept scientific payloads out of every variant.
+- Preserved IO, JSON, SystemState, StateSeries, custom decoder, and shared
+  terminal-worker sources.
+- Covered configuration, metadata, chunk integrity, encoding, decoding, exact
+  byte accounting, bounded queues, and writer lifecycle context.
+- Dedicated `tests/storage/error.rs`: complete; 7 tests pass with warnings
+  denied.
+
+### src/storage/format.rs — complete
+
+- Added version-one metadata, lifecycle, record-format, time-axis, stream,
+  field, and chunk representations.
+- Added safe relative-path, deterministic filename, checksum, limits, ordering,
+  and metadata semantic validation without filesystem access.
+- Added parsed `RawRecord` and non-Clone newline-framed `EncodedRecord`.
+- Dedicated `tests/storage/format.rs`: complete; all 11 tests pass with
+  warnings denied. The suite is intentionally in-memory and leaves filesystem
+  integrity checks to the reader and writer stages.
+- Revised after review: removed user-configurable `queue_records` from
+  `StreamMetadata`; its focused tests must be updated in their next review unit.
 
 ### External integration: physics_in_parallel serialization
 
@@ -206,11 +242,6 @@ to this module. Those belong to the later `storage` stage.
   then remove the temporary local path from the versioned dev dependency.
 - Until publication, keep `../../pip` as the authoritative dependency and test
   coordinated contract changes in both crates before considering them complete.
-
-### src/time_series/codec.rs
-
-- Remove this transitional registry module after its obsolete callers and tests
-  are removed. It has no replacement in time_series.
 
 ### src/storage/reader.rs
 
@@ -230,9 +261,20 @@ to this module. Those belong to the later `storage` stage.
 
 ### src/storage/writer.rs
 
-- Accept only complete EncodedRecord values from JsonEncoder.
-- Perform blocking bounded-queue management, byte-targeted chunking, and disk IO without accessing
+- Complete: accepts only complete EncodedRecord values without accessing
   payload types or invoking Serialize.
+- Complete: blocks on a fixed 1,024-record bound plus caller-configured strict
+  byte bound; oversized records fail immediately and worker failure wakes all
+  waiters.
+- Complete: writes FIFO JSONL records, performs exact byte-targeted rollover,
+  never splits a record, synchronizes and atomically renames chunks, and emits
+  SHA-256-backed ChunkMetadata and WriterSummary.
+- Dedicated `tests/storage/writer.rs`: 8 focused cases pass.
+- Unified `tests/storage.rs`: 27 storage cases pass, including a joint workflow
+  across real SystemState, StateSeries, format validation, writer output,
+  metadata round trip, and raw JSONL parsing.
+- Full all-target suite (75 tests), formatting, and Clippy pass with warnings
+  denied.
 
 ### src/time_series/series.rs
 

@@ -26,6 +26,22 @@ cargo test --test system_state 'value_tests::'
 cargo test --test system_state 'state_tests::'
 ```
 
+### Complete in-memory time-series suite
+
+The time-series target includes the focused collection and error suites plus a
+public SystemState-to-StateSeries ownership workflow:
+
+```bash
+cargo test --test time_series
+```
+
+Focused suites can be selected by module path:
+
+```bash
+cargo test --test time_series 'error_tests::'
+cargo test --test time_series 'series_tests::'
+```
+
 Tests remain organized under subdirectories:
 
 - A test covering one source file mirrors its source filename. For example,

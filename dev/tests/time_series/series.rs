@@ -1,8 +1,7 @@
 //! Contract tests for `time_series/series.rs`.
 //!
-//! The public facade remains disconnected while component files are reviewed.
-//! This suite includes the reviewed production files directly and re-exports
-//! the crate's real SystemState types at their expected crate-root path.
+//! This suite exercises the public collection API with the crate's real
+//! SystemState types.
 //!
 //! Coverage includes collection invariants, ownership-preserving rejection,
 //! clone-free state movement, explicit deep cloning, narrow field mutation,
@@ -16,20 +15,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Serialize, Serializer};
 
-/// Supplies the real public state API at the path imported by production code.
-mod system_state {
-    pub use scientific_workflow::system_state::*;
-}
-
-#[path = "../../src/time_series/error.rs"]
-mod error;
-
-#[path = "../../src/time_series/series.rs"]
-mod series;
-
-use error::SeriesError;
-use series::{PushError, StateSeries};
-use system_state::{StateError, StateSpec, SystemState, TimePoint};
+use scientific_workflow::system_state::{StateError, StateSpec, SystemState, TimePoint};
+use scientific_workflow::time_series::{PushError, SeriesError, StateSeries};
 
 /// Scientific payload whose backing allocation and deep clones are observable.
 #[derive(Debug)]

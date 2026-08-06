@@ -3,10 +3,10 @@
 `scientific-workflow` provides Rust primitives for representing scientific
 system states and building reproducible simulation workflows.
 
-The crate currently focuses on `SystemState`: a fixed-layout, heterogeneous
-state container whose schema is loaded from JSON. Concrete payloads move into
-and out of a state without cloning, making the container suitable for large
-arrays and tensors used in scientific calculations.
+The crate provides `SystemState`, a fixed-layout heterogeneous state container,
+and `StateSeries`, an ordered growable collection of complete states for
+in-memory analysis. Concrete payloads move through both layers without cloning,
+making them suitable for large arrays and tensors.
 
 ## Features
 
@@ -19,8 +19,10 @@ arrays and tensors used in scientific calculations.
 - Strict template validation and semantic JSON round trips.
 - Compatibility with owned scientific payloads such as
   `physics_in_parallel` tensors.
+- Ordered state-series collection with strict shared-layout identity.
+- Lightweight copyable series views and field-level analysis mutation.
 
-Time-series storage, automatic chunking, and workflow dispatch are under active
+Persistent storage, automatic chunking, and workflow dispatch are under active
 development and are not part of the published API described below.
 
 ## Installation
@@ -85,6 +87,42 @@ payload. Neither operation calls `Clone`. Calling `SystemState::clone`
 creates a new erased box and calls `Clone` for every populated payload; the
 semantic depth is defined by each concrete type's `Clone` implementation.
 
+## In-Memory Time Series
+
+`StateSeries` owns complete states for analysis. Appending validates that every
+state shares the series' exact specification allocation and that simulation
+indices increase strictly. Index gaps are allowed.
+
+```rust,no_run
+use scientific_workflow::system_state::{StateSpec, TimePoint};
+use scientific_workflow::time_series::StateSeries;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let spec = StateSpec::load("state.json")?;
+    let mut state = spec.empty(TimePoint::new(0));
+    drop(state.set("population", vec![10_u64, 20, 30])?);
+
+    let mut series = StateSeries::new(spec);
+    series.push(state)?;
+    series
+        .field_mut::<Vec<u64>>(0, "population")?
+        .push(40);
+
+    let view = series.view();
+    assert_eq!(view.len(), 1);
+    Ok(())
+}
+```
+
+The collection never returns `&mut SystemState`, because changing a stored
+state's time would invalidate ordering. `field_mut` permits one typed payload
+mutation at a time. `push`, `pop`, and `into_states` move ownership without
+cloning. Explicit `StateSeries::clone` deep-clones all populated payloads; use
+`view` or `Arc<StateSeries>` for lightweight sharing.
+
+`StateSeries` performs no serialization, chunking, queueing, or disk IO. Those
+responsibilities belong to the separate storage layer.
+
 ## Tensor Payloads
 
 Any concrete type satisfying `Serialize + Clone + Send + 'static` can be
@@ -125,6 +163,13 @@ focused module suites, and exercises the complete state lifecycle using
 
 ```bash
 cargo test --test system_state
+```
+
+The time-series target runs its focused error and collection suites plus a
+public cross-module ownership workflow:
+
+```bash
+cargo test --test time_series
 ```
 
 ## License
