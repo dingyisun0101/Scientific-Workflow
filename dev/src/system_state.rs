@@ -9,15 +9,20 @@
 //!
 //! 1. Load and validate a template with [`StateSpec::load`].
 //! 2. Create the initial state with [`StateSpec::empty`].
-//! 3. Insert, borrow, mutate, or extract payloads through [`SystemState`].
-//! 4. Mutate time through [`SystemState::set_time`] or
+//! 3. Assemble payload types and owners with [`SystemState::set`].
+//! 4. Borrow, mutate, or extract payloads through [`SystemState`].
+//!    Coordinated kernels use [`SystemState::borrow`] or
+//!    [`SystemState::borrow_mut`] with matching type and field-name tuples.
+//! 5. Mutate time through [`SystemState::set_time`] or
 //!    [`SystemState::advance`].
-//! 5. Create later blank states with [`SystemState::empty`].
+//! 6. Create later blank states with [`SystemState::empty`].
 //!
 //! The template fixes field names, field order, and optional human-facing
 //! descriptions. It contains no Rust type or storage codec information.
 //! Individual payload slots may be empty, but callers cannot add, remove, or
-//! reorder fields after the template is loaded.
+//! reorder fields after the template is loaded. First insertion binds a slot's
+//! concrete Rust type. That contract survives extraction and clearing and is
+//! inherited by blank states derived from an assembled instance.
 //!
 //! Every inserted payload implements Serde `Serialize`, `Clone`, `Send`, and
 //! `'static`. Serialization is supplied by the payload type itself; this
@@ -71,10 +76,9 @@
 //! name-to-slot lookup tables are likewise hidden behind the public types
 //! re-exported below.
 //!
-//! Mutable payload access intentionally borrows one field at a time. Callers
-//! must end one `get_mut` borrow before requesting another; tightly coupled
-//! data that requires simultaneous mutation should be stored in one aggregate
-//! payload.
+//! Type erasure remains limited to the private heterogeneous owner. Concrete
+//! payload types and runtime identities are retained, and serialization
+//! erasure is borrowed only when storage explicitly requests it.
 
 mod error;
 mod spec;
@@ -83,4 +87,6 @@ mod value;
 
 pub use error::{SetError, StateError};
 pub use spec::{FieldSpec, StateSpec};
+#[doc(hidden)]
+pub use state::StateTuple;
 pub use state::{SystemState, TimePoint};

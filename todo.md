@@ -48,15 +48,32 @@ prematurely.
 
 ## Simulator integration gate
 
-The scientific-workflow side is ready. Coordinate one simulator migration that:
+Simulator must own and mutate a `SystemState` directly. That state replaces both
+its dedicated live-state field layout and its old IO snapshot struct; sampling
+borrows this authoritative state and must never clone the PiP lattice.
 
-- adds local `scientific-workflow` and PiP 3.0.4 path dependencies;
-- replaces simulator's fixed `io::SystemState` ownership boundary;
-- replaces separate `SignalWriter` and `SpaceWriter` formats with named
-  `RunOutput` streams;
-- supplies custom decoders for `Vec<usize>`, PiP lattice, and activity payloads;
-- proves save, chunk, readback, and resume behavior before removing simulator's
-  old IO implementation.
+The first identified gap, multi-payload live mutation, is resolved by the
+assembly-retained type contract and `borrow[_mut]::<(A, B, ...)>(name_tuple)`.
+The remaining crate-level gaps are:
+
+1. **Interrupted-run recovery and append.** Persist sealed chunk descriptors
+   incrementally, validate existing run/schema identity, clean abandoned temp
+   files, resume ordinals/order, and expose verified latest-record recovery for
+   the space checkpoint stream.
+2. **Public manifest and terminal summary.** Expose read-only run status and
+   user metadata, permit terminal values known only at finish, and return or
+   expose aggregate per-stream record and byte statistics.
+3. **Aggregate resources and failure lifecycle.** Benchmark concurrent systems;
+   if per-stream writers exceed total memory/thread limits, introduce a shared
+   bounded writer runtime or global byte budget without weakening per-stream
+   ordering. Define explicit failure handling so simulator early returns do not
+   leave an unrecoverable running output.
+
+After these gates, coordinate the simulator migration: add local
+`scientific-workflow` and PiP 3.0.4 dependencies, replace its snapshot and
+specialized writers with named streams, supply custom decoders, update
+dispatcher completion validation, and prove save/chunk/readback/crash-resume
+behavior before deleting legacy IO.
 
 ## Project rules
 

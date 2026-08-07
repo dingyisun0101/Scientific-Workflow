@@ -11,6 +11,9 @@
 //! - time-point and state construction;
 //! - real `physics_in_parallel` tensor insertion, borrowing, mutation,
 //!   cloning, and owned extraction;
+//! - immutable and mutable heterogeneous tuple borrowing;
+//! - generated tuple arities two through eight and duplicate rejection;
+//! - retained type contracts after extraction, clearing, and empty derivation;
 //! - ownership-preserving replacement and rejection;
 //! - checked mutable simulation time;
 //! - public errors for unknown, missing, and mismatched fields.
@@ -50,6 +53,10 @@ impl Clone for CloneTracked {
 /// Canonical state template resolved independently of the process working
 /// directory.
 const STATE_TEMPLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/state.json");
+const COUPLED_TEMPLATE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/coupled_state.json"
+);
 
 #[test]
 fn tensor_state_round_trip_integrates_public_modules() {
@@ -301,7 +308,57 @@ fn tensor_state_round_trip_integrates_public_modules() {
         21
     );
 
-    // A failed owning downcast restores the original payload transactionally.
+    // One coordinated borrow resolves heterogeneous payloads once around a
+    // coupled kernel. Reversed template order exercises safe slot sorting while
+    // the returned tuple preserves caller order.
+    {
+        let (activity, population, space) = state
+            .borrow_mut::<(Tensor<u8, Dense>, Tensor<u64, Dense>, Tensor<u64, Dense>)>((
+                "activity",
+                "population",
+                "space",
+            ))
+            .expect("three distinct typed fields must be mutably borrowed together");
+        activity.set(&[1], 1);
+        population.set(&[2], 31);
+        space.set(&[1, 0], 30);
+    }
+    let (population, activity) = state
+        .borrow::<(Tensor<u64, Dense>, Tensor<u8, Dense>)>(("population", "activity"))
+        .expect("two distinct typed fields must be immutably borrowed together");
+    assert_eq!(population.get(&[2]), 31);
+    assert_eq!(activity.get(&[1]), 1);
+
+    let repeated = state
+        .borrow_mut::<(Tensor<u64, Dense>, Tensor<u64, Dense>)>(("space", "space"))
+        .expect_err("one coordinated borrow must reject a repeated field");
+    assert!(matches!(
+        repeated,
+        StateError::RepeatedBorrow { ref field } if field == "space"
+    ));
+    let tuple_unknown = state
+        .borrow::<(Tensor<u64, Dense>, Tensor<u64, Dense>)>(("population", "temperature"))
+        .expect_err("tuple preflight must reject an undeclared field");
+    assert!(matches!(
+        tuple_unknown,
+        StateError::UnknownField { ref field } if field == "temperature"
+    ));
+    let tuple_mismatch = state
+        .borrow_mut::<(Tensor<u8, Dense>, Tensor<u64, Dense>)>(("population", "space"))
+        .expect_err("tuple preflight must reject a retained type mismatch");
+    assert!(matches!(
+        tuple_mismatch,
+        StateError::TypeMismatch { ref field, .. } if field == "population"
+    ));
+    assert_eq!(
+        state
+            .get::<Tensor<u64, Dense>>("space")
+            .unwrap()
+            .get(&[1, 0]),
+        30
+    );
+
+    // A failed owning request is rejected before the original payload moves.
     assert!(matches!(
         state.take::<Tensor<u8, Dense>>("population"),
         Err(StateError::TypeMismatch { .. })
@@ -374,33 +431,54 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert_eq!(population.shape(), &[3]);
     assert_eq!(population.get(&[0]), 10);
     assert_eq!(population.get(&[1]), 21);
-    assert_eq!(population.get(&[2]), 30);
+    assert_eq!(population.get(&[2]), 31);
     assert_eq!(space.shape(), &[2, 2]);
     assert_eq!(space.get(&[1, 1]), 4);
+    assert_eq!(space.get(&[1, 0]), 30);
     assert_eq!(activity.shape(), &[3]);
     assert_eq!(activity.get(&[0]), 1);
-    assert_eq!(activity.get(&[1]), 0);
+    assert_eq!(activity.get(&[1]), 1);
     assert_eq!(activity.get(&[2]), 1);
     assert_eq!(state.loaded(), 0);
     assert!(state.is_blank());
 
+    // Extraction leaves the original slots empty but permanently typed. A
+    // different payload type is rejected even though no value is present.
+    let retype = state
+        .set("population", vec![3_u64, 5, 8, 13])
+        .expect_err("an emptied tensor field must retain its tensor type");
+    assert!(matches!(
+        retype.error(),
+        StateError::TypeMismatch { field, actual, .. }
+            if field == "population"
+                && *actual == std::any::type_name::<Tensor<u64, Dense>>()
+    ));
+    let (_, recovered) = retype.into_parts();
+    assert_eq!(recovered, vec![3, 5, 8, 13]);
+
+    // A separately assembled state can bind the same JSON field to a vector.
     // Ordinary vector payloads make allocation identity directly observable.
+    let mut allocation_state = specification.empty(TimePoint::new(2));
     let owned = vec![3_u64, 5, 8, 13];
     let owned_pointer = owned.as_ptr();
-    assert!(state.set("population", owned).unwrap().is_none());
+    assert!(allocation_state.set("population", owned).unwrap().is_none());
     let replacement = vec![21_u64, 34];
-    let previous = state
+    let previous = allocation_state
         .set("population", replacement)
         .unwrap()
         .expect("same-type replacement must return the previous vector");
     assert_eq!(previous.as_ptr(), owned_pointer);
-    let replacement_pointer = state.get::<Vec<u64>>("population").unwrap().as_ptr();
-    let extracted = state.take::<Vec<u64>>("population").unwrap();
+    let replacement_pointer = allocation_state
+        .get::<Vec<u64>>("population")
+        .unwrap()
+        .as_ptr();
+    let extracted = allocation_state.take::<Vec<u64>>("population").unwrap();
     assert_eq!(extracted.as_ptr(), replacement_pointer);
 
+    let mut clone_state = specification.empty(TimePoint::new(3));
     let clones = Arc::new(AtomicUsize::new(0));
     assert!(
-        state
+        clone_state
             .set(
                 "population",
                 CloneTracked {
@@ -411,7 +489,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
             .unwrap()
             .is_none()
     );
-    let mut cloned = state.clone();
+    let mut cloned = clone_state.clone();
     assert_eq!(clones.load(Ordering::Relaxed), 1);
     cloned
         .get_mut::<CloneTracked>("population")
@@ -419,7 +497,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
         .values
         .push(8);
     assert_eq!(
-        state
+        clone_state
             .get::<CloneTracked>("population")
             .unwrap()
             .values
@@ -434,26 +512,39 @@ fn tensor_state_round_trip_integrates_public_modules() {
             .len(),
         6
     );
-    assert!(state.clear("population").unwrap());
-    assert!(!state.clear("population").unwrap());
+    assert!(clone_state.clear("population").unwrap());
+    assert!(!clone_state.clear("population").unwrap());
+    let cleared_retype = clone_state
+        .set("population", String::from("wrong after clear"))
+        .expect_err("clear must retain the field type definition");
+    assert!(matches!(
+        cleared_retype.error(),
+        StateError::TypeMismatch { field, .. } if field == "population"
+    ));
 
-    assert!(state.set("space", vec![1_u8]).unwrap().is_none());
-    assert!(
-        state
-            .set("activity", String::from("active"))
-            .unwrap()
-            .is_none()
-    );
-    state.clear_all();
-    assert!(state.is_blank());
-
-    // Derived states share immutable schema storage but begin with no payloads.
-    let later = state.empty(TimePoint::new(1));
+    // Derived states share immutable schema storage and type definitions while
+    // beginning with no payloads.
+    let mut later = state.empty(TimePoint::new(1));
     assert_eq!(later.time().index(), 1);
     assert_eq!(later.time().physical(), None);
     assert!(later.is_blank());
     assert_eq!(later.fields(), state.fields());
     assert!(std::ptr::eq(later.spec().fields(), state.spec().fields()));
+    assert!(matches!(
+        later.set("space", vec![1_u8]),
+        Err(ref error)
+            if matches!(error.error(), StateError::TypeMismatch { field, .. } if field == "space")
+    ));
+    let mut restored_space = Tensor::<u64, Dense>::zeros(&[1]);
+    restored_space.set(&[0], 7);
+    assert!(later.set("space", restored_space).unwrap().is_none());
+    let blank_tuple = later
+        .borrow::<(Tensor<u64, Dense>, Tensor<u64, Dense>)>(("space", "population"))
+        .expect_err("tuple preflight must reject a correctly typed empty field");
+    assert!(matches!(
+        blank_tuple,
+        StateError::MissingValue { ref field } if field == "population"
+    ));
 
     let debug = format!("{state:?}");
     assert!(debug.contains("SystemState"));
@@ -467,6 +558,10 @@ fn tensor_state_round_trip_integrates_public_modules() {
     );
     println!("[ownership] pointer_preserved=true rejected_payload_recovered=true");
     println!(
+        "[tuple] immutable=true mutable=true duplicate_rejected=true unknown_rejected=true preflight_atomic=true"
+    );
+    println!("[type-contract] take_retained=true clear_retained=true empty_inherited=true");
+    println!(
         "[validation] read_error=true parse_error=true duplicate_error=true time_transactional=true"
     );
     println!(
@@ -477,4 +572,55 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     fs::remove_dir_all(round_trip_directory)
         .expect("temporary round-trip directory must be removed");
+}
+
+#[test]
+fn generated_tuple_arities_two_through_eight_are_available() {
+    let specification = StateSpec::load(COUPLED_TEMPLATE).expect("coupled state fixture must load");
+    let mut state = specification.empty(TimePoint::new(0));
+    for (key, value) in [
+        ("a", 1_u64),
+        ("b", 2),
+        ("c", 3),
+        ("d", 4),
+        ("e", 5),
+        ("f", 6),
+        ("g", 7),
+        ("h", 8),
+    ] {
+        assert!(state.set(key, value).unwrap().is_none());
+    }
+
+    let _ = state.borrow::<(u64, u64)>(("a", "b")).unwrap();
+    let _ = state.borrow::<(u64, u64, u64)>(("a", "b", "c")).unwrap();
+    let _ = state
+        .borrow::<(u64, u64, u64, u64)>(("a", "b", "c", "d"))
+        .unwrap();
+    let _ = state
+        .borrow::<(u64, u64, u64, u64, u64)>(("a", "b", "c", "d", "e"))
+        .unwrap();
+    let _ = state
+        .borrow::<(u64, u64, u64, u64, u64, u64)>(("a", "b", "c", "d", "e", "f"))
+        .unwrap();
+    let _ = state
+        .borrow::<(u64, u64, u64, u64, u64, u64, u64)>(("a", "b", "c", "d", "e", "f", "g"))
+        .unwrap();
+
+    let (h, g, f, e, d, c, b, a) = state
+        .borrow_mut::<(u64, u64, u64, u64, u64, u64, u64, u64)>((
+            "h", "g", "f", "e", "d", "c", "b", "a",
+        ))
+        .expect("arity-eight reverse-order mutable borrow must succeed");
+    *a += 10;
+    *b += 10;
+    *c += 10;
+    *d += 10;
+    *e += 10;
+    *f += 10;
+    *g += 10;
+    *h += 10;
+
+    assert_eq!(*state.get::<u64>("a").unwrap(), 11);
+    assert_eq!(*state.get::<u64>("h").unwrap(), 18);
+    println!("[tuple-arities] min=2 max=8 reverse_order_mutation=true");
 }

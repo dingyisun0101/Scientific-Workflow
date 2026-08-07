@@ -25,7 +25,8 @@ replace many narrow tests.
 
     tests/
     ├── fixtures/
-    │   └── state.json
+    │   ├── state.json
+    │   └── coupled_state.json
     ├── state_workflow.rs
     ├── analysis_workflow.rs
     ├── storage_workflow.rs
@@ -57,11 +58,20 @@ and transfer payload ownership into and out of the state.
 - Create a blank state and inspect structural versus populated counts.
 - Insert, borrow, type-check, mutate, replace, take, clear, and clear-all
   payloads.
+- Borrow heterogeneous payload tuples immutably and mutably, including keys in
+  reverse layout order.
+- Compile and execute sealed tuple implementations for arities two through
+  eight.
+- Reject repeated tuple fields and prove complete preflight leaves all payloads
+  unchanged.
+- Retain concrete field types after `take` and `clear`, reject retyping empty
+  slots, and inherit type contracts in a derived blank state.
 - Verify `set` and `take` preserve a large allocation pointer.
 - Verify same-type replacement returns the previous payload.
 - Verify a rejected set returns the unchanged incoming payload through
   `SetError`.
-- Verify failed typed extraction restores the original payload.
+- Verify failed typed extraction is rejected before moving the original
+  payload.
 - Advance simulation and physical time transactionally, including one failure
   that leaves time unchanged.
 - Create a blank sibling state without cloning payloads.
@@ -90,10 +100,16 @@ and transfer payload ownership into and out of the state.
 `SystemState`:
 
 - `empty`, `time`, `set_time`, `advance`, `spec`, `len`, `is_empty`, `loaded`,
-  `is_blank`, `fields`, `has`, `is`, `set`, `get`, `get_mut`, `take`, `clear`,
-  `clear_all`, and `clone`.
-- Crate-private `new`, `value`, `value_mut`, and `serializable` are covered by
-  `StateSpec::empty`, typed access, and storage encoding.
+  `is_blank`, `fields`, `has`, `is`, `set`, `get`, `get_mut`, `borrow`,
+  `borrow_mut`, `take`, `clear`, `clear_all`, and `clone`.
+- Crate-private `new`, slot validation/separation, `value`, and `serializable`
+  are covered by `StateSpec::empty`, tuple access, and storage encoding.
+
+Doc-hidden `StateTuple`:
+
+- generated immutable and mutable mappings for every supported arity;
+- duplicate, unknown, missing, and mismatch preflight through public tuple
+  calls.
 
 `SetError<T>`:
 
@@ -108,6 +124,9 @@ deep cloning are covered through the `SystemState` operations above.
     [template] fields=3 round_trip=true shared_layout=true
     [state] index=... physical=... loaded=... mutation_verified=true
     [ownership] pointer_preserved=true rejected_payload_recovered=true
+    [tuple] immutable=true mutable=true duplicate_rejected=true unknown_rejected=true preflight_atomic=true
+    [type-contract] take_retained=true clear_retained=true empty_inherited=true
+    [tuple-arities] min=2 max=8 reverse_order_mutation=true
     [clone] payload_clone_calls=... independent=true
     [result] state_workflow=passed
 

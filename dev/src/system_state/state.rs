@@ -7,11 +7,12 @@
 //!
 //! # Layout invariant
 //!
-//! The payload vector always has exactly one slot per field declared by the
+//! The slot vector always has exactly one entry per field declared by the
 //! specification. A slot may be empty, but fields cannot be added, removed, or
-//! reordered after template loading. Consequently, name lookup resolves once
-//! to a stable integer index and all states with the same specification have
-//! identical structural shape.
+//! reordered after template loading. The first successful insertion binds a
+//! slot to that payload's concrete Rust type. Taking or clearing the payload
+//! retains this type contract, and [`SystemState::empty`] carries all contracts
+//! into the derived blank state without cloning payloads.
 //!
 //! # Ownership and cloning
 //!
@@ -30,17 +31,18 @@
 //! # Mutation
 //!
 //! The owning simulation can replace, borrow mutably, extract, or clear every
-//! payload. It can also replace the complete time point with `set_time` or
-//! advance it transactionally with `advance`. The [`StateSpec`] is deliberately
-//! immutable because changing field order or identity would invalidate the
-//! state's slot layout and every downstream schema assumption.
+//! payload. [`SystemState::borrow`] and [`SystemState::borrow_mut`] grant
+//! coordinated access to distinct heterogeneous fields through type and name
+//! tuples, allowing one validated borrow to surround an entire scientific
+//! kernel. The state can also replace the complete time point with `set_time`
+//! or advance it transactionally with `advance`.
 //!
 //! # Type safety
 //!
 //! Typed access uses Rust's exact runtime [`TypeId`](std::any::TypeId). A type
-//! mismatch reports both type names. A failed consuming `take` restores the
-//! original erased payload to its slot before returning the error, so an
-//! incorrect type request cannot discard scientific data.
+//! mismatch reports both type names. `take` validates the retained slot type
+//! before removing its owner, so an incorrect request cannot temporarily empty
+//! or discard scientific data.
 //!
 //! # Serialization capability
 //!
@@ -49,7 +51,7 @@
 //! the storage encoder. `SystemState` itself does not select JSON, frame
 //! records, or perform IO.
 
-use std::any::{Any, type_name};
+use std::any::{Any, TypeId, type_name};
 use std::fmt;
 
 use serde::Serialize;
@@ -111,7 +113,66 @@ impl TimePoint {
 pub struct SystemState {
     spec: StateSpec,
     time: TimePoint,
-    values: Vec<Option<StateValue>>,
+    slots: Vec<StateSlot>,
+}
+
+/// One fixed state field's retained type contract and optional payload.
+///
+/// A JSON template creates an unbound slot. The first accepted payload records
+/// its exact runtime type independently from the optional owner, allowing an
+/// emptied slot and every state derived from it to reject accidental retyping.
+/// This structure is private because callers interact only with concrete types
+/// through [`SystemState`].
+#[derive(Clone)]
+struct StateSlot {
+    definition: Option<ValueType>,
+    value: Option<StateValue>,
+}
+
+impl StateSlot {
+    /// Creates a payload-empty slot without a concrete type contract.
+    const fn unbound() -> Self {
+        Self {
+            definition: None,
+            value: None,
+        }
+    }
+
+    /// Creates a payload-empty slot retaining this slot's type contract.
+    const fn empty_like(&self) -> Self {
+        Self {
+            definition: self.definition,
+            value: None,
+        }
+    }
+}
+
+/// Copyable runtime identity retained after a slot's payload is removed.
+#[derive(Clone, Copy)]
+struct ValueType {
+    id: TypeId,
+    name: &'static str,
+}
+
+impl ValueType {
+    /// Captures the exact runtime identity and diagnostic name of `T`.
+    fn of<T>() -> Self
+    where
+        T: Any,
+    {
+        Self {
+            id: TypeId::of::<T>(),
+            name: type_name::<T>(),
+        }
+    }
+
+    /// Reports whether this definition names the exact concrete type `T`.
+    fn is<T>(self) -> bool
+    where
+        T: Any,
+    {
+        self.id == TypeId::of::<T>()
+    }
 }
 
 impl SystemState {
@@ -121,16 +182,22 @@ impl SystemState {
     /// state without first loading a template. [`StateSpec::empty`] is the
     /// public initial construction path.
     pub(crate) fn new(spec: StateSpec, time: TimePoint) -> Self {
-        let values = (0..spec.len()).map(|_| None).collect();
-        Self { spec, time, values }
+        let slots = (0..spec.len()).map(|_| StateSlot::unbound()).collect();
+        Self { spec, time, slots }
     }
 
-    /// Creates another empty state with the same shared specification.
+    /// Creates another empty state with the same specification and field types.
     ///
-    /// No payload is cloned. Only the immutable specification handle is
-    /// cloned, which increments an internal `Arc` reference count.
+    /// No payload is cloned. The immutable specification handle is shared, and
+    /// each assembly-established concrete type contract is copied into an empty
+    /// slot. A later [`SystemState::set`] must therefore use the same type even
+    /// though the derived state begins without payloads.
     pub fn empty(&self, time: TimePoint) -> Self {
-        Self::new(self.spec.clone(), time)
+        Self {
+            spec: self.spec.clone(),
+            time,
+            slots: self.slots.iter().map(StateSlot::empty_like).collect(),
+        }
     }
 
     /// Returns this state's temporal coordinate.
@@ -222,7 +289,7 @@ impl SystemState {
     ///
     /// This count is structural and includes empty payload slots.
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.slots.len()
     }
 
     /// Reports whether the state specification declares no fields.
@@ -231,17 +298,20 @@ impl SystemState {
     /// non-empty layout currently carries no payloads, use
     /// [`SystemState::is_blank`].
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.slots.is_empty()
     }
 
     /// Returns the number of slots that currently contain payloads.
     pub fn loaded(&self) -> usize {
-        self.values.iter().filter(|value| value.is_some()).count()
+        self.slots
+            .iter()
+            .filter(|slot| slot.value.is_some())
+            .count()
     }
 
     /// Reports whether every declared payload slot is empty.
     pub fn is_blank(&self) -> bool {
-        self.values.iter().all(Option::is_none)
+        self.slots.iter().all(|slot| slot.value.is_none())
     }
 
     /// Returns field specifications in deterministic template order.
@@ -257,7 +327,7 @@ impl SystemState {
     /// JSON template.
     pub fn has(&self, key: &str) -> Result<bool, StateError> {
         let index = self.spec.index_of(key)?;
-        Ok(self.values[index].is_some())
+        Ok(self.slots[index].value.is_some())
     }
 
     /// Reports whether a populated field contains the exact Rust type `T`.
@@ -273,20 +343,24 @@ impl SystemState {
         T: Any,
     {
         let index = self.spec.index_of(key)?;
-        Ok(self.values[index].as_ref().is_some_and(StateValue::is::<T>))
+        Ok(self.slots[index]
+            .value
+            .as_ref()
+            .is_some_and(StateValue::is::<T>))
     }
 
     /// Sets or replaces a payload while preserving ownership on every outcome.
     ///
     /// `payload` moves into this operation and is never cloned:
     ///
-    /// - an empty declared slot receives it and returns `Ok(None)`;
-    /// - a slot containing exactly `T` receives it and returns the displaced
-    ///   payload as `Ok(Some(previous))`;
+    /// - a never-populated declared slot binds itself to `T`, receives the
+    ///   payload, and returns `Ok(None)`;
+    /// - a slot bound to exactly `T` receives it and returns the displaced
+    ///   payload as `Ok(Some(previous))`, or `Ok(None)` when currently empty;
     /// - an undeclared key returns `Err(SetError<T>)` containing the unchanged
     ///   incoming payload;
-    /// - a slot containing another concrete type remains unchanged and returns
-    ///   the incoming payload in `SetError<T>`.
+    /// - a slot bound to another concrete type remains unchanged and returns
+    ///   the incoming payload in `SetError<T>`, even when its payload is empty.
     ///
     /// Returning a previous payload is deliberate assignment behavior. A
     /// caller that does not need that owner should discard it explicitly:
@@ -300,17 +374,18 @@ impl SystemState {
     /// # }
     /// ```
     ///
-    /// Same-type validation occurs before the occupied slot is changed.
-    /// Consequently, rejection cannot discard or temporarily remove the
-    /// existing scientific value.
+    /// Type-contract validation occurs before the slot is changed.
+    /// Consequently, rejection cannot discard or temporarily remove an
+    /// existing scientific value, and `take` or `clear` cannot reopen a field
+    /// for a different type.
     ///
     /// # Errors
     ///
     /// Returns [`SetError`] containing:
     ///
     /// - [`StateError::UnknownField`] when `key` is undeclared;
-    /// - [`StateError::TypeMismatch`] when an occupied slot contains a
-    ///   different concrete Rust type.
+    /// - [`StateError::TypeMismatch`] when the slot is bound to a different
+    ///   concrete Rust type.
     ///
     /// In both cases [`SetError::into_parts`] recovers the unchanged incoming
     /// `T` without cloning it.
@@ -323,29 +398,29 @@ impl SystemState {
             Err(error) => return Err(SetError::new(error, payload)),
         };
 
-        let Some(previous) = self.values[index].as_ref() else {
-            self.values[index] = Some(StateValue::new(payload));
-            return Ok(None);
-        };
-
-        if !previous.is::<T>() {
-            return Err(SetError::new(
-                StateError::TypeMismatch {
-                    field: key.to_owned(),
-                    expected: type_name::<T>(),
-                    actual: previous.type_name(),
-                },
-                payload,
-            ));
+        let slot = &mut self.slots[index];
+        match slot.definition {
+            Some(definition) if !definition.is::<T>() => {
+                return Err(SetError::new(
+                    StateError::TypeMismatch {
+                        field: key.to_owned(),
+                        expected: type_name::<T>(),
+                        actual: definition.name,
+                    },
+                    payload,
+                ));
+            }
+            Some(_) => {}
+            None => slot.definition = Some(ValueType::of::<T>()),
         }
 
-        let previous = self.values[index]
-            .replace(StateValue::new(payload))
-            .expect("the occupied slot was validated immediately before replacement");
-
-        match previous.downcast::<T>() {
-            Ok(previous) => Ok(Some(previous)),
-            Err(_) => unreachable!("a matching StateValue failed its consuming downcast"),
+        let previous = slot.value.replace(StateValue::new(payload));
+        match previous {
+            None => Ok(None),
+            Some(previous) => match previous.downcast::<T>() {
+                Ok(previous) => Ok(Some(previous)),
+                Err(_) => unreachable!("a type-bound StateValue failed its consuming downcast"),
+            },
         }
     }
 
@@ -361,16 +436,13 @@ impl SystemState {
     where
         T: Any,
     {
-        let value = self.value(key)?;
-        let actual = value.type_name();
-
-        value
-            .downcast_ref::<T>()
-            .ok_or_else(|| StateError::TypeMismatch {
-                field: key.to_owned(),
-                expected: type_name::<T>(),
-                actual,
-            })
+        let index = self.spec.index_of(key)?;
+        self.validate_slot::<T>(index, key)?;
+        Ok(self.slots[index]
+            .value
+            .as_ref()
+            .and_then(StateValue::downcast_ref::<T>)
+            .expect("a validated state slot must contain its bound concrete type"))
     }
 
     /// Mutably borrows a populated field as the exact Rust type `T`.
@@ -387,24 +459,70 @@ impl SystemState {
     where
         T: Any,
     {
-        let value = self.value_mut(key)?;
-        let actual = value.type_name();
+        let index = self.spec.index_of(key)?;
+        self.validate_slot::<T>(index, key)?;
+        Ok(self.slots[index]
+            .value
+            .as_mut()
+            .and_then(StateValue::downcast_mut::<T>)
+            .expect("a validated state slot must contain its bound concrete type"))
+    }
 
-        value
-            .downcast_mut::<T>()
-            .ok_or_else(|| StateError::TypeMismatch {
-                field: key.to_owned(),
-                expected: type_name::<T>(),
-                actual,
-            })
+    /// Borrows several distinct populated fields as concrete immutable types.
+    ///
+    /// `Q` is a tuple of expected payload types, while `keys` is the equally
+    /// sized tuple of field names. Tuple positions correspond exactly. The
+    /// supported arities are two through eight; single-field callers should use
+    /// [`SystemState::get`]. The sealed tuple implementation is internal and
+    /// requires no user-defined selector, query object, or macro invocation.
+    ///
+    /// # Errors
+    ///
+    /// Validation proceeds from left to right and completes before references
+    /// are returned. The method reports an unknown field, repeated field,
+    /// retained type mismatch, or missing payload through [`StateError`]. An
+    /// error leaves every slot unchanged.
+    pub fn borrow<'state, Q>(&'state self, keys: Q::Keys<'_>) -> Result<Q::Refs<'state>, StateError>
+    where
+        Q: StateTuple,
+    {
+        Q::borrow(self, keys)
+    }
+
+    /// Borrows several distinct populated fields as concrete mutable types.
+    ///
+    /// `Q` is a tuple of expected payload types, while `keys` is the equally
+    /// sized tuple of field names. All names, duplicate indices, retained type
+    /// contracts, and payload presence are validated before any mutable
+    /// reference is produced. Payloads remain owned by this state and are not
+    /// cloned, moved, serialized, locked, or temporarily removed.
+    ///
+    /// One call should normally surround a complete coupled kernel or sweep so
+    /// name lookup and dynamic type validation occur once outside its inner
+    /// loop. Supported arities are two through eight; single-field callers
+    /// should use [`SystemState::get_mut`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same deterministic validation errors as
+    /// [`SystemState::borrow`]. A failure leaves the state unchanged and grants
+    /// no partial borrow.
+    pub fn borrow_mut<'state, Q>(
+        &'state mut self,
+        keys: Q::Keys<'_>,
+    ) -> Result<Q::RefsMut<'state>, StateError>
+    where
+        Q: StateTuple,
+    {
+        Q::borrow_mut(self, keys)
     }
 
     /// Removes and returns the payload from a declared field.
     ///
     /// A successful call moves the original concrete `T` out of its internal
-    /// box and leaves the field slot empty. It does not invoke `Clone`. If `T`
-    /// does not match, the original erased value is restored before the error
-    /// is returned.
+    /// box and leaves the field slot empty while retaining its type contract.
+    /// It does not invoke `Clone`. Type and presence validation occurs before
+    /// the payload owner is removed.
     ///
     /// # Errors
     ///
@@ -417,23 +535,14 @@ impl SystemState {
         T: Any + Send,
     {
         let index = self.spec.index_of(key)?;
-        let value = self.values[index]
+        self.validate_slot::<T>(index, key)?;
+        let value = self.slots[index]
+            .value
             .take()
-            .ok_or_else(|| StateError::MissingValue {
-                field: key.to_owned(),
-            })?;
-        let actual = value.type_name();
-
+            .expect("a validated state slot must contain a payload");
         match value.downcast::<T>() {
             Ok(payload) => Ok(payload),
-            Err(value) => {
-                self.values[index] = Some(value);
-                Err(StateError::TypeMismatch {
-                    field: key.to_owned(),
-                    expected: type_name::<T>(),
-                    actual,
-                })
-            }
+            Err(_) => unreachable!("a type-bound StateValue failed its consuming downcast"),
         }
     }
 
@@ -448,32 +557,86 @@ impl SystemState {
     /// JSON template.
     pub fn clear(&mut self, key: &str) -> Result<bool, StateError> {
         let index = self.spec.index_of(key)?;
-        Ok(self.values[index].take().is_some())
+        Ok(self.slots[index].value.take().is_some())
     }
 
-    /// Drops every payload while retaining the shared layout and time point.
+    /// Drops every payload while retaining layout, type contracts, and time.
     pub fn clear_all(&mut self) {
-        self.values.iter_mut().for_each(|value| *value = None);
+        self.slots.iter_mut().for_each(|slot| slot.value = None);
     }
 
     /// Returns a populated erased value for a typed immutable accessor.
     fn value(&self, key: &str) -> Result<&StateValue, StateError> {
         let index = self.spec.index_of(key)?;
-        self.values[index]
+        self.slots[index]
+            .value
             .as_ref()
             .ok_or_else(|| StateError::MissingValue {
                 field: key.to_owned(),
             })
     }
 
-    /// Returns a populated erased value for a typed mutable accessor.
-    fn value_mut(&mut self, key: &str) -> Result<&mut StateValue, StateError> {
-        let index = self.spec.index_of(key)?;
-        self.values[index]
-            .as_mut()
-            .ok_or_else(|| StateError::MissingValue {
+    /// Validates one resolved slot against an expected concrete type and value.
+    fn validate_slot<T>(&self, index: usize, key: &str) -> Result<(), StateError>
+    where
+        T: Any,
+    {
+        let slot = &self.slots[index];
+        if let Some(definition) = slot.definition
+            && !definition.is::<T>()
+        {
+            return Err(StateError::TypeMismatch {
                 field: key.to_owned(),
-            })
+                expected: type_name::<T>(),
+                actual: definition.name,
+            });
+        }
+
+        if slot.value.is_none() {
+            return Err(StateError::MissingValue {
+                field: key.to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Resolves and validates a fixed-size tuple of distinct field names.
+    fn resolve_distinct<const N: usize>(&self, keys: [&str; N]) -> Result<[usize; N], StateError> {
+        let mut indices = [0; N];
+        for (position, key) in keys.iter().enumerate() {
+            let index = self.spec.index_of(key)?;
+            if indices[..position].contains(&index) {
+                return Err(StateError::RepeatedBorrow {
+                    field: (*key).to_owned(),
+                });
+            }
+            indices[position] = index;
+        }
+        Ok(indices)
+    }
+
+    /// Safely separates already validated distinct slot indices.
+    fn disjoint_slots_mut<const N: usize>(&mut self, indices: [usize; N]) -> [&mut StateSlot; N] {
+        let mut positions: [(usize, usize); N] =
+            std::array::from_fn(|position| (position, indices[position]));
+        positions.sort_unstable_by_key(|(_, index)| *index);
+
+        let mut remaining = self.slots.as_mut_slice();
+        let mut base = 0;
+        let mut selected: [Option<&mut StateSlot>; N] = std::array::from_fn(|_| None);
+        for (original_position, index) in positions {
+            let relative = index - base;
+            let (_, at_index) = remaining.split_at_mut(relative);
+            let (slot, tail) = at_index
+                .split_first_mut()
+                .expect("resolved state slot index must be in bounds");
+            selected[original_position] = Some(slot);
+            remaining = tail;
+            base = index + 1;
+        }
+
+        selected
+            .map(|slot| slot.expect("one disjoint slot must be returned for every requested index"))
     }
 
     /// Borrows one populated payload through erased Serde serialization.
@@ -497,13 +660,169 @@ impl SystemState {
     }
 }
 
+/// Sealing boundary for the internally generated tuple implementations.
+mod tuple_sealed {
+    /// Prevents downstream crates from implementing the hidden tuple contract.
+    pub trait Sealed {}
+}
+
+/// Internal type-level mapping used by [`SystemState::borrow`] and
+/// [`SystemState::borrow_mut`].
+///
+/// This trait must be public because it appears in those generic methods'
+/// signatures, but it is sealed, omitted from the prelude, and hidden from
+/// generated documentation. Applications select an implementation simply by
+/// writing a supported tuple type such as `(Position, Velocity)`.
+#[doc(hidden)]
+pub trait StateTuple: tuple_sealed::Sealed {
+    /// Equally sized tuple of borrowed field names.
+    type Keys<'key>;
+
+    /// Equally sized tuple of immutable concrete payload references.
+    type Refs<'state>
+    where
+        Self: 'state;
+
+    /// Equally sized tuple of mutable concrete payload references.
+    type RefsMut<'state>
+    where
+        Self: 'state;
+
+    /// Resolves and immutably borrows one supported field tuple.
+    #[doc(hidden)]
+    fn borrow<'state, 'key>(
+        state: &'state SystemState,
+        keys: Self::Keys<'key>,
+    ) -> Result<Self::Refs<'state>, StateError>;
+
+    /// Resolves and mutably borrows one supported field tuple.
+    #[doc(hidden)]
+    fn borrow_mut<'state, 'key>(
+        state: &'state mut SystemState,
+        keys: Self::Keys<'key>,
+    ) -> Result<Self::RefsMut<'state>, StateError>;
+}
+
+/// Substitutes one repeated generic identifier with a common tuple element.
+macro_rules! substitute_type {
+    ($_generic:ident => $replacement:ty) => {
+        $replacement
+    };
+}
+
+/// Generates the sealed heterogeneous borrow contract for one tuple arity.
+///
+/// Public callers see only `SystemState::borrow[_mut]`; this macro centralizes
+/// validation order, exact downcasts, and tuple construction so every supported
+/// arity has identical semantics.
+macro_rules! impl_state_tuple {
+    ($(($type:ident, $key:ident, $slot:ident, $index:tt)),+ $(,)?) => {
+        impl<$($type),+> tuple_sealed::Sealed for ($($type,)+)
+        where
+            $($type: Any,)+
+        {
+        }
+
+        impl<$($type),+> StateTuple for ($($type,)+)
+        where
+            $($type: Any,)+
+        {
+            type Keys<'key> = ($(substitute_type!($type => &'key str),)+);
+            type Refs<'state> = ($(&'state $type,)+) where Self: 'state;
+            type RefsMut<'state> = ($(&'state mut $type,)+) where Self: 'state;
+
+            fn borrow<'state, 'key>(
+                state: &'state SystemState,
+                keys: Self::Keys<'key>,
+            ) -> Result<Self::Refs<'state>, StateError> {
+                let ($($key,)+) = keys;
+                let indices = state.resolve_distinct([$($key,)+])?;
+                $(state.validate_slot::<$type>(indices[$index], $key)?;)+
+
+                Ok(($(
+                    state.slots[indices[$index]]
+                        .value
+                        .as_ref()
+                        .and_then(StateValue::downcast_ref::<$type>)
+                        .expect("a preflighted state slot must contain its bound concrete type"),
+                )+))
+            }
+
+            fn borrow_mut<'state, 'key>(
+                state: &'state mut SystemState,
+                keys: Self::Keys<'key>,
+            ) -> Result<Self::RefsMut<'state>, StateError> {
+                let ($($key,)+) = keys;
+                let indices = state.resolve_distinct([$($key,)+])?;
+                $(state.validate_slot::<$type>(indices[$index], $key)?;)+
+                let [$($slot,)+] = state.disjoint_slots_mut(indices);
+
+                Ok(($(
+                    $slot
+                        .value
+                        .as_mut()
+                        .and_then(StateValue::downcast_mut::<$type>)
+                        .expect("a preflighted state slot must contain its bound concrete type"),
+                )+))
+            }
+        }
+    };
+}
+
+impl_state_tuple!((A, key_a, slot_a, 0), (B, key_b, slot_b, 1));
+impl_state_tuple!(
+    (A, key_a, slot_a, 0),
+    (B, key_b, slot_b, 1),
+    (C, key_c, slot_c, 2),
+);
+impl_state_tuple!(
+    (A, key_a, slot_a, 0),
+    (B, key_b, slot_b, 1),
+    (C, key_c, slot_c, 2),
+    (D, key_d, slot_d, 3),
+);
+impl_state_tuple!(
+    (A, key_a, slot_a, 0),
+    (B, key_b, slot_b, 1),
+    (C, key_c, slot_c, 2),
+    (D, key_d, slot_d, 3),
+    (E, key_e, slot_e, 4),
+);
+impl_state_tuple!(
+    (A, key_a, slot_a, 0),
+    (B, key_b, slot_b, 1),
+    (C, key_c, slot_c, 2),
+    (D, key_d, slot_d, 3),
+    (E, key_e, slot_e, 4),
+    (F, key_f, slot_f, 5),
+);
+impl_state_tuple!(
+    (A, key_a, slot_a, 0),
+    (B, key_b, slot_b, 1),
+    (C, key_c, slot_c, 2),
+    (D, key_d, slot_d, 3),
+    (E, key_e, slot_e, 4),
+    (F, key_f, slot_f, 5),
+    (G, key_g, slot_g, 6),
+);
+impl_state_tuple!(
+    (A, key_a, slot_a, 0),
+    (B, key_b, slot_b, 1),
+    (C, key_c, slot_c, 2),
+    (D, key_d, slot_d, 3),
+    (E, key_e, slot_e, 4),
+    (F, key_f, slot_f, 5),
+    (G, key_g, slot_g, 6),
+    (H, key_h, slot_h, 7),
+);
+
 impl Clone for SystemState {
     /// Shares the immutable specification and deep-clones populated payloads.
     fn clone(&self) -> Self {
         Self {
             spec: self.spec.clone(),
             time: self.time,
-            values: self.values.clone(),
+            slots: self.slots.clone(),
         }
     }
 }

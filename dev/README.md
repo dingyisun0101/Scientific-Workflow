@@ -12,6 +12,9 @@ making them suitable for large arrays and tensors.
 
 - JSON-defined state fields with deterministic order and optional descriptions.
 - Dictionary-like typed access to heterogeneous Rust payloads.
+- Coordinated immutable and mutable tuple borrowing for coupled kernels.
+- Assembly-established field types retained across extraction and blank-state
+  derivation.
 - Clone-free payload insertion, in-place mutation, and owned extraction.
 - Explicit deep cloning of complete states.
 - Shared immutable state specifications.
@@ -63,8 +66,10 @@ document its payload in natural language:
 ```
 
 Field order defines the compact runtime slot order. The template contains no
-Rust type or storage codec information. Payload types are checked at runtime
-through typed access, and descriptions are documentation only.
+Rust type or storage codec information. The first payload inserted into a field
+establishes its concrete runtime type; that contract remains after `take` or
+`clear` and is copied into blank states derived with `SystemState::empty`.
+Descriptions remain documentation only.
 
 ## Basic Usage
 
@@ -94,6 +99,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 payload. Neither operation calls `Clone`. Calling `SystemState::clone`
 creates a new erased box and calls `Clone` for every populated payload; the
 semantic depth is defined by each concrete type's `Clone` implementation.
+
+## Coupled Payload Access
+
+Scientific kernels can borrow several distinct fields without payload copies,
+temporary extraction, locks, or application-side selector structures. Supply
+the expected concrete types and field names in matching tuple order:
+
+```rust,no_run
+use scientific_workflow::prelude::*;
+
+# fn evolve(position: &mut Vec<f64>, velocity: &mut Vec<f64>) {
+#     position[0] += velocity[0];
+# }
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let spec = StateSpec::load("state.json")?;
+let mut state = spec.empty(TimePoint::new(0));
+drop(state.set("position", vec![0.0_f64])?);
+drop(state.set("velocity", vec![1.0_f64])?);
+
+let (position, velocity) = state
+    .borrow_mut::<(Vec<f64>, Vec<f64>)>(("position", "velocity"))?;
+evolve(position, velocity);
+# Ok(())
+# }
+```
+
+Supported tuple arities are two through eight. The complete request is
+validated before any reference is returned, and repeating a field is rejected.
+Use `get` or `get_mut` for one field. Name lookup and type validation occur once
+per tuple borrow, so the returned references should normally surround the full
+kernel or simulation sweep.
 
 ## In-Memory Time Series
 

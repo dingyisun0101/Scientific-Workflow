@@ -107,7 +107,9 @@ stream is the authoritative sampled history.
         │       │   └── vec_f64.rs Vec<f64> default decoder
         │       └── reader.rs     verified eager reconstruction
         └── tests/
-            ├── fixtures/state.json
+            ├── fixtures/
+            │   ├── state.json
+            │   └── coupled_state.json
             ├── state_workflow.rs
             ├── analysis_workflow.rs
             ├── storage_workflow.rs
@@ -310,26 +312,29 @@ payloads plus one mutable `TimePoint`.
 #### SystemState::new
 
 Crate-private allocation from a validated specification and time point. It is
-the single invariant-establishing mechanism: it allocates exactly one empty
-slot per declared field and is not part of the downstream API.
+the single structural invariant-establishing mechanism: it allocates exactly
+one empty, initially type-unbound slot per declared field and is not part of the
+downstream API.
 
 ##### Reference
 
-    StateSpec::empty and SystemState::empty -> SystemState::new
+    StateSpec::empty -> SystemState::new
 
 #### SystemState::empty
 
-Creates another blank state sharing the same layout without cloning payloads.
-Its final allocation is produced by `SystemState::new`, but its contract is
-different: the caller supplies only a new time and the specification is
-inherited from the existing state. Thus these are not two equivalent public
-constructors. The name is still potentially confusing because structural
-`is_empty` means “zero declared fields,” whereas this method produces a
-payload-blank state (`is_blank == true`).
+Creates another blank state sharing the same specification and retaining the
+source state's per-slot concrete type definitions without cloning payloads. Its
+final allocation is produced from the same structural constructor, but its
+contract is different: the caller supplies only a new time, and both field
+layout and assembly-established type contracts are inherited. The name is
+still potentially confusing because structural `is_empty` means “zero declared
+fields,” whereas this method produces a payload-blank state (`is_blank ==
+true`).
 
 ##### Reference
 
-    simulation scratch states and tests
+    assembled state -> SystemState::empty -> typed simulation scratch state
+    tests and state reuse
 
 #### SystemState::time
 
@@ -422,8 +427,10 @@ Checks the concrete type in one populated slot.
 
 #### SystemState::set<T>
 
-Moves a payload into a slot; same-type replacement returns the previous
-payload, while rejection returns the incoming payload through `SetError<T>`.
+Moves a payload into a slot. First insertion establishes the slot's concrete
+type definition; same-type replacement returns the previous payload, while a
+later different-type insertion is rejected even when the slot is temporarily
+empty. Rejection returns the incoming payload through `SetError<T>`.
 
 ##### Reference
 
@@ -439,15 +446,65 @@ Borrows one concrete payload immutably.
 
 #### SystemState::get_mut<T>
 
-Borrows one concrete payload mutably; users mutate one field at a time.
+Borrows one concrete payload mutably through on-demand name resolution.
 
 ##### Reference
 
     simulation evolution and StateSeries::field_mut
 
+#### SystemState::borrow<Q>
+
+Borrows a tuple of distinct populated payloads immutably. `Q` is written by the
+caller as the tuple of expected concrete payload types; the method argument is
+the equally sized tuple of field names. The sealed query implementation is
+generated internally and is not an end-user concept.
+
+##### Reference
+
+    coupled scientific inspection and multi-input kernels
+
+#### SystemState::borrow_mut<Q>
+
+Borrows a tuple of distinct populated payloads mutably without moving or
+cloning them. It resolves and validates the complete request before returning
+any reference and rejects repeated resolved slots. One borrow is intended to
+surround an entire coupled kernel or simulation sweep.
+
+##### Reference
+
+    simulator EcoSystem sweep -> SystemState::borrow_mut<(SquareLattice, TaxonTable)>
+    coupled scientific integrators and solvers
+
+### StateTuple
+
+Doc-hidden, sealed public trait required only as the generic mapping behind
+`SystemState::borrow` and `SystemState::borrow_mut`. A private declarative macro
+implements it for heterogeneous tuples of arity two through eight. It is not
+re-exported by the prelude and cannot be implemented by downstream crates.
+
+#### StateTuple::borrow
+
+Resolves a tuple of field names, validates distinct indices, payload presence,
+and retained concrete types, then returns the equally shaped immutable
+reference tuple.
+
+##### Reference
+
+    SystemState::borrow -> StateTuple::borrow
+
+#### StateTuple::borrow_mut
+
+Performs the same complete preflight before safely separating the slot slice
+and returning the equally shaped mutable reference tuple.
+
+##### Reference
+
+    SystemState::borrow_mut -> StateTuple::borrow_mut
+
 #### SystemState::take<T>
 
 Moves one concrete payload out without cloning and restores it on type error.
+The now-empty slot retains its assembly-established concrete type definition.
 
 ##### Reference
 
@@ -455,7 +512,8 @@ Moves one concrete payload out without cloning and restores it on type error.
 
 #### SystemState::clear
 
-Drops one payload and reports whether it existed.
+Drops one payload and reports whether it existed while retaining the field's
+concrete type definition.
 
 ##### Reference
 
@@ -463,7 +521,8 @@ Drops one payload and reports whether it existed.
 
 #### SystemState::clear_all
 
-Drops every payload while retaining layout and slots.
+Drops every payload while retaining layout, slots, and concrete type
+definitions.
 
 ##### Reference
 
@@ -487,8 +546,9 @@ Deep-clones each populated payload and shares only immutable layout metadata.
 
 ### StateError
 
-Non-exhaustive state/template/time/access error vocabulary. It never owns a
-scientific payload.
+Non-exhaustive state/template/time/access error vocabulary. It includes
+`RepeatedBorrow` for aliased tuple requests and never owns a scientific
+payload.
 
 ### SetError<T>
 
@@ -1544,46 +1604,296 @@ accidentally private supported type is detected by compilation.
     public API integration tests -> use scientific_workflow::prelude::*
     crate root -> pub mod prelude
 
-## Simulator integration readiness
+## Simulator integration audit
 
-The crate is architecture-compatible with simulator, but full integration is
-not ready yet.
+The encoded payload and completed-run analysis paths fit simulator, but the
+crate is not yet ready to replace simulator storage. Inspection of simulator's
+actual hot loop, checkpoint resume path, and multi-system runner exposed four
+crate-level integration gates. Gate 1 is complete; gates 2 through 4 remain.
 
-Ready now:
+Already compatible:
 
-- public `StateSpec`, `SystemState`, and `TimePoint` can represent and mutate a
-  simulator-owned live state;
-- arbitrary simulator payloads satisfying `Serialize + Clone + Send + 'static`
-  can occupy exact template keys;
-- borrowed encoding, bounded writer behavior, chunk integrity, custom decoder
-  registration, and typed series reconstruction are implemented and verified;
-- application-specific decoder closures can reconstruct `Vec<usize>`, PiP
-  lattices, activity status, or simulator aggregate payloads without adding
-  built-in decoders.
+- named `signal` and `space` streams naturally preserve independent sampling
+  cadences and output identities;
+- PiP's local `SquareLattice` serializer borrows its dense storage, so
+  `RunOutput::sample` can encode a lattice without first cloning it;
+- exact encoded-byte chunking is a stricter implementation of simulator's
+  desired maximum-file-size policy than its current estimated record sizing;
+- bounded stream queues provide deterministic per-stream backpressure;
+- application decoders can reconstruct `Vec<usize>`, PiP lattices,
+  `ActivityStatus`, and scalar payloads without built-in crate support;
+- immutable JSONL chunks, checksums, and complete-run reconstruction satisfy
+  analysis once a run has terminated successfully.
 
-Remaining simulator-side migration work:
+### Gate 1: live-state mutation boundary
 
-- simulator still owns a separate fixed `io::SystemState` and separate
-  `SignalWriter`/`SpaceWriter` formats, so it is not using the agreed live-state
-  ownership model;
-- simulator depends on registry PiP 3.0.3, while coordinated local development
-  uses PiP 3.0.4.
+`EcoSystem` evolves `SquareLattice` and `TaxonTable` through simultaneous
+mutable borrows on every event. This boundary is now supported by
+`SystemState::borrow_mut`, which returns distinct heterogeneous payload
+references after complete validation. Exporting simulator's old snapshot is no
+longer needed and would remain unacceptable because it clones the full lattice
+for every space sample.
 
-The crate-side migration boundary is now ready. Simulator can replace its fixed
-snapshot struct and two specialized writers as one coherent migration without
-depending on crate-private storage internals or maintaining two new formats.
+The integration contract is now fixed: simulator must own and mutate one
+`SystemState` directly, replacing its dedicated runtime state fields and old IO
+snapshot struct. Storage will continue sampling that same state by borrow; an
+external keyed-field sampling abstraction is not the chosen architecture.
 
-Simulator migration will require:
+Gate 1 completion criteria are satisfied: payload types are established during
+state assembly and retained independently of payload presence; blank derived
+states inherit those contracts; immutable and mutable tuple borrowing supports
+arities two through eight; duplicate, unknown, missing, and mismatched requests
+fail before references are returned; and safe stack-only slot separation adds
+no payload copy, ownership transfer, heap allocation, lock, or unsafe code.
+Integrated PiP tensor tests cover the complete public boundary.
 
-1. add path dependencies on local `scientific-workflow` and PiP 3.0.4 during
-   coordinated development;
-2. define the simulator state template and exact stream field selections;
-3. make `EcoSystem` own or directly expose the scientific-workflow live state
-   instead of exporting a lattice-cloning snapshot;
-4. route signal and space cadence decisions through `RunOutput::sample`;
-5. register simulator-specific decoders for resume and analysis;
-6. replace legacy signal/space loaders only after new-format round-trip and
-   resume integration tests pass.
+#### Simulator mutation dependency
+
+Simulator does not literally write the lattice and taxon table simultaneously.
+For one event, `Decider` reads source and target taxa from the lattice, may read
+the current table to sample an effective target, decides whether replacement
+occurs, writes the lattice target, and then adjusts two table counts. Those
+instructions can be expressed as a read/decide phase followed by separate
+lattice and table writes.
+
+They cannot generally be decoupled at sweep or batch granularity without
+changing behavior. In randomized-target mode, event `n + 1` samples from the
+table produced by event `n`; delaying count updates would sample from stale
+abundances. Every accepted replacement must therefore update both
+representations before the next event. The table is a derived cache of lattice
+population counts, but it is also live model input and must remain consistent.
+
+A strictly single-field state API could preserve semantics by repeatedly
+borrowing the lattice and table in separate scopes for every event. That would
+introduce several key lookups and dynamic type checks per lattice event and
+create a visible two-step commit in application code. It is viable for
+correctness, but it is an inferior hot-loop boundary. Simultaneous mutable
+borrowing is not required for mathematical expressiveness; it is required to
+retain the current efficient sweep shape, in which both payload references are
+resolved once and reused across all events.
+
+Accordingly, coordinated tuple borrowing is required to retain simulator's
+efficient sweep shape. The intended use is one borrow before the inner event
+loop, not one lookup per event:
+
+```text
+borrow_mut::<(SquareLattice, TaxonTable)>(("space", "population"))
+    -> (space, population)
+    -> for each event: decide(space, population, source, target)
+    -> release both borrows
+    -> advance SystemState time and evaluate other fields
+```
+
+This keeps `SystemState` authoritative, preserves exact randomized-target
+semantics, and adds only one pair of key/type validations per sweep.
+
+#### General scientific workload
+
+Coordinated mutation of multiple state components is a common scientific
+computing requirement. Representative cases include position/velocity/force
+arrays in particle models, density/momentum/energy fields in fluid solvers,
+coupled species in reaction systems, primal/dual or parameter/momentum arrays
+in optimization, field values and auxiliary caches, and simulator's lattice
+plus population table. Even when an algorithm stages its numerical writes, it
+often needs several mutable component references for the duration of one
+kernel, integrator step, or sweep.
+
+“At the same time” means simultaneous exclusive Rust borrows, not simultaneous
+machine instructions. Individual writes remain ordered. The capability matters
+because resolving typed state components once around a hot kernel avoids
+repeated name lookup, dynamic type validation, and artificial take/reinsert
+ownership cycles.
+
+The typical borrow arity is small and statically known. A state may contain many
+fields, while a particular kernel usually couples two or three. The sealed tuple
+contract supports arities two through eight without exposing erased wrappers,
+query objects, generated numbered methods, or public macros.
+
+Users may still group fields that form one inseparable domain object into one
+payload. Grouping is a modeling choice, not a workaround imposed by the borrow
+API: independently sampled, encoded, or analyzed fields should remain separate
+state keys.
+
+#### Simplified assembly-bound type model
+
+Users should not define or retain a parallel field-selector structure. Payload
+definition occurs while the initial state is assembled:
+
+```text
+state = spec.empty(time)
+state.set("space", space_payload)
+state.set("population", population_payload)
+state.set("activity", activity_payload)
+```
+
+The first successful insertion into a slot establishes that field's runtime
+concrete type for this state layout. Clearing or taking the payload empties the
+slot but retains its type definition; subsequent insertion must use the same
+type. An empty state derived from an assembled state retains all field type
+definitions while omitting payloads. This is distinct from a fresh unassembled
+state created directly from the type-free JSON `StateSpec`.
+
+Coordinated access then names and types fields in one expression:
+
+```text
+(space, population) =
+    state.borrow_mut::<(SquareLattice<usize>, TaxonTable)>(
+        ("space", "population"),
+    )
+```
+
+The public vocabulary is only `borrow` and `borrow_mut`. A sealed tuple trait
+implemented internally for arities two through eight associates each type
+tuple with its equally sized name tuple and returned reference tuple. Users do
+not name the trait, create query objects, keep typed handles, or invoke macros.
+Existing `get<T>` and `get_mut<T>` remain the concise single-field operations.
+
+Each multi-borrow resolves the names through the specification's existing hash
+map and validates retained field types before producing references. Distinct
+slot separation uses fixed const-generic stack arrays and safe `split_at_mut`;
+it performs no heap allocation, unsafe pointer construction, payload movement,
+or cloning. The intended call surrounds a full kernel or sweep, so lookup cost
+occurs once rather than per event. A future cached-handle layer is warranted
+only if measurement shows repeated borrow setup itself is material.
+
+#### Idiomaticity assessment
+
+The simplified API is idiomatic Rust despite relying on private generated tuple
+implementations. Rust has no variadic generics, so sealed traits implemented for
+a documented range of tuple arities are the conventional way to express a
+heterogeneous operation whose arity is known at compile time. The public call
+uses normal method syntax, turbofish type selection, tuple construction and
+destructuring, `Result`-based validation, and borrow lifetimes enforced by the
+compiler.
+
+It also follows core ownership conventions:
+
+- the state owns every concrete payload;
+- assembly moves payloads into the state;
+- access returns ordinary `&T` or `&mut T`, not guards or smart wrappers;
+- one `&mut SystemState` is the exclusive authority from which all disjoint
+  mutable references originate;
+- an error is reported before any reference is returned and cannot partially
+  mutate or empty the state; and
+- all references expire before time advancement, sampling, or another state
+  operation can borrow the state again.
+
+`borrow_mut` is acceptable as an inherent method name: it describes granting
+temporary references and does not imply interior mutability because it requires
+`&mut self`. Rust also has `BorrowMut`, but an inherent method with tuple and
+type arguments is unambiguous. `get_many_mut` or `get_disjoint_mut` would more
+closely resemble collection APIs, but expose implementation mechanics and are
+less symmetrical with immutable `borrow`. The concise `borrow`/`borrow_mut`
+pair is retained unless implementation experience reveals confusing compiler
+diagnostics.
+
+The deliberately non-standard part is dynamic, assembly-established field
+typing, which follows directly from the type-free JSON template. Retaining a
+slot's `TypeId` after `take` or `clear` makes that dynamic boundary predictable
+and gives derived empty states a stable program-level schema. This invariant
+must be documented prominently because users may otherwise expect an empty
+dictionary slot to accept a different type.
+
+#### Concrete payload type and erasure boundaries
+
+Every payload remains its original concrete Rust value `T` for its entire time
+inside `SystemState`. Insertion moves that `T` into owned storage; typed access
+returns `&T` or `&mut T`; extraction returns the same owned `T`. No conversion
+to JSON, `serde_json::Value`, bytes, or a common scientific container occurs.
+Runtime `TypeId` and the concrete Rust type name remain available for checked
+downcasting and diagnostics.
+
+There are two distinct meanings of type erasure:
+
+1. **Heterogeneous storage erasure is unavoidable internally.** A Rust `Vec`
+   cannot directly contain unrelated concrete types. Each slot therefore holds
+   a private trait-object owner whose concrete allocation is still `T`. This
+   erases the static type only from the vector's element type; it does not erase
+   runtime type identity, transform data, clone payloads, or expose erasure to
+   the user. A type map based on `Any` would make the same tradeoff under a
+   different name.
+2. **Serialization erasure is demand-driven.** When storage samples a field,
+   the private wrapper temporarily borrows its concrete `T` as
+   `&dyn erased_serde::Serialize`. That borrowed serialization view exists only
+   for encoding. It neither replaces the stored payload nor persists after the
+   call. Capturing the serialization function in the private value vtable at
+   insertion is necessary because, after heterogeneous storage erasure, plain
+   `Any` alone cannot rediscover an arbitrary type's `Serialize`
+   implementation.
+
+The type tuple supplied to `borrow` or `borrow_mut` states what the program
+expects from each named slot. The method compares those expectations with the
+concrete `TypeId` definitions retained during state assembly before returning
+typed references. The tuple does not own, wrap, convert, or serialize any
+payload.
+
+Avoiding even internal storage erasure would require abandoning at least one
+core requirement: use a compile-time fixed generic state struct, generate a
+typed struct from a typed schema, or restrict payloads to a closed enum. All
+three conflict with the runtime JSON key template and open-ended payload types.
+The private erased owner plus demand-driven serialization view is therefore the
+appropriate implementation for this general state.
+
+### Gate 2: interrupted-run resume and append
+
+Simulator resumes an incomplete task in its existing directory, loads only the
+newest space checkpoint, and appends later chunks. Current `RunOutput::start`
+rejects every existing root, running metadata does not receive sealed chunk
+descriptors until terminal writer shutdown, and `SeriesReader::open` rejects
+non-complete runs. Consequently, durable chunk files may exist after a crash
+but cannot be discovered through the public API, and the same run cannot be
+continued.
+
+The storage lifecycle needs a recovery/append entry point that validates the
+existing schema and run identity, removes abandoned temporary files, discovers
+or reads every committed chunk descriptor, resumes chunk ordinals and record
+ordering, and republishes running metadata safely. Chunk descriptors should be
+committed incrementally as chunks seal, rather than appearing only at
+`finish`. Recovery also needs an integrity-checking latest-record operation;
+eagerly reconstructing an entire potentially gigabyte-scale space series just
+to restore its final checkpoint is not acceptable.
+
+### Gate 3: run manifest and terminal summary
+
+Simulator and dispatcher inspect configuration, end time, activity, sample
+counts, and writer statistics without decoding payload chunks. Current run
+metadata accepts annotations only at startup, remains private behind the
+reader, and `RunOutput::finish` returns no summary. The public boundary needs:
+
+- a read-only run manifest/status view, including per-stream aggregate records
+  and bytes;
+- access to user run metadata from the reader;
+- a terminal metadata update for values known only after simulation; and
+- a `RunSummary` returned by successful finish, or an equivalent cheap
+  inspection API after finish.
+
+This allows dispatcher validation to depend on the scientific-workflow format
+instead of simulator-private metadata.
+
+### Gate 4: aggregate resource control and failure lifecycle
+
+Backpressure is currently correct per stream, but simulator runs many systems
+and would create two writer threads and two independent byte budgets per
+system. Total queued memory and thread count therefore scale with
+`systems * streams`. A full encoded record is also allocated before queue
+admission and must individually fit the configured queue. Simulator-scale
+benchmarks must determine whether a shared writer runtime/global byte budget is
+required; the likely production design is a bounded worker pool plus a global
+byte semaphore while retaining per-stream ordering.
+
+Simulator error propagation currently uses early `?` returns. Dropping
+`RunOutput` drains writers but cannot reliably publish the simulation failure,
+leaving a running manifest. Integration must either explicitly call `fail` on
+all terminal paths or introduce a run guard/coordinator whose failure policy is
+compatible with recovery.
+
+### Simulator migration after the gates
+
+Once these decisions are implemented, migration consists of adding local
+scientific-workflow and PiP dependencies, declaring simulator keys/streams,
+using checked `usize`/`u64` time conversion, registering application decoders,
+replacing cadence writes, and updating dispatcher completion validation. Those
+are downstream adaptation tasks rather than missing serialization features.
 
 ## Verification gate
 
@@ -1610,10 +1920,12 @@ consistent.
 
 The former focused file-mirroring suites were useful during production-file
 review and have now been replaced by four behavior-oriented Cargo integration
-targets plus the real JSON fixture:
+targets plus their real JSON fixtures:
 
     tests/
-    ├── fixtures/state.json
+    ├── fixtures/
+    │   ├── state.json
+    │   └── coupled_state.json
     ├── state_workflow.rs
     ├── analysis_workflow.rs
     ├── storage_workflow.rs
@@ -1626,17 +1938,21 @@ thread timing.
 
 ### state_workflow.rs
 
-One realistic simulation-state lifecycle using the checked-in template and PiP
-tensors. It covers template semantic round trip, shared layouts, typed insertion
-and sequential mutation, time advancement, zero-copy extraction with allocation
-identity, explicit deep-clone accounting, rejected-set payload recovery, and
-bounded diagnostics.
+One realistic simulation-state lifecycle using checked-in templates and PiP
+tensors. It covers template semantic round trip, shared layouts, assembly-bound
+type retention, heterogeneous immutable/mutable tuple access for arities two
+through eight, duplicate/preflight errors, time advancement, zero-copy
+extraction with allocation identity, explicit deep-clone accounting,
+rejected-set payload recovery, and bounded diagnostics.
 
 Key log output:
 
     [template] fields=3 round_trip=true
     [state] index=... loaded=... mutation=verified
     [ownership] set_take_pointer_preserved=true clone_calls=...
+    [tuple] immutable=true mutable=true duplicate_rejected=true unknown_rejected=true preflight_atomic=true
+    [type-contract] take_retained=true clear_retained=true empty_inherited=true
+    [tuple-arities] min=2 max=8 reverse_order_mutation=true
     [result] state_workflow=passed
 
 ### analysis_workflow.rs
@@ -1717,7 +2033,7 @@ Required method allocation:
 
 | Workflow | Structures and API families exercised |
 |---|---|
-| `state_workflow` | `FieldSpec`, `StateSpec`, `TimePoint`, `SystemState`, `StateError`, `SetError`; all public spec, time, state-access, ownership, clear, clone, and inspection methods |
+| `state_workflow` | `FieldSpec`, `StateSpec`, `TimePoint`, `SystemState`, doc-hidden `StateTuple`, `StateError`, `SetError`; all public spec, time, single/tuple state access, ownership, retained-type, clear, clone, and inspection methods |
 | `analysis_workflow` | `StateSeries`, `SeriesRef`, `PushError`, `SeriesError`; all public construction, capacity, lookup, iteration, mutation, append/rejection, extraction, clear, and clone methods |
 | `storage_workflow` | `TimeAxis`, `StreamConfig`, `RunOutputBuilder`, `RunOutput`, `PayloadDecoder`, `Decoders`, both default decoders, and `SeriesReader`; every public success-path method including `read_all`, with private encoding/writing/format behavior verified through files and readback |
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |

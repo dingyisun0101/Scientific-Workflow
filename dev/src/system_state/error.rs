@@ -85,6 +85,18 @@ pub enum StateError {
         field: String,
     },
 
+    /// One coordinated borrow requested the same resolved field more than once.
+    ///
+    /// Mutable aliases to one payload would violate Rust's exclusivity rules.
+    /// Immutable coordinated borrows reject the same input as well so
+    /// `SystemState::borrow` and `SystemState::borrow_mut` retain identical,
+    /// predictable request validation.
+    #[error("coordinated state borrow repeats field `{field}`")]
+    RepeatedBorrow {
+        /// Field name at the first repeated tuple position.
+        field: String,
+    },
+
     /// An operation required a payload from a declared but currently empty
     /// field.
     #[error("state field `{field}` does not contain a payload")]
@@ -93,14 +105,17 @@ pub enum StateError {
         field: String,
     },
 
-    /// A typed operation requested a different Rust type from the stored one.
-    #[error("state field `{field}` contains `{actual}`, but the operation requested `{expected}`")]
+    /// A typed operation requested a different Rust type from the retained
+    /// field contract.
+    #[error(
+        "state field `{field}` is bound to `{actual}`, but the operation requested `{expected}`"
+    )]
     TypeMismatch {
         /// Field on which the typed operation was attempted.
         field: String,
         /// Rust type requested by the caller.
         expected: &'static str,
-        /// Rust type currently stored in the field.
+        /// Rust type bound to the field during state assembly.
         actual: &'static str,
     },
 
@@ -148,11 +163,13 @@ pub enum StateError {
 /// retains ownership of the unchanged incoming payload.
 ///
 /// A set operation can fail before moving `payload` into a state because the
-/// requested field is undeclared or because an existing field contains a
-/// different concrete Rust type. Returning only [`StateError`] in those cases
-/// would drop the caller's payload while unwinding the failed call. `SetError`
-/// instead keeps the rejection reason and original `T` together, following the
-/// ownership-preserving pattern of channel send errors.
+/// requested field is undeclared or because its assembly-retained type contract
+/// names a different concrete Rust type. The latter remains true even when the
+/// field is temporarily empty after `take` or `clear`. Returning only
+/// [`StateError`] in those cases would drop the caller's payload while unwinding
+/// the failed call. `SetError` instead keeps the rejection reason and original
+/// `T` together, following the ownership-preserving pattern of channel send
+/// errors.
 ///
 /// The payload remains private so diagnostics cannot accidentally expose or
 /// traverse large scientific data. Borrow it through [`SetError::payload`] or

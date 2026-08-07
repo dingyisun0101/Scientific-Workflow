@@ -1,0 +1,12 @@
+{
+  "fields": [
+    {"name": "a", "description": "First coupled scalar"},
+    {"name": "b", "description": "Second coupled scalar"},
+    {"name": "c", "description": "Third coupled scalar"},
+    {"name": "d", "description": "Fourth coupled scalar"},
+    {"name": "e", "description": "Fifth coupled scalar"},
+    {"name": "f", "description": "Sixth coupled scalar"},
+    {"name": "g", "description": "Seventh coupled scalar"},
+    {"name": "h", "description": "Eighth coupled scalar"}
+  ]
+}
