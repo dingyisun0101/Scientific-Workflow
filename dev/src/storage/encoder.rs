@@ -17,11 +17,12 @@
 //! # Sampling
 //!
 //! [`JsonEncoder::encode`] first verifies that every selected slot is populated.
-//! It then serializes directly from borrowed payload references into one compact
-//! JSON buffer. The temporary erased borrows cannot outlive the call. On
-//! success, only the independently owned encoded bytes remain, allowing the
-//! simulation to resume mutation immediately or move the record into a
-//! [`StateWriter`](super::writer::StateWriter).
+//! Each successful lookup is retained as a borrowed erased-Serde reference, so
+//! the subsequent serialization pass does not look up the field again. The
+//! local reference vector introduces no payload clone and cannot outlive the
+//! call. On success, only the independently owned encoded bytes remain,
+//! allowing the simulation to resume mutation immediately or move the record
+//! into a [`StateWriter`](super::writer::StateWriter).
 //!
 //! # Responsibility boundary
 //!

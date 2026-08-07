@@ -24,6 +24,8 @@ making them suitable for large arrays and tensors.
 - Borrowed JSON encoding without payload cloning.
 - Finite byte- and record-bounded asynchronous writers.
 - Exact-byte automatic chunking with indivisible JSONL records.
+- Durable chunk publication through file sync, atomic rename, and stream-
+  directory sync before metadata can advertise completion.
 - SHA-256-verified eager reconstruction through per-key payload decoders.
 
 The public `RunOutput` facade owns multi-stream metadata, bounded writers, and
@@ -191,9 +193,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`sample` borrows selected payloads only while producing owned encoded bytes.
-It then applies bounded blocking backpressure through the selected writer.
-`finish` drains every stream and atomically publishes completed metadata.
+`sample` resolves each selected key once and borrows its payload only while
+producing owned encoded bytes. It then applies bounded blocking backpressure
+through the selected writer. `finish` drains every stream; each chunk is file-
+synced, atomically renamed, and followed by a stream-directory sync before the
+run atomically publishes completed metadata.
 
 ## Testing
 

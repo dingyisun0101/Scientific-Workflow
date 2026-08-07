@@ -3,6 +3,13 @@
 Only incomplete, next-stage, or explicitly deferred work belongs here. The
 implemented architecture and per-method references live in `design.md`.
 
+## Performance validation
+
+- Add a focused encoder benchmark before claiming that the cached borrowed-
+  payload vector is faster than the former second hash lookup. Compare small
+  and large selected-field counts; functional tests already verify ownership,
+  encoded output, and error semantics.
+
 ## Deferred decoder catalog
 
 The main-development defaults are intentionally limited to:

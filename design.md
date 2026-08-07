@@ -1040,6 +1040,7 @@ depending on a chunk directory entry that was not synchronized.
 ##### Reference
 
     chunk rollover or writer finish -> ActiveChunk::seal
+    storage_workflow final-name and temporary-file assertions -> successful seal path
 
 ## Payload decoding
 

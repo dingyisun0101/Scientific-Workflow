@@ -198,6 +198,8 @@ surface.
   SHA-256 descriptors.
 - Persist and semantically round-trip the sole `metadata.json`.
 - Assert no per-chunk metadata sidecars or temporary files remain.
+- Assert every sealed chunk is visible only under its deterministic final name;
+  this exercises the successful file-sync, rename, and directory-sync path.
 - Register `VecF64Decoder` and `StringDecoder` under exact keys.
 - Register an application-provided PiP tensor decoder under its exact key.
 - Open a completed run, enumerate streams, read one stream, and read all
@@ -244,6 +246,7 @@ Decoder structures:
     [sample] index=... physical=... signal=true space=...
     [writer] signal_records=... signal_bytes=... space_records=... space_bytes=...
     [chunk] stream=... file=... records=... bytes=... checksum_verified=true
+    [durability] final_chunk_names=true temporary_files=false
     [metadata] files=... bytes=... semantic_round_trip=true status=complete
     [readback] signal_states=... space_states=... typed_round_trip=true clone_calls=0
     [result] storage_workflow=passed

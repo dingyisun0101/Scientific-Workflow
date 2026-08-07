@@ -39,7 +39,8 @@ cargo test --test storage_workflow -- --nocapture
 Runs default decoder round trips and a multi-stream PiP tensor workflow through
 the public prelude and `RunOutput`, including borrowed encoding, bounded
 writing, automatic chunking, metadata, integrity verification, and typed
-reconstruction.
+reconstruction. Successful output verifies that sealed chunks have final names
+and no temporary files remain after durable publication.
 
 ### Storage resilience
 

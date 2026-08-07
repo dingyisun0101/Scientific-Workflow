@@ -259,6 +259,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .iter()
             .all(|path| { !path.file_name().unwrap().to_string_lossy().contains(".tmp") })
     );
+    println!("[durability] final_chunk_names=true temporary_files=false");
     println!(
         "[metadata] files={} bytes={} semantic_round_trip=true status=complete",
         files.len(),
