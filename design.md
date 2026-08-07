@@ -309,7 +309,9 @@ payloads plus one mutable `TimePoint`.
 
 #### SystemState::new
 
-Crate-private allocation from a validated spec.
+Crate-private allocation from a validated specification and time point. It is
+the single invariant-establishing mechanism: it allocates exactly one empty
+slot per declared field and is not part of the downstream API.
 
 ##### Reference
 
@@ -318,6 +320,12 @@ Crate-private allocation from a validated spec.
 #### SystemState::empty
 
 Creates another blank state sharing the same layout without cloning payloads.
+Its final allocation is produced by `SystemState::new`, but its contract is
+different: the caller supplies only a new time and the specification is
+inherited from the existing state. Thus these are not two equivalent public
+constructors. The name is still potentially confusing because structural
+`is_empty` means “zero declared fields,” whereas this method produces a
+payload-blank state (`is_blank == true`).
 
 ##### Reference
 
@@ -882,6 +890,15 @@ Iterates selected names in canonical template order for metadata construction.
 Preflights selected slots, serializes borrowed erased payloads into compact JSON,
 and ends all borrows before returning the owned record.
 
+The preflight retains the successfully resolved
+`&dyn erased_serde::Serialize` values and `ValuesRef` serializes those
+cached borrows. This preserves typed `StateAccess` errors and per-field
+`EncodeField` context while reducing state lookup from twice to once per key.
+The cache contains payload references only and continues using the
+encoder's existing canonical field slice for keys, avoiding redundant `&str`
+storage. This introduces one small `Vec` allocation per record, so its
+performance effect remains a benchmark question rather than an assumed gain.
+
 ##### Reference
 
     RunOutput::sample -> JsonEncoder::encode -> StateWriter::submit
@@ -987,6 +1004,17 @@ Private temporary-file owner with incremental SHA-256 and exact counters.
 
 Creates one deterministic temporary chunk.
 
+The temporary name is a commit marker, not a second payload copy. Records are
+written once into one inode; sealing renames that same inode to its final name.
+Under the current whole-run contract, chunk temporaries are not strictly
+required for reader correctness because `metadata.json` does not advertise a
+chunk until successful completion and readers reject running or failed runs.
+They nevertheless make incomplete crash remnants distinguishable, prevent
+directory observers from treating a growing file as committed, and establish a
+per-chunk commit boundary useful for recovery or future incremental metadata.
+Removing them would be a valid simplification only if final filenames are
+explicitly documented as non-authoritative until metadata references them.
+
 ##### Reference
 
     writer worker begins a chunk -> ActiveChunk::create
@@ -1002,6 +1030,12 @@ Appends one complete record and updates checksum and facts.
 #### ActiveChunk::seal
 
 Synchronizes, atomically renames, and returns `ChunkMetadata`.
+
+After the rename, the writer synchronizes the stream
+directory before returning the descriptor. File `sync_all` makes record bytes
+durable, but on POSIX-like filesystems it does not by itself guarantee that the
+new final filename survives a crash. Metadata must never become durable while
+depending on a chunk directory entry that was not synchronized.
 
 ##### Reference
 
@@ -1457,6 +1491,13 @@ bounded writer. There is exactly one entry for each running metadata stream.
 with exclusive creation. `commit_metadata` validates and serializes a snapshot,
 while `write_and_replace_metadata` exclusively creates a temporary sibling,
 syncs it, renames it over the authoritative file, and syncs the root directory.
+
+Unlike a chunk temporary, the metadata temporary is required for the current
+lifecycle guarantee. `Running` metadata already exists when `Complete` or
+`Failed` is published. Rewriting that file in place can expose truncation,
+mixed old/new bytes, or invalid JSON after a crash. Writing and synchronizing a
+complete sibling before atomic rename guarantees that observers see either the
+previous complete metadata document or the next complete document.
 
 ##### Reference
 

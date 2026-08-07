@@ -33,7 +33,7 @@
 use std::cell::Cell;
 use std::collections::HashSet;
 
-use serde::ser::{Error as _, SerializeMap};
+use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
 use crate::system_state::{StateSpec, SystemState};
@@ -153,27 +153,31 @@ impl JsonEncoder {
     pub(crate) fn encode(&self, state: &SystemState) -> Result<EncodedRecord, StorageError> {
         let time = state.time();
 
-        // Preflight access keeps StateError typed. During the subsequent
-        // immutable serialization pass these lookups cannot change because the
-        // same state remains borrowed for the entire method.
-        for field in &self.fields {
-            state
-                .serializable(field)
-                .map_err(|source| StorageError::StateAccess {
-                    stream: self.stream.to_string(),
-                    index: time.index(),
-                    field: field.to_string(),
-                    source,
-                })?;
-        }
+        // Resolving before Serde preserves StateError as a typed source. The
+        // successful borrows are retained for the serialization pass so each
+        // selected field incurs exactly one state lookup.
+        let payloads = self
+            .fields
+            .iter()
+            .map(|field| {
+                state
+                    .serializable(field)
+                    .map_err(|source| StorageError::StateAccess {
+                        stream: self.stream.to_string(),
+                        index: time.index(),
+                        field: field.to_string(),
+                        source,
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let active_field = Cell::new(None);
         let document = RecordRef {
             index: time.index(),
             physical: time.physical(),
             values: ValuesRef {
-                state,
                 fields: &self.fields,
+                payloads: &payloads,
                 active_field: &active_field,
             },
         };
@@ -203,10 +207,10 @@ struct RecordRef<'a> {
     values: ValuesRef<'a>,
 }
 
-/// Lazily serializes selected values without collecting payload references.
+/// Serializes pre-resolved selected values beside their canonical field keys.
 struct ValuesRef<'a> {
-    state: &'a SystemState,
     fields: &'a [Box<str>],
+    payloads: &'a [&'a dyn erased_serde::Serialize],
     active_field: &'a Cell<Option<usize>>,
 }
 
@@ -216,11 +220,11 @@ impl Serialize for ValuesRef<'_> {
     where
         S: Serializer,
     {
+        debug_assert_eq!(self.fields.len(), self.payloads.len());
         let mut map = serializer.serialize_map(Some(self.fields.len()))?;
-        for (index, field) in self.fields.iter().enumerate() {
+        for (index, (field, payload)) in self.fields.iter().zip(self.payloads).enumerate() {
             self.active_field.set(Some(index));
-            let payload = self.state.serializable(field).map_err(S::Error::custom)?;
-            map.serialize_entry(field, &ErasedRef(payload))?;
+            map.serialize_entry(field, &ErasedRef(*payload))?;
             self.active_field.set(None);
         }
         map.end()

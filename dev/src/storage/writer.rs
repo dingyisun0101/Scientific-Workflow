@@ -19,7 +19,8 @@
 //! # Chunk commits
 //!
 //! Records are written to a temporary file and exposed under their
-//! deterministic `chunk-NNNNNN.jsonl` name only after `sync_all` and rename.
+//! deterministic `chunk-NNNNNN.jsonl` name only after file `sync_all`, rename,
+//! and stream-directory `sync_all`.
 //! The chunk-size setting is a rollover target rather than a splitting rule:
 //! one oversized record becomes the sole record in an oversized chunk.
 //! SHA-256 is accumulated while bytes are appended, so no second payload pass
@@ -374,6 +375,13 @@ impl ActiveChunk {
     }
 
     /// Synchronizes and atomically publishes this non-empty chunk.
+    ///
+    /// Synchronizing the file makes its contents durable. Synchronizing the
+    /// containing stream directory after rename separately makes the final
+    /// filename durable on filesystems that require an explicit directory
+    /// barrier. A post-rename synchronization error leaves an unadvertised
+    /// final chunk on disk and terminates the writer; successful run metadata
+    /// is never published from that failed summary.
     fn seal(self) -> Result<ChunkMetadata, StorageError> {
         self.file.sync_all().map_err(|source| StorageError::Io {
             operation: "synchronize chunk",
@@ -386,6 +394,17 @@ impl ActiveChunk {
             path: self.final_path.clone(),
             source,
         })?;
+        let directory = self
+            .final_path
+            .parent()
+            .expect("every chunk path has its configured stream directory");
+        File::open(directory)
+            .and_then(|handle| handle.sync_all())
+            .map_err(|source| StorageError::Io {
+                operation: "synchronize stream directory",
+                path: directory.to_path_buf(),
+                source,
+            })?;
         let digest = lowercase_hex(&self.hasher.finalize());
         Ok(ChunkMetadata {
             ordinal: self.ordinal,
