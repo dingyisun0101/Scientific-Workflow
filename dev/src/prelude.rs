@@ -6,9 +6,9 @@
 //! ```
 //! use scientific_workflow::prelude::*;
 //!
-//! let time = TimePoint::new(0);
-//! assert_eq!(time.index(), 0);
-//! let decoders = Decoders::new();
+//! let time = SimulationTime::from_step(0);
+//! assert_eq!(time.step(), 0);
+//! let decoders = JsonPayloadDecoderRegistry::new();
 //! assert!(decoders.is_empty());
 //! ```
 //!
@@ -17,8 +17,14 @@
 //! responsibility of the application that uses them.
 
 pub use crate::storage::{
-    Decoders, PayloadDecoder, RunOutput, RunOutputBuilder, SeriesReader, StorageError,
-    StreamConfig, StringDecoder, TimeAxis, VecF64Decoder,
+    JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder,
+    StateStreamConfig, StorageError, StoredStateSeriesReader, SystemStateWriter,
+    SystemStateWriterBuilder, TimeAxisMetadata,
 };
-pub use crate::system_state::{FieldSpec, SetError, StateError, StateSpec, SystemState, TimePoint};
-pub use crate::time_series::{PushError, SeriesError, SeriesRef, StateSeries};
+pub use crate::system_state::{
+    PayloadInsertError, SimulationTime, StateError, StateFieldSchema, SystemState,
+    SystemStateSchema,
+};
+pub use crate::time_series::{
+    StateSeries, StateSeriesError, StateSeriesPushError, StateSeriesView,
+};

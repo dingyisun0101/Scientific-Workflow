@@ -1,7 +1,7 @@
 //! JSON decoding for a state field whose concrete payload is `Vec<f64>`.
 //!
-//! [`VecF64Decoder`] converts exactly one raw JSON field value into an owned
-//! vector of double-precision values. The [`SeriesReader`](crate::storage::reader::SeriesReader)
+//! [`JsonVecF64Decoder`] converts exactly one raw JSON field value into an owned
+//! vector of double-precision values. The [`StoredStateSeriesReader`](crate::storage::stored_state_series_reader::StoredStateSeriesReader)
 //! remains responsible for finding the field by key, selecting this decoder,
 //! and inserting the returned vector into the matching state slot.
 //!
@@ -16,7 +16,7 @@
 //! values. Applications needing constraints such as a fixed dimension or a
 //! finite-only vector should register a custom decoder for that key.
 
-use super::PayloadDecoder;
+use super::JsonPayloadDecoder;
 
 /// Stateless default decoder for payloads stored as `Vec<f64>`.
 ///
@@ -24,9 +24,9 @@ use super::PayloadDecoder;
 /// decoder registries. Each registry entry still binds it to exactly one key
 /// and the concrete `Vec<f64>` output type.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct VecF64Decoder;
+pub struct JsonVecF64Decoder;
 
-impl PayloadDecoder<Vec<f64>> for VecF64Decoder {
+impl JsonPayloadDecoder<Vec<f64>> for JsonVecF64Decoder {
     type Error = serde_json::Error;
 
     /// Deserializes one complete raw JSON array directly into `Vec<f64>`.
@@ -34,7 +34,7 @@ impl PayloadDecoder<Vec<f64>> for VecF64Decoder {
     /// The returned vector owns its allocation. On failure, the original
     /// `serde_json::Error` is returned so the decoder registry can retain it as
     /// the source of a stream-, index-, and key-aware storage error.
-    fn decode(&self, raw_json: &str) -> Result<Vec<f64>, Self::Error> {
+    fn decode_json_payload(&self, raw_json: &str) -> Result<Vec<f64>, Self::Error> {
         serde_json::from_str(raw_json)
     }
 }

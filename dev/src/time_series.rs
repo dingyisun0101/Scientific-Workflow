@@ -3,7 +3,7 @@
 //! This module provides the analysis-facing representation of a system-state
 //! time series. [`StateSeries`] owns a growable array of complete
 //! [`SystemState`](crate::system_state::SystemState) snapshots, while
-//! [`SeriesRef`] provides a lightweight read-only view over that array.
+//! [`StateSeriesView`] provides a lightweight read-only view over that array.
 //!
 //! # Responsibility boundary
 //!
@@ -19,45 +19,45 @@
 //! # Collection invariants
 //!
 //! Every state accepted by a series must share its exact immutable
-//! [`StateSpec`](crate::system_state::StateSpec) layout allocation and carry a
+//! [`SystemStateSchema`](crate::system_state::SystemStateSchema) layout allocation and carry a
 //! simulation index greater than the current final index. Gaps between indices
 //! are valid; optional physical time does not determine ordering.
 //!
 //! A complete mutable state is never exposed from the collection because its
 //! time could then be changed behind the ordering invariant. Use
-//! [`StateSeries::field_mut`] to mutate one typed payload at one position.
+//! [`StateSeries::payload_mut_at`] to mutate one typed payload at one position.
 //!
 //! # Ownership
 //!
 //! Appending, removing, consuming, and iterating an owned series move
-//! `SystemState` owners without cloning their payloads. [`PushError`] returns an
+//! `SystemState` owners without cloning their payloads. [`StateSeriesPushError`] returns an
 //! unchanged rejected state. Explicit [`Clone`] of `StateSeries` is different:
 //! it deep-clones every populated payload and should be avoided for lightweight
-//! sharing. Use [`StateSeries::view`] or `Arc<StateSeries>` instead.
+//! sharing. Use [`StateSeries::as_view`] or `Arc<StateSeries>` instead.
 //!
 //! # Example
 //!
 //! ```no_run
-//! use scientific_workflow::system_state::{StateSpec, TimePoint};
+//! use scientific_workflow::system_state::{SystemStateSchema, SimulationTime};
 //! use scientific_workflow::time_series::StateSeries;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let spec = StateSpec::load("state.json")?;
-//! let mut first = spec.empty(TimePoint::new(0));
-//! drop(first.set("population", vec![10_u64, 20, 30])?);
+//! let spec = SystemStateSchema::load_json_template("state.json")?;
+//! let mut first = spec.create_empty_state(SimulationTime::from_step(0));
+//! drop(first.insert_payload("population", vec![10_u64, 20, 30])?);
 //!
 //! let mut series = StateSeries::new(spec.clone());
-//! series.push(first)?;
+//! series.push_state(first)?;
 //! series
-//!     .field_mut::<Vec<u64>>(0, "population")?
+//!     .payload_mut_at::<Vec<u64>>(0, "population")?
 //!     .push(40);
 //!
-//! let view = series.view();
+//! let view = series.as_view();
 //! assert_eq!(view.len(), 1);
 //! assert_eq!(
-//!     view.first()
+//!     view.first_state()
 //!         .expect("one state was appended")
-//!         .get::<Vec<u64>>("population")?,
+//!         .payload::<Vec<u64>>("population")?,
 //!     &vec![10, 20, 30, 40]
 //! );
 //! # Ok(())
@@ -65,7 +65,7 @@
 //! ```
 
 mod error;
-mod series;
+mod state_series;
 
-pub use error::SeriesError;
-pub use series::{PushError, SeriesRef, StateSeries};
+pub use error::StateSeriesError;
+pub use state_series::{StateSeries, StateSeriesPushError, StateSeriesView};

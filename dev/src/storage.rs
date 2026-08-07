@@ -1,36 +1,43 @@
-//! Run-level persistence and reconstruction for scientific state samples.
+//! Recording persistence and reconstruction for scientific state samples.
 //!
 //! This module is the complete public storage boundary. Simulations configure
-//! named output streams through [`RunOutputBuilder`], borrow their live
+//! named output streams through [`SystemStateWriterBuilder`], borrow their live
 //! [`SystemState`] at each sampling cadence, and hand the resulting encoded
-//! record to [`RunOutput::sample`]. Each stream owns an independent bounded
-//! writer queue and byte-targeted chunk sequence, while the run owns exactly
-//! one authoritative `metadata.json` lifecycle.
+//! record to [`SystemStateWriter::record_state_to_stream`]. One bounded queue
+//! and worker serve every configured stream, while each stream retains an
+//! independent byte-targeted chunk sequence. The recording owns exactly one
+//! authoritative `metadata.json` lifecycle.
 //!
 //! # Ownership and backpressure
 //!
 //! Sampling never clones, removes, or retains a scientific payload. The
 //! selected values are borrowed only while Serde creates one owned JSONL
-//! record. That record is then moved into its stream writer. If the configured
-//! queue-byte budget is full, [`RunOutput::sample`] blocks until the writer
+//! record. That record is then moved into the recording writer. If the configured
+//! queue-byte budget is full, [`SystemStateWriter::record_state_to_stream`] blocks until the writer
 //! commits enough queued bytes or reports a terminal error. Records are never
 //! split between chunks.
 //!
 //! # Lifecycle
 //!
-//! [`RunOutputBuilder::start`] refuses an existing output root, validates every
-//! stream against one shared state specification, starts the stream writers,
-//! and atomically publishes initial `running` metadata before returning.
-//! [`RunOutput::finish`] drains every writer and atomically replaces that file
-//! with a complete chunk inventory. [`RunOutput::fail`] performs the same safe
-//! drain but records an explicit failed lifecycle instead. Dropping an active
-//! output drains its writer threads for memory and file safety, but deliberately
-//! leaves metadata as `running`; an implicit drop cannot claim successful or
-//! intentional termination.
+//! [`SystemStateWriterBuilder::create_new_recording`] refuses an existing output root, validates every
+//! stream against one shared state specification, publishes initial `running`
+//! metadata, and then starts the recording writer. Each chunk descriptor is committed
+//! incrementally before that payload receives its sealed filename.
+//! [`SystemStateWriter::complete_recording`] drains the writer and atomically transitions the
+//! manifest to complete; [`SystemStateWriter::mark_recording_failed`] records an explicit failed
+//! lifecycle instead. Dropping an active recording drains its writer thread for
+//! memory and file safety but deliberately leaves metadata as `running`.
+//!
+//! [`SystemStateWriterBuilder::continue_existing_recording`] explicitly validates and appends an
+//! existing running run. [`SystemStateWriterBuilder::continue_recording_from_latest_checkpoint`]
+//! additionally reconstructs a complete owned checkpoint state through
+//! caller-supplied payload decoders.
+//! Resume trusts every sealed filename and examines only the highest unsealed
+//! chunk per stream.
 //!
 //! # Reading
 //!
-//! [`SeriesReader`] accepts a completed output directory and a [`Decoders`]
+//! [`StoredStateSeriesReader`] accepts a completed output directory and a [`JsonPayloadDecoderRegistry`]
 //! registry. The reader validates metadata, chunks, checksums, record order,
 //! and decoder coverage before reconstructing typed
 //! [`StateSeries`](crate::time_series::StateSeries) values. Decoder
@@ -42,25 +49,32 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use fs2::FileExt;
 use serde_json::{Map, Value};
 
-use crate::system_state::{StateSpec, SystemState};
+use crate::system_state::{SystemState, SystemStateSchema};
 
-mod decoder;
-mod encoder;
 mod error;
-mod format;
-mod reader;
-mod writer;
+mod json_payload_decoder;
+mod json_state_record_encoder;
+mod jsonl_format;
+mod queued_state_writer;
+mod stored_state_series_reader;
 
-pub use decoder::{Decoders, PayloadDecoder, StringDecoder, VecF64Decoder};
 pub use error::StorageError;
-pub use reader::SeriesReader;
+pub use json_payload_decoder::{
+    JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder,
+};
+pub use stored_state_series_reader::StoredStateSeriesReader;
 
-use encoder::JsonEncoder;
-use format::{FieldMetadata, RunMetadata, RunStatus, StreamMetadata, TimeAxis as StoredTimeAxis};
-use writer::{StateWriter, WriterConfig};
+use json_state_record_encoder::JsonStateRecordEncoder;
+use jsonl_format::{
+    RecordingMetadata, RecordingStatus, StateFieldMetadata, StateStreamMetadata,
+    TimeAxisMetadata as StoredTimeAxis,
+};
+use queued_state_writer::{RecoveredStateStream, StateStreamStorageConfig, StateWriterWorker};
 
 /// Stable name of the sole structural metadata file in one output root.
 const METADATA_FILE: &str = "metadata.json";
@@ -73,66 +87,66 @@ const METADATA_TEMP_FILE: &str = ".metadata.json.tmp";
 /// Every record always has an integer simulation index. Physical time remains
 /// optional, and its unit is legal only when a physical-coordinate name is
 /// configured. Labels are documentation persisted once in `metadata.json`;
-/// they do not change [`crate::system_state::TimePoint`] representation.
+/// they do not change [`crate::system_state::SimulationTime`] representation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TimeAxis {
-    index_name: String,
-    index_unit: Option<String>,
-    physical_name: Option<String>,
-    physical_unit: Option<String>,
+pub struct TimeAxisMetadata {
+    step_name: String,
+    step_unit: Option<String>,
+    physical_time_name: Option<String>,
+    physical_time_unit: Option<String>,
 }
 
-impl TimeAxis {
+impl TimeAxisMetadata {
     /// Creates a time-axis declaration with a mandatory index label.
     ///
     /// Whitespace is retained in the builder and rejected by
-    /// [`RunOutputBuilder::start`], keeping fluent configuration infallible
+    /// [`SystemStateWriterBuilder::create_new_recording`], keeping fluent configuration infallible
     /// while ensuring persisted labels are never silently normalized.
-    pub fn new(index_name: impl Into<String>) -> Self {
+    pub fn new(step_name: impl Into<String>) -> Self {
         Self {
-            index_name: index_name.into(),
-            index_unit: None,
-            physical_name: None,
-            physical_unit: None,
+            step_name: step_name.into(),
+            step_unit: None,
+            physical_time_name: None,
+            physical_time_unit: None,
         }
     }
 
     /// Sets the optional unit of the integer simulation index.
     #[must_use]
-    pub fn index_unit(mut self, unit: impl Into<String>) -> Self {
-        self.index_unit = Some(unit.into());
+    pub fn with_step_unit(mut self, unit: impl Into<String>) -> Self {
+        self.step_unit = Some(unit.into());
         self
     }
 
     /// Declares the optional floating-point physical coordinate.
     #[must_use]
-    pub fn physical_name(mut self, name: impl Into<String>) -> Self {
-        self.physical_name = Some(name.into());
+    pub fn with_physical_time_name(mut self, name: impl Into<String>) -> Self {
+        self.physical_time_name = Some(name.into());
         self
     }
 
     /// Sets the physical-coordinate unit.
     ///
-    /// A matching [`TimeAxis::physical_name`] is required; construction fails
-    /// at [`RunOutputBuilder::start`] if the unit is configured alone.
+    /// A matching [`TimeAxisMetadata::with_physical_time_name`] is required; construction fails
+    /// at [`SystemStateWriterBuilder::create_new_recording`] if the unit is configured alone.
     #[must_use]
-    pub fn physical_unit(mut self, unit: impl Into<String>) -> Self {
-        self.physical_unit = Some(unit.into());
+    pub fn with_physical_time_unit(mut self, unit: impl Into<String>) -> Self {
+        self.physical_time_unit = Some(unit.into());
         self
     }
 
     /// Converts public configuration into the private persisted representation.
     fn into_stored(self) -> StoredTimeAxis {
         StoredTimeAxis {
-            index_name: self.index_name,
-            index_unit: self.index_unit,
-            physical_name: self.physical_name,
-            physical_unit: self.physical_unit,
+            step_name: self.step_name,
+            step_unit: self.step_unit,
+            physical_time_name: self.physical_time_name,
+            physical_time_unit: self.physical_time_unit,
         }
     }
 }
 
-impl Default for TimeAxis {
+impl Default for TimeAxisMetadata {
     /// Uses `index` as the simulation-index label and declares no units or
     /// physical coordinate.
     fn default() -> Self {
@@ -142,14 +156,14 @@ impl Default for TimeAxis {
 
 /// Configuration for one independently sampled logical output stream.
 ///
-/// Field names are exact keys from the run's [`StateSpec`]. Their input order
+/// Field names are exact keys from the run's [`SystemStateSchema`]. Their input order
 /// is irrelevant: the encoder writes them in canonical template order. The
 /// chunk byte limit is a rollover target, so a single larger record remains
 /// intact in its own oversized chunk. The queue byte limit is strict; a record
 /// larger than the complete queue budget is rejected because it can never be
 /// admitted.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StreamConfig {
+pub struct StateStreamConfig {
     name: String,
     directory: String,
     cadence: Option<String>,
@@ -158,13 +172,13 @@ pub struct StreamConfig {
     queue_bytes: NonZeroU64,
 }
 
-impl StreamConfig {
+impl StateStreamConfig {
     /// Creates a stream whose relative output directory initially equals its
     /// logical name.
     ///
     /// Non-zero byte types make both storage limits valid by construction.
     /// Names, paths, duplicate fields, and state-key membership are validated
-    /// together by [`RunOutputBuilder::start`].
+    /// together by [`SystemStateWriterBuilder::create_new_recording`].
     pub fn new<I, K>(
         name: impl Into<String>,
         fields: I,
@@ -191,7 +205,7 @@ impl StreamConfig {
     /// Absolute paths, empty paths, and `.` or `..` components are rejected at
     /// start. Distinct streams must use distinct directories.
     #[must_use]
-    pub fn directory(mut self, directory: impl Into<String>) -> Self {
+    pub fn with_relative_directory(mut self, directory: impl Into<String>) -> Self {
         self.directory = directory.into();
         self
     }
@@ -199,58 +213,59 @@ impl StreamConfig {
     /// Adds an optional human-readable cadence description to metadata.
     ///
     /// Cadence is descriptive only. The simulation remains responsible for
-    /// deciding when to call [`RunOutput::sample`].
+    /// deciding when to call [`SystemStateWriter::record_state_to_stream`].
     #[must_use]
-    pub fn cadence(mut self, cadence: impl Into<String>) -> Self {
+    pub fn with_cadence_description(mut self, cadence: impl Into<String>) -> Self {
         self.cadence = Some(cadence.into());
         self
     }
 }
 
-/// Builder for one exclusive run output directory.
+/// Builder for one exclusive state-recording directory.
 ///
 /// The builder owns only paths, immutable configuration, and a cheap shared
-/// [`StateSpec`] handle. It opens no files and starts no threads before
-/// [`RunOutputBuilder::start`].
+/// [`SystemStateSchema`] handle. It opens no files and starts no threads before
+/// [`SystemStateWriterBuilder::create_new_recording`], [`SystemStateWriterBuilder::continue_existing_recording`], or
+/// [`SystemStateWriterBuilder::continue_recording_from_latest_checkpoint`].
 #[derive(Debug)]
-pub struct RunOutputBuilder {
+pub struct SystemStateWriterBuilder {
     root: PathBuf,
-    spec: StateSpec,
-    time: TimeAxis,
-    run_metadata: Map<String, Value>,
-    streams: Vec<StreamConfig>,
+    spec: SystemStateSchema,
+    time: TimeAxisMetadata,
+    user_metadata: Map<String, Value>,
+    streams: Vec<StateStreamConfig>,
 }
 
-impl RunOutputBuilder {
-    /// Creates an empty run configuration using [`TimeAxis::default`].
+impl SystemStateWriterBuilder {
+    /// Creates an empty run configuration using [`TimeAxisMetadata::default`].
     ///
     /// `spec` is cloned only as an `Arc`-backed metadata handle. No scientific
     /// state or payload exists in this builder.
-    pub fn new(root: impl Into<PathBuf>, spec: &StateSpec) -> Self {
+    pub fn new(root: impl Into<PathBuf>, spec: &SystemStateSchema) -> Self {
         Self {
             root: root.into(),
             spec: spec.clone(),
-            time: TimeAxis::default(),
-            run_metadata: Map::new(),
+            time: TimeAxisMetadata::default(),
+            user_metadata: Map::new(),
             streams: Vec::new(),
         }
     }
 
     /// Replaces the run's temporal-coordinate documentation.
     #[must_use]
-    pub fn time_axis(mut self, time: TimeAxis) -> Self {
+    pub fn with_time_axis_metadata(mut self, time: TimeAxisMetadata) -> Self {
         self.time = time;
         self
     }
 
-    /// Replaces caller-owned run metadata persisted under the `run` property.
+    /// Replaces caller-owned metadata persisted under `user_metadata`.
     ///
     /// Values must already be JSON-compatible. This metadata is structurally
     /// separate from scientific payloads and is written only to
     /// `metadata.json`.
     #[must_use]
-    pub fn run_metadata(mut self, metadata: Map<String, Value>) -> Self {
-        self.run_metadata = metadata;
+    pub fn with_user_metadata(mut self, metadata: Map<String, Value>) -> Self {
+        self.user_metadata = metadata;
         self
     }
 
@@ -259,7 +274,7 @@ impl RunOutputBuilder {
     /// Duplicate names or directories are reported at start so fluent builder
     /// assembly remains infallible.
     #[must_use]
-    pub fn stream(mut self, stream: StreamConfig) -> Self {
+    pub fn add_state_stream(mut self, stream: StateStreamConfig) -> Self {
         self.streams.push(stream);
         self
     }
@@ -269,47 +284,75 @@ impl RunOutputBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::OutputExists`] rather than replacing any
+    /// Returns [`StorageError::RecordingDirectoryExists`] rather than replacing any
     /// existing filesystem entry. Configuration, state-key selection,
     /// directory creation, thread startup, JSON, and metadata durability
     /// failures retain their precise [`StorageError`] context. If startup fails
     /// after the root is created, the path is retained as diagnostic evidence
     /// and is never silently removed.
-    pub fn start(self) -> Result<RunOutput, StorageError> {
-        RunOutput::start(self)
+    pub fn create_new_recording(self) -> Result<SystemStateWriter, StorageError> {
+        SystemStateWriter::create_new_recording(self)
+    }
+
+    /// Continues append writing in an existing running recording directory.
+    ///
+    /// The complete builder configuration is compared with authoritative
+    /// metadata before any chunk is recovered. Sealed chunks are trusted by
+    /// filename; only the highest open chunk in each stream may be examined.
+    pub fn continue_existing_recording(self) -> Result<SystemStateWriter, StorageError> {
+        SystemStateWriter::continue_recording(self, None).map(|(writer, _)| writer)
+    }
+
+    /// Resumes a run and reconstructs its newest complete checkpoint state.
+    ///
+    /// `stream` must cover the builder's complete state specification, and
+    /// `decoders` must cover every field. The returned state owns all decoded
+    /// payloads. Writer threads begin only after reconstruction succeeds.
+    pub fn continue_recording_from_latest_checkpoint(
+        self,
+        stream: &str,
+        decoders: JsonPayloadDecoderRegistry,
+    ) -> Result<(SystemStateWriter, SystemState), StorageError> {
+        let (writer, state) =
+            SystemStateWriter::continue_recording(self, Some((stream, decoders)))?;
+        Ok((
+            writer,
+            state.expect("checkpoint-aware resume always reconstructs one state"),
+        ))
     }
 }
 
-/// Exclusive coordinator for all persistent streams in one scientific run.
+/// Exclusive queued writer for all persistent streams in one recording.
 ///
 /// This type is intentionally non-Clone. It owns the only writer handles and
 /// the only legal transition from `running` metadata to a terminal status.
 /// It owns no [`SystemState`] and never extends a payload borrow beyond one
-/// synchronous [`RunOutput::sample`] call.
-pub struct RunOutput {
+/// synchronous [`SystemStateWriter::record_state_to_stream`] call.
+pub struct SystemStateWriter {
     root: PathBuf,
-    metadata_path: PathBuf,
-    metadata: RunMetadata,
-    streams: HashMap<String, ActiveStream>,
+    stream_order: Vec<String>,
+    manifest: Arc<RecordingManifest>,
+    encoders: HashMap<String, JsonStateRecordEncoder>,
+    writer: Option<StateWriterWorker>,
+    /// Held after writers so normal field drop keeps the lease until every
+    /// worker has drained and released its manifest handle.
+    _lease: RecordingLease,
 }
 
-impl RunOutput {
-    /// Begins configuring a new exclusive run output directory.
-    pub fn builder(root: impl Into<PathBuf>, spec: &StateSpec) -> RunOutputBuilder {
-        RunOutputBuilder::new(root, spec)
+impl SystemStateWriter {
+    /// Begins configuring a new exclusive state-recording directory.
+    pub fn builder(root: impl Into<PathBuf>, spec: &SystemStateSchema) -> SystemStateWriterBuilder {
+        SystemStateWriterBuilder::new(root, spec)
     }
 
-    /// Returns the run output root exactly as configured.
-    pub fn root(&self) -> &Path {
+    /// Returns the recording directory exactly as configured.
+    pub fn recording_directory(&self) -> &Path {
         &self.root
     }
 
     /// Iterates logical stream names in deterministic declaration order.
-    pub fn streams(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.metadata
-            .streams
-            .iter()
-            .map(|stream| stream.name.as_str())
+    pub fn stream_names(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.stream_order.iter().map(String::as_str)
     }
 
     /// Samples selected fields from one live state and transfers the encoded
@@ -321,18 +364,43 @@ impl RunOutput {
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::UnknownStream`] for an undeclared name, state or
+    /// Returns [`StorageError::UnknownStateStream`] for an undeclared name, state or
     /// payload serialization errors from borrowed encoding, queue-limit and
     /// ordering errors, or the writer's authoritative terminal failure.
-    pub fn sample(&self, stream: &str, state: &SystemState) -> Result<(), StorageError> {
-        let active = self
-            .streams
-            .get(stream)
-            .ok_or_else(|| StorageError::UnknownStream {
+    pub fn record_state_to_stream(
+        &self,
+        stream: &str,
+        state: &SystemState,
+    ) -> Result<(), StorageError> {
+        let encoder =
+            self.encoders
+                .get(stream)
+                .ok_or_else(|| StorageError::UnknownStateStream {
+                    stream: stream.to_owned(),
+                })?;
+        let record = encoder.encode(state)?;
+        self.writer
+            .as_ref()
+            .expect("an active recording owns its writer worker")
+            .submit_record(stream, record)
+    }
+
+    /// Durably seals every record accepted earlier by one logical stream.
+    ///
+    /// This is an ordered per-stream checkpoint barrier, not merely a buffered
+    /// file flush. A non-empty open chunk is synchronized, prepared in the sole
+    /// metadata document, renamed to its sealed filename, and directory-synced
+    /// before this method returns.
+    pub fn flush_stream_to_storage(&self, stream: &str) -> Result<(), StorageError> {
+        if !self.encoders.contains_key(stream) {
+            return Err(StorageError::UnknownStateStream {
                 stream: stream.to_owned(),
-            })?;
-        let record = active.encoder.encode(state)?;
-        active.writer.submit(record)
+            });
+        }
+        self.writer
+            .as_ref()
+            .expect("an active recording owns its writer worker")
+            .flush_state_stream(stream)
     }
 
     /// Drains every stream, seals all chunks, and atomically publishes complete
@@ -342,70 +410,214 @@ impl RunOutput {
     /// impossible in safe Rust. If a writer fails, all remaining writers are
     /// still drained and a best-effort failed metadata transition is attempted
     /// before the originating writer error is returned.
-    pub fn finish(mut self) -> Result<(), StorageError> {
-        let first_error = self.finish_writers();
-        if let Some(error) = first_error {
-            self.metadata.status = RunStatus::Failed {
+    pub fn complete_recording(mut self) -> Result<(), StorageError> {
+        if let Err(error) = self.finish_writer() {
+            let _ = self.manifest.transition(RecordingStatus::Failed {
                 message: error.to_string(),
-            };
-            let _ = commit_metadata(&self.root, &self.metadata_path, &self.metadata);
+            });
             return Err(error);
         }
-
-        self.metadata.status = RunStatus::Complete;
-        commit_metadata(&self.root, &self.metadata_path, &self.metadata)
+        self.manifest.transition(RecordingStatus::Complete)
     }
 
     /// Drains every stream and atomically records an intentional failed run.
     ///
     /// This is appropriate when the simulation itself fails after storage has
-    /// started. The supplied message is structural run metadata and must not be
+    /// started. The supplied message is structural recording metadata and must not be
     /// empty or whitespace-only. Successfully accepted records remain as
     /// immutable chunks and are listed in the failed metadata, but
-    /// [`SeriesReader`] deliberately reconstructs only completed runs.
+    /// [`StoredStateSeriesReader`] deliberately reconstructs only completed runs.
     ///
     /// If a writer also fails, its error takes precedence as the returned and
     /// persisted reason; the caller's message would no longer describe the
     /// authoritative storage termination.
-    pub fn fail(mut self, message: impl Into<String>) -> Result<(), StorageError> {
+    pub fn mark_recording_failed(mut self, message: impl Into<String>) -> Result<(), StorageError> {
         let message = message.into();
         if message.trim().is_empty() {
-            return Err(StorageError::InvalidConfig {
+            return Err(StorageError::InvalidConfiguration {
                 setting: "failure_message",
                 reason: "failed run message must not be empty".to_owned(),
             });
         }
 
-        if let Some(error) = self.finish_writers() {
-            self.metadata.status = RunStatus::Failed {
+        if let Err(error) = self.finish_writer() {
+            let _ = self.manifest.transition(RecordingStatus::Failed {
                 message: error.to_string(),
-            };
-            let _ = commit_metadata(&self.root, &self.metadata_path, &self.metadata);
+            });
             return Err(error);
         }
-
-        self.metadata.status = RunStatus::Failed { message };
-        commit_metadata(&self.root, &self.metadata_path, &self.metadata)
+        self.manifest
+            .transition(RecordingStatus::Failed { message })
     }
 
     /// Performs complete validation before creating or mutating the run root.
-    fn start(builder: RunOutputBuilder) -> Result<Self, StorageError> {
+    fn create_new_recording(builder: SystemStateWriterBuilder) -> Result<Self, StorageError> {
         ensure_absent(&builder.root)?;
+        let prepared = PreparedRecording::from_builder(builder)?;
+        create_root(&prepared.root)?;
+        let lease = RecordingLease::acquire(&prepared.root)?;
+        for stream in &prepared.streams {
+            stream.writer.create_directory()?;
+        }
+        commit_metadata(&prepared.root, &prepared.metadata_path, &prepared.metadata)?;
+        let manifest = Arc::new(RecordingManifest::new(
+            prepared.root.clone(),
+            prepared.metadata_path.clone(),
+            prepared.metadata,
+        ));
+        Self::start_new_prepared(prepared.root, prepared.streams, manifest, lease)
+    }
+
+    /// Validates, recovers, optionally reconstructs, and starts an append run.
+    fn continue_recording(
+        builder: SystemStateWriterBuilder,
+        checkpoint: Option<(&str, JsonPayloadDecoderRegistry)>,
+    ) -> Result<(Self, Option<SystemState>), StorageError> {
+        let prepared = PreparedRecording::from_builder(builder)?;
+        let lease = RecordingLease::acquire(&prepared.root)?;
+        remove_stale_metadata_temp(&prepared.root)?;
+        let existing = load_metadata(&prepared.metadata_path)?;
+        if !matches!(existing.status, RecordingStatus::Running) {
+            return Err(StorageError::RecordingNotContinuable {
+                path: prepared.metadata_path,
+            });
+        }
+        ensure_resume_match(&prepared.metadata_path, &prepared.metadata, &existing)?;
+
+        let manifest = Arc::new(RecordingManifest::new(
+            prepared.root.clone(),
+            prepared.metadata_path.clone(),
+            existing.clone(),
+        ));
+        let mut recovered = Vec::with_capacity(prepared.streams.len());
+        for stream in prepared.streams {
+            let declaration = existing
+                .stream(&stream.name)
+                .expect("matched metadata contains every prepared stream");
+            let seed = StateWriterWorker::recover_state_stream(&stream.writer, declaration)?;
+            recovered.push((stream, seed));
+        }
+
+        let state = if let Some((checkpoint_stream, decoders)) = checkpoint {
+            let declaration = existing.stream(checkpoint_stream).ok_or_else(|| {
+                StorageError::UnknownStateStream {
+                    stream: checkpoint_stream.to_owned(),
+                }
+            })?;
+            let seed = recovered
+                .iter()
+                .find(|(stream, _)| stream.name == checkpoint_stream)
+                .map(|(_, seed)| seed)
+                .expect("matched stream has one recovered seed");
+            Some(stored_state_series_reader::decode_resume_state(
+                &prepared.root,
+                &prepared.metadata_path,
+                declaration,
+                &prepared.spec,
+                &decoders,
+                seed.latest_open_record(),
+            )?)
+        } else {
+            None
+        };
+
+        let output = Self::start_resumed_prepared(prepared.root, recovered, manifest, lease)?;
+        Ok((output, state))
+    }
+
+    /// Spawns every empty writer after the initial manifest is durable.
+    fn start_new_prepared(
+        root: PathBuf,
+        streams: Vec<PreparedStateStream>,
+        manifest: Arc<RecordingManifest>,
+        lease: RecordingLease,
+    ) -> Result<Self, StorageError> {
+        let mut encoders = HashMap::with_capacity(streams.len());
+        let mut configs = Vec::with_capacity(streams.len());
+        let mut stream_order = Vec::with_capacity(streams.len());
+        for prepared in streams {
+            let name = prepared.name;
+            stream_order.push(name.clone());
+            encoders.insert(name, prepared.encoder);
+            configs.push(prepared.writer);
+        }
+        let writer = StateWriterWorker::start_new_recording(configs, Arc::clone(&manifest))?;
+        Ok(Self {
+            root,
+            stream_order,
+            manifest,
+            encoders,
+            writer: Some(writer),
+            _lease: lease,
+        })
+    }
+
+    /// Spawns every append writer from its recovered active owner and indices.
+    fn start_resumed_prepared(
+        root: PathBuf,
+        streams: Vec<(PreparedStateStream, RecoveredStateStream)>,
+        manifest: Arc<RecordingManifest>,
+        lease: RecordingLease,
+    ) -> Result<Self, StorageError> {
+        let mut encoders = HashMap::with_capacity(streams.len());
+        let mut recovered_streams = Vec::with_capacity(streams.len());
+        let mut stream_order = Vec::with_capacity(streams.len());
+        for (prepared, seed) in streams {
+            let name = prepared.name;
+            stream_order.push(name.clone());
+            encoders.insert(name, prepared.encoder);
+            recovered_streams.push((prepared.writer, seed));
+        }
+        let writer = StateWriterWorker::continue_recovered_recording(
+            recovered_streams,
+            Arc::clone(&manifest),
+        )?;
+        Ok(Self {
+            root,
+            stream_order,
+            manifest,
+            encoders,
+            writer: Some(writer),
+            _lease: lease,
+        })
+    }
+
+    /// Drains and joins the recording's sole queued writer worker.
+    fn finish_writer(&mut self) -> Result<(), StorageError> {
+        let Some(writer) = self.writer.take() else {
+            return Ok(());
+        };
+        writer.finish_recording()
+    }
+}
+
+/// Fully validated builder output before any writer thread starts.
+struct PreparedRecording {
+    root: PathBuf,
+    metadata_path: PathBuf,
+    spec: SystemStateSchema,
+    metadata: RecordingMetadata,
+    streams: Vec<PreparedStateStream>,
+}
+
+impl PreparedRecording {
+    /// Canonicalizes stream field order and builds expected persisted metadata.
+    fn from_builder(builder: SystemStateWriterBuilder) -> Result<Self, StorageError> {
         let metadata_path = builder.root.join(METADATA_FILE);
         let stored_time = builder.time.into_stored();
         let mut names = HashSet::with_capacity(builder.streams.len());
         let mut directories = HashSet::with_capacity(builder.streams.len());
-        let mut prepared = Vec::with_capacity(builder.streams.len());
+        let mut streams = Vec::with_capacity(builder.streams.len());
         let mut declarations = Vec::with_capacity(builder.streams.len());
 
         for config in builder.streams {
             if !names.insert(config.name.clone()) {
-                return Err(StorageError::DuplicateStream {
+                return Err(StorageError::DuplicateStateStream {
                     stream: config.name,
                 });
             }
             if !directories.insert(config.directory.clone()) {
-                return Err(StorageError::InvalidConfig {
+                return Err(StorageError::InvalidConfiguration {
                     setting: "stream.directory",
                     reason: format!(
                         "multiple streams use relative directory `{}`",
@@ -414,21 +626,21 @@ impl RunOutput {
                 });
             }
 
-            let encoder = JsonEncoder::new(&config.name, &builder.spec, &config.fields)?;
+            let encoder = JsonStateRecordEncoder::new(&config.name, &builder.spec, &config.fields)?;
             let fields = encoder
                 .fields()
                 .map(|name| {
                     let field = builder
                         .spec
-                        .get(name)
+                        .field_schema(name)
                         .expect("encoder fields were validated against this specification");
-                    FieldMetadata {
+                    StateFieldMetadata {
                         name: name.to_owned(),
                         description: field.description().map(str::to_owned),
                     }
                 })
-                .collect();
-            declarations.push(StreamMetadata {
+                .collect::<Vec<_>>();
+            declarations.push(StateStreamMetadata {
                 name: config.name.clone(),
                 directory: config.directory.clone(),
                 cadence: config.cadence,
@@ -437,96 +649,209 @@ impl RunOutput {
                 queue_bytes: config.queue_bytes.get(),
                 chunks: Vec::new(),
             });
-            prepared.push((
-                config.name,
+            streams.push(PreparedStateStream {
+                name: config.name.clone(),
                 encoder,
-                config.directory,
-                config.max_chunk_bytes,
-                config.queue_bytes,
-            ));
+                writer: StateStreamStorageConfig::new(
+                    &config.name,
+                    builder.root.join(&config.directory),
+                    config.max_chunk_bytes,
+                    config.queue_bytes,
+                )?,
+            });
         }
 
-        let mut metadata = RunMetadata::running(stored_time, builder.run_metadata, declarations);
+        let metadata = RecordingMetadata::running(stored_time, builder.user_metadata, declarations);
         metadata.validate(&metadata_path)?;
-        create_root(&builder.root)?;
-
-        let mut streams = HashMap::with_capacity(prepared.len());
-        for (name, encoder, directory, max_chunk_bytes, queue_bytes) in prepared {
-            let writer_config = WriterConfig::new(
-                &name,
-                builder.root.join(directory),
-                max_chunk_bytes,
-                queue_bytes,
-            )?;
-            match StateWriter::start(writer_config) {
-                Ok(writer) => {
-                    streams.insert(name, ActiveStream { encoder, writer });
-                }
-                Err(error) => {
-                    metadata.status = RunStatus::Failed {
-                        message: error.to_string(),
-                    };
-                    let _ = commit_metadata(&builder.root, &metadata_path, &metadata);
-                    return Err(error);
-                }
-            }
-        }
-
-        commit_metadata(&builder.root, &metadata_path, &metadata)?;
         Ok(Self {
             root: builder.root,
             metadata_path,
+            spec: builder.spec,
             metadata,
             streams,
         })
     }
+}
 
-    /// Finishes every writer and installs successful chunk inventories.
-    ///
-    /// The first failure is returned after every remaining stream has received
-    /// its drain-and-join opportunity. Later failures cannot replace the first
-    /// authoritative error.
-    fn finish_writers(&mut self) -> Option<StorageError> {
-        let names = self
-            .metadata
-            .streams
-            .iter()
-            .map(|stream| stream.name.clone())
-            .collect::<Vec<_>>();
-        let mut first_error = None;
+/// One canonical encoder paired with its immutable writer configuration.
+struct PreparedStateStream {
+    name: String,
+    encoder: JsonStateRecordEncoder,
+    writer: StateStreamStorageConfig,
+}
 
-        for name in names {
-            let active = self
-                .streams
-                .remove(&name)
-                .expect("each metadata stream owns exactly one active writer");
-            match active.writer.finish() {
-                Ok(summary) => {
-                    let declaration = self
-                        .metadata
-                        .stream_mut(&name)
-                        .expect("active stream must have a metadata declaration");
-                    declaration.chunks = summary.chunks().to_vec();
-                }
-                Err(error) if first_error.is_none() => first_error = Some(error),
-                Err(_) => {}
-            }
+/// Serialized authority over the sole mutable metadata document.
+///
+/// Every worker shares this small coordinator. A transaction clones metadata,
+/// validates and persists the candidate, then replaces the in-memory snapshot
+/// only after the atomic filesystem commit succeeds.
+pub(crate) struct RecordingManifest {
+    root: PathBuf,
+    path: PathBuf,
+    metadata: Mutex<RecordingMetadata>,
+}
+
+impl RecordingManifest {
+    /// Creates an authority from the exact snapshot already present on disk.
+    fn new(root: PathBuf, path: PathBuf, metadata: RecordingMetadata) -> Self {
+        Self {
+            root,
+            path,
+            metadata: Mutex::new(metadata),
         }
-        first_error
+    }
+
+    /// Appends one prepared descriptor and commits it before filename sealing.
+    pub(crate) fn prepare_chunk(
+        &self,
+        stream: &str,
+        descriptor: jsonl_format::ChunkMetadata,
+    ) -> Result<(), StorageError> {
+        let mut current = lock_metadata(&self.metadata);
+        if !matches!(current.status, RecordingStatus::Running) {
+            return Err(StorageError::RecordingFinished);
+        }
+        let mut candidate = current.clone();
+        let declaration =
+            candidate
+                .stream_mut(stream)
+                .ok_or_else(|| StorageError::UnknownStateStream {
+                    stream: stream.to_owned(),
+                })?;
+        let expected = u64::try_from(declaration.chunks.len()).map_err(|_| {
+            StorageError::ByteCountOverflow {
+                stream: stream.to_owned(),
+            }
+        })?;
+        if descriptor.ordinal != expected {
+            return Err(StorageError::InvalidMetadata {
+                path: self.path.clone(),
+                reason: format!(
+                    "stream `{stream}` prepared chunk ordinal {}, expected {expected}",
+                    descriptor.ordinal
+                ),
+            });
+        }
+        declaration.chunks.push(descriptor);
+        commit_metadata(&self.root, &self.path, &candidate)?;
+        *current = candidate;
+        Ok(())
+    }
+
+    /// Atomically changes the lifecycle after every writer has drained.
+    fn transition(&self, status: RecordingStatus) -> Result<(), StorageError> {
+        let mut current = lock_metadata(&self.metadata);
+        let mut candidate = current.clone();
+        candidate.status = status;
+        commit_metadata(&self.root, &self.path, &candidate)?;
+        *current = candidate;
+        Ok(())
     }
 }
 
-/// Private pairing of one stream's immutable encoder and exclusive writer.
-struct ActiveStream {
-    encoder: JsonEncoder,
-    writer: StateWriter,
+/// Advisory exclusive ownership of the output root directory itself.
+///
+/// Locking the directory handle creates no lockfile or status artifact and the
+/// operating system releases the lease automatically after process death.
+struct RecordingLease {
+    _directory: File,
+}
+
+impl RecordingLease {
+    /// Acquires non-blocking exclusive writer ownership.
+    fn acquire(root: &Path) -> Result<Self, StorageError> {
+        let directory = File::open(root).map_err(|source| StorageError::Io {
+            operation: "open output root for exclusive ownership",
+            path: root.to_path_buf(),
+            source,
+        })?;
+        match FileExt::try_lock_exclusive(&directory) {
+            Ok(()) => Ok(Self {
+                _directory: directory,
+            }),
+            Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(StorageError::RecordingDirectoryInUse {
+                    path: root.to_path_buf(),
+                })
+            }
+            Err(source) => Err(StorageError::Io {
+                operation: "acquire exclusive output ownership",
+                path: root.to_path_buf(),
+                source,
+            }),
+        }
+    }
+}
+
+/// Loads and semantically validates the authoritative metadata snapshot.
+fn load_metadata(path: &Path) -> Result<RecordingMetadata, StorageError> {
+    let bytes = fs::read(path).map_err(|source| StorageError::Io {
+        operation: "read metadata for resume",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata: RecordingMetadata =
+        serde_json::from_slice(&bytes).map_err(|source| StorageError::Json {
+            operation: "parse metadata for resume",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    metadata.validate(path)?;
+    Ok(metadata)
+}
+
+/// Compares every immutable run/stream setting while ignoring chunk progress.
+fn ensure_resume_match(
+    path: &Path,
+    expected: &RecordingMetadata,
+    existing: &RecordingMetadata,
+) -> Result<(), StorageError> {
+    let mut configuration = existing.clone();
+    for stream in &mut configuration.streams {
+        stream.chunks.clear();
+    }
+    configuration.status = RecordingStatus::Running;
+    if &configuration != expected {
+        return Err(StorageError::RecordingConfigurationMismatch {
+            path: path.to_path_buf(),
+            reason: "builder time axis, user metadata, or stream declarations differ".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Removes only the known atomic-replacement remnant after acquiring the lease.
+fn remove_stale_metadata_temp(root: &Path) -> Result<(), StorageError> {
+    let path = root.join(METADATA_TEMP_FILE);
+    match fs::remove_file(&path) {
+        Ok(()) => File::open(root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| StorageError::Io {
+                operation: "synchronize stale metadata cleanup",
+                path: root.to_path_buf(),
+                source,
+            }),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(StorageError::Io {
+            operation: "remove stale temporary metadata",
+            path,
+            source,
+        }),
+    }
+}
+
+/// Locks the metadata snapshot while recovering from a participant panic.
+fn lock_metadata(metadata: &Mutex<RecordingMetadata>) -> MutexGuard<'_, RecordingMetadata> {
+    metadata
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Rejects every existing filesystem object and preserves IO inspection errors.
 fn ensure_absent(root: &Path) -> Result<(), StorageError> {
     match root.try_exists() {
         Ok(false) => Ok(()),
-        Ok(true) => Err(StorageError::OutputExists {
+        Ok(true) => Err(StorageError::RecordingDirectoryExists {
             path: root.to_path_buf(),
         }),
         Err(source) => Err(StorageError::Io {
@@ -542,7 +867,7 @@ fn create_root(root: &Path) -> Result<(), StorageError> {
     match fs::create_dir(root) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(StorageError::OutputExists {
+            Err(StorageError::RecordingDirectoryExists {
                 path: root.to_path_buf(),
             })
         }
@@ -564,7 +889,7 @@ fn create_root(root: &Path) -> Result<(), StorageError> {
 fn commit_metadata(
     root: &Path,
     metadata_path: &Path,
-    metadata: &RunMetadata,
+    metadata: &RecordingMetadata,
 ) -> Result<(), StorageError> {
     metadata.validate(metadata_path)?;
     let mut bytes = serde_json::to_vec_pretty(metadata).map_err(|source| StorageError::Json {

@@ -22,8 +22,8 @@
 //!
 //! # Ownership-preserving insertion failures
 //!
-//! [`SetError`] is generic because it returns ownership of a payload that
-//! [`SystemState::set`](super::state::SystemState::set) could not accept. Its
+//! [`PayloadInsertError`] is generic because it returns ownership of a payload that
+//! [`SystemState::insert_payload`](super::state::SystemState::insert_payload) could not accept. Its
 //! diagnostics deliberately omit the payload value, so scientific data does
 //! not need to implement [`Debug`](std::fmt::Debug) and is never traversed or
 //! copied merely to format an error.
@@ -89,10 +89,10 @@ pub enum StateError {
     ///
     /// Mutable aliases to one payload would violate Rust's exclusivity rules.
     /// Immutable coordinated borrows reject the same input as well so
-    /// `SystemState::borrow` and `SystemState::borrow_mut` retain identical,
+    /// `SystemState::borrow_payloads` and `SystemState::borrow_payloads_mut` retain identical,
     /// predictable request validation.
     #[error("coordinated state borrow repeats field `{field}`")]
-    RepeatedBorrow {
+    RepeatedPayloadBorrow {
         /// Field name at the first repeated tuple position.
         field: String,
     },
@@ -100,7 +100,7 @@ pub enum StateError {
     /// An operation required a payload from a declared but currently empty
     /// field.
     #[error("state field `{field}` does not contain a payload")]
-    MissingValue {
+    MissingPayload {
         /// Declared field whose slot is empty.
         field: String,
     },
@@ -121,7 +121,7 @@ pub enum StateError {
 
     /// Incrementing the authoritative integer time index would overflow `u64`.
     ///
-    /// `SystemState::advance` will detect this condition before mutating the
+    /// `SystemState::advance_simulation_time` will detect this condition before mutating the
     /// state, so the original time point remains unchanged.
     #[error("cannot advance state time index {index}: the next index exceeds u64::MAX")]
     TimeIndexOverflow {
@@ -159,7 +159,7 @@ pub enum StateError {
     },
 }
 
-/// A failed [`SystemState::set`](super::state::SystemState::set) operation that
+/// A failed [`SystemState::insert_payload`](super::state::SystemState::insert_payload) operation that
 /// retains ownership of the unchanged incoming payload.
 ///
 /// A set operation can fail before moving `payload` into a state because the
@@ -167,13 +167,13 @@ pub enum StateError {
 /// names a different concrete Rust type. The latter remains true even when the
 /// field is temporarily empty after `take` or `clear`. Returning only
 /// [`StateError`] in those cases would drop the caller's payload while unwinding
-/// the failed call. `SetError` instead keeps the rejection reason and original
+/// the failed call. `PayloadInsertError` instead keeps the rejection reason and original
 /// `T` together, following the ownership-preserving pattern of channel send
 /// errors.
 ///
 /// The payload remains private so diagnostics cannot accidentally expose or
-/// traverse large scientific data. Borrow it through [`SetError::payload`] or
-/// recover ownership of both components through [`SetError::into_parts`].
+/// traverse large scientific data. Borrow it through [`PayloadInsertError::payload`] or
+/// recover ownership of both components through [`PayloadInsertError::into_parts`].
 /// Neither operation invokes [`Clone`].
 ///
 /// # Formatting
@@ -183,17 +183,17 @@ pub enum StateError {
 /// the compile-time Rust type name of `T`; it never requires `T: Debug` or
 /// formats the payload value.
 #[must_use = "the rejected payload remains owned by this error until it is recovered or dropped"]
-pub struct SetError<T> {
+pub struct PayloadInsertError<T> {
     error: StateError,
     payload: T,
 }
 
-impl<T> SetError<T> {
+impl<T> PayloadInsertError<T> {
     /// Creates an ownership-preserving set rejection.
     ///
     /// This constructor is crate-private because only SystemState validation
     /// may determine that a payload was rejected. Public callers receive a
-    /// `SetError<T>` from [`SystemState::set`](super::state::SystemState::set)
+    /// `PayloadInsertError<T>` from [`SystemState::insert_payload`](super::state::SystemState::insert_payload)
     /// and recover its contents through the accessors below.
     pub(crate) const fn new(error: StateError, payload: T) -> Self {
         Self { error, payload }
@@ -211,7 +211,7 @@ impl<T> SetError<T> {
     /// Returns the unchanged rejected payload by shared reference.
     ///
     /// The returned reference points to the same concrete `T` moved into
-    /// [`SystemState::set`](super::state::SystemState::set). No payload clone,
+    /// [`SystemState::insert_payload`](super::state::SystemState::insert_payload). No payload clone,
     /// serialization, downcast, or backing-buffer copy occurs.
     pub const fn payload(&self) -> &T {
         &self.payload
@@ -220,7 +220,7 @@ impl<T> SetError<T> {
     /// Consumes the rejection and returns its reason and original payload.
     ///
     /// The tuple is ordered as `(StateError, T)`, matching the borrowed
-    /// [`SetError::error`] then [`SetError::payload`] inspection order. The
+    /// [`PayloadInsertError::error`] then [`PayloadInsertError::payload`] inspection order. The
     /// payload moves directly out of the error and retains its original owned
     /// allocations.
     pub fn into_parts(self) -> (StateError, T) {
@@ -228,26 +228,26 @@ impl<T> SetError<T> {
     }
 }
 
-impl<T> fmt::Debug for SetError<T> {
+impl<T> fmt::Debug for PayloadInsertError<T> {
     /// Formats bounded diagnostic context without requiring or inspecting
     /// `T: Debug`.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("SetError")
+            .debug_struct("PayloadInsertError")
             .field("error", &self.error)
             .field("payload_type", &std::any::type_name::<T>())
             .finish_non_exhaustive()
     }
 }
 
-impl<T> fmt::Display for SetError<T> {
+impl<T> fmt::Display for PayloadInsertError<T> {
     /// Delegates the user-facing message to the state-validation reason.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.error, formatter)
     }
 }
 
-impl<T> Error for SetError<T> {
+impl<T> Error for PayloadInsertError<T> {
     /// Exposes the contained [`StateError`] for standard error-chain traversal.
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.error)

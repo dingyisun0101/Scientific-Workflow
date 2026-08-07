@@ -1,6 +1,6 @@
 //! JSON decoding for a state field whose concrete payload is [`String`].
 //!
-//! [`StringDecoder`] converts exactly one raw JSON field value into an owned
+//! [`JsonStringDecoder`] converts exactly one raw JSON field value into an owned
 //! UTF-8 string. The series reader remains responsible for finding the field
 //! by key, selecting this decoder, and inserting the returned string into the
 //! matching state slot.
@@ -16,7 +16,7 @@
 //! mutation, or filesystem access. Applications requiring a constrained or
 //! transformed string should register a custom decoder for that key.
 
-use super::PayloadDecoder;
+use super::JsonPayloadDecoder;
 
 /// Stateless default decoder for payloads stored as [`String`].
 ///
@@ -24,9 +24,9 @@ use super::PayloadDecoder;
 /// decoder registries. Every registry entry still binds it to exactly one key
 /// and to the concrete [`String`] output type.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct StringDecoder;
+pub struct JsonStringDecoder;
 
-impl PayloadDecoder<String> for StringDecoder {
+impl JsonPayloadDecoder<String> for JsonStringDecoder {
     type Error = serde_json::Error;
 
     /// Deserializes one complete JSON string into an owned [`String`].
@@ -34,7 +34,7 @@ impl PayloadDecoder<String> for StringDecoder {
     /// The returned value owns its UTF-8 buffer. On failure, the original
     /// [`serde_json::Error`] is returned so the decoder registry can retain it
     /// as the source of a stream-, index-, and key-aware storage error.
-    fn decode(&self, raw_json: &str) -> Result<String, Self::Error> {
+    fn decode_json_payload(&self, raw_json: &str) -> Result<String, Self::Error> {
         serde_json::from_str(raw_json)
     }
 }

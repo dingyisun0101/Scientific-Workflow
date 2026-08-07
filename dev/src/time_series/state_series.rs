@@ -2,8 +2,8 @@
 //!
 //! [`StateSeries`] is the analysis-facing growable array for complete
 //! [`SystemState`] snapshots. It owns states, preserves one canonical
-//! [`StateSpec`], and maintains strictly increasing simulation indices.
-//! [`SeriesRef`] provides a lightweight read-only view without cloning states
+//! [`SystemStateSchema`], and maintains strictly increasing simulation indices.
+//! [`StateSeriesView`] provides a lightweight read-only view without cloning states
 //! or payloads.
 //!
 //! # Scope
@@ -15,14 +15,14 @@
 //!
 //! # Ownership and cloning
 //!
-//! Successful [`StateSeries::push`] calls move a complete state into the
-//! backing `Vec`. [`StateSeries::pop`], [`StateSeries::into_states`], and owned
+//! Successful [`StateSeries::push_state`] calls move a complete state into the
+//! backing `Vec`. [`StateSeries::pop_state`], [`StateSeries::into_states`], and owned
 //! iteration move those owners back out. None of these paths clones a payload.
-//! A rejected append returns [`PushError`], which retains the unchanged state.
+//! A rejected append returns [`StateSeriesPushError`], which retains the unchanged state.
 //!
 //! Explicitly cloning a `StateSeries` is intentionally expensive: every
 //! populated payload is deep-cloned through [`SystemState::clone`]. Prefer
-//! [`StateSeries::view`] for scoped immutable access or an application-owned
+//! [`StateSeries::as_view`] for scoped immutable access or an application-owned
 //! `Arc<StateSeries>` when shared ownership is required.
 //!
 //! # Invariants
@@ -35,16 +35,16 @@
 //! Time-index gaps are valid. Optional physical time does not determine
 //! ordering. The module never exposes `&mut SystemState`, because callers could
 //! otherwise change time or replace structural state behind the collection's
-//! validation boundary. [`StateSeries::field_mut`] permits mutation of one
+//! validation boundary. [`StateSeries::payload_mut_at`] permits mutation of one
 //! payload while leaving those invariants inaccessible.
 
 use std::any::Any;
 use std::error::Error;
 use std::fmt;
 
-use crate::system_state::{StateSpec, SystemState};
+use crate::system_state::{SystemState, SystemStateSchema};
 
-use super::error::SeriesError;
+use super::error::StateSeriesError;
 
 /// A growable homogeneous array of owned, time-ordered system states.
 ///
@@ -53,7 +53,7 @@ use super::error::SeriesError;
 /// its own cheap handle to the same immutable layout allocation and therefore
 /// remains independently valid after removal from the series.
 pub struct StateSeries {
-    spec: StateSpec,
+    spec: SystemStateSchema,
     states: Vec<SystemState>,
 }
 
@@ -63,7 +63,7 @@ impl StateSeries {
     /// This stores the supplied specification handle but allocates no state or
     /// payload storage. Use [`StateSeries::with_capacity`] when an analysis or
     /// reader already knows an approximate state count.
-    pub fn new(spec: StateSpec) -> Self {
+    pub fn new(spec: SystemStateSchema) -> Self {
         Self {
             spec,
             states: Vec::new(),
@@ -75,7 +75,7 @@ impl StateSeries {
     /// The reservation covers only `SystemState` owners in the backing vector.
     /// It does not create states, duplicate the shared layout, or allocate any
     /// scientific payload.
-    pub fn with_capacity(spec: StateSpec, capacity: usize) -> Self {
+    pub fn with_capacity(spec: SystemStateSchema, capacity: usize) -> Self {
         Self {
             spec,
             states: Vec::with_capacity(capacity),
@@ -83,7 +83,7 @@ impl StateSeries {
     }
 
     /// Returns the canonical immutable specification for this collection.
-    pub fn spec(&self) -> &StateSpec {
+    pub fn schema(&self) -> &SystemStateSchema {
         &self.spec
     }
 
@@ -92,8 +92,8 @@ impl StateSeries {
     /// The view contains only borrowed references to the canonical
     /// specification and state slice. Constructing, copying, or cloning it
     /// never clones a state, layout, payload, or vector allocation.
-    pub fn view(&self) -> SeriesRef<'_> {
-        SeriesRef::new(&self.spec, &self.states)
+    pub fn as_view(&self) -> StateSeriesView<'_> {
+        StateSeriesView::new(&self.spec, &self.states)
     }
 
     /// Returns the number of states currently owned by the collection.
@@ -125,14 +125,14 @@ impl StateSeries {
     /// This follows slice conventions and returns `None` when `position` is
     /// outside the collection. The position is distinct from the state's
     /// simulation index because sampled indices may contain gaps.
-    pub fn get(&self, position: usize) -> Option<&SystemState> {
+    pub fn state_at(&self, position: usize) -> Option<&SystemState> {
         self.states.get(position)
     }
 
     /// Mutably borrows one typed payload in one stored state.
     ///
     /// This is the collection's only mutable analysis boundary. It delegates
-    /// concrete type validation to [`SystemState::get_mut`] but does not expose
+    /// concrete type validation to [`SystemState::payload_mut`] but does not expose
     /// the containing `SystemState`; callers therefore cannot change its time,
     /// clear unrelated fields, or replace it with a foreign layout.
     ///
@@ -142,11 +142,15 @@ impl StateSeries {
     ///
     /// # Errors
     ///
-    /// Returns [`SeriesError::PositionOutOfBounds`] when no state exists at
+    /// Returns [`StateSeriesError::PositionOutOfBounds`] when no state exists at
     /// `position`. An unknown key, empty field, or concrete type mismatch is
-    /// returned as [`SeriesError::FieldAccess`] with the original
+    /// returned as [`StateSeriesError::PayloadAccess`] with the original
     /// [`crate::system_state::StateError`] preserved as its source.
-    pub fn field_mut<T>(&mut self, position: usize, key: &str) -> Result<&mut T, SeriesError>
+    pub fn payload_mut_at<T>(
+        &mut self,
+        position: usize,
+        key: &str,
+    ) -> Result<&mut T, StateSeriesError>
     where
         T: Any,
     {
@@ -154,20 +158,20 @@ impl StateSeries {
         let state = self
             .states
             .get_mut(position)
-            .ok_or(SeriesError::PositionOutOfBounds { position, len })?;
+            .ok_or(StateSeriesError::PositionOutOfBounds { position, len })?;
 
         state
-            .get_mut::<T>(key)
-            .map_err(|source| SeriesError::FieldAccess { position, source })
+            .payload_mut::<T>(key)
+            .map_err(|source| StateSeriesError::PayloadAccess { position, source })
     }
 
     /// Returns the earliest stored state, or `None` when the series is empty.
-    pub fn first(&self) -> Option<&SystemState> {
+    pub fn first_state(&self) -> Option<&SystemState> {
         self.states.first()
     }
 
     /// Returns the latest stored state, or `None` when the series is empty.
-    pub fn last(&self) -> Option<&SystemState> {
+    pub fn last_state(&self) -> Option<&SystemState> {
         self.states.last()
     }
 
@@ -175,7 +179,7 @@ impl StateSeries {
     ///
     /// No mutable slice is exposed because element replacement could bypass
     /// both shared-layout validation and increasing-index validation.
-    pub fn states(&self) -> &[SystemState] {
+    pub fn as_state_slice(&self) -> &[SystemState] {
         &self.states
     }
 
@@ -187,31 +191,34 @@ impl StateSeries {
     /// Appends one owned state after validating collection invariants.
     ///
     /// Success moves `state` directly into the backing vector without cloning
-    /// it or any payload. Failure returns [`PushError`] containing the complete
+    /// it or any payload. Failure returns [`StateSeriesPushError`] containing the complete
     /// unchanged state, allowing the caller to recover expensive data without
     /// cloning before the operation.
     ///
     /// # Errors
     ///
-    /// - [`SeriesError::SpecMismatch`] if `state` does not share the exact
+    /// - [`StateSeriesError::SchemaMismatch`] if `state` does not share the exact
     ///   canonical layout allocation;
-    /// - [`SeriesError::NonIncreasingTime`] if its simulation index is not
+    /// - [`StateSeriesError::NonIncreasingTime`] if its simulation index is not
     ///   greater than the current final index.
-    pub fn push(&mut self, state: SystemState) -> Result<(), PushError> {
-        if !self.spec.shares_layout(state.spec()) {
-            return Err(PushError::new(
-                SeriesError::SpecMismatch {
-                    index: state.time().index(),
+    pub fn push_state(&mut self, state: SystemState) -> Result<(), StateSeriesPushError> {
+        if !self.spec.shares_schema_instance(state.schema()) {
+            return Err(StateSeriesPushError::new(
+                StateSeriesError::SchemaMismatch {
+                    index: state.simulation_time().step(),
                 },
                 state,
             ));
         }
 
-        if let Some(previous) = self.last().map(|state| state.time().index()) {
-            let next = state.time().index();
+        if let Some(previous) = self
+            .last_state()
+            .map(|state| state.simulation_time().step())
+        {
+            let next = state.simulation_time().step();
             if next <= previous {
-                return Err(PushError::new(
-                    SeriesError::NonIncreasingTime { previous, next },
+                return Err(StateSeriesPushError::new(
+                    StateSeriesError::NonIncreasingTime { previous, next },
                     state,
                 ));
             }
@@ -225,7 +232,7 @@ impl StateSeries {
     ///
     /// A later append is compared with the new final state. Once empty, the
     /// series accepts any simulation index from a state sharing its layout.
-    pub fn pop(&mut self) -> Option<SystemState> {
+    pub fn pop_state(&mut self) -> Option<SystemState> {
         self.states.pop()
     }
 
@@ -234,7 +241,7 @@ impl StateSeries {
     /// Stored payloads are dropped with their owning states. This method is an
     /// explicit analysis working-set operation and has no relationship to
     /// writer rollover or persistent chunks.
-    pub fn clear(&mut self) {
+    pub fn clear_states(&mut self) {
         self.states.clear();
     }
 
@@ -256,7 +263,7 @@ impl Clone for StateSeries {
     /// Cost scales with the complete populated payload volume and may involve
     /// gigabytes of allocation and copying. This method is appropriate only
     /// when analysis requires independent mutable payload ownership. Use
-    /// [`StateSeries::view`] or an `Arc<StateSeries>` for lightweight sharing.
+    /// [`StateSeries::as_view`] or an `Arc<StateSeries>` for lightweight sharing.
     /// The immutable specification allocation remains shared.
     fn clone(&self) -> Self {
         Self {
@@ -271,13 +278,20 @@ impl fmt::Debug for StateSeries {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("StateSeries")
-            .field("source", &self.spec.source())
+            .field("source", &self.spec.template_path())
             .field("states", &self.len())
             .field(
                 "first_index",
-                &self.first().map(|state| state.time().index()),
+                &self
+                    .first_state()
+                    .map(|state| state.simulation_time().step()),
             )
-            .field("last_index", &self.last().map(|state| state.time().index()))
+            .field(
+                "last_index",
+                &self
+                    .last_state()
+                    .map(|state| state.simulation_time().step()),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -310,19 +324,19 @@ impl IntoIterator for StateSeries {
 /// [`StateSeries`].
 #[must_use = "a series view has no effect unless it is inspected"]
 #[derive(Clone, Copy)]
-pub struct SeriesRef<'a> {
-    spec: &'a StateSpec,
+pub struct StateSeriesView<'a> {
+    spec: &'a SystemStateSchema,
     states: &'a [SystemState],
 }
 
-impl<'a> SeriesRef<'a> {
+impl<'a> StateSeriesView<'a> {
     /// Creates an invariant-preserving view over one complete state series.
-    fn new(spec: &'a StateSpec, states: &'a [SystemState]) -> Self {
+    fn new(spec: &'a SystemStateSchema, states: &'a [SystemState]) -> Self {
         Self { spec, states }
     }
 
     /// Returns the canonical specification shared by the borrowed states.
-    pub fn spec(self) -> &'a StateSpec {
+    pub fn schema(self) -> &'a SystemStateSchema {
         self.spec
     }
 
@@ -337,22 +351,22 @@ impl<'a> SeriesRef<'a> {
     }
 
     /// Returns a state by zero-based view position.
-    pub fn get(self, position: usize) -> Option<&'a SystemState> {
+    pub fn state_at(self, position: usize) -> Option<&'a SystemState> {
         self.states.get(position)
     }
 
     /// Returns the earliest borrowed state, or `None` for an empty view.
-    pub fn first(self) -> Option<&'a SystemState> {
+    pub fn first_state(self) -> Option<&'a SystemState> {
         self.states.first()
     }
 
     /// Returns the latest borrowed state, or `None` for an empty view.
-    pub fn last(self) -> Option<&'a SystemState> {
+    pub fn last_state(self) -> Option<&'a SystemState> {
         self.states.last()
     }
 
     /// Returns the complete immutable state slice.
-    pub fn states(self) -> &'a [SystemState] {
+    pub fn as_state_slice(self) -> &'a [SystemState] {
         self.states
     }
 
@@ -362,23 +376,30 @@ impl<'a> SeriesRef<'a> {
     }
 }
 
-impl fmt::Debug for SeriesRef<'_> {
+impl fmt::Debug for StateSeriesView<'_> {
     /// Formats bounded structural context without traversing payload values.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("SeriesRef")
-            .field("source", &self.spec.source())
+            .debug_struct("StateSeriesView")
+            .field("source", &self.spec.template_path())
             .field("states", &self.len())
             .field(
                 "first_index",
-                &self.first().map(|state| state.time().index()),
+                &self
+                    .first_state()
+                    .map(|state| state.simulation_time().step()),
             )
-            .field("last_index", &self.last().map(|state| state.time().index()))
+            .field(
+                "last_index",
+                &self
+                    .last_state()
+                    .map(|state| state.simulation_time().step()),
+            )
             .finish_non_exhaustive()
     }
 }
 
-impl<'a> IntoIterator for SeriesRef<'a> {
+impl<'a> IntoIterator for StateSeriesView<'a> {
     type Item = &'a SystemState;
     type IntoIter = std::slice::Iter<'a, SystemState>;
 
@@ -393,17 +414,17 @@ impl<'a> IntoIterator for SeriesRef<'a> {
 /// This follows the ownership behavior of standard-library channel send
 /// errors: callers never need to clone expensive scientific data before an
 /// operation that may reject it. The state is boxed internally so
-/// `Result<(), PushError>` remains small on the successful hot path. The box is
+/// `Result<(), StateSeriesPushError>` remains small on the successful hot path. The box is
 /// allocated only after validation fails.
 #[must_use = "the rejected SystemState remains owned by this error until recovered or dropped"]
-pub struct PushError {
-    error: SeriesError,
+pub struct StateSeriesPushError {
+    error: StateSeriesError,
     state: Box<SystemState>,
 }
 
-impl PushError {
+impl StateSeriesPushError {
     /// Creates a failure-path owner for one unchanged rejected state.
-    fn new(error: SeriesError, state: SystemState) -> Self {
+    fn new(error: StateSeriesError, state: SystemState) -> Self {
         Self {
             error,
             state: Box::new(state),
@@ -411,7 +432,7 @@ impl PushError {
     }
 
     /// Returns the collection invariant that rejected the state.
-    pub fn error(&self) -> &SeriesError {
+    pub fn error(&self) -> &StateSeriesError {
         &self.error
     }
 
@@ -425,30 +446,30 @@ impl PushError {
     /// Moving the state out of its failure-only outer box does not clone the
     /// state or any scientific payload allocation. The tuple follows borrowed
     /// inspection order: error first, then state.
-    pub fn into_parts(self) -> (SeriesError, SystemState) {
+    pub fn into_parts(self) -> (StateSeriesError, SystemState) {
         (self.error, *self.state)
     }
 }
 
-impl fmt::Debug for PushError {
+impl fmt::Debug for StateSeriesPushError {
     /// Formats the reason and structural state context without payload values.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PushError")
+            .debug_struct("StateSeriesPushError")
             .field("error", &self.error)
             .field("state", &self.state)
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Display for PushError {
+impl fmt::Display for StateSeriesPushError {
     /// Delegates user-facing formatting to the collection invariant failure.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.error, formatter)
     }
 }
 
-impl Error for PushError {
+impl Error for StateSeriesPushError {
     /// Exposes the underlying collection error for standard source traversal.
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.error)

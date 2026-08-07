@@ -2,20 +2,21 @@
 //!
 //! This module is the complete public boundary for describing one scientific
 //! system at a particular time point. A program first loads a JSON template
-//! into [`StateSpec`], constructs its initial blank [`SystemState`], and then
+//! into [`SystemStateSchema`], constructs its initial blank [`SystemState`], and then
 //! moves concrete Rust payloads into and out of the declared fields.
 //!
 //! # Public workflow
 //!
-//! 1. Load and validate a template with [`StateSpec::load`].
-//! 2. Create the initial state with [`StateSpec::empty`].
-//! 3. Assemble payload types and owners with [`SystemState::set`].
+//! 1. Load and validate a template with [`SystemStateSchema::load_json_template`].
+//! 2. Create the initial state with [`SystemStateSchema::create_empty_state`].
+//! 3. Assemble payload types and owners with [`SystemState::insert_payload`].
 //! 4. Borrow, mutate, or extract payloads through [`SystemState`].
-//!    Coordinated kernels use [`SystemState::borrow`] or
-//!    [`SystemState::borrow_mut`] with matching type and field-name tuples.
-//! 5. Mutate time through [`SystemState::set_time`] or
-//!    [`SystemState::advance`].
-//! 6. Create later blank states with [`SystemState::empty`].
+//!    Coordinated kernels use [`SystemState::borrow_payloads`] or
+//!    [`SystemState::borrow_payloads_mut`] with matching type and field-name tuples.
+//! 5. Mutate time through [`SystemState::replace_simulation_time`] or
+//!    [`SystemState::advance_simulation_time`].
+//! 6. Create later blank states with
+//!    [`SystemState::clone_structure_without_payloads`].
 //!
 //! The template fixes field names, field order, and optional human-facing
 //! descriptions. It contains no Rust type or storage codec information.
@@ -31,14 +32,14 @@
 //!
 //! # Ownership
 //!
-//! [`SystemState::set`] consumes a concrete payload without cloning it. An
+//! [`SystemState::insert_payload`] consumes a concrete payload without cloning it. An
 //! insertion into an empty slot returns `None`; replacement returns the
 //! previous payload as `Some(T)`, preserving its ownership instead of dropping
-//! it. A rejected insertion returns [`SetError<T>`], from which the unchanged
+//! it. A rejected insertion returns [`PayloadInsertError<T>`], from which the unchanged
 //! incoming payload can be recovered.
 //!
-//! [`SystemState::take`] moves a stored payload back to the caller. Together,
-//! `set` and `take` allow large scientific allocations to cross the state
+//! [`SystemState::take_payload`] moves a stored payload back to the caller. Together,
+//! insertion and extraction allow large scientific allocations to cross the state
 //! boundary without copying their contents. Explicitly cloning a
 //! [`SystemState`] is intentionally different: it creates a new erased box and
 //! invokes each populated payload's `Clone` implementation. Clone depth is
@@ -47,19 +48,19 @@
 //! The public insertion contract deliberately makes replacement visible:
 //!
 //! ```no_run
-//! use scientific_workflow::system_state::{StateSpec, TimePoint};
+//! use scientific_workflow::system_state::{SystemStateSchema, SimulationTime};
 //!
-//! # fn example(spec: &StateSpec) -> Result<(), Box<dyn std::error::Error>> {
-//! let mut state = spec.empty(TimePoint::new(0));
+//! # fn example(spec: &SystemStateSchema) -> Result<(), Box<dyn std::error::Error>> {
+//! let mut state = spec.create_empty_state(SimulationTime::from_step(0));
 //!
-//! let previous = state.set("population", vec![1_u64, 2, 3])?;
+//! let previous = state.insert_payload("population", vec![1_u64, 2, 3])?;
 //! assert!(previous.is_none());
 //!
-//! let previous = state.set("population", vec![4_u64, 5, 6])?;
+//! let previous = state.insert_payload("population", vec![4_u64, 5, 6])?;
 //! assert_eq!(previous, Some(vec![1, 2, 3]));
 //!
-//! let time = state.advance(None)?;
-//! assert_eq!(time.index(), 1);
+//! let time = state.advance_simulation_time(None)?;
+//! assert_eq!(time.step(), 1);
 //! # Ok(())
 //! # }
 //! ```
@@ -81,12 +82,12 @@
 //! erasure is borrowed only when storage explicitly requests it.
 
 mod error;
-mod spec;
+mod schema;
 mod state;
 mod value;
 
-pub use error::{SetError, StateError};
-pub use spec::{FieldSpec, StateSpec};
+pub use error::{PayloadInsertError, StateError};
+pub use schema::{StateFieldSchema, SystemStateSchema};
 #[doc(hidden)]
-pub use state::StateTuple;
-pub use state::{SystemState, TimePoint};
+pub use state::PayloadTuple;
+pub use state::{SimulationTime, SystemState};

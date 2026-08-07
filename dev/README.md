@@ -27,12 +27,14 @@ making them suitable for large arrays and tensors.
 - Borrowed JSON encoding without payload cloning.
 - Finite byte- and record-bounded asynchronous writers.
 - Exact-byte automatic chunking with indivisible JSONL records.
-- Durable chunk publication through file sync, atomic rename, and stream-
-  directory sync before metadata can advertise completion.
+- Durable chunk publication through open-file sync, incremental descriptor
+  preparation, atomic lifecycle rename, and stream-directory sync.
+- Explicit interrupted-run append and complete typed checkpoint recovery.
 - SHA-256-verified eager reconstruction through per-key payload decoders.
 
-The public `RunOutput` facade owns multi-stream metadata, bounded writers, and
-their completion or failure lifecycle. Workflow dispatch remains a later
+The public `SystemStateWriter` facade owns multi-stream metadata, one bounded
+queue and worker, and the recording's completion or failure lifecycle.
+Workflow dispatch remains a later
 development stage.
 
 ## Installation
@@ -67,8 +69,9 @@ document its payload in natural language:
 
 Field order defines the compact runtime slot order. The template contains no
 Rust type or storage codec information. The first payload inserted into a field
-establishes its concrete runtime type; that contract remains after `take` or
-`clear` and is copied into blank states derived with `SystemState::empty`.
+establishes its concrete runtime type; that contract remains after
+`take_payload` or `clear_payload` and is copied into blank states derived with
+`SystemState::clone_structure_without_payloads`.
 Descriptions remain documentation only.
 
 ## Basic Usage
@@ -77,25 +80,25 @@ Descriptions remain documentation only.
 use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let spec = StateSpec::load("state.json")?;
+    let spec = SystemStateSchema::load_json_template("state.json")?;
     std::fs::create_dir_all("output")?;
-    let mut state = spec.empty(TimePoint::new(0));
+    let mut state = spec.create_empty_state(SimulationTime::from_step(0));
 
-    drop(state.set("population", vec![10_u64, 20, 30])?);
+    drop(state.insert_payload("population", vec![10_u64, 20, 30])?);
 
     state
-        .get_mut::<Vec<u64>>("population")?
+        .payload_mut::<Vec<u64>>("population")?
         .push(40);
 
-    let population = state.take::<Vec<u64>>("population")?;
+    let population = state.take_payload::<Vec<u64>>("population")?;
     assert_eq!(population, vec![10, 20, 30, 40]);
-    assert!(state.is_blank());
+    assert!(state.has_no_payloads());
 
     Ok(())
 }
 ```
 
-`set` consumes the supplied payload, and `take` returns that same owned
+`insert_payload` consumes the supplied payload, and `take_payload` returns that same owned
 payload. Neither operation calls `Clone`. Calling `SystemState::clone`
 creates a new erased box and calls `Clone` for every populated payload; the
 semantic depth is defined by each concrete type's `Clone` implementation.
@@ -113,13 +116,13 @@ use scientific_workflow::prelude::*;
 #     position[0] += velocity[0];
 # }
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-let spec = StateSpec::load("state.json")?;
-let mut state = spec.empty(TimePoint::new(0));
-drop(state.set("position", vec![0.0_f64])?);
-drop(state.set("velocity", vec![1.0_f64])?);
+let spec = SystemStateSchema::load_json_template("state.json")?;
+let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+drop(state.insert_payload("position", vec![0.0_f64])?);
+drop(state.insert_payload("velocity", vec![1.0_f64])?);
 
 let (position, velocity) = state
-    .borrow_mut::<(Vec<f64>, Vec<f64>)>(("position", "velocity"))?;
+    .borrow_payloads_mut::<(Vec<f64>, Vec<f64>)>(("position", "velocity"))?;
 evolve(position, velocity);
 # Ok(())
 # }
@@ -127,7 +130,7 @@ evolve(position, velocity);
 
 Supported tuple arities are two through eight. The complete request is
 validated before any reference is returned, and repeating a field is rejected.
-Use `get` or `get_mut` for one field. Name lookup and type validation occur once
+Use `payload` or `payload_mut` for one field. Name lookup and type validation occur once
 per tuple borrow, so the returned references should normally surround the full
 kernel or simulation sweep.
 
@@ -141,27 +144,27 @@ indices increase strictly. Index gaps are allowed.
 use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let spec = StateSpec::load("state.json")?;
-    let mut state = spec.empty(TimePoint::new(0));
-    drop(state.set("population", vec![10_u64, 20, 30])?);
+    let spec = SystemStateSchema::load_json_template("state.json")?;
+    let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+    drop(state.insert_payload("population", vec![10_u64, 20, 30])?);
 
     let mut series = StateSeries::new(spec);
-    series.push(state)?;
+    series.push_state(state)?;
     series
-        .field_mut::<Vec<u64>>(0, "population")?
+        .payload_mut_at::<Vec<u64>>(0, "population")?
         .push(40);
 
-    let view = series.view();
+    let view = series.as_view();
     assert_eq!(view.len(), 1);
     Ok(())
 }
 ```
 
 The collection never returns `&mut SystemState`, because changing a stored
-state's time would invalidate ordering. `field_mut` permits one typed payload
-mutation at a time. `push`, `pop`, and `into_states` move ownership without
+state's time would invalidate ordering. `payload_mut_at` permits one typed payload
+mutation at a time. `push_state`, `pop_state`, and `into_states` move ownership without
 cloning. Explicit `StateSeries::clone` deep-clones all populated payloads; use
-`view` or `Arc<StateSeries>` for lightweight sharing.
+`as_view` or `Arc<StateSeries>` for lightweight sharing.
 
 `StateSeries` performs no serialization, chunking, queueing, or disk IO. Those
 responsibilities belong to the separate storage layer.
@@ -176,23 +179,23 @@ tensor:
 use physics_in_parallel::math::{Dense, Tensor};
 use scientific_workflow::prelude::*;
 
-let spec = StateSpec::load("state.json")?;
-let mut state = spec.empty(TimePoint::new(0));
+let spec = SystemStateSchema::load_json_template("state.json")?;
+let mut state = spec.create_empty_state(SimulationTime::from_step(0));
 
 let mut population = Tensor::<u64, Dense>::zeros(&[3]);
 population.set(&[0], 10);
 population.set(&[1], 20);
 population.set(&[2], 30);
 
-drop(state.set("population", population)?);
-let population = state.take::<Tensor<u64, Dense>>("population")?;
+drop(state.insert_payload("population", population)?);
+let population = state.take_payload::<Tensor<u64, Dense>>("population")?;
 ```
 
 The tensor crate is not a required runtime dependency of
 `scientific-workflow`; applications use their own concrete serializable
 scientific payload types without registering codecs.
 
-## Persistent Output
+## Persistent State Recording
 
 One import brings the complete supported state, analysis, storage, reader, and
 decoder API into scope:
@@ -202,38 +205,44 @@ use std::num::NonZeroU64;
 use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let spec = StateSpec::load("state.json")?;
-    let stream = StreamConfig::new(
+    let spec = SystemStateSchema::load_json_template("state.json")?;
+    let stream = StateStreamConfig::new(
         "signal",
         ["population"],
         NonZeroU64::new(64 * 1024 * 1024).unwrap(),
         NonZeroU64::new(256 * 1024 * 1024).unwrap(),
     )
-    .cadence("every simulation step");
+    .with_cadence_description("every simulation step");
 
-    let output = RunOutput::builder("output/run-001", &spec)
-        .time_axis(TimeAxis::new("step").physical_name("time").physical_unit("s"))
-        .stream(stream)
-        .start()?;
+    let writer = SystemStateWriter::builder("output/recording-001", &spec)
+        .with_time_axis_metadata(TimeAxisMetadata::new("step").with_physical_time_name("time").with_physical_time_unit("s"))
+        .add_state_stream(stream)
+        .create_new_recording()?;
 
-    let mut state = spec.empty(TimePoint::from_physical(0, 0.0).unwrap());
-    drop(state.set("population", vec![10.0_f64, 20.0, 30.0])?);
-    output.sample("signal", &state)?;
-    output.finish()?;
+    let mut state = spec.create_empty_state(SimulationTime::from_step_and_physical_time(0, 0.0).unwrap());
+    drop(state.insert_payload("population", vec![10.0_f64, 20.0, 30.0])?);
+    writer.record_state_to_stream("signal", &state)?;
+    writer.complete_recording()?;
 
-    let mut decoders = Decoders::new();
-    decoders.add("population", VecF64Decoder)?;
-    let series = SeriesReader::open("output/run-001", decoders)?.read("signal")?;
+    let mut decoders = JsonPayloadDecoderRegistry::new();
+    decoders.register_for_field("population", JsonVecF64Decoder)?;
+    let series = StoredStateSeriesReader::open_completed_recording("output/recording-001", decoders)?
+        .read_stream_as_state_series("signal")?;
     assert_eq!(series.len(), 1);
     Ok(())
 }
 ```
 
-`sample` resolves each selected key once and borrows its payload only while
-producing owned encoded bytes. It then applies bounded blocking backpressure
-through the selected writer. `finish` drains every stream; each chunk is file-
-synced, atomically renamed, and followed by a stream-directory sync before the
-run atomically publishes completed metadata.
+`record_state_to_stream` resolves each selected key once and borrows its
+payload only while producing owned encoded bytes. It then applies bounded
+blocking backpressure through the recording's single queue and worker. Each
+chunk is synchronized, described in the sole
+metadata file, atomically renamed from `.jsonl.tmp` to `.jsonl`, and followed by
+a stream-directory sync. `flush_stream_to_storage(stream)` exposes this as an
+ordered durability barrier. `continue_existing_recording` recovers append
+position without reconstructing state, while
+`continue_recording_from_latest_checkpoint` also returns a complete typed
+checkpoint through registered decoders.
 
 ## Testing
 
@@ -243,7 +252,7 @@ From the package directory:
 cargo test --all-targets --no-fail-fast --locked
 ```
 
-The permanent suite contains four logged integration workflows. Run each with
+The permanent suite contains five logged integration workflows. Run each with
 `--nocapture` to display its stable semantic report.
 
 Simulation-owned state:
@@ -268,6 +277,12 @@ Storage failure and corruption handling:
 
 ```bash
 cargo test --test storage_resilience -- --nocapture
+```
+
+Interrupted-run recovery, checkpoint reconstruction, and append:
+
+```bash
+cargo test --test resume_workflow -- --nocapture
 ```
 
 Doctests and lint gate:

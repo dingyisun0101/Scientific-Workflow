@@ -9,9 +9,11 @@
 //!
 //! Every run has one `metadata.json`. It contains the format/version marker,
 //! record encoding, time-axis description, caller-supplied JSON metadata,
-//! logical stream schemas, committed chunk descriptors, and run completion
-//! state. Chunk files contain only compact JSON Lines records and never repeat
-//! schemas or chunk metadata.
+//! logical stream schemas, prepared chunk descriptors, and run completion
+//! state. A running manifest may describe its final chunk while that payload
+//! still has the open `.tmp` name during the crash-safe sealing transaction.
+//! Chunk files contain only compact JSON Lines records and never repeat schemas
+//! or chunk metadata.
 //!
 //! # Record shape
 //!
@@ -22,13 +24,13 @@
 //! ```
 //!
 //! `physical` is omitted when absent. `values` retains field keys for readable
-//! raw output and decoder dispatch. [`EncodedRecord`] owns the complete framed
+//! raw output and decoder dispatch. [`EncodedStateRecord`] owns the complete framed
 //! line including its trailing newline, so writer byte accounting is exact and
 //! no downstream layer can accidentally split a record.
 //!
 //! # Validation
 //!
-//! [`RunMetadata::validate`] rejects unknown format versions, unsafe relative
+//! [`RecordingMetadata::validate`] rejects unknown format versions, unsafe relative
 //! paths, duplicate stream or field names, non-deterministic chunk filenames,
 //! empty committed chunks, inconsistent chunk ordinals or index ranges,
 //! unsupported encoding labels, and malformed lifecycle descriptions. It does
@@ -42,7 +44,7 @@ use std::path::{Component, Path};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::system_state::TimePoint;
+use crate::system_state::SimulationTime;
 
 use super::error::StorageError;
 
@@ -58,48 +60,48 @@ pub(crate) const PAYLOAD_ENCODING: &str = "json";
 /// Record framing supported by the current storage stage.
 pub(crate) const RECORD_FRAMING: &str = "json_lines";
 
-/// Complete contents of the sole run-level `metadata.json` file.
+/// Complete contents of the sole recording-level `metadata.json` file.
 ///
 /// This representation is cloneable because writers commit small metadata
 /// snapshots atomically. It never contains scientific payload data.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RunMetadata {
+pub(crate) struct RecordingMetadata {
     /// Stable format identifier validated before version-specific processing.
     pub(crate) format: String,
     /// Version of all structures in this metadata document and its chunks.
     pub(crate) version: u32,
-    /// Current run lifecycle state.
-    pub(crate) status: RunStatus,
+    /// Current recording lifecycle state.
+    pub(crate) status: RecordingStatus,
     /// Payload encoding and record framing declaration.
     pub(crate) records: RecordFormat,
     /// Meanings and optional units of temporal coordinates.
-    pub(crate) time: TimeAxis,
+    pub(crate) time: TimeAxisMetadata,
     /// Arbitrary JSON metadata supplied by the workflow or dispatcher.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub(crate) run: Map<String, Value>,
+    pub(crate) user_metadata: Map<String, Value>,
     /// Logical output streams in deterministic declaration order.
-    pub(crate) streams: Vec<StreamMetadata>,
+    pub(crate) streams: Vec<StateStreamMetadata>,
 }
 
-impl RunMetadata {
-    /// Creates initial metadata for a run that has not yet accepted records.
+impl RecordingMetadata {
+    /// Creates initial metadata for a recording that has not yet accepted records.
     ///
     /// Stream order is preserved exactly. Semantic validation is deliberately
-    /// separate through [`RunMetadata::validate`] so construction, parsed input,
+    /// separate through [`RecordingMetadata::validate`] so construction, parsed input,
     /// and pre-commit snapshots share one validation implementation.
     pub(crate) fn running(
-        time: TimeAxis,
-        run: Map<String, Value>,
-        streams: Vec<StreamMetadata>,
+        time: TimeAxisMetadata,
+        user_metadata: Map<String, Value>,
+        streams: Vec<StateStreamMetadata>,
     ) -> Self {
         Self {
             format: FORMAT_NAME.to_owned(),
             version: FORMAT_VERSION,
-            status: RunStatus::Running,
+            status: RecordingStatus::Running,
             records: RecordFormat::json_lines(),
             time,
-            run,
+            user_metadata,
             streams,
         }
     }
@@ -137,7 +139,7 @@ impl RunMetadata {
         let mut directories = HashSet::with_capacity(self.streams.len());
         for stream in &self.streams {
             if !names.insert(stream.name.as_str()) {
-                return Err(StorageError::DuplicateStream {
+                return Err(StorageError::DuplicateStateStream {
                     stream: stream.name.clone(),
                 });
             }
@@ -156,24 +158,24 @@ impl RunMetadata {
     }
 
     /// Returns one stream declaration by exact configured name.
-    pub(crate) fn stream(&self, name: &str) -> Option<&StreamMetadata> {
+    pub(crate) fn stream(&self, name: &str) -> Option<&StateStreamMetadata> {
         self.streams.iter().find(|stream| stream.name == name)
     }
 
     /// Returns one mutable stream declaration by exact configured name.
     ///
     /// This crate-private boundary lets the writer append committed chunk
-    /// descriptors. Callers must re-run [`RunMetadata::validate`] before an
+    /// descriptors. Callers must re-run [`RecordingMetadata::validate`] before an
     /// atomic metadata commit.
-    pub(crate) fn stream_mut(&mut self, name: &str) -> Option<&mut StreamMetadata> {
+    pub(crate) fn stream_mut(&mut self, name: &str) -> Option<&mut StateStreamMetadata> {
         self.streams.iter_mut().find(|stream| stream.name == name)
     }
 }
 
-/// Run lifecycle persisted atomically in `metadata.json`.
+/// Recording lifecycle persisted atomically in `metadata.json`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum RunStatus {
+pub(crate) enum RecordingStatus {
     /// Writers may still accept or commit records.
     Running,
     /// Every writer drained and committed its final non-empty chunk.
@@ -185,7 +187,7 @@ pub(crate) enum RunStatus {
     },
 }
 
-impl RunStatus {
+impl RecordingStatus {
     /// Validates lifecycle-specific metadata fields.
     fn validate(&self, path: &Path) -> Result<(), StorageError> {
         if let Self::Failed { message } = self {
@@ -200,7 +202,7 @@ impl RunStatus {
     }
 }
 
-/// Encoding declaration shared by every stream in one run.
+/// Encoding declaration shared by every stream in one recording.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RecordFormat {
@@ -236,89 +238,93 @@ impl RecordFormat {
 /// Names and optional units for the two supported temporal coordinates.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct TimeAxis {
+pub(crate) struct TimeAxisMetadata {
     /// Human-facing name for the mandatory integer simulation index.
-    pub(crate) index_name: String,
+    pub(crate) step_name: String,
     /// Optional unit for the integer index, such as `step` or `sweep`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) index_unit: Option<String>,
+    pub(crate) step_unit: Option<String>,
     /// Optional name for the floating physical coordinate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) physical_name: Option<String>,
+    pub(crate) physical_time_name: Option<String>,
     /// Optional physical-coordinate unit. A unit requires a physical name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) physical_unit: Option<String>,
+    pub(crate) physical_time_unit: Option<String>,
 }
 
-impl TimeAxis {
+impl TimeAxisMetadata {
     /// Validates non-empty labels and physical-name/unit consistency.
     fn validate(&self, path: &Path) -> Result<(), StorageError> {
-        if self.index_name.trim().is_empty() {
-            return Err(invalid_metadata(path, "time.index_name must not be empty"));
+        if self.step_name.trim().is_empty() {
+            return Err(invalid_metadata(path, "time.step_name must not be empty"));
         }
         if self
-            .index_unit
+            .step_unit
             .as_deref()
             .is_some_and(|unit| unit.trim().is_empty())
         {
             return Err(invalid_metadata(
                 path,
-                "time.index_unit must not be empty when present",
+                "time.step_unit must not be empty when present",
             ));
         }
         if self
-            .physical_name
+            .physical_time_name
             .as_deref()
             .is_some_and(|name| name.trim().is_empty())
         {
             return Err(invalid_metadata(
                 path,
-                "time.physical_name must not be empty when present",
+                "time.physical_time_name must not be empty when present",
             ));
         }
         if self
-            .physical_unit
+            .physical_time_unit
             .as_deref()
             .is_some_and(|unit| unit.trim().is_empty())
         {
             return Err(invalid_metadata(
                 path,
-                "time.physical_unit must not be empty when present",
+                "time.physical_time_unit must not be empty when present",
             ));
         }
-        if self.physical_unit.is_some() && self.physical_name.is_none() {
+        if self.physical_time_unit.is_some() && self.physical_time_name.is_none() {
             return Err(invalid_metadata(
                 path,
-                "time.physical_unit requires time.physical_name",
+                "time.physical_time_unit requires time.physical_time_name",
             ));
         }
         Ok(())
     }
 }
 
-/// Metadata and committed chunk inventory for one logical output stream.
+/// Metadata and incrementally prepared chunk inventory for one logical stream.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct StreamMetadata {
+pub(crate) struct StateStreamMetadata {
     /// Unique normalized stream name used by the sampling API.
     pub(crate) name: String,
-    /// Safe relative directory beneath the run output root.
+    /// Safe relative directory beneath the recording root.
     pub(crate) directory: String,
     /// Optional human-readable sampling cadence description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cadence: Option<String>,
     /// Ordered partial-state schema persisted once for this stream.
-    pub(crate) fields: Vec<FieldMetadata>,
+    pub(crate) fields: Vec<StateFieldMetadata>,
     /// Soft maximum chunk size; complete oversized records remain indivisible.
     pub(crate) max_chunk_bytes: u64,
     /// Strict maximum number of accepted but uncommitted encoded bytes.
     pub(crate) queue_bytes: u64,
-    /// Committed chunks in monotonically increasing ordinal order.
+    /// Prepared chunks in monotonically increasing ordinal order.
+    ///
+    /// In a running run, only the final descriptor may still correspond to its
+    /// open lifecycle filename. Complete and failed manifests name only sealed
+    /// payloads after their writers have drained.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) chunks: Vec<ChunkMetadata>,
 }
 
-impl StreamMetadata {
+impl StateStreamMetadata {
     /// Validates stream names, paths, limits, fields, and chunk continuity.
     fn validate(&self, path: &Path) -> Result<(), StorageError> {
         if self.name.trim().is_empty() {
@@ -379,7 +385,7 @@ impl StreamMetadata {
 /// One key and optional description in a persisted partial-state schema.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct FieldMetadata {
+pub(crate) struct StateFieldMetadata {
     /// Exact SystemState key serialized into each record's `values` object.
     pub(crate) name: String,
     /// Optional natural-language payload description; never a Rust type tag.
@@ -387,7 +393,7 @@ pub(crate) struct FieldMetadata {
     pub(crate) description: Option<String>,
 }
 
-impl FieldMetadata {
+impl StateFieldMetadata {
     /// Validates normalized field documentation.
     fn validate(&self, path: &Path, stream: &str) -> Result<(), StorageError> {
         if self.name.trim().is_empty() {
@@ -494,24 +500,24 @@ impl ChunkMetadata {
 /// The type is intentionally non-Clone. Its buffer is created once by the
 /// encoder, moved through bounded queue ownership, and appended as one
 /// indivisible unit by the writer.
-pub(crate) struct EncodedRecord {
-    time: TimePoint,
+pub(crate) struct EncodedStateRecord {
+    time: SimulationTime,
     bytes: Vec<u8>,
 }
 
-impl EncodedRecord {
+impl EncodedStateRecord {
     /// Frames compact JSON bytes as one complete newline-terminated record.
     ///
     /// `json` must contain one complete compact object produced by the encoder.
-    /// The framing newline is appended here so [`EncodedRecord::len`] exactly
+    /// The framing newline is appended here so [`EncodedStateRecord::len`] exactly
     /// matches the bytes presented to chunk rollover and file writing.
-    pub(crate) fn new(time: TimePoint, mut json: Vec<u8>) -> Self {
+    pub(crate) fn new(time: SimulationTime, mut json: Vec<u8>) -> Self {
         json.push(b'\n');
         Self { time, bytes: json }
     }
 
     /// Returns the record's complete temporal coordinate.
-    pub(crate) fn time(&self) -> TimePoint {
+    pub(crate) fn simulation_time(&self) -> SimulationTime {
         self.time
     }
 
@@ -526,11 +532,11 @@ impl EncodedRecord {
     }
 }
 
-impl fmt::Debug for EncodedRecord {
+impl fmt::Debug for EncodedStateRecord {
     /// Formats time and byte length without formatting encoded payload bytes.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("EncodedRecord")
+            .debug_struct("EncodedStateRecord")
             .field("time", &self.time)
             .field("bytes", &self.bytes.len())
             .finish_non_exhaustive()
@@ -540,6 +546,16 @@ impl fmt::Debug for EncodedRecord {
 /// Returns the only valid committed filename for `ordinal`.
 pub(crate) fn chunk_filename(ordinal: u64) -> String {
     format!("chunk-{ordinal:06}.jsonl")
+}
+
+/// Returns the only valid open filename for `ordinal`.
+///
+/// The open name is not a sidecar: it identifies the same payload file before
+/// the atomic rename performed at sealing. Recovery may inspect only the
+/// highest such file in a stream. A final [`chunk_filename`] is authoritative
+/// evidence that the chunk is sealed and immutable.
+pub(crate) fn chunk_temp_filename(ordinal: u64) -> String {
+    format!("{}.tmp", chunk_filename(ordinal))
 }
 
 /// Constructs a semantic metadata error with owned provenance.

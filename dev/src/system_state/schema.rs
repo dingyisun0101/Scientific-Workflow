@@ -30,7 +30,7 @@
 //!
 //! # Sharing and performance
 //!
-//! `StateSpec` is a small cloneable handle around an immutable, reference-
+//! `SystemStateSchema` is a small cloneable handle around an immutable, reference-
 //! counted layout. Cloning it never duplicates field names or lookup tables.
 //! Field lookup uses a hash map, while iteration preserves JSON declaration
 //! order through the field slice.
@@ -38,7 +38,7 @@
 //! # Construction boundary
 //!
 //! Public callers load the first specification from a JSON template path using
-//! [`StateSpec::load`]. A crate-private byte parser applies the identical
+//! [`SystemStateSchema::load_json_template`]. A crate-private byte parser applies the identical
 //! validation path for persistence readers that recover an embedded template
 //! from the sole dataset metadata file. Keeping that parser crate-private
 //! preserves the public file-template initialization contract.
@@ -51,15 +51,15 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::error::StateError;
-use super::state::{SystemState, TimePoint};
+use super::state::{SimulationTime, SystemState};
 
 /// One validated field in a state template.
 ///
 /// A field specification is immutable after template loading. Its index is the
 /// position of the corresponding payload slot in every `SystemState` created
-/// from the same [`StateSpec`].
+/// from the same [`SystemStateSchema`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct FieldSpec {
+pub struct StateFieldSchema {
     #[serde(skip)]
     index: usize,
     name: Box<str>,
@@ -67,7 +67,7 @@ pub struct FieldSpec {
     description: Option<Box<str>>,
 }
 
-impl FieldSpec {
+impl StateFieldSchema {
     /// Constructs one normalized field definition.
     fn new(index: usize, name: &str, description: Option<&str>) -> Self {
         Self {
@@ -81,7 +81,7 @@ impl FieldSpec {
     }
 
     /// Returns the zero-based payload-slot index assigned by template order.
-    pub fn index(&self) -> usize {
+    pub fn position(&self) -> usize {
         self.index
     }
 
@@ -101,15 +101,15 @@ impl FieldSpec {
 
 /// A validated, shareable SystemState layout.
 ///
-/// `StateSpec` owns an [`Arc`] to immutable metadata, making `Clone` a cheap
+/// `SystemStateSchema` owns an [`Arc`] to immutable metadata, making `Clone` a cheap
 /// reference-count increment. Every state derived from a specification shares
 /// the exact field order and name lookup table.
 #[derive(Clone, Debug)]
-pub struct StateSpec {
+pub struct SystemStateSchema {
     inner: Arc<StateLayout>,
 }
 
-impl StateSpec {
+impl SystemStateSchema {
     /// Loads and validates a state specification from a JSON template.
     ///
     /// The file is read as bytes and parsed directly, avoiding an intermediate
@@ -125,7 +125,7 @@ impl StateSpec {
     /// - [`StateError::TemplateParse`] when JSON syntax or structure is invalid;
     /// - [`StateError::EmptyFieldName`] for an empty normalized field name;
     /// - [`StateError::DuplicateField`] for repeated normalized names.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, StateError> {
+    pub fn load_json_template(path: impl AsRef<Path>) -> Result<Self, StateError> {
         let source = path.as_ref().to_path_buf();
         let bytes = fs::read(&source).map_err(|error| StateError::TemplateRead {
             path: source.clone(),
@@ -141,7 +141,7 @@ impl StateSpec {
     /// reader. `source` identifies the containing metadata file for provenance
     /// and errors; it need not be a standalone state-template path. Parsing
     /// uses the same strict Serde representation and semantic validation as
-    /// [`StateSpec::load`].
+    /// [`SystemStateSchema::load_json_template`].
     ///
     /// The method is crate-private so application code cannot bypass the
     /// required public initialization from a JSON template file.
@@ -150,7 +150,7 @@ impl StateSpec {
     ///
     /// Returns [`StateError::TemplateParse`] for invalid JSON structure or
     /// syntax and the same semantic template variants documented by
-    /// [`StateSpec::load`]. The input bytes are borrowed only for this call.
+    /// [`SystemStateSchema::load_json_template`]. The input bytes are borrowed only for this call.
     pub(crate) fn parse(source: PathBuf, bytes: &[u8]) -> Result<Self, StateError> {
         let template: StateTemplate =
             serde_json::from_slice(bytes).map_err(|error| StateError::TemplateParse {
@@ -166,14 +166,14 @@ impl StateSpec {
     /// Every declared field exists in the returned state's layout, while every
     /// payload slot starts empty. Cloning the specification is constant-time
     /// and does not duplicate layout data.
-    pub fn empty(&self, time: TimePoint) -> SystemState {
+    pub fn create_empty_state(&self, time: SimulationTime) -> SystemState {
         SystemState::new(self.clone(), time)
     }
 
     /// Converts this specification into a pretty-printed JSON template.
     ///
     /// The generated document has the same strict `fields` structure accepted
-    /// by [`StateSpec::load`]. Runtime-only field indices and the source path
+    /// by [`SystemStateSchema::load_json_template`]. Runtime-only field indices and the source path
     /// are omitted: field indices are reconstructed from array order, and the
     /// destination path becomes the source when the JSON is loaded again.
     ///
@@ -184,22 +184,22 @@ impl StateSpec {
     ///
     /// Returns the underlying [`serde_json::Error`] if JSON serialization
     /// fails.
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+    pub fn to_json_template(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&StateTemplateRef {
-            fields: self.fields(),
+            fields: self.field_schemas(),
         })
     }
 
     /// Returns the path from which this specification was loaded.
     ///
-    /// The path is retained exactly as supplied to [`StateSpec::load`]. It may
+    /// The path is retained exactly as supplied to [`SystemStateSchema::load_json_template`]. It may
     /// be relative and is not guaranteed to remain accessible after loading.
-    pub fn source(&self) -> &Path {
+    pub fn template_path(&self) -> &Path {
         &self.inner.source
     }
 
     /// Returns field definitions in deterministic template order.
-    pub fn fields(&self) -> &[FieldSpec] {
+    pub fn field_schemas(&self) -> &[StateFieldSchema] {
         &self.inner.fields
     }
 
@@ -217,13 +217,13 @@ impl StateSpec {
     }
 
     /// Looks up a field definition by its normalized name.
-    pub fn get(&self, name: &str) -> Option<&FieldSpec> {
+    pub fn field_schema(&self, name: &str) -> Option<&StateFieldSchema> {
         let index = self.inner.by_name.get(name)?;
         self.inner.fields.get(*index)
     }
 
     /// Reports whether the template declares `name`.
-    pub fn contains(&self, name: &str) -> bool {
+    pub fn contains_field(&self, name: &str) -> bool {
         self.inner.by_name.contains_key(name)
     }
 
@@ -231,21 +231,21 @@ impl StateSpec {
     ///
     /// This is an identity comparison, not structural equality. Two templates
     /// loaded independently may declare identical fields but still return
-    /// `false`; states derived by cloning one `StateSpec` return `true` without
+    /// `false`; states derived by cloning one `SystemStateSchema` return `true` without
     /// comparing field names, descriptions, source paths, or lookup maps.
     ///
     /// Identity is useful when building a homogeneous collection of states.
     /// Once a collection accepts only states sharing its canonical layout,
     /// later indexing and serialization can rely on one field order without
     /// repeating structural comparisons.
-    pub fn shares_layout(&self, other: &Self) -> bool {
+    pub(crate) fn shares_schema_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Resolves a declared field name to its payload-slot index.
     ///
     /// This is crate-private because compact indices are an implementation
-    /// detail. Public callers address fields by name or inspect [`FieldSpec`].
+    /// detail. Public callers address fields by name or inspect [`StateFieldSchema`].
     pub(crate) fn index_of(&self, name: &str) -> Result<usize, StateError> {
         self.inner
             .by_name
@@ -273,7 +273,7 @@ impl StateSpec {
                 });
             }
 
-            let field = FieldSpec::new(index, name, declaration.description.as_deref());
+            let field = StateFieldSchema::new(index, name, declaration.description.as_deref());
             by_name.insert(field.name.clone(), index);
             fields.push(field);
         }
@@ -288,13 +288,13 @@ impl StateSpec {
     }
 }
 
-/// Immutable metadata shared by every clone of a [`StateSpec`].
+/// Immutable metadata shared by every clone of a [`SystemStateSchema`].
 #[derive(Debug)]
 struct StateLayout {
     /// Original template path retained for provenance and diagnostics.
     source: PathBuf,
     /// Validated fields in deterministic template order.
-    fields: Vec<FieldSpec>,
+    fields: Vec<StateFieldSchema>,
     /// Normalized field name to compact payload-slot index.
     by_name: HashMap<Box<str>, usize>,
 }
@@ -326,5 +326,5 @@ struct FieldDeclaration {
 #[derive(Serialize)]
 struct StateTemplateRef<'a> {
     /// Fields borrowed in deterministic template order.
-    fields: &'a [FieldSpec],
+    fields: &'a [StateFieldSchema],
 }

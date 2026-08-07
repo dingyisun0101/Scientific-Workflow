@@ -1,14 +1,14 @@
 //! Borrowed JSON encoding for one logical output stream.
 //!
-//! [`JsonEncoder`] is the synchronous boundary between a simulation-owned
+//! [`JsonStateRecordEncoder`] is the synchronous boundary between a simulation-owned
 //! [`SystemState`] and the asynchronous storage writer. It selects an ordered
 //! subset of state fields, borrows their existing payloads through erased
-//! Serde references, and returns one owned [`EncodedRecord`]. It never clones,
+//! Serde references, and returns one owned [`EncodedStateRecord`]. It never clones,
 //! removes, replaces, or otherwise mutates a scientific payload.
 //!
 //! # Construction
 //!
-//! Field selection is validated once against the program's [`StateSpec`]. The
+//! Field selection is validated once against the program's [`SystemStateSchema`]. The
 //! caller may list keys in any order; the encoder stores them in canonical
 //! template order so equivalent selections always produce the same JSON key
 //! order and metadata schema. Empty selections are valid and produce
@@ -16,13 +16,14 @@
 //!
 //! # Sampling
 //!
-//! [`JsonEncoder::encode`] first verifies that every selected slot is populated.
+//! [`JsonStateRecordEncoder::encode`] first verifies that every selected slot is populated.
 //! Each successful lookup is retained as a borrowed erased-Serde reference, so
 //! the subsequent serialization pass does not look up the field again. The
 //! local reference vector introduces no payload clone and cannot outlive the
 //! call. On success, only the independently owned encoded bytes remain,
 //! allowing the simulation to resume mutation immediately or move the record
-//! into a [`StateWriter`](super::writer::StateWriter).
+//! into the recording's
+//! [`StateWriterWorker`](super::queued_state_writer::StateWriterWorker).
 //!
 //! # Responsibility boundary
 //!
@@ -37,41 +38,41 @@ use std::collections::HashSet;
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::system_state::{StateSpec, SystemState};
+use crate::system_state::{SystemState, SystemStateSchema};
 
 use super::error::StorageError;
-use super::format::EncodedRecord;
+use super::jsonl_format::EncodedStateRecord;
 
 /// Reusable borrowed-state encoder for one logical output stream.
 ///
 /// The encoder owns only a stream name and selected field names. The
-/// [`StateSpec`] supplied to construction is borrowed for validation and then
-/// released; the run coordinator remains the sole owner of its shared layout
+/// [`SystemStateSchema`] supplied to construction is borrowed for validation and then
+/// released; the recording writer remains the sole owner of its shared layout
 /// handle. The encoder owns no payload, output buffer, mutable scratch space,
 /// queue, or file handle. Consequently, separate sampling calls allocate only
 /// their resulting encoded buffer.
 #[derive(Clone, Debug)]
-pub(crate) struct JsonEncoder {
+pub(crate) struct JsonStateRecordEncoder {
     stream: Box<str>,
     fields: Box<[Box<str>]>,
 }
 
-impl JsonEncoder {
+impl JsonStateRecordEncoder {
     /// Validates and canonicalizes one stream's selected state fields.
     ///
     /// `fields` may arrive in arbitrary order. Each exact field name must occur
     /// once in `spec`; successful construction stores names in template order.
-    /// Normal builds retain no [`StateSpec`] handle after validation.
+    /// Normal builds retain no [`SystemStateSchema`] handle after validation.
     /// Scientific payloads do not exist at this stage and cannot be copied.
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::InvalidConfig`] when the normalized stream name
+    /// Returns [`StorageError::InvalidConfiguration`] when the normalized stream name
     /// is empty, a selected name is empty or unknown, or a field is selected
     /// more than once.
     pub(crate) fn new<I, K>(
         stream: impl Into<String>,
-        spec: &StateSpec,
+        spec: &SystemStateSchema,
         fields: I,
     ) -> Result<Self, StorageError>
     where
@@ -81,7 +82,7 @@ impl JsonEncoder {
         let stream = stream.into();
         let stream = stream.trim();
         if stream.is_empty() {
-            return Err(StorageError::InvalidConfig {
+            return Err(StorageError::InvalidConfiguration {
                 setting: "stream",
                 reason: "stream name must not be empty".to_owned(),
             });
@@ -91,17 +92,19 @@ impl JsonEncoder {
         for field in fields {
             let name = field.as_ref();
             if name.is_empty() {
-                return Err(StorageError::InvalidConfig {
+                return Err(StorageError::InvalidConfiguration {
                     setting: "fields",
                     reason: format!("stream `{stream}` contains an empty field name"),
                 });
             }
-            let declaration = spec.get(name).ok_or_else(|| StorageError::InvalidConfig {
-                setting: "fields",
-                reason: format!("stream `{stream}` selects unknown state field `{name}`"),
-            })?;
-            if !selected.insert(declaration.index()) {
-                return Err(StorageError::InvalidConfig {
+            let declaration =
+                spec.field_schema(name)
+                    .ok_or_else(|| StorageError::InvalidConfiguration {
+                        setting: "fields",
+                        reason: format!("stream `{stream}` selects unknown state field `{name}`"),
+                    })?;
+            if !selected.insert(declaration.position()) {
+                return Err(StorageError::InvalidConfiguration {
                     setting: "fields",
                     reason: format!("stream `{stream}` selects field `{name}` more than once"),
                 });
@@ -109,9 +112,9 @@ impl JsonEncoder {
         }
 
         let fields = spec
-            .fields()
+            .field_schemas()
             .iter()
-            .filter(|field| selected.contains(&field.index()))
+            .filter(|field| selected.contains(&field.position()))
             .map(|field| Box::<str>::from(field.name()))
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -129,12 +132,12 @@ impl JsonEncoder {
 
     /// Encodes one borrowed state as a compact, complete JSONL record.
     ///
-    /// The state need not share the `StateSpec` allocation used during encoder
+    /// The state need not share the `SystemStateSchema` allocation used during encoder
     /// construction. Each selected name is checked against the supplied state,
     /// allowing an independently reconstructed but compatible partial state to
     /// be encoded safely. Extra state fields are ignored.
     ///
-    /// The produced buffer has this shape before [`EncodedRecord`] adds its
+    /// The produced buffer has this shape before [`EncodedStateRecord`] adds its
     /// framing newline:
     ///
     /// ```json
@@ -150,9 +153,9 @@ impl JsonEncoder {
     /// Returns [`StorageError::StateAccess`] for an unknown or empty selected
     /// slot in the supplied state. Returns [`StorageError::EncodeField`] when a
     /// selected payload's own serializer rejects its value. A failed call
-    /// drops its incomplete byte buffer and produces no [`EncodedRecord`].
-    pub(crate) fn encode(&self, state: &SystemState) -> Result<EncodedRecord, StorageError> {
-        let time = state.time();
+    /// drops its incomplete byte buffer and produces no [`EncodedStateRecord`].
+    pub(crate) fn encode(&self, state: &SystemState) -> Result<EncodedStateRecord, StorageError> {
+        let time = state.simulation_time();
 
         // Resolving before Serde preserves StateError as a typed source. The
         // successful borrows are retained for the serialization pass so each
@@ -165,7 +168,7 @@ impl JsonEncoder {
                     .serializable(field)
                     .map_err(|source| StorageError::StateAccess {
                         stream: self.stream.to_string(),
-                        index: time.index(),
+                        index: time.step(),
                         field: field.to_string(),
                         source,
                     })
@@ -174,8 +177,8 @@ impl JsonEncoder {
 
         let active_field = Cell::new(None);
         let document = RecordRef {
-            index: time.index(),
-            physical: time.physical(),
+            index: time.step(),
+            physical: time.physical_time(),
             values: ValuesRef {
                 fields: &self.fields,
                 payloads: &payloads,
@@ -189,13 +192,13 @@ impl JsonEncoder {
                 .map_or_else(|| "<record>".to_owned(), ToString::to_string);
             StorageError::EncodeField {
                 stream: self.stream.to_string(),
-                index: time.index(),
+                index: time.step(),
                 field,
                 source,
             }
         })?;
 
-        Ok(EncodedRecord::new(time, json))
+        Ok(EncodedStateRecord::new(time, json))
     }
 }
 

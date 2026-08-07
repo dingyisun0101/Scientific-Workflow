@@ -8,7 +8,7 @@ cd dev
 
 ## Integration tests
 
-The permanent suite contains four logged, behavior-oriented workflows rather
+The permanent suite contains five logged, behavior-oriented workflows rather
 than source-file-level tests.
 
 ### Simulation state
@@ -37,7 +37,7 @@ cargo test --test storage_workflow -- --nocapture
 ```
 
 Runs default decoder round trips and a multi-stream PiP tensor workflow through
-the public prelude and `RunOutput`, including borrowed encoding, bounded
+the public prelude and `SystemStateWriter`, including borrowed encoding, bounded
 writing, automatic chunking, metadata, integrity verification, and typed
 reconstruction. Successful output verifies that sealed chunks have final names
 and no temporary files remain after durable publication.
@@ -50,6 +50,16 @@ cargo test --test storage_resilience -- --nocapture
 
 Injects configuration, writer, decoder, record, and chunk-integrity failures
 and verifies contextual errors without exposing partial results.
+
+### Interrupted-run resume
+
+```bash
+cargo test --test resume_workflow -- --nocapture
+```
+
+Exercises both open-chunk crash windows, complete typed checkpoint
+reconstruction, continued append ordering, explicit durability barriers, and
+artifact-free exclusive writer ownership.
 
 ## Complete verification
 

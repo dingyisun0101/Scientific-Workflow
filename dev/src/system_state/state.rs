@@ -2,7 +2,7 @@
 //!
 //! [`SystemState`] is the public typed access boundary over the private
 //! [`StateValue`](super::value::StateValue) erasure layer. Every state owns its
-//! payloads, while all states derived from one [`StateSpec`] share immutable
+//! payloads, while all states derived from one [`SystemStateSchema`] share immutable
 //! field metadata and name lookup tables.
 //!
 //! # Layout invariant
@@ -11,7 +11,7 @@
 //! specification. A slot may be empty, but fields cannot be added, removed, or
 //! reordered after template loading. The first successful insertion binds a
 //! slot to that payload's concrete Rust type. Taking or clearing the payload
-//! retains this type contract, and [`SystemState::empty`] carries all contracts
+//! retains this type contract, and [`SystemState::clone_structure_without_payloads`] carries all contracts
 //! into the derived blank state without cloning payloads.
 //!
 //! # Ownership and cloning
@@ -19,7 +19,7 @@
 //! `set` consumes a payload without cloning it. Initial insertion returns
 //! `None`, replacement returns ownership of the previous same-typed payload,
 //! and rejection returns ownership of the unchanged incoming payload through
-//! [`SetError`]. `take` moves a stored payload back to the caller. These
+//! [`PayloadInsertError`]. `take` moves a stored payload back to the caller. These
 //! operations preserve the backing allocations of ordinary scientific owners
 //! such as `Vec<T>` and tensor containers.
 //!
@@ -31,7 +31,7 @@
 //! # Mutation
 //!
 //! The owning simulation can replace, borrow mutably, extract, or clear every
-//! payload. [`SystemState::borrow`] and [`SystemState::borrow_mut`] grant
+//! payload. [`SystemState::borrow_payloads`] and [`SystemState::borrow_payloads_mut`] grant
 //! coordinated access to distinct heterogeneous fields through type and name
 //! tuples, allowing one validated borrow to surround an entire scientific
 //! kernel. The state can also replace the complete time point with `set_time`
@@ -56,8 +56,8 @@ use std::fmt;
 
 use serde::Serialize;
 
-use super::error::{SetError, StateError};
-use super::spec::{FieldSpec, StateSpec};
+use super::error::{PayloadInsertError, StateError};
+use super::schema::{StateFieldSchema, SystemStateSchema};
 use super::value::StateValue;
 
 /// The temporal coordinate associated with one [`SystemState`].
@@ -67,14 +67,14 @@ use super::value::StateValue;
 /// finite domain time such as seconds or model time. Time-axis units belong to
 /// stream metadata so they are not repeated in every state.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TimePoint {
+pub struct SimulationTime {
     index: u64,
     physical: Option<f64>,
 }
 
-impl TimePoint {
+impl SimulationTime {
     /// Creates an index-only time point.
-    pub const fn new(index: u64) -> Self {
+    pub const fn from_step(index: u64) -> Self {
         Self {
             index,
             physical: None,
@@ -86,7 +86,7 @@ impl TimePoint {
     /// Returns `None` for `NaN` or either infinity. Negative finite values are
     /// accepted because some scientific coordinate systems use an origin after
     /// the beginning of a simulation or observation.
-    pub fn from_physical(index: u64, physical: f64) -> Option<Self> {
+    pub fn from_step_and_physical_time(index: u64, physical: f64) -> Option<Self> {
         physical.is_finite().then_some(Self {
             index,
             physical: Some(physical),
@@ -94,25 +94,25 @@ impl TimePoint {
     }
 
     /// Returns the deterministic integer index.
-    pub const fn index(self) -> u64 {
+    pub const fn step(self) -> u64 {
         self.index
     }
 
     /// Returns the optional physical coordinate.
-    pub const fn physical(self) -> Option<f64> {
+    pub const fn physical_time(self) -> Option<f64> {
         self.physical
     }
 }
 
 /// A heterogeneous collection of payloads describing one system time point.
 ///
-/// Fields are declared by a JSON-derived [`StateSpec`]. Values are addressed
+/// Fields are declared by a JSON-derived [`SystemStateSchema`]. Values are addressed
 /// by those field names but stored in compact optional slots. The type-erased
 /// representation remains private; callers always insert, borrow, mutate, and
 /// extract concrete Rust types.
 pub struct SystemState {
-    spec: StateSpec,
-    time: TimePoint,
+    spec: SystemStateSchema,
+    time: SimulationTime,
     slots: Vec<StateSlot>,
 }
 
@@ -179,9 +179,9 @@ impl SystemState {
     /// Creates an empty state from a validated specification.
     ///
     /// This constructor is crate-private so an external caller cannot create a
-    /// state without first loading a template. [`StateSpec::empty`] is the
+    /// state without first loading a template. [`SystemStateSchema::create_empty_state`] is the
     /// public initial construction path.
-    pub(crate) fn new(spec: StateSpec, time: TimePoint) -> Self {
+    pub(crate) fn new(spec: SystemStateSchema, time: SimulationTime) -> Self {
         let slots = (0..spec.len()).map(|_| StateSlot::unbound()).collect();
         Self { spec, time, slots }
     }
@@ -190,9 +190,9 @@ impl SystemState {
     ///
     /// No payload is cloned. The immutable specification handle is shared, and
     /// each assembly-established concrete type contract is copied into an empty
-    /// slot. A later [`SystemState::set`] must therefore use the same type even
+    /// slot. A later [`SystemState::insert_payload`] must therefore use the same type even
     /// though the derived state begins without payloads.
-    pub fn empty(&self, time: TimePoint) -> Self {
+    pub fn clone_structure_without_payloads(&self, time: SimulationTime) -> Self {
         Self {
             spec: self.spec.clone(),
             time,
@@ -201,19 +201,20 @@ impl SystemState {
     }
 
     /// Returns this state's temporal coordinate.
-    pub const fn time(&self) -> TimePoint {
+    pub const fn simulation_time(&self) -> SimulationTime {
         self.time
     }
 
     /// Replaces this state's complete temporal coordinate.
     ///
-    /// The previous [`TimePoint`] is returned by value. Both coordinates are
+    /// The previous [`SimulationTime`] is returned by value. Both coordinates are
     /// small `Copy` values, so replacement performs no heap allocation and
     /// does not inspect, move, or clone any scientific payload.
     ///
     /// Replacing the complete value rather than exposing its individual fields
     /// ensures that a physical coordinate can enter a state only through the
-    /// finite-value validation performed by [`TimePoint::from_physical`].
+    /// finite-value validation performed by
+    /// [`SimulationTime::from_step_and_physical_time`].
     ///
     /// # Collection invariants
     ///
@@ -221,7 +222,7 @@ impl SystemState {
     /// `&mut SystemState` to external callers: changing its time could violate
     /// collection ordering. The owning simulation may freely call this method
     /// before submitting a state or encoded sample.
-    pub fn set_time(&mut self, time: TimePoint) -> TimePoint {
+    pub fn replace_simulation_time(&mut self, time: SimulationTime) -> SimulationTime {
         std::mem::replace(&mut self.time, time)
     }
 
@@ -233,7 +234,7 @@ impl SystemState {
     /// a finite `delta`, and a finite sum. Negative and zero finite deltas are
     /// valid because integer index—not physical time—defines record ordering.
     ///
-    /// On success, the new [`TimePoint`] is stored and returned. All validation
+    /// On success, the new [`SimulationTime`] is stored and returned. All validation
     /// occurs before assignment, so every error leaves the original time point
     /// unchanged.
     ///
@@ -247,7 +248,10 @@ impl SystemState {
     ///   current state has no physical coordinate;
     /// - [`StateError::InvalidPhysicalAdvance`] when the delta or resulting
     ///   coordinate is not finite.
-    pub fn advance(&mut self, physical_delta: Option<f64>) -> Result<TimePoint, StateError> {
+    pub fn advance_simulation_time(
+        &mut self,
+        physical_delta: Option<f64>,
+    ) -> Result<SimulationTime, StateError> {
         let next_index = self
             .time
             .index
@@ -272,7 +276,7 @@ impl SystemState {
             }
         };
 
-        let next = TimePoint {
+        let next = SimulationTime {
             index: next_index,
             physical: next_physical,
         };
@@ -281,28 +285,28 @@ impl SystemState {
     }
 
     /// Returns the shared immutable field specification.
-    pub const fn spec(&self) -> &StateSpec {
+    pub const fn schema(&self) -> &SystemStateSchema {
         &self.spec
     }
 
     /// Returns the number of fields declared by the state specification.
     ///
     /// This count is structural and includes empty payload slots.
-    pub fn len(&self) -> usize {
+    pub fn declared_field_count(&self) -> usize {
         self.slots.len()
     }
 
     /// Reports whether the state specification declares no fields.
     ///
-    /// This is consistent with [`SystemState::len`]. To test whether a
+    /// This is consistent with [`SystemState::declared_field_count`]. To test whether a
     /// non-empty layout currently carries no payloads, use
-    /// [`SystemState::is_blank`].
-    pub fn is_empty(&self) -> bool {
+    /// [`SystemState::has_no_payloads`].
+    pub fn has_no_declared_fields(&self) -> bool {
         self.slots.is_empty()
     }
 
     /// Returns the number of slots that currently contain payloads.
-    pub fn loaded(&self) -> usize {
+    pub fn populated_field_count(&self) -> usize {
         self.slots
             .iter()
             .filter(|slot| slot.value.is_some())
@@ -310,13 +314,13 @@ impl SystemState {
     }
 
     /// Reports whether every declared payload slot is empty.
-    pub fn is_blank(&self) -> bool {
+    pub fn has_no_payloads(&self) -> bool {
         self.slots.iter().all(|slot| slot.value.is_none())
     }
 
     /// Returns field specifications in deterministic template order.
-    pub fn fields(&self) -> &[FieldSpec] {
-        self.spec.fields()
+    pub fn field_schemas(&self) -> &[StateFieldSchema] {
+        self.spec.field_schemas()
     }
 
     /// Reports whether a declared field currently contains a payload.
@@ -325,7 +329,7 @@ impl SystemState {
     ///
     /// Returns [`StateError::UnknownField`] when `key` was not declared by the
     /// JSON template.
-    pub fn has(&self, key: &str) -> Result<bool, StateError> {
+    pub fn contains_payload(&self, key: &str) -> Result<bool, StateError> {
         let index = self.spec.index_of(key)?;
         Ok(self.slots[index].value.is_some())
     }
@@ -338,7 +342,7 @@ impl SystemState {
     ///
     /// Returns [`StateError::UnknownField`] when `key` was not declared by the
     /// JSON template.
-    pub fn is<T>(&self, key: &str) -> Result<bool, StateError>
+    pub fn payload_has_type<T>(&self, key: &str) -> Result<bool, StateError>
     where
         T: Any,
     {
@@ -357,19 +361,19 @@ impl SystemState {
     ///   payload, and returns `Ok(None)`;
     /// - a slot bound to exactly `T` receives it and returns the displaced
     ///   payload as `Ok(Some(previous))`, or `Ok(None)` when currently empty;
-    /// - an undeclared key returns `Err(SetError<T>)` containing the unchanged
+    /// - an undeclared key returns `Err(PayloadInsertError<T>)` containing the unchanged
     ///   incoming payload;
     /// - a slot bound to another concrete type remains unchanged and returns
-    ///   the incoming payload in `SetError<T>`, even when its payload is empty.
+    ///   the incoming payload in `PayloadInsertError<T>`, even when its payload is empty.
     ///
     /// Returning a previous payload is deliberate assignment behavior. A
     /// caller that does not need that owner should discard it explicitly:
     ///
     /// ```no_run
-    /// # use scientific_workflow::system_state::{StateSpec, TimePoint};
-    /// # fn example(spec: &StateSpec) -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut state = spec.empty(TimePoint::new(0));
-    /// drop(state.set("population", vec![1_u64, 2, 3])?);
+    /// # use scientific_workflow::system_state::{SystemStateSchema, SimulationTime};
+    /// # fn example(spec: &SystemStateSchema) -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+    /// drop(state.insert_payload("population", vec![1_u64, 2, 3])?);
     /// # Ok(())
     /// # }
     /// ```
@@ -381,27 +385,31 @@ impl SystemState {
     ///
     /// # Errors
     ///
-    /// Returns [`SetError`] containing:
+    /// Returns [`PayloadInsertError`] containing:
     ///
     /// - [`StateError::UnknownField`] when `key` is undeclared;
     /// - [`StateError::TypeMismatch`] when the slot is bound to a different
     ///   concrete Rust type.
     ///
-    /// In both cases [`SetError::into_parts`] recovers the unchanged incoming
+    /// In both cases [`PayloadInsertError::into_parts`] recovers the unchanged incoming
     /// `T` without cloning it.
-    pub fn set<T>(&mut self, key: &str, payload: T) -> Result<Option<T>, SetError<T>>
+    pub fn insert_payload<T>(
+        &mut self,
+        key: &str,
+        payload: T,
+    ) -> Result<Option<T>, PayloadInsertError<T>>
     where
         T: Serialize + Clone + Send + 'static,
     {
         let index = match self.spec.index_of(key) {
             Ok(index) => index,
-            Err(error) => return Err(SetError::new(error, payload)),
+            Err(error) => return Err(PayloadInsertError::new(error, payload)),
         };
 
         let slot = &mut self.slots[index];
         match slot.definition {
             Some(definition) if !definition.is::<T>() => {
-                return Err(SetError::new(
+                return Err(PayloadInsertError::new(
                     StateError::TypeMismatch {
                         field: key.to_owned(),
                         expected: type_name::<T>(),
@@ -429,10 +437,10 @@ impl SystemState {
     /// # Errors
     ///
     /// Returns [`StateError::UnknownField`] for an undeclared key,
-    /// [`StateError::MissingValue`] for an empty slot, or
+    /// [`StateError::MissingPayload`] for an empty slot, or
     /// [`StateError::TypeMismatch`] when the stored concrete type differs from
     /// `T`.
-    pub fn get<T>(&self, key: &str) -> Result<&T, StateError>
+    pub fn payload<T>(&self, key: &str) -> Result<&T, StateError>
     where
         T: Any,
     {
@@ -452,10 +460,10 @@ impl SystemState {
     /// # Errors
     ///
     /// Returns [`StateError::UnknownField`] for an undeclared key,
-    /// [`StateError::MissingValue`] for an empty slot, or
+    /// [`StateError::MissingPayload`] for an empty slot, or
     /// [`StateError::TypeMismatch`] when the stored concrete type differs from
     /// `T`.
-    pub fn get_mut<T>(&mut self, key: &str) -> Result<&mut T, StateError>
+    pub fn payload_mut<T>(&mut self, key: &str) -> Result<&mut T, StateError>
     where
         T: Any,
     {
@@ -473,7 +481,7 @@ impl SystemState {
     /// `Q` is a tuple of expected payload types, while `keys` is the equally
     /// sized tuple of field names. Tuple positions correspond exactly. The
     /// supported arities are two through eight; single-field callers should use
-    /// [`SystemState::get`]. The sealed tuple implementation is internal and
+    /// [`SystemState::payload`]. The sealed tuple implementation is internal and
     /// requires no user-defined selector, query object, or macro invocation.
     ///
     /// # Errors
@@ -482,9 +490,12 @@ impl SystemState {
     /// are returned. The method reports an unknown field, repeated field,
     /// retained type mismatch, or missing payload through [`StateError`]. An
     /// error leaves every slot unchanged.
-    pub fn borrow<'state, Q>(&'state self, keys: Q::Keys<'_>) -> Result<Q::Refs<'state>, StateError>
+    pub fn borrow_payloads<'state, Q>(
+        &'state self,
+        keys: Q::Keys<'_>,
+    ) -> Result<Q::Refs<'state>, StateError>
     where
-        Q: StateTuple,
+        Q: PayloadTuple,
     {
         Q::borrow(self, keys)
     }
@@ -500,19 +511,19 @@ impl SystemState {
     /// One call should normally surround a complete coupled kernel or sweep so
     /// name lookup and dynamic type validation occur once outside its inner
     /// loop. Supported arities are two through eight; single-field callers
-    /// should use [`SystemState::get_mut`].
+    /// should use [`SystemState::payload_mut`].
     ///
     /// # Errors
     ///
     /// Returns the same deterministic validation errors as
-    /// [`SystemState::borrow`]. A failure leaves the state unchanged and grants
+    /// [`SystemState::borrow_payloads`]. A failure leaves the state unchanged and grants
     /// no partial borrow.
-    pub fn borrow_mut<'state, Q>(
+    pub fn borrow_payloads_mut<'state, Q>(
         &'state mut self,
         keys: Q::Keys<'_>,
     ) -> Result<Q::RefsMut<'state>, StateError>
     where
-        Q: StateTuple,
+        Q: PayloadTuple,
     {
         Q::borrow_mut(self, keys)
     }
@@ -527,10 +538,10 @@ impl SystemState {
     /// # Errors
     ///
     /// Returns [`StateError::UnknownField`] for an undeclared key,
-    /// [`StateError::MissingValue`] for an empty slot, or
+    /// [`StateError::MissingPayload`] for an empty slot, or
     /// [`StateError::TypeMismatch`] when the stored concrete type differs from
     /// `T`.
-    pub fn take<T>(&mut self, key: &str) -> Result<T, StateError>
+    pub fn take_payload<T>(&mut self, key: &str) -> Result<T, StateError>
     where
         T: Any + Send,
     {
@@ -555,13 +566,13 @@ impl SystemState {
     ///
     /// Returns [`StateError::UnknownField`] when `key` was not declared by the
     /// JSON template.
-    pub fn clear(&mut self, key: &str) -> Result<bool, StateError> {
+    pub fn clear_payload(&mut self, key: &str) -> Result<bool, StateError> {
         let index = self.spec.index_of(key)?;
         Ok(self.slots[index].value.take().is_some())
     }
 
     /// Drops every payload while retaining layout, type contracts, and time.
-    pub fn clear_all(&mut self) {
+    pub fn clear_all_payloads(&mut self) {
         self.slots.iter_mut().for_each(|slot| slot.value = None);
     }
 
@@ -571,7 +582,7 @@ impl SystemState {
         self.slots[index]
             .value
             .as_ref()
-            .ok_or_else(|| StateError::MissingValue {
+            .ok_or_else(|| StateError::MissingPayload {
                 field: key.to_owned(),
             })
     }
@@ -593,7 +604,7 @@ impl SystemState {
         }
 
         if slot.value.is_none() {
-            return Err(StateError::MissingValue {
+            return Err(StateError::MissingPayload {
                 field: key.to_owned(),
             });
         }
@@ -606,7 +617,7 @@ impl SystemState {
         for (position, key) in keys.iter().enumerate() {
             let index = self.spec.index_of(key)?;
             if indices[..position].contains(&index) {
-                return Err(StateError::RepeatedBorrow {
+                return Err(StateError::RepeatedPayloadBorrow {
                     field: (*key).to_owned(),
                 });
             }
@@ -643,14 +654,14 @@ impl SystemState {
     ///
     /// This crate-private method is the complete format-agnostic boundary used
     /// by the storage encoder. It performs the same declared-field and
-    /// populated-slot validation as [`SystemState::get`], but it neither
+    /// populated-slot validation as [`SystemState::payload`], but it neither
     /// downcasts nor exposes the private [`StateValue`] wrapper.
     ///
     /// The returned object refers directly to the stored concrete payload. No
     /// clone, allocation, encoding, or ownership transfer occurs here.
     #[allow(
         dead_code,
-        reason = "reserved for storage::JsonEncoder, which is implemented in the next module stage"
+        reason = "reserved for storage::JsonStateRecordEncoder, which is implemented in the next module stage"
     )]
     pub(crate) fn serializable(
         &self,
@@ -666,15 +677,15 @@ mod tuple_sealed {
     pub trait Sealed {}
 }
 
-/// Internal type-level mapping used by [`SystemState::borrow`] and
-/// [`SystemState::borrow_mut`].
+/// Internal type-level mapping used by [`SystemState::borrow_payloads`] and
+/// [`SystemState::borrow_payloads_mut`].
 ///
 /// This trait must be public because it appears in those generic methods'
 /// signatures, but it is sealed, omitted from the prelude, and hidden from
 /// generated documentation. Applications select an implementation simply by
 /// writing a supported tuple type such as `(Position, Velocity)`.
 #[doc(hidden)]
-pub trait StateTuple: tuple_sealed::Sealed {
+pub trait PayloadTuple: tuple_sealed::Sealed {
     /// Equally sized tuple of borrowed field names.
     type Keys<'key>;
 
@@ -712,7 +723,7 @@ macro_rules! substitute_type {
 
 /// Generates the sealed heterogeneous borrow contract for one tuple arity.
 ///
-/// Public callers see only `SystemState::borrow[_mut]`; this macro centralizes
+/// Public callers see only `SystemState::borrow_payloads[_mut]`; this macro centralizes
 /// validation order, exact downcasts, and tuple construction so every supported
 /// arity has identical semantics.
 macro_rules! impl_state_tuple {
@@ -723,7 +734,7 @@ macro_rules! impl_state_tuple {
         {
         }
 
-        impl<$($type),+> StateTuple for ($($type,)+)
+        impl<$($type),+> PayloadTuple for ($($type,)+)
         where
             $($type: Any,)+
         {
@@ -833,9 +844,9 @@ impl fmt::Debug for SystemState {
         formatter
             .debug_struct("SystemState")
             .field("time", &self.time)
-            .field("source", &self.spec.source())
-            .field("fields", &self.len())
-            .field("loaded", &self.loaded())
+            .field("source", &self.spec.template_path())
+            .field("fields", &self.declared_field_count())
+            .field("loaded", &self.populated_field_count())
             .finish_non_exhaustive()
     }
 }

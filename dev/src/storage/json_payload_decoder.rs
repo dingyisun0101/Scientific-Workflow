@@ -2,11 +2,11 @@
 //!
 //! A payload decoder receives only one field's borrowed raw JSON and returns
 //! one concrete Rust value. It does not receive record time, sibling fields,
-//! chunk metadata, a destination state, or a series. [`Decoders`] matches keys
+//! chunk metadata, a destination state, or a series. [`JsonPayloadDecoderRegistry`] matches keys
 //! to these independently reusable conversions and privately adapts their
 //! heterogeneous results for insertion into `SystemState`.
 //!
-//! [`PayloadDecoder::decode`] accepts `&str` containing exactly one JSON value.
+//! [`JsonPayloadDecoder::decode_json_payload`] accepts `&str` containing exactly one JSON value.
 //! The reader can obtain this slice from `serde_json::value::RawValue` while
 //! retaining the enclosing line buffer. A tensor decoder can therefore build
 //! its final allocation without an intermediate `serde_json::Value` tree. The
@@ -14,7 +14,7 @@
 //!
 //! Type erasure occurs only inside the registry adapter. Public decoders still
 //! return their real `T`; the adapter moves that value directly into the state
-//! through `SystemState::set` and never invokes `T::clone`.
+//! through `SystemState::insert_payload` and never invokes `T::clone`.
 //!
 //! This module performs no JSON parsing, filesystem access, chunk validation,
 //! record-key validation, state construction, or series collection. The reader
@@ -31,13 +31,13 @@ use crate::system_state::{StateError, SystemState};
 
 use super::error::StorageError;
 
-#[path = "decoder/string.rs"]
+#[path = "json_payload_decoder/string.rs"]
 mod string;
-#[path = "decoder/vec_f64.rs"]
+#[path = "json_payload_decoder/vec_f64.rs"]
 mod vec_f64;
 
-pub use string::StringDecoder;
-pub use vec_f64::VecF64Decoder;
+pub use string::JsonStringDecoder;
+pub use vec_f64::JsonVecF64Decoder;
 
 /// Object-safe error boundary for application-defined payload conversion.
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
@@ -47,15 +47,15 @@ type BoxError = Box<dyn Error + Send + Sync + 'static>;
 /// `T` stays explicit at this boundary. Any thread-safe
 /// `Fn(&str) -> Result<T, E>` implements the trait automatically; named decoder
 /// types may implement it directly when they own configuration or shared state.
-pub trait PayloadDecoder<T>: Send + Sync + 'static {
+pub trait JsonPayloadDecoder<T>: Send + Sync + 'static {
     /// Decoder-specific failure retained by [`StorageError::DecodeField`].
     type Error: Error + Send + Sync + 'static;
 
     /// Decodes exactly one complete raw JSON value into an owned payload.
-    fn decode(&self, raw_json: &str) -> Result<T, Self::Error>;
+    fn decode_json_payload(&self, raw_json: &str) -> Result<T, Self::Error>;
 }
 
-impl<T, E, F> PayloadDecoder<T> for F
+impl<T, E, F> JsonPayloadDecoder<T> for F
 where
     F: Fn(&str) -> Result<T, E> + Send + Sync + 'static,
     E: Error + Send + Sync + 'static,
@@ -63,7 +63,7 @@ where
     type Error = E;
 
     /// Invokes the registered closure without wrapping or copying its output.
-    fn decode(&self, raw_json: &str) -> Result<T, Self::Error> {
+    fn decode_json_payload(&self, raw_json: &str) -> Result<T, Self::Error> {
         self(raw_json)
     }
 }
@@ -77,11 +77,11 @@ where
 /// This type is intentionally non-Clone because registered decoders may own
 /// caches, handles, or synchronization state with unknown clone semantics.
 #[derive(Default)]
-pub struct Decoders {
+pub struct JsonPayloadDecoderRegistry {
     entries: HashMap<Box<str>, Box<dyn ErasedPayloadDecoder>>,
 }
 
-impl Decoders {
+impl JsonPayloadDecoderRegistry {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
@@ -101,17 +101,21 @@ impl Decoders {
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::InvalidConfig`] for an empty key and
+    /// Returns [`StorageError::InvalidConfiguration`] for an empty key and
     /// [`StorageError::DuplicateDecoder`] for an existing key. The incoming
     /// decoder is dropped on either configuration error.
-    pub fn add<T, D>(&mut self, key: impl Into<String>, decoder: D) -> Result<(), StorageError>
+    pub fn register_for_field<T, D>(
+        &mut self,
+        key: impl Into<String>,
+        decoder: D,
+    ) -> Result<(), StorageError>
     where
         T: Serialize + Clone + Send + 'static,
-        D: PayloadDecoder<T>,
+        D: JsonPayloadDecoder<T>,
     {
         let key = key.into();
         if key.is_empty() {
-            return Err(StorageError::InvalidConfig {
+            return Err(StorageError::InvalidConfiguration {
                 setting: "decoder.key",
                 reason: "decoder key must not be empty".to_owned(),
             });
@@ -140,7 +144,7 @@ impl Decoders {
     }
 
     /// Reports whether an exact field key has a registered decoder.
-    pub fn contains(&self, key: &str) -> bool {
+    pub fn has_decoder_for_field(&self, key: &str) -> bool {
         self.entries.contains_key(key)
     }
 
@@ -148,7 +152,7 @@ impl Decoders {
     ///
     /// Reader dispatch never uses this order. Callers needing stable display
     /// should sort the returned strings.
-    pub fn keys(&self) -> impl ExactSizeIterator<Item = &str> {
+    pub fn registered_field_names(&self) -> impl ExactSizeIterator<Item = &str> {
         self.entries.keys().map(AsRef::as_ref)
     }
 
@@ -163,7 +167,7 @@ impl Decoders {
     ) -> Result<(), StorageError> {
         let mut checked = HashSet::new();
         for field in fields {
-            if checked.insert(field) && !self.contains(field) {
+            if checked.insert(field) && !self.has_decoder_for_field(field) {
                 return Err(StorageError::MissingDecoder {
                     field: field.to_owned(),
                 });
@@ -202,19 +206,19 @@ impl Decoders {
     }
 }
 
-impl fmt::Debug for Decoders {
+impl fmt::Debug for JsonPayloadDecoderRegistry {
     /// Formats sorted keys without exposing decoder internals or payloads.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut keys = self.keys().collect::<Vec<_>>();
+        let mut keys = self.registered_field_names().collect::<Vec<_>>();
         keys.sort_unstable();
         formatter
-            .debug_struct("Decoders")
+            .debug_struct("JsonPayloadDecoderRegistry")
             .field("keys", &keys)
             .finish_non_exhaustive()
     }
 }
 
-/// Object-safe insertion adapter stored by [`Decoders`].
+/// Object-safe insertion adapter stored by [`JsonPayloadDecoderRegistry`].
 trait ErasedPayloadDecoder: Send + Sync {
     /// Decodes one field and moves its concrete result into `state`.
     fn decode_into(
@@ -235,7 +239,7 @@ struct TypedDecoder<D, T> {
 impl<T, D> ErasedPayloadDecoder for TypedDecoder<D, T>
 where
     T: Serialize + Clone + Send + 'static,
-    D: PayloadDecoder<T>,
+    D: JsonPayloadDecoder<T>,
 {
     /// Preserves `T` through conversion, then transfers it into the state.
     fn decode_into(
@@ -246,17 +250,17 @@ where
     ) -> Result<(), BoxError> {
         let payload = self
             .decoder
-            .decode(raw_json)
+            .decode_json_payload(raw_json)
             .map_err(|source| Box::new(source) as BoxError)?;
 
-        match state.set(field, payload) {
+        match state.insert_payload(field, payload) {
             Ok(None) => Ok(()),
             Ok(Some(previous)) => {
                 // Restore the pre-existing payload transactionally. Setting an
                 // identical concrete type must succeed and returns the newly
                 // decoded replacement, which is then dropped.
                 let decoded = state
-                    .set(field, previous)
+                    .insert_payload(field, previous)
                     .expect("restoring an identical concrete payload type must succeed");
                 drop(decoded);
                 Err(Box::new(DecoderInsertError::Occupied {

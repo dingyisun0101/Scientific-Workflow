@@ -30,10 +30,11 @@ replace many narrow tests.
     ├── state_workflow.rs
     ├── analysis_workflow.rs
     ├── storage_workflow.rs
-    └── storage_resilience.rs
+    ├── storage_resilience.rs
+    └── resume_workflow.rs
 
 The former `tests/system_state/`, `tests/time_series/`, and `tests/storage/`
-subdirectories and their aggregator files have been removed. All four
+subdirectories and their aggregator files have been removed. All five
 replacement targets pass independently with the logs specified below.
 
 Doctests remain in production documentation and are not replaced by this
@@ -53,7 +54,7 @@ and transfer payload ownership into and out of the state.
 - Assert semantic template JSON round trip explicitly.
 - Verify deterministic field order, normalized descriptions, lookup, and
   shared-layout identity.
-- Construct index-only and physical `TimePoint` values and reject non-finite
+- Construct index-only and physical `SimulationTime` values and reject non-finite
   physical time.
 - Create a blank state and inspect structural versus populated counts.
 - Insert, borrow, type-check, mutate, replace, take, clear, and clear-all
@@ -64,12 +65,12 @@ and transfer payload ownership into and out of the state.
   eight.
 - Reject repeated tuple fields and prove complete preflight leaves all payloads
   unchanged.
-- Retain concrete field types after `take` and `clear`, reject retyping empty
+- Retain concrete field types after `take_payload` and `clear_payload`, reject retyping empty
   slots, and inherit type contracts in a derived blank state.
-- Verify `set` and `take` preserve a large allocation pointer.
+- Verify `insert_payload` and `take_payload` preserve a large allocation pointer.
 - Verify same-type replacement returns the previous payload.
-- Verify a rejected set returns the unchanged incoming payload through
-  `SetError`.
+- Verify a rejected insertion returns the unchanged incoming payload through
+  `PayloadInsertError`.
 - Verify failed typed extraction is rejected before moving the original
   payload.
 - Advance simulation and physical time transactionally, including one failure
@@ -82,36 +83,41 @@ and transfer payload ownership into and out of the state.
 
 ### Structures and methods
 
-`FieldSpec`:
+`StateFieldSchema`:
 
 - `index`, `name`, `description`.
 
-`StateSpec`:
+`SystemStateSchema`:
 
-- `load`, `to_json`, `source`, `fields`, `len`, `is_empty`, `get`, `contains`,
-  `shares_layout`, `empty`, and `clone`.
+- `load_json_template`, `to_json_template`, `template_path`, `field_schemas`,
+  `len`, `is_empty`, `field_schema`, `contains_field`, and
+  `create_empty_state`.
 - Crate-private `parse`, `index_of`, and layout construction are covered
   indirectly through reader reconstruction and all typed state access.
 
-`TimePoint`:
+`SimulationTime`:
 
 - `new`, `from_physical`, `index`, `physical`.
 
 `SystemState`:
 
-- `empty`, `time`, `set_time`, `advance`, `spec`, `len`, `is_empty`, `loaded`,
-  `is_blank`, `fields`, `has`, `is`, `set`, `get`, `get_mut`, `borrow`,
-  `borrow_mut`, `take`, `clear`, `clear_all`, and `clone`.
+- `clone_structure_without_payloads`, `simulation_time`,
+  `replace_simulation_time`, `advance_simulation_time`, `schema`,
+  `declared_field_count`, `has_no_declared_fields`, `populated_field_count`,
+  `has_no_payloads`, `field_schemas`, `contains_payload`, `payload_has_type`,
+  `insert_payload`, `payload`, `payload_mut`, `borrow_payloads`,
+  `borrow_payloads_mut`, `take_payload`, `clear_payload`,
+  `clear_all_payloads`, and `clone`.
 - Crate-private `new`, slot validation/separation, `value`, and `serializable`
-  are covered by `StateSpec::empty`, tuple access, and storage encoding.
+  are covered by `SystemStateSchema::create_empty_state`, tuple access, and storage encoding.
 
-Doc-hidden `StateTuple`:
+Doc-hidden `PayloadTuple`:
 
 - generated immutable and mutable mappings for every supported arity;
 - duplicate, unknown, missing, and mismatch preflight through public tuple
   calls.
 
-`SetError<T>`:
+`PayloadInsertError<T>`:
 
 - `error`, `payload`, `into_parts`, `Debug`, `Display`, and `Error::source`.
 
@@ -148,8 +154,8 @@ appends, and recover ownership from failures.
 - Distinguish zero-based collection position from simulation index.
 - Exercise immutable lookup, first/last access, slices, iteration, and owned
   iteration.
-- Exercise every `SeriesRef` accessor and its copyable behavior.
-- Mutate one typed field through `field_mut` without exposing mutable state
+- Exercise every `StateSeriesView` accessor and its copyable behavior.
+- Mutate one typed field through `payload_mut_at` without exposing mutable state
   time.
 - Verify bounds and typed field errors preserve `StateError` as a source.
 - Pop, clear, and consume the series while checking allocation/ownership
@@ -162,23 +168,25 @@ appends, and recover ownership from failures.
 
 `StateSeries`:
 
-- `new`, `with_capacity`, `spec`, `view`, `len`, `is_empty`, `capacity`,
-  `reserve`, `get`, `field_mut`, `first`, `last`, `states`, `iter`, `push`,
-  `pop`, `clear`, `into_states`, `clone`, borrowed `IntoIterator`, owned
+- `new`, `with_capacity`, `schema`, `as_view`, `len`, `is_empty`, `capacity`,
+  `reserve`, `state_at`, `payload_mut_at`, `first_state`, `last_state`,
+  `as_state_slice`, `iter`, `push_state`, `pop_state`, `clear_states`,
+  `into_states`, `clone`, borrowed `IntoIterator`, owned
   `IntoIterator`, and `Debug`.
 
-`SeriesRef`:
+`StateSeriesView`:
 
-- `spec`, `len`, `is_empty`, `get`, `first`, `last`, `states`, `iter`,
+- `schema`, `len`, `is_empty`, `state_at`, `first_state`, `last_state`,
+  `as_state_slice`, `iter`,
   `IntoIterator`, and `Debug`.
-- Private `new` is covered by `StateSeries::view`.
+- Private `new` is covered by `StateSeries::as_view`.
 
-`PushError`:
+`StateSeriesPushError`:
 
 - `error`, `state`, `into_parts`, `Debug`, `Display`, and `Error::source`.
-- Private `new` is covered by both `StateSeries::push` rejection paths.
+- Private `new` is covered by both `StateSeries::push_state` rejection paths.
 
-`SeriesError`:
+`StateSeriesError`:
 
 - Exercise layout mismatch, non-increasing time, out-of-bounds position, and
   contextualized field access in realistic series operations.
@@ -208,7 +216,7 @@ surface.
 
 - Configure at least two streams with different field selections and cadences.
 - Prove encoding does not clone or retain the simulation payload borrow.
-- Submit samples through `RunOutput` and its bounded writer boundary.
+- Submit samples through `SystemStateWriter` and its bounded writer boundary.
 - Produce multiple chunks through exact-byte rollover without splitting a
   record.
 - Include one record larger than the chunk target but smaller than the queue
@@ -219,7 +227,7 @@ surface.
 - Assert no per-chunk metadata sidecars or temporary files remain.
 - Assert every sealed chunk is visible only under its deterministic final name;
   this exercises the successful file-sync, rename, and directory-sync path.
-- Register `VecF64Decoder` and `StringDecoder` under exact keys.
+- Register `JsonVecF64Decoder` and `JsonStringDecoder` under exact keys.
 - Register an application-provided PiP tensor decoder under its exact key.
 - Open a completed run, enumerate streams, read one stream, and read all
   streams.
@@ -231,12 +239,16 @@ surface.
 
 Public run configuration and lifecycle:
 
-- `TimeAxis::new`, `default`, `index_unit`, `physical_name`, and
-  `physical_unit`;
-- `StreamConfig::new`, `directory`, and `cadence`;
-- `RunOutputBuilder::new`, `time_axis`, `run_metadata`, `stream`, and `start`;
-- `RunOutput::builder`, `root`, `streams`, `sample`, `finish`, and `fail` across
-  the successful and resilience workflows.
+- `TimeAxisMetadata::new`, `default`, `with_step_unit`,
+  `with_physical_time_name`, and `with_physical_time_unit`;
+- `StateStreamConfig::new`, `with_relative_directory`, and
+  `with_cadence_description`;
+- `SystemStateWriterBuilder::new`, `with_time_axis_metadata`,
+  `with_user_metadata`, `add_state_stream`, and `create_new_recording`;
+- `SystemStateWriter::builder`, `recording_directory`, `stream_names`,
+  `record_state_to_stream`, `flush_stream_to_storage`,
+  `complete_recording`, and `mark_recording_failed` across the successful and
+  resilience workflows.
 
 Private format, encoder, record, writer configuration, writer queue, summary,
 and metadata transaction structures are covered only through observable public
@@ -246,16 +258,19 @@ temporary files, atomic lifecycle metadata, and typed reader reconstruction.
 
 Decoder structures:
 
-- `PayloadDecoder::decode` through both default and custom decoders;
-- `Decoders::new`, `with_capacity`, `add`, `len`, `is_empty`, `contains`, and
-  `keys`;
+- `JsonPayloadDecoder::decode_json_payload` through both default and custom decoders;
+- `JsonPayloadDecoderRegistry::new`, `with_capacity`, `register_for_field`,
+  `len`, `is_empty`, `has_decoder_for_field`, and
+  `registered_field_names`;
 - crate-private coverage and insertion paths through complete reader dispatch;
-- `VecF64Decoder` and `StringDecoder`, including empty values, escaped text,
+- `JsonVecF64Decoder` and `JsonStringDecoder`, including empty values, escaped text,
   and Unicode.
 
-`SeriesReader`:
+`StoredStateSeriesReader`:
 
-- `open`, `root`, `streams`, `read`, `read_all`, and bounded `Debug`.
+- `open_completed_recording`, `recording_directory`, `stream_names`,
+  `read_stream_as_state_series`, `read_all_streams_as_state_series`, and
+  bounded `Debug`.
 - Private chunk traversal, borrowed raw-value parsing, schema reconstruction,
   canonical decoder dispatch, and checksumming are covered by exact readback
   and the resilience target.
@@ -284,7 +299,7 @@ large exact-display snapshots.
 - Reject empty/invalid stream configuration.
 - Reject one record larger than the strict queue byte budget immediately.
 - Reject duplicate or decreasing writer indices.
-- Exercise a writer terminal failure through `RunOutput` and verify it propagates rather
+- Exercise a writer terminal failure through `SystemStateWriter` and verify it propagates rather
   than silently succeeding.
 - Reject unknown streams and missing decoder coverage before chunk decoding.
 - Reject empty and duplicate decoder keys.
@@ -295,7 +310,7 @@ large exact-display snapshots.
 - Reject malformed/unterminated JSONL, missing/additional/duplicate payload
   keys, invalid physical time, and non-increasing indices.
 - Verify transactional reading returns no partial `StateSeries`.
-- Verify the most important nested `StateError`, `SeriesError`, IO, JSON, and
+- Verify the most important nested `StateError`, `StateSeriesError`, IO, JSON, and
   decoder sources remain traversable.
 
 ### Error-family coverage
@@ -326,6 +341,52 @@ through the operation that produces it.
     [backpressure] oversized_rejected=true ordering_rejected=true
     [result] storage_resilience=passed
 
+## Test 5: resume_workflow.rs
+
+### Scenario
+
+Reproduce both crash windows using real encoded chunks, explicitly reopen the
+running output, reconstruct a complete typed checkpoint, continue append
+ordering, force a durability barrier, and finish into an ordinarily readable
+analysis series.
+
+### Required behavior
+
+- Convert one real sealed chunk into an unprepared open chunk and append a
+  non-newline-terminated crash fragment.
+- Verify recovery examines only that open payload, truncates only the fragment,
+  retains all complete records, and continues the same chunk owner.
+- Reconstruct every full-state field through
+  `continue_recording_from_latest_checkpoint`, including a PiP tensor decoder,
+  and verify time and typed values.
+- Force `flush_stream_to_storage(stream)` below the automatic byte target and observe both the
+  sealed filename and incrementally updated running metadata before finish.
+- Reproduce the prepared-descriptor/before-rename crash window and verify the
+  rename is completed without scanning sealed history.
+- Reject a competing writer through the artifact-free advisory root lease.
+- Reject a partial stream as a full-state checkpoint while allowing the same
+  output to continue through plain `resume`.
+- Append later indices after both recovery paths, finish, and reconstruct the
+  complete final series through `StoredStateSeriesReader`.
+
+### Structures and methods
+
+- `SystemStateWriterBuilder::continue_existing_recording` and
+  `continue_recording_from_latest_checkpoint`;
+- `SystemStateWriter::flush_stream_to_storage`;
+- interrupted descriptor preparation and sealing through `RecordingManifest`;
+- `StateWriterWorker::recover_state_stream`, `resume`, recovered ordering, and flush barriers;
+- open-tail scanning/truncation and latest sealed-record fallback;
+- `StorageError::RecordingDirectoryInUse` plus recovery conflict paths indirectly.
+
+### Log contract
+
+    [resume-state] index=... physical=... fields=... complete=true
+    [recovery] incomplete_tail_truncated=true continued_open_chunk=true records=... durable_barrier=true
+    [prepared] descriptor_verified=true rename_completed=true sealed_history_scanned=false lease_exclusive=true
+    [schema] partial_checkpoint_rejected=true output_continued=true final_states=...
+    [result] ..._resume=passed final_states=...
+
 ## Logging rules
 
 - Use stable category prefixes shown above.
@@ -345,15 +406,17 @@ through the operation that produces it.
 2. `analysis_workflow.rs` implemented and run independently.
 3. `storage_workflow.rs` implemented and run independently.
 4. `storage_resilience.rs` implemented and run independently.
-5. Meaningful ownership, invariant, storage, decoder, and integrity assertions
-   mapped into the four scenarios.
-6. Old aggregators and test subdirectories removed after replacements passed.
-7. README and architecture documentation updated to the consolidated layout.
-8. Storage tests migrated from source-path harnesses to the public prelude.
-9. Full formatting, all-target, doctest, and Clippy verification is the final
+5. `resume_workflow.rs` implemented for crash recovery and append.
+6. Meaningful ownership, invariant, storage, decoder, integrity, and recovery
+   assertions mapped into the five scenarios.
+7. Old aggregators and test subdirectories removed after replacements passed.
+8. README and architecture documentation updated to the consolidated layout.
+9. Storage tests migrated from source-path harnesses to the public prelude.
+10. Full formatting, all-target, doctest, and Clippy verification is the final
    closeout gate for every later change.
 
-The migration preserved old tests until all four replacements compiled and ran.
+The migration preserved old tests until the replacement workflows compiled and
+ran.
 
 ## Commands after consolidation
 
@@ -364,6 +427,7 @@ cargo test --test state_workflow -- --nocapture
 cargo test --test analysis_workflow -- --nocapture
 cargo test --test storage_workflow -- --nocapture
 cargo test --test storage_resilience -- --nocapture
+cargo test --test resume_workflow -- --nocapture
 cargo test --all-targets --no-fail-fast --locked
 cargo test --doc --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -373,14 +437,14 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 
 The cleanup is complete only when:
 
-- the final tree contains the fixture and four integration files;
+- the final tree contains the fixtures and five integration files;
 - every implemented public structure and method is checked off above;
 - every high-risk private subsystem has observable behavioral coverage;
-- all four targets emit their documented bounded logs;
+- all five targets emit their documented bounded logs;
 - no test depends on execution order or retained generated data;
 - the complete verification command set passes.
 
 All criteria are satisfied for the current implemented crate: the test tree is
-the fixture plus four workflows, every target emits its bounded report, all
-four integration tests and four doctests pass, formatting is clean, and Clippy
-passes across all targets with warnings denied.
+the fixtures plus five workflows, every target emits its bounded report, all
+integration tests and doctests pass, formatting is clean, and Clippy passes
+across all targets with warnings denied.

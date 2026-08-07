@@ -28,7 +28,8 @@
 //! serialization, chunking, or filesystem IO.
 //!
 //! [`storage`] provides named partial-state streams, borrowed JSON encoding,
-//! bounded asynchronous persistence, byte-targeted chunking, atomic run
+//! bounded asynchronous persistence through one worker per recording,
+//! byte-targeted chunking, atomic recording
 //! metadata, per-key payload decoders, and verified analysis reconstruction.
 //! Import [`prelude`] when an application wants the complete supported API in
 //! scope without listing each module separately.
@@ -39,20 +40,20 @@
 //! use scientific_workflow::prelude::*;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let spec = StateSpec::load("state.json")?;
-//! let mut state = spec.empty(TimePoint::new(0));
+//! let spec = SystemStateSchema::load_json_template("state.json")?;
+//! let mut state = spec.create_empty_state(SimulationTime::from_step(0));
 //!
 //! assert!(
 //!     state
-//!         .set("population", vec![10_u64, 20, 30])?
+//!         .insert_payload("population", vec![10_u64, 20, 30])?
 //!         .is_none()
 //! );
 //! state
-//!     .get_mut::<Vec<u64>>("population")?
+//!     .payload_mut::<Vec<u64>>("population")?
 //!     .push(40);
-//! let time = state.advance(None)?;
-//! assert_eq!(time.index(), 1);
-//! let population = state.take::<Vec<u64>>("population")?;
+//! let time = state.advance_simulation_time(None)?;
+//! assert_eq!(time.step(), 1);
+//! let population = state.take_payload::<Vec<u64>>("population")?;
 //!
 //! assert_eq!(population, vec![10, 20, 30, 40]);
 //! # Ok(())

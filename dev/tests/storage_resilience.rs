@@ -68,12 +68,12 @@ fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state.json")
 }
 
-fn spec() -> StateSpec {
-    StateSpec::load(fixture_path()).unwrap()
+fn spec() -> SystemStateSchema {
+    SystemStateSchema::load_json_template(fixture_path()).unwrap()
 }
 
-fn stream(queue_bytes: u64) -> StreamConfig {
-    StreamConfig::new(
+fn stream(queue_bytes: u64) -> StateStreamConfig {
+    StateStreamConfig::new(
         "signal",
         ["population", "activity"],
         NonZeroU64::new(128).unwrap(),
@@ -81,30 +81,42 @@ fn stream(queue_bytes: u64) -> StreamConfig {
     )
 }
 
-fn populated_state(spec: &StateSpec, index: u64) -> SystemState {
-    let mut state = spec.empty(TimePoint::new(index));
-    state.set("population", vec![index as f64, 2.5]).unwrap();
-    state.set("activity", format!("sample-{index}")).unwrap();
+fn populated_state(spec: &SystemStateSchema, index: u64) -> SystemState {
+    let mut state = spec.create_empty_state(SimulationTime::from_step(index));
+    state
+        .insert_payload("population", vec![index as f64, 2.5])
+        .unwrap();
+    state
+        .insert_payload("activity", format!("sample-{index}"))
+        .unwrap();
     state
 }
 
-fn decoders() -> Decoders {
-    let mut decoders = Decoders::with_capacity(2);
-    decoders.add("population", VecF64Decoder).unwrap();
-    decoders.add("activity", StringDecoder).unwrap();
+fn decoders() -> JsonPayloadDecoderRegistry {
+    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(2);
+    decoders
+        .register_for_field("population", JsonVecF64Decoder)
+        .unwrap();
+    decoders
+        .register_for_field("activity", JsonStringDecoder)
+        .unwrap();
     decoders
 }
 
 /// Produces a completed public run with two strictly ordered records.
 fn write_valid_run(workspace: &TempWorkspace) {
     let spec = spec();
-    let output = RunOutput::builder(workspace.run(), &spec)
-        .stream(stream(4_096))
-        .start()
+    let output = SystemStateWriter::builder(workspace.run(), &spec)
+        .add_state_stream(stream(4_096))
+        .create_new_recording()
         .unwrap();
-    output.sample("signal", &populated_state(&spec, 2)).unwrap();
-    output.sample("signal", &populated_state(&spec, 5)).unwrap();
-    output.finish().unwrap();
+    output
+        .record_state_to_stream("signal", &populated_state(&spec, 2))
+        .unwrap();
+    output
+        .record_state_to_stream("signal", &populated_state(&spec, 5))
+        .unwrap();
+    output.complete_recording().unwrap();
 }
 
 fn metadata_path(run: &Path) -> PathBuf {
@@ -142,23 +154,23 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let existing = TempWorkspace::new("existing");
     fs::create_dir(existing.run()).unwrap();
     assert!(matches!(
-        RunOutput::builder(existing.run(), &state_spec)
-            .stream(stream(4_096))
-            .start(),
-        Err(StorageError::OutputExists { path }) if path == existing.run()
+        SystemStateWriter::builder(existing.run(), &state_spec)
+            .add_state_stream(stream(4_096))
+            .create_new_recording(),
+        Err(StorageError::RecordingDirectoryExists { path }) if path == existing.run()
     ));
 
     let invalid = TempWorkspace::new("invalid");
     assert!(matches!(
-        RunOutput::builder(invalid.run(), &state_spec)
-            .stream(StreamConfig::new(
+        SystemStateWriter::builder(invalid.run(), &state_spec)
+            .add_state_stream(StateStreamConfig::new(
                 "signal",
                 ["absent"],
                 NonZeroU64::new(1).unwrap(),
                 NonZeroU64::new(1).unwrap(),
             ))
-            .start(),
-        Err(StorageError::InvalidConfig {
+            .create_new_recording(),
+        Err(StorageError::InvalidConfiguration {
             setting: "fields",
             ..
         })
@@ -167,93 +179,97 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let duplicate = TempWorkspace::new("duplicate");
     assert!(matches!(
-        RunOutput::builder(duplicate.run(), &state_spec)
-            .stream(stream(4_096))
-            .stream(stream(4_096))
-            .start(),
-        Err(StorageError::DuplicateStream { stream }) if stream == "signal"
+        SystemStateWriter::builder(duplicate.run(), &state_spec)
+            .add_state_stream(stream(4_096))
+            .add_state_stream(stream(4_096))
+            .create_new_recording(),
+        Err(StorageError::DuplicateStateStream { stream }) if stream == "signal"
     ));
 
     let invalid_time = TempWorkspace::new("time");
     assert!(matches!(
-        RunOutput::builder(invalid_time.run(), &state_spec)
-            .time_axis(TimeAxis::new("step").physical_unit("s"))
-            .stream(stream(4_096))
-            .start(),
+        SystemStateWriter::builder(invalid_time.run(), &state_spec)
+            .with_time_axis_metadata(TimeAxisMetadata::new("step").with_physical_time_unit("s"))
+            .add_state_stream(stream(4_096))
+            .create_new_recording(),
         Err(StorageError::InvalidMetadata { .. })
     ));
     println!("[configuration] existing=true fields=true duplicate=true time=true");
 
     let oversized = TempWorkspace::new("oversized");
-    let output = RunOutput::builder(oversized.run(), &state_spec)
-        .stream(stream(64))
-        .start()
+    let output = SystemStateWriter::builder(oversized.run(), &state_spec)
+        .add_state_stream(stream(64))
+        .create_new_recording()
         .unwrap();
-    let mut huge = state_spec.empty(TimePoint::new(1));
-    huge.set("population", vec![1.0]).unwrap();
-    huge.set("activity", "x".repeat(512)).unwrap();
+    let mut huge = state_spec.create_empty_state(SimulationTime::from_step(1));
+    huge.insert_payload("population", vec![1.0]).unwrap();
+    huge.insert_payload("activity", "x".repeat(512)).unwrap();
     assert!(matches!(
-        output.sample("signal", &huge),
+        output.record_state_to_stream("signal", &huge),
         Err(StorageError::RecordTooLarge { limit: 64, .. })
     ));
-    output.fail("expected oversized sample").unwrap();
+    output
+        .mark_recording_failed("expected oversized sample")
+        .unwrap();
 
     let ordering = TempWorkspace::new("ordering");
-    let output = RunOutput::builder(ordering.run(), &state_spec)
-        .stream(stream(4_096))
-        .start()
+    let output = SystemStateWriter::builder(ordering.run(), &state_spec)
+        .add_state_stream(stream(4_096))
+        .create_new_recording()
         .unwrap();
     let mut state = populated_state(&state_spec, 5);
-    output.sample("signal", &state).unwrap();
+    output.record_state_to_stream("signal", &state).unwrap();
     assert!(matches!(
-        output.sample("signal", &state),
+        output.record_state_to_stream("signal", &state),
         Err(StorageError::OutOfOrderRecord {
             index: 5,
             previous: 5,
             ..
         })
     ));
-    state.set_time(TimePoint::new(4));
+    state.replace_simulation_time(SimulationTime::from_step(4));
     assert!(matches!(
-        output.sample("signal", &state),
+        output.record_state_to_stream("signal", &state),
         Err(StorageError::OutOfOrderRecord {
             index: 4,
             previous: 5,
             ..
         })
     ));
-    output.finish().unwrap();
+    output.complete_recording().unwrap();
 
     let terminal = TempWorkspace::new("terminal");
-    let output = RunOutput::builder(terminal.run(), &state_spec)
-        .stream(stream(4_096))
-        .start()
+    let output = SystemStateWriter::builder(terminal.run(), &state_spec)
+        .add_state_stream(stream(4_096))
+        .create_new_recording()
         .unwrap();
     fs::remove_dir(terminal.run().join("signal")).unwrap();
     output
-        .sample("signal", &populated_state(&state_spec, 1))
+        .record_state_to_stream("signal", &populated_state(&state_spec, 1))
         .unwrap();
     assert!(matches!(
-        output.finish(),
-        Err(StorageError::WriterTerminated { .. })
+        output.complete_recording(),
+        Err(StorageError::StateWriterTerminated { .. })
     ));
     println!(
         "[backpressure] oversized_rejected=true ordering_rejected=true terminal_propagated=true"
     );
 
     let encoding = TempWorkspace::new("encoding");
-    let output = RunOutput::builder(encoding.run(), &state_spec)
-        .stream(stream(4_096))
-        .start()
+    let output = SystemStateWriter::builder(encoding.run(), &state_spec)
+        .add_state_stream(stream(4_096))
+        .create_new_recording()
         .unwrap();
-    let mut empty = state_spec.empty(TimePoint::new(3));
+    let mut empty = state_spec.create_empty_state(SimulationTime::from_step(3));
     assert!(matches!(
-        output.sample("signal", &empty),
+        output.record_state_to_stream("signal", &empty),
         Err(StorageError::StateAccess { index: 3, .. })
     ));
-    empty.set("population", RejectEncoding).unwrap();
-    empty.set("activity", String::from("valid")).unwrap();
-    let encode_error = output.sample("signal", &empty).unwrap_err();
+    empty.insert_payload("population", RejectEncoding).unwrap();
+    empty
+        .insert_payload("activity", String::from("valid"))
+        .unwrap();
+    let encode_error = output.record_state_to_stream("signal", &empty).unwrap_err();
     assert!(matches!(
         &encode_error,
         StorageError::EncodeField {
@@ -267,18 +283,22 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         encode_error.source().unwrap().to_string(),
         "deliberate resilience failure"
     );
-    output.fail("expected encoding failures").unwrap();
+    output
+        .mark_recording_failed("expected encoding failures")
+        .unwrap();
 
     let running = TempWorkspace::new("running");
-    let output = RunOutput::builder(running.run(), &state_spec)
-        .stream(stream(4_096))
-        .start()
+    let output = SystemStateWriter::builder(running.run(), &state_spec)
+        .add_state_stream(stream(4_096))
+        .create_new_recording()
         .unwrap();
     assert!(matches!(
-        SeriesReader::open(running.run(), decoders()),
-        Err(StorageError::RunIncomplete { .. })
+        StoredStateSeriesReader::open_completed_recording(running.run(), decoders()),
+        Err(StorageError::RecordingNotComplete { .. })
     ));
-    output.fail("simulation stopped deliberately").unwrap();
+    output
+        .mark_recording_failed("simulation stopped deliberately")
+        .unwrap();
     let failed_metadata: Value =
         serde_json::from_slice(&fs::read(metadata_path(&running.run())).unwrap()).unwrap();
     assert_eq!(failed_metadata["status"]["state"], "failed");
@@ -287,29 +307,35 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         "simulation stopped deliberately"
     );
     assert!(matches!(
-        SeriesReader::open(running.run(), decoders()),
-        Err(StorageError::RunIncomplete { .. })
+        StoredStateSeriesReader::open_completed_recording(running.run(), decoders()),
+        Err(StorageError::RecordingNotComplete { .. })
     ));
 
     let coverage = TempWorkspace::new("coverage");
     write_valid_run(&coverage);
-    let reader = SeriesReader::open(coverage.run(), Decoders::new()).unwrap();
+    let reader = StoredStateSeriesReader::open_completed_recording(
+        coverage.run(),
+        JsonPayloadDecoderRegistry::new(),
+    )
+    .unwrap();
     assert!(matches!(
-        reader.read("absent"),
-        Err(StorageError::UnknownStream { stream }) if stream == "absent"
+        reader.read_stream_as_state_series("absent"),
+        Err(StorageError::UnknownStateStream { stream }) if stream == "absent"
     ));
     assert!(matches!(
-        reader.read("signal"),
+        reader.read_stream_as_state_series("signal"),
         Err(StorageError::MissingDecoder { field }) if field == "population"
     ));
-    let mut registry = Decoders::new();
+    let mut registry = JsonPayloadDecoderRegistry::new();
     assert!(matches!(
-        registry.add::<String, _>("", StringDecoder),
-        Err(StorageError::InvalidConfig { .. })
+        registry.register_for_field::<String, _>("", JsonStringDecoder),
+        Err(StorageError::InvalidConfiguration { .. })
     ));
-    registry.add("activity", StringDecoder).unwrap();
+    registry
+        .register_for_field("activity", JsonStringDecoder)
+        .unwrap();
     assert!(matches!(
-        registry.add::<String, _>("activity", StringDecoder),
+        registry.register_for_field::<String, _>("activity", JsonStringDecoder),
         Err(StorageError::DuplicateDecoder { field }) if field == "activity"
     ));
 
@@ -317,9 +343,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     write_valid_run(&wrong_type);
     let wrong_bytes = b"{\"index\":2,\"values\":{\"population\":\"bad\",\"activity\":\"valid\"}}\n";
     replace_first_chunk(&wrong_type.run(), wrong_bytes, 1, 2, 2);
-    let error = SeriesReader::open(wrong_type.run(), decoders())
+    let error = StoredStateSeriesReader::open_completed_recording(wrong_type.run(), decoders())
         .unwrap()
-        .read("signal")
+        .read_stream_as_state_series("signal")
         .unwrap_err();
     assert!(matches!(
         &error,
@@ -337,9 +363,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     write_valid_run(&malformed);
     replace_first_chunk(&malformed.run(), b"{\n", 1, 2, 2);
     assert!(matches!(
-        SeriesReader::open(malformed.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(malformed.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::InvalidRecord { line: 1, .. })
     ));
 
@@ -348,9 +374,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let missing_field_bytes = b"{\"index\":2,\"values\":{\"population\":[2.0]}}\n";
     replace_first_chunk(&missing_field.run(), missing_field_bytes, 1, 2, 2);
     assert!(matches!(
-        SeriesReader::open(missing_field.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(missing_field.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("missing payload field `activity`")
     ));
 
@@ -360,9 +386,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"activity\":\"b\"}}\n";
     replace_first_chunk(&duplicate_field.run(), duplicate_bytes, 1, 2, 2);
     assert!(matches!(
-        SeriesReader::open(duplicate_field.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(duplicate_field.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("duplicate payload field")
     ));
 
@@ -372,9 +398,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"extra\":0}}\n";
     replace_first_chunk(&additional_field.run(), additional_bytes, 1, 2, 2);
     assert!(matches!(
-        SeriesReader::open(additional_field.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(additional_field.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("undeclared payload fields: extra")
     ));
 
@@ -384,9 +410,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         b"{\"index\":2,\"physical\":1e400,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n";
     replace_first_chunk(&invalid_physical.run(), physical_bytes, 1, 2, 2);
     assert!(matches!(
-        SeriesReader::open(invalid_physical.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(invalid_physical.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::InvalidRecord { .. })
     ));
 
@@ -395,9 +421,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let repeated = b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n{\"index\":2,\"values\":{\"population\":[3.0],\"activity\":\"b\"}}\n";
     replace_first_chunk(&non_increasing.run(), repeated, 2, 2, 2);
     assert!(matches!(
-        SeriesReader::open(non_increasing.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(non_increasing.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("not greater")
     ));
 
@@ -406,9 +432,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let missing_chunk = first_chunk(&missing.run());
     fs::remove_file(&missing_chunk).unwrap();
     assert!(matches!(
-        SeriesReader::open(missing.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(missing.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::MissingChunk { path }) if path == missing_chunk
     ));
 
@@ -419,9 +445,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     size_bytes.push(b' ');
     fs::write(&size_chunk, size_bytes).unwrap();
     assert!(matches!(
-        SeriesReader::open(size.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(size.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::ChunkSizeMismatch { path, .. }) if path == size_chunk
     ));
 
@@ -436,9 +462,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     checksum_bytes[position] = b'6';
     fs::write(&checksum_chunk, checksum_bytes).unwrap();
     assert!(matches!(
-        SeriesReader::open(checksum.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(checksum.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::ChecksumMismatch { path, .. }) if path == checksum_chunk
     ));
 
@@ -447,9 +473,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let bytes = b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}";
     replace_first_chunk(&unterminated.run(), bytes, 1, 2, 2);
     assert!(matches!(
-        SeriesReader::open(unterminated.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(unterminated.run(), decoders())
             .unwrap()
-            .read("signal"),
+            .read_stream_as_state_series("signal"),
         Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("not terminated")
     ));
 
@@ -465,7 +491,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     )
     .unwrap();
     assert!(matches!(
-        SeriesReader::open(version.run(), decoders()),
+        StoredStateSeriesReader::open_completed_recording(version.run(), decoders()),
         Err(StorageError::UnsupportedVersion { found: 999, .. })
     ));
 

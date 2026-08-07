@@ -137,50 +137,55 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
 
     let workspace = TempWorkspace::new();
     let run_path = workspace.run();
-    let spec = StateSpec::load(fixture_path()).expect("checked-in template must load");
+    let spec = SystemStateSchema::load_json_template(fixture_path())
+        .expect("checked-in template must load");
     let clones = Arc::new(AtomicUsize::new(0));
 
-    let signal = StreamConfig::new(
+    let signal = StateStreamConfig::new(
         "signal",
         ["activity", "population"],
         NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
         NonZeroU64::new(QUEUE_BYTES).unwrap(),
     )
-    .directory("streams/signals")
-    .cadence("every simulation step");
-    let space = StreamConfig::new(
+    .with_relative_directory("streams/signals")
+    .with_cadence_description("every simulation step");
+    let space = StateStreamConfig::new(
         "space",
         ["space"],
         NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
         NonZeroU64::new(QUEUE_BYTES).unwrap(),
     )
-    .cadence("every two simulation steps");
+    .with_cadence_description("every two simulation steps");
 
     let mut annotations = Map::new();
     annotations.insert("seed".to_owned(), Value::from(42));
     annotations.insert("program".to_owned(), Value::from("public-api-demo"));
-    let output = RunOutputBuilder::new(&run_path, &spec)
-        .time_axis(
-            TimeAxis::new("simulation_step")
-                .index_unit("step")
-                .physical_name("time")
-                .physical_unit("s"),
+    let output = SystemStateWriterBuilder::new(&run_path, &spec)
+        .with_time_axis_metadata(
+            TimeAxisMetadata::new("simulation_step")
+                .with_step_unit("step")
+                .with_physical_time_name("time")
+                .with_physical_time_unit("s"),
         )
-        .run_metadata(annotations)
-        .stream(signal)
-        .stream(space)
-        .start()
+        .with_user_metadata(annotations)
+        .add_state_stream(signal)
+        .add_state_stream(space)
+        .create_new_recording()
         .expect("valid run must start");
-    assert_eq!(output.root(), run_path);
-    assert_eq!(output.streams().collect::<Vec<_>>(), ["signal", "space"]);
+    assert_eq!(output.recording_directory(), run_path);
+    assert_eq!(
+        output.stream_names().collect::<Vec<_>>(),
+        ["signal", "space"]
+    );
     assert!(run_path.join("metadata.json").is_file());
 
     let mut lattice = Tensor::<u64, Dense>::zeros(&[2, 2]);
     for (coordinate, value) in [([0, 0], 1), ([0, 1], 2), ([1, 0], 3), ([1, 1], 4)] {
         lattice.set(&coordinate, value);
     }
-    let mut live = spec.empty(TimePoint::from_physical(0, 0.0).unwrap());
-    live.set(
+    let mut live =
+        spec.create_empty_state(SimulationTime::from_step_and_physical_time(0, 0.0).unwrap());
+    live.insert_payload(
         "population",
         TrackedVec {
             values: vec![10.0, 20.0, 30.0],
@@ -188,40 +193,43 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         },
     )
     .unwrap();
-    live.set("space", lattice).unwrap();
-    live.set("activity", String::from("initial")).unwrap();
+    live.insert_payload("space", lattice).unwrap();
+    live.insert_payload("activity", String::from("initial"))
+        .unwrap();
 
     for index in 0..4_u64 {
-        output.sample("signal", &live).unwrap();
+        output.record_state_to_stream("signal", &live).unwrap();
         if index % 2 == 0 {
-            output.sample("space", &live).unwrap();
+            output.record_state_to_stream("space", &live).unwrap();
         }
         assert_eq!(clones.load(Ordering::SeqCst), 0);
         println!(
             "[sample] index={index} physical={:.2} signal=true space={}",
-            live.time().physical().unwrap(),
+            live.simulation_time().physical_time().unwrap(),
             index % 2 == 0
         );
 
         if index < 3 {
-            live.get_mut::<TrackedVec>("population").unwrap().values[0] += 1.0;
-            let lattice = live.get_mut::<Tensor<u64, Dense>>("space").unwrap();
+            live.payload_mut::<TrackedVec>("population").unwrap().values[0] += 1.0;
+            let lattice = live.payload_mut::<Tensor<u64, Dense>>("space").unwrap();
             lattice.set(&[0, 0], lattice.get(&[0, 0]) + 10);
-            *live.get_mut::<String>("activity").unwrap() = format!("step-{index} 世界");
-            live.advance(Some(0.25)).unwrap();
+            *live.payload_mut::<String>("activity").unwrap() = format!("step-{index} 世界");
+            live.advance_simulation_time(Some(0.25)).unwrap();
         }
     }
     assert!(matches!(
-        output.sample("absent", &live),
-        Err(StorageError::UnknownStream { stream }) if stream == "absent"
+        output.record_state_to_stream("absent", &live),
+        Err(StorageError::UnknownStateStream { stream }) if stream == "absent"
     ));
-    output.finish().expect("all writers must drain and finish");
+    output
+        .complete_recording()
+        .expect("all writers must drain and finish");
     assert_eq!(clones.load(Ordering::SeqCst), 0);
 
     let metadata_bytes = fs::read(run_path.join("metadata.json")).unwrap();
     let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
     assert_eq!(metadata["status"]["state"], "complete");
-    assert_eq!(metadata["run"]["seed"], 42);
+    assert_eq!(metadata["user_metadata"]["seed"], 42);
     assert_eq!(
         serde_json::from_slice::<Value>(&serde_json::to_vec_pretty(&metadata).unwrap()).unwrap(),
         metadata
@@ -269,60 +277,94 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         "[writer] signal_records={signal_records} signal_bytes={signal_bytes} space_records={space_records} space_bytes={space_bytes}"
     );
 
-    assert_eq!(VecF64Decoder.decode("[1.25,-2.5]").unwrap(), [1.25, -2.5]);
-    assert!(VecF64Decoder.decode("[]").unwrap().is_empty());
     assert_eq!(
-        StringDecoder.decode(r#""hello 世界""#).unwrap(),
+        JsonVecF64Decoder
+            .decode_json_payload("[1.25,-2.5]")
+            .unwrap(),
+        [1.25, -2.5]
+    );
+    assert!(
+        JsonVecF64Decoder
+            .decode_json_payload("[]")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        JsonStringDecoder
+            .decode_json_payload(r#""hello 世界""#)
+            .unwrap(),
         "hello 世界"
     );
-    assert!(StringDecoder.decode(r#""""#).unwrap().is_empty());
-    let mut decoders = Decoders::with_capacity(3);
+    assert!(
+        JsonStringDecoder
+            .decode_json_payload(r#""""#)
+            .unwrap()
+            .is_empty()
+    );
+    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(3);
     assert!(decoders.is_empty());
-    decoders.add("population", VecF64Decoder).unwrap();
-    decoders.add("activity", StringDecoder).unwrap();
     decoders
-        .add::<Tensor<u64, Dense>, _>("space", |raw: &str| serde_json::from_str(raw))
+        .register_for_field("population", JsonVecF64Decoder)
+        .unwrap();
+    decoders
+        .register_for_field("activity", JsonStringDecoder)
+        .unwrap();
+    decoders
+        .register_for_field::<Tensor<u64, Dense>, _>("space", |raw: &str| serde_json::from_str(raw))
         .unwrap();
     assert_eq!(decoders.len(), 3);
-    assert!(decoders.contains("space"));
-    let mut decoder_keys = decoders.keys().collect::<Vec<_>>();
+    assert!(decoders.has_decoder_for_field("space"));
+    let mut decoder_keys = decoders.registered_field_names().collect::<Vec<_>>();
     decoder_keys.sort_unstable();
     assert_eq!(decoder_keys, ["activity", "population", "space"]);
 
-    let reader = SeriesReader::open(&run_path, decoders).unwrap();
-    assert_eq!(reader.root(), run_path);
-    assert_eq!(reader.streams().collect::<Vec<_>>(), ["signal", "space"]);
-    assert!(format!("{reader:?}").contains("SeriesReader"));
-    let signal_series = reader.read("signal").unwrap();
+    let reader = StoredStateSeriesReader::open_completed_recording(&run_path, decoders).unwrap();
+    assert_eq!(reader.recording_directory(), run_path);
+    assert_eq!(
+        reader.stream_names().collect::<Vec<_>>(),
+        ["signal", "space"]
+    );
+    assert!(format!("{reader:?}").contains("StoredStateSeriesReader"));
+    let signal_series = reader.read_stream_as_state_series("signal").unwrap();
     assert_eq!(signal_series.len(), 4);
-    assert_eq!(signal_series.first().unwrap().time().index(), 0);
-    assert_eq!(signal_series.last().unwrap().time().index(), 3);
     assert_eq!(
         signal_series
-            .last()
+            .first_state()
             .unwrap()
-            .get::<Vec<f64>>("population")
+            .simulation_time()
+            .step(),
+        0
+    );
+    assert_eq!(
+        signal_series.last_state().unwrap().simulation_time().step(),
+        3
+    );
+    assert_eq!(
+        signal_series
+            .last_state()
+            .unwrap()
+            .payload::<Vec<f64>>("population")
             .unwrap()[0],
         13.0
     );
     assert_eq!(
         signal_series
-            .last()
+            .last_state()
             .unwrap()
-            .get::<String>("activity")
+            .payload::<String>("activity")
             .unwrap(),
         "step-2 世界"
     );
-    let all = reader.read_all().unwrap();
+    let all = reader.read_all_streams_as_state_series().unwrap();
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].0, "signal");
     assert_eq!(all[1].0, "space");
     assert_eq!(
         all[1]
             .1
-            .last()
+            .last_state()
             .unwrap()
-            .get::<Tensor<u64, Dense>>("space")
+            .payload::<Tensor<u64, Dense>>("space")
             .unwrap()
             .get(&[0, 0]),
         21

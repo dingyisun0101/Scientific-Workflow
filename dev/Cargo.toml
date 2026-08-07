@@ -23,10 +23,11 @@ include = [
 
 [dependencies]
 erased-serde = "0.4.10"
+fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.11"
 thiserror = "2"
 
 [dev-dependencies]
-physics_in_parallel = { version = "3.0.4", path = "../../pip" }
+physics_in_parallel = { version = "3.0.3", path = "../../pip" }

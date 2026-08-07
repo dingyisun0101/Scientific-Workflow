@@ -4,11 +4,11 @@
 //! [`SystemState`](crate::system_state::SystemState) values for analysis. JSON
 //! encoding, payload reconstruction, metadata validation, filesystem access,
 //! chunk management, and writer lifecycles belong to the separate storage
-//! module and deliberately do not appear in [`SeriesError`].
+//! module and deliberately do not appear in [`StateSeriesError`].
 //!
 //! # Invariant failures
 //!
-//! A [`StateSeries`](super::series::StateSeries) accepts a state only when it
+//! A [`StateSeries`](super::state_series::StateSeries) accepts a state only when it
 //! shares the series' exact immutable layout allocation and has a simulation
 //! index greater than the current final index. These requirements make layout
 //! checks constant-time and preserve one unambiguous iteration order while
@@ -19,8 +19,8 @@
 //! Immutable state lookup follows ordinary slice conventions and returns an
 //! `Option`. The narrow mutable analysis boundary needs richer diagnostics
 //! because it validates both a series position and a typed state field.
-//! [`SeriesError::PositionOutOfBounds`] identifies the former, while
-//! [`SeriesError::FieldAccess`] adds the series position to the original
+//! [`StateSeriesError::PositionOutOfBounds`] identifies the former, while
+//! [`StateSeriesError::PayloadAccess`] adds the series position to the original
 //! [`StateError`] without discarding its source-chain information.
 
 use thiserror::Error;
@@ -33,20 +33,20 @@ use crate::system_state::StateError;
 /// variant is either a collection invariant violation or contextualized typed
 /// access into one already-stored state.
 ///
-/// `SeriesError` is non-exhaustive so additional analysis invariants can be
+/// `StateSeriesError` is non-exhaustive so additional analysis invariants can be
 /// introduced without forcing downstream crates to use exhaustive matches.
 /// Callers should therefore retain a fallback match arm.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum SeriesError {
+pub enum StateSeriesError {
     /// The rejected state does not share the series' canonical layout.
     ///
     /// Structural equality is insufficient: accepted states must derive from
-    /// the same [`StateSpec`](crate::system_state::StateSpec) allocation. The
+    /// the same [`SystemStateSchema`](crate::system_state::SystemStateSchema) allocation. The
     /// rejected state's simulation index is retained for diagnostics without
     /// inspecting or formatting any scientific payload.
     #[error("state at time index {index} does not share the series specification")]
-    SpecMismatch {
+    SchemaMismatch {
         /// Simulation index carried by the rejected state.
         index: u64,
     },
@@ -83,10 +83,10 @@ pub enum SeriesError {
     /// concrete payload type mismatch. Wrapping it here adds the series
     /// position while preserving [`std::error::Error::source`] traversal.
     #[error("cannot access state-series position {position}: {source}")]
-    FieldAccess {
+    PayloadAccess {
         /// Zero-based position of the state containing the requested field.
         position: usize,
-        /// Original typed access failure reported by `SystemState::get_mut`.
+        /// Original typed access failure reported by `SystemState::payload_mut`.
         #[source]
         source: StateError,
     },

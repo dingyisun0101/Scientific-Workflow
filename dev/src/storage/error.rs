@@ -5,7 +5,7 @@
 //! immutable chunk files, bounded writer queues, and worker lifecycle. It does
 //! not redefine errors that belong to the in-memory data model. Instead,
 //! [`StorageError`] wraps [`StateError`](crate::system_state::StateError) or
-//! [`SeriesError`](crate::time_series::SeriesError) when storage adds stream,
+//! [`StateSeriesError`](crate::time_series::StateSeriesError) when storage adds stream,
 //! record, or filesystem context to one of those failures.
 //!
 //! # Context ownership
@@ -27,7 +27,7 @@
 //!
 //! `StorageError` contains no scientific payload. In particular, a decoded
 //! state that violates a series invariant is dropped before its
-//! [`SeriesError`] is wrapped. Writer-terminal errors are shared through `Arc`
+//! [`StateSeriesError`] is wrapped. Writer-terminal errors are shared through `Arc`
 //! so every blocked or later submitter can observe one authoritative failure
 //! without requiring `StorageError: Clone`.
 
@@ -39,7 +39,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::system_state::StateError;
-use crate::time_series::SeriesError;
+use crate::time_series::StateSeriesError;
 
 /// A failure encountered while encoding, writing, reading, or decoding a run.
 ///
@@ -56,13 +56,13 @@ pub enum StorageError {
     // ---------------------------------------------------------------------
     // Configuration and lifecycle
     // ---------------------------------------------------------------------
-    /// A new run refused to replace an existing output path.
+    /// A new recording refused to replace an existing path.
     ///
-    /// Storage never silently overwrites a previous run. A future explicit
-    /// recovery or replacement policy must use a separate API.
-    #[error("output path `{path}` already exists")]
-    OutputExists {
-        /// Existing path that prevented run creation.
+    /// Storage never silently overwrites a previous recording. Existing
+    /// running recordings are accepted only through explicit continuation.
+    #[error("recording directory `{path}` already exists")]
+    RecordingDirectoryExists {
+        /// Existing path that prevented recording creation.
         path: PathBuf,
     },
 
@@ -72,7 +72,7 @@ pub enum StorageError {
     /// point. This variant covers relationships between values, unsafe relative
     /// paths, unsupported names, and similar semantic configuration failures.
     #[error("invalid storage setting `{setting}`: {reason}")]
-    InvalidConfig {
+    InvalidConfiguration {
         /// Stable setting name used by documentation and diagnostics.
         setting: &'static str,
         /// Concise explanation of the violated invariant.
@@ -81,28 +81,74 @@ pub enum StorageError {
 
     /// Two logical output streams were configured with the same name.
     #[error("output stream `{stream}` is configured more than once")]
-    DuplicateStream {
+    DuplicateStateStream {
         /// Repeated normalized stream name.
         stream: String,
     },
 
-    /// A caller selected a stream absent from the run declaration.
-    #[error("run does not declare output stream `{stream}`")]
-    UnknownStream {
+    /// A caller selected a stream absent from the recording declaration.
+    #[error("recording does not declare state stream `{stream}`")]
+    UnknownStateStream {
         /// Requested stream name.
         stream: String,
     },
 
-    /// A caller submitted another record after one stream had been finished.
-    #[error("output stream `{stream}` has already finished")]
-    StreamFinished {
-        /// Finished stream that rejected the operation.
+    /// The recording-wide writer has stopped accepting new work.
+    #[error("system-state writer has stopped accepting records")]
+    StateWriterClosed,
+
+    /// A caller repeated a recording operation after successful termination.
+    #[error("state recording has already finished")]
+    RecordingFinished,
+
+    /// Another writer currently owns the recording directory.
+    #[error("state recording `{path}` is already owned by another writer")]
+    RecordingDirectoryInUse {
+        /// Output root whose advisory exclusive lease could not be acquired.
+        path: PathBuf,
+    },
+
+    /// Explicit continuation was requested for a terminal recording.
+    #[error("recording metadata `{path}` is terminal and cannot be continued")]
+    RecordingNotContinuable {
+        /// Metadata file declaring a complete or failed lifecycle.
+        path: PathBuf,
+    },
+
+    /// Existing running configuration differs from the requested builder.
+    #[error("cannot continue recording metadata `{path}`: {reason}")]
+    RecordingConfigurationMismatch {
+        /// Existing authoritative metadata document.
+        path: PathBuf,
+        /// Concise description of the incompatible configuration.
+        reason: String,
+    },
+
+    /// A stream selected as a checkpoint omits part of the full state schema.
+    #[error("stream `{stream}` cannot reconstruct the full system state: {reason}")]
+    IncompleteCheckpointStream {
+        /// Logical stream selected for latest-checkpoint reconstruction.
+        stream: String,
+        /// Missing, additional, or reordered schema detail.
+        reason: String,
+    },
+
+    /// No complete record exists from which a state can be reconstructed.
+    #[error("stream `{stream}` contains no complete checkpoint record")]
+    NoCheckpointState {
+        /// Logical checkpoint stream searched during continuation.
         stream: String,
     },
 
-    /// A caller repeated a run-level operation after successful termination.
-    #[error("run output has already finished")]
-    RunFinished,
+    /// Chunk filenames do not describe one recoverable committed prefix and
+    /// at most one highest open chunk.
+    #[error("cannot recover stream output at `{path}`: {reason}")]
+    RecoveryConflict {
+        /// Stream directory or conflicting payload path.
+        path: PathBuf,
+        /// Concise filename/inventory conflict.
+        reason: String,
+    },
 
     // ---------------------------------------------------------------------
     // Persisted format and integrity
@@ -121,7 +167,7 @@ pub enum StorageError {
     },
 
     /// Syntactically valid metadata violates a semantic storage invariant.
-    #[error("invalid run metadata in `{path}`: {reason}")]
+    #[error("invalid recording metadata in `{path}`: {reason}")]
     InvalidMetadata {
         /// Authoritative metadata file that failed validation.
         path: PathBuf,
@@ -129,9 +175,10 @@ pub enum StorageError {
         reason: String,
     },
 
-    /// A reader requiring a successful run encountered incomplete metadata.
-    #[error("run metadata `{path}` does not declare successful completion")]
-    RunIncomplete {
+    /// A reader requiring a completed recording encountered terminally
+    /// unsuitable metadata.
+    #[error("recording metadata `{path}` does not declare successful completion")]
+    RecordingNotComplete {
         /// Metadata file whose lifecycle state is incomplete or failed.
         path: PathBuf,
     },
@@ -241,14 +288,14 @@ pub enum StorageError {
     /// created from persisted input and is dropped on failed reconstruction,
     /// preventing an error value from pinning arbitrarily large payloads.
     #[error("decoded state for stream `{stream}` at time index {index} cannot enter its series")]
-    SeriesInvariant {
+    StateSeriesInvariant {
         /// Logical stream being reconstructed.
         stream: String,
         /// Simulation index of the rejected decoded state.
         index: u64,
         /// Original in-memory collection invariant failure.
         #[source]
-        source: SeriesError,
+        source: StateSeriesError,
     },
 
     // ---------------------------------------------------------------------
@@ -317,30 +364,22 @@ pub enum StorageError {
     // ---------------------------------------------------------------------
     // Queue and writer-worker lifecycle
     // ---------------------------------------------------------------------
-    /// The bounded queue disconnected before accepting a complete record.
-    #[error("writer queue for stream `{stream}` is disconnected")]
-    QueueDisconnected {
-        /// Stream whose worker no longer has a live queue receiver.
-        stream: String,
-    },
+    /// The bounded recording queue disconnected before shutdown completed.
+    #[error("system-state writer queue disconnected before shutdown completed")]
+    WriterQueueDisconnected,
 
-    /// A stream worker terminated with an authoritative storage failure.
+    /// The recording worker terminated with an authoritative storage failure.
     ///
     /// The shared source lets multiple blocked submitters observe the same
     /// terminal failure without cloning an IO or JSON error.
-    #[error("writer for stream `{stream}` terminated: {source}")]
-    WriterTerminated {
-        /// Stream whose worker entered the terminal state.
-        stream: String,
+    #[error("system-state writer terminated: {source}")]
+    StateWriterTerminated {
         /// Shared authoritative worker failure.
         #[source]
         source: Arc<StorageError>,
     },
 
     /// Joining a writer thread revealed an unexpected panic.
-    #[error("writer worker for stream `{stream}` panicked")]
-    WriterPanicked {
-        /// Stream owned by the panicked worker.
-        stream: String,
-    },
+    #[error("system-state writer worker panicked")]
+    StateWriterPanicked,
 }

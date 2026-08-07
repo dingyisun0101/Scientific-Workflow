@@ -1,8 +1,8 @@
 //! All-in-one reconstruction of persisted streams into `StateSeries`.
 //!
-//! [`SeriesReader`] is the complete public read boundary. It owns an output
+//! [`StoredStateSeriesReader`] is the complete public read boundary. It owns a recording
 //! directory, one validated snapshot of its sole `metadata.json`, and a
-//! caller-configured [`Decoders`] registry. [`SeriesReader::read`] verifies a
+//! caller-configured [`JsonPayloadDecoderRegistry`] registry. [`StoredStateSeriesReader::read_stream_as_state_series`] verifies a
 //! selected stream's immutable chunks, dispatches each raw payload to the
 //! decoder registered for its key, assembles complete `SystemState` values, and
 //! returns one fully validated `StateSeries`.
@@ -29,7 +29,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use serde::de::{MapAccess, Visitor};
@@ -37,47 +37,51 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
-use crate::system_state::{StateSpec, TimePoint};
+use crate::system_state::{SimulationTime, SystemState, SystemStateSchema};
 use crate::time_series::StateSeries;
 
-use super::decoder::Decoders;
 use super::error::StorageError;
-use super::format::{ChunkMetadata, RunMetadata, RunStatus, StreamMetadata};
+use super::json_payload_decoder::JsonPayloadDecoderRegistry;
+use super::jsonl_format::{ChunkMetadata, RecordingMetadata, RecordingStatus, StateStreamMetadata};
+use super::queued_state_writer::RecoveredUnsealedRecord;
 
-/// Name of the only metadata document in one run output directory.
+/// Name of the only metadata document in one recording directory.
 const METADATA_FILE: &str = "metadata.json";
 
-/// Reader that reconstructs complete in-memory series from one finished run.
+/// Reader that reconstructs complete in-memory series from one completed recording.
 ///
 /// Construction consumes the decoder registry so decoder configuration and
 /// metadata remain one coherent read authority. The type is intentionally
 /// non-Clone because registered decoders may not have meaningful clone
 /// semantics.
-pub struct SeriesReader {
+pub struct StoredStateSeriesReader {
     root: PathBuf,
     metadata_path: PathBuf,
-    metadata: RunMetadata,
-    decoders: Decoders,
+    metadata: RecordingMetadata,
+    decoders: JsonPayloadDecoderRegistry,
 }
 
-impl SeriesReader {
-    /// Opens one output directory and validates its authoritative metadata.
+impl StoredStateSeriesReader {
+    /// Opens one recording directory and validates its authoritative metadata.
     ///
     /// The metadata snapshot must declare successful completion. Reading an
-    /// active or failed run is deliberately rejected because its chunk
+    /// active or failed recording is deliberately rejected because its chunk
     /// inventory is not a complete analysis result.
     ///
     /// Decoder coverage is checked per selected stream by
-    /// [`SeriesReader::read`], allowing one registry to serve only the streams
+    /// [`StoredStateSeriesReader::read_stream_as_state_series`], allowing one registry to serve only the streams
     /// an analysis intends to load.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError::Io`] when `metadata.json` cannot be read,
     /// [`StorageError::Json`] when it is not syntactically valid JSON, semantic
-    /// metadata errors from internal `RunMetadata::validate`, or
-    /// [`StorageError::RunIncomplete`] unless status is complete.
-    pub fn open(root: impl AsRef<Path>, decoders: Decoders) -> Result<Self, StorageError> {
+    /// metadata errors from internal `RecordingMetadata::validate`, or
+    /// [`StorageError::RecordingNotComplete`] unless status is complete.
+    pub fn open_completed_recording(
+        root: impl AsRef<Path>,
+        decoders: JsonPayloadDecoderRegistry,
+    ) -> Result<Self, StorageError> {
         let root = root.as_ref().to_path_buf();
         let metadata_path = root.join(METADATA_FILE);
         let bytes = fs::read(&metadata_path).map_err(|source| StorageError::Io {
@@ -85,15 +89,15 @@ impl SeriesReader {
             path: metadata_path.clone(),
             source,
         })?;
-        let metadata: RunMetadata =
+        let metadata: RecordingMetadata =
             serde_json::from_slice(&bytes).map_err(|source| StorageError::Json {
                 operation: "parse metadata",
                 path: metadata_path.clone(),
                 source,
             })?;
         metadata.validate(&metadata_path)?;
-        if !matches!(metadata.status, RunStatus::Complete) {
-            return Err(StorageError::RunIncomplete {
+        if !matches!(metadata.status, RecordingStatus::Complete) {
+            return Err(StorageError::RecordingNotComplete {
                 path: metadata_path,
             });
         }
@@ -105,13 +109,13 @@ impl SeriesReader {
         })
     }
 
-    /// Returns the run output directory exactly as supplied at construction.
-    pub fn root(&self) -> &Path {
+    /// Returns the recording directory exactly as supplied at construction.
+    pub fn recording_directory(&self) -> &Path {
         &self.root
     }
 
     /// Iterates declared stream names in deterministic metadata order.
-    pub fn streams(&self) -> impl ExactSizeIterator<Item = &str> {
+    pub fn stream_names(&self) -> impl ExactSizeIterator<Item = &str> {
         self.metadata
             .streams
             .iter()
@@ -130,11 +134,11 @@ impl SeriesReader {
     /// Returns precise stream-selection, decoder, filesystem, integrity,
     /// record, payload-conversion, or series-invariant errors. No partially
     /// reconstructed series is returned on failure.
-    pub fn read(&self, stream: &str) -> Result<StateSeries, StorageError> {
+    pub fn read_stream_as_state_series(&self, stream: &str) -> Result<StateSeries, StorageError> {
         let declaration =
             self.metadata
                 .stream(stream)
-                .ok_or_else(|| StorageError::UnknownStream {
+                .ok_or_else(|| StorageError::UnknownStateStream {
                     stream: stream.to_owned(),
                 })?;
         self.decoders
@@ -163,12 +167,14 @@ impl SeriesReader {
     /// Distinct stream schemas and cadences remain distinct series. If any
     /// stream fails, already reconstructed series are dropped and no partial
     /// vector is returned.
-    pub fn read_all(&self) -> Result<Vec<(String, StateSeries)>, StorageError> {
+    pub fn read_all_streams_as_state_series(
+        &self,
+    ) -> Result<Vec<(String, StateSeries)>, StorageError> {
         self.metadata
             .streams
             .iter()
             .map(|stream| {
-                self.read(&stream.name)
+                self.read_stream_as_state_series(&stream.name)
                     .map(|series| (stream.name.clone(), series))
             })
             .collect()
@@ -177,7 +183,7 @@ impl SeriesReader {
     /// Verifies and reconstructs one immutable committed chunk.
     fn read_chunk(
         &self,
-        stream: &StreamMetadata,
+        stream: &StateStreamMetadata,
         chunk: &ChunkMetadata,
         previous_index: &mut Option<u64>,
         series: &mut StateSeries,
@@ -249,12 +255,13 @@ impl SeriesReader {
             *previous_index = Some(index);
 
             let time = match record.physical {
-                Some(physical) => TimePoint::from_physical(index, physical).ok_or_else(|| {
-                    invalid_record(&path, line_number, "physical time must be finite")
-                })?,
-                None => TimePoint::new(index),
+                Some(physical) => SimulationTime::from_step_and_physical_time(index, physical)
+                    .ok_or_else(|| {
+                        invalid_record(&path, line_number, "physical time must be finite")
+                    })?,
+                None => SimulationTime::from_step(index),
             };
-            let mut state = series.spec().empty(time);
+            let mut state = series.schema().create_empty_state(time);
             decode_values(
                 &self.decoders,
                 stream,
@@ -263,11 +270,11 @@ impl SeriesReader {
                 record.values,
                 &mut state,
             )?;
-            series.push(state).map_err(|rejection| {
+            series.push_state(state).map_err(|rejection| {
                 let (source, state) = rejection.into_parts();
-                let index = state.time().index();
+                let index = state.simulation_time().step();
                 drop(state);
-                StorageError::SeriesInvariant {
+                StorageError::StateSeriesInvariant {
                     stream: stream.name.clone(),
                     index,
                     source,
@@ -297,16 +304,234 @@ impl SeriesReader {
     }
 }
 
-impl fmt::Debug for SeriesReader {
+impl fmt::Debug for StoredStateSeriesReader {
     /// Formats bounded configuration without decoder internals or payloads.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("SeriesReader")
+            .debug_struct("StoredStateSeriesReader")
             .field("root", &self.root)
             .field("streams", &self.metadata.streams.len())
             .field("decoders", &self.decoders)
             .finish_non_exhaustive()
     }
+}
+
+/// Reconstructs the newest complete state used by coordinated run resume.
+///
+/// `open_record` is the final complete JSONL object already obtained while the
+/// progress checker examined the sole unsealed chunk. When absent, this helper
+/// seeks directly to the last record of the newest sealed chunk. It does not
+/// scan, hash, size-check, or decode any earlier sealed record.
+pub(crate) fn decode_resume_state(
+    root: &Path,
+    _metadata_path: &Path,
+    stream: &StateStreamMetadata,
+    full_spec: &SystemStateSchema,
+    decoders: &JsonPayloadDecoderRegistry,
+    open_record: Option<&RecoveredUnsealedRecord>,
+) -> Result<SystemState, StorageError> {
+    validate_complete_resume_schema(stream, full_spec)?;
+    decoders.require(full_spec.field_schemas().iter().map(|field| field.name()))?;
+
+    if let Some(record) = open_record {
+        let bytes = read_open_record(record, &stream.name)?;
+        return decode_state_record_with_decoders(
+            &bytes,
+            record.path(),
+            stream,
+            full_spec,
+            decoders,
+        );
+    }
+
+    let chunk = stream
+        .chunks
+        .last()
+        .ok_or_else(|| StorageError::NoCheckpointState {
+            stream: stream.name.clone(),
+        })?;
+    let path = root.join(&stream.directory).join(&chunk.file);
+    let record = read_last_sealed_record(&path)?;
+    if record.is_empty() {
+        return Err(StorageError::NoCheckpointState {
+            stream: stream.name.clone(),
+        });
+    }
+    decode_state_record_with_decoders(&record, &path, stream, full_spec, decoders)
+}
+
+/// Reads one recovery-selected open record without rescanning its chunk.
+fn read_open_record(
+    record: &RecoveredUnsealedRecord,
+    stream: &str,
+) -> Result<Vec<u8>, StorageError> {
+    let length = usize::try_from(record.bytes()).map_err(|_| StorageError::ByteCountOverflow {
+        stream: stream.to_owned(),
+    })?;
+    let mut file = File::open(record.path()).map_err(|source| StorageError::Io {
+        operation: "open latest recoverable record",
+        path: record.path().to_path_buf(),
+        source,
+    })?;
+    file.seek(SeekFrom::Start(record.offset()))
+        .map_err(|source| StorageError::Io {
+            operation: "seek latest recoverable record",
+            path: record.path().to_path_buf(),
+            source,
+        })?;
+    let mut bytes = vec![0_u8; length];
+    file.read_exact(&mut bytes)
+        .map_err(|source| StorageError::Io {
+            operation: "read latest recoverable record",
+            path: record.path().to_path_buf(),
+            source,
+        })?;
+    Ok(bytes)
+}
+
+/// Requires exact key order and descriptions for a full-state checkpoint.
+fn validate_complete_resume_schema(
+    stream: &StateStreamMetadata,
+    full_spec: &SystemStateSchema,
+) -> Result<(), StorageError> {
+    if stream.fields.len() != full_spec.len() {
+        return Err(StorageError::IncompleteCheckpointStream {
+            stream: stream.name.clone(),
+            reason: format!(
+                "stream declares {} fields but the full state declares {}",
+                stream.fields.len(),
+                full_spec.len()
+            ),
+        });
+    }
+    for (position, (stored, expected)) in stream
+        .fields
+        .iter()
+        .zip(full_spec.field_schemas())
+        .enumerate()
+    {
+        if stored.name != expected.name() || stored.description.as_deref() != expected.description()
+        {
+            return Err(StorageError::IncompleteCheckpointStream {
+                stream: stream.name.clone(),
+                reason: format!(
+                    "field {position} is `{}` but full state requires `{}`",
+                    stored.name,
+                    expected.name()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Parses one record and dispatches each raw field into its owned final type.
+fn decode_state_record_with_decoders(
+    record: &[u8],
+    path: &Path,
+    stream: &StateStreamMetadata,
+    full_spec: &SystemStateSchema,
+    decoders: &JsonPayloadDecoderRegistry,
+) -> Result<SystemState, StorageError> {
+    let record: BorrowedRecord<'_> = serde_json::from_slice(record)
+        .map_err(|source| invalid_record(path, 1, format!("invalid JSON record: {source}")))?;
+    let time = match record.physical {
+        Some(physical) => SimulationTime::from_step_and_physical_time(record.index, physical)
+            .ok_or_else(|| invalid_record(path, 1, "physical time must be finite"))?,
+        None => SimulationTime::from_step(record.index),
+    };
+    let mut state = full_spec.create_empty_state(time);
+    decode_values(decoders, stream, path, 1, record.values, &mut state)?;
+    Ok(state)
+}
+
+/// Reads only the final newline-terminated JSONL record using backward blocks.
+fn read_last_sealed_record(path: &Path) -> Result<Vec<u8>, StorageError> {
+    const BLOCK: u64 = 8 * 1024;
+    let mut file = File::open(path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            StorageError::MissingChunk {
+                path: path.to_path_buf(),
+            }
+        } else {
+            StorageError::Io {
+                operation: "open latest sealed checkpoint",
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })?;
+    let length = file
+        .metadata()
+        .map_err(|source| StorageError::Io {
+            operation: "inspect latest sealed checkpoint",
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+
+    file.seek(SeekFrom::Start(length - 1))
+        .map_err(|source| StorageError::Io {
+            operation: "seek latest sealed checkpoint",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut final_byte = [0_u8; 1];
+    file.read_exact(&mut final_byte)
+        .map_err(|source| StorageError::Io {
+            operation: "read latest sealed checkpoint",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if final_byte[0] != b'\n' {
+        return Err(invalid_record(
+            path,
+            1,
+            "sealed chunk does not end with a record newline",
+        ));
+    }
+
+    let record_end = length - 1;
+    let mut cursor = record_end;
+    let mut record_start = 0_u64;
+    while cursor > 0 {
+        let block_start = cursor.saturating_sub(BLOCK);
+        let block_len =
+            usize::try_from(cursor - block_start).map_err(|_| StorageError::ByteCountOverflow {
+                stream: path.display().to_string(),
+            })?;
+        let mut block = vec![0_u8; block_len];
+        file.seek(SeekFrom::Start(block_start))
+            .and_then(|_| file.read_exact(&mut block))
+            .map_err(|source| StorageError::Io {
+                operation: "scan latest sealed record boundary",
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if let Some(position) = block.iter().rposition(|byte| *byte == b'\n') {
+            record_start = block_start + position as u64 + 1;
+            break;
+        }
+        cursor = block_start;
+    }
+
+    let record_len = usize::try_from(record_end - record_start).map_err(|_| {
+        StorageError::ByteCountOverflow {
+            stream: path.display().to_string(),
+        }
+    })?;
+    let mut record = vec![0_u8; record_len];
+    file.seek(SeekFrom::Start(record_start))
+        .and_then(|_| file.read_exact(&mut record))
+        .map_err(|source| StorageError::Io {
+            operation: "read latest sealed record",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(record)
 }
 
 /// Borrowed JSONL record whose payload values point into one line buffer.
@@ -371,14 +596,17 @@ impl<'de: 'a, 'a> Visitor<'de> for BorrowedValuesVisitor<'a> {
     }
 }
 
-/// Serde representation accepted by the crate-private StateSpec parser.
+/// Serde representation accepted by the crate-private SystemStateSchema parser.
 #[derive(Serialize)]
 struct StreamTemplateRef<'a> {
-    fields: &'a [super::format::FieldMetadata],
+    fields: &'a [super::jsonl_format::StateFieldMetadata],
 }
 
 /// Reconstructs one stream's immutable key/description specification.
-fn stream_spec(metadata_path: &Path, stream: &StreamMetadata) -> Result<StateSpec, StorageError> {
+fn stream_spec(
+    metadata_path: &Path,
+    stream: &StateStreamMetadata,
+) -> Result<SystemStateSchema, StorageError> {
     let bytes = serde_json::to_vec(&StreamTemplateRef {
         fields: &stream.fields,
     })
@@ -387,7 +615,7 @@ fn stream_spec(metadata_path: &Path, stream: &StreamMetadata) -> Result<StateSpe
         path: metadata_path.to_path_buf(),
         source,
     })?;
-    StateSpec::parse(metadata_path.to_path_buf(), &bytes).map_err(|source| {
+    SystemStateSchema::parse(metadata_path.to_path_buf(), &bytes).map_err(|source| {
         StorageError::InvalidMetadata {
             path: metadata_path.to_path_buf(),
             reason: format!(
@@ -446,8 +674,8 @@ fn validate_index(
 
 /// Validates exact keys, dispatches canonical decoders, and fills one state.
 fn decode_values(
-    decoders: &Decoders,
-    stream: &StreamMetadata,
+    decoders: &JsonPayloadDecoderRegistry,
+    stream: &StateStreamMetadata,
     path: &Path,
     line: u64,
     mut values: BorrowedValues<'_>,
@@ -468,7 +696,7 @@ fn decode_values(
         let (_, raw) = values.entries.swap_remove(position);
         decoders.decode_into(
             &stream.name,
-            state.time().index(),
+            state.simulation_time().step(),
             &field.name,
             raw.get(),
             state,
@@ -493,7 +721,7 @@ fn decode_values(
 /// Compares parsed chunk facts with the authoritative metadata descriptor.
 fn validate_chunk_facts(
     metadata_path: &Path,
-    stream: &StreamMetadata,
+    stream: &StateStreamMetadata,
     chunk: &ChunkMetadata,
     records: u64,
     first_index: Option<u64>,
