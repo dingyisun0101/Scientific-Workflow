@@ -10,6 +10,10 @@ making them suitable for large arrays and tensors.
 
 ## Features
 
+- Standard `config/{fixed,sweep,paths}.json` project configuration.
+- Deterministic Cartesian and correlated explicit-case task expansion.
+- Clone-free dict-like resolved task views over shared JSON values.
+- Named project-root-relative path resolution and byte-exact source export.
 - JSON-defined state fields with deterministic order and optional descriptions.
 - Dictionary-like typed access to heterogeneous Rust payloads.
 - Coordinated immutable and mutable tuple borrowing for coupled kernels.
@@ -25,6 +29,7 @@ making them suitable for large arrays and tensors.
 - Ordered state-series collection with strict shared-layout identity.
 - Lightweight copyable series views and field-level analysis mutation.
 - Borrowed JSON encoding without payload cloning.
+- Exact finite-`f64` JSON reconstruction through Serde JSON's round-trip parser.
 - Finite byte- and record-bounded asynchronous writers.
 - Exact-byte automatic chunking with indivisible JSONL records.
 - Durable chunk publication through open-file sync, incremental descriptor
@@ -47,6 +52,118 @@ scientific-workflow = "0.1"
 ```
 
 The crate uses Rust edition 2024 and requires Rust 1.85 or newer.
+
+## Complete Project Example
+
+The source repository includes `examples/attractor_2d`, a standalone
+downstream application that exercises configuration loading, Cartesian task
+expansion, directly owned mutable states, tuple payload borrowing, independent
+sample streams, bounded asynchronous recording, automatic chunking, and
+explicit completion. It then reconstructs all streams with typed payload
+decoders, calculates numerical summaries, renders a terminal phase portrait,
+and verifies the final live-to-stored round trip exactly. From the repository
+root, run:
+
+```bash
+cargo run --manifest-path examples/attractor_2d/Cargo.toml
+```
+
+The example is intentionally outside this crate directory and therefore is
+not part of the crates.io package. Its generated recordings remain under its
+ignored `target/recordings` directory.
+
+## Project Configuration
+
+A standard project keeps three files together:
+
+```text
+project-root/
+└── config/
+    ├── fixed.json
+    ├── sweep.json
+    └── paths.json
+```
+
+`fixed.json` contains values shared by every task:
+
+```json
+{
+  "time_step": 0.125,
+  "lattice_shape": [4, 8]
+}
+```
+
+`sweep.json` supports ordered Cartesian axes:
+
+```json
+{
+  "mode": "cartesian",
+  "axes": [
+    {"name": "temperature", "values": [280.0, 300.0]},
+    {"name": "seed", "values": [7, 11, 13]}
+  ]
+}
+```
+
+or correlated explicit cases:
+
+```json
+{
+  "mode": "cases",
+  "cases": [
+    {"temperature": 280.0, "time_step": 0.1},
+    {"temperature": 300.0, "time_step": 0.05}
+  ]
+}
+```
+
+`paths.json` contains shared path strings resolved relative to the project root:
+
+```json
+{
+  "input_data": "data/input.json",
+  "output_root": "results"
+}
+```
+
+Load the project and consume exact JSON names through each resolved task's
+read-only dictionary:
+
+```rust,no_run
+use scientific_workflow::prelude::*;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let project = ProjectConfig::load("project-root")?;
+    let output_root = project.paths().resolve_path("output_root")?;
+
+    for task in project.parameters().tasks() {
+        let time_step = task.decode_value::<f64>("time_step")?;
+        let temperature = task.decode_value::<f64>("temperature")?;
+        let seed = task.decode_value::<u64>("seed")?;
+        println!(
+            "task={} dt={time_step} temperature={temperature} seed={seed} output={}",
+            task.task_index(),
+            output_root.display()
+        );
+    }
+    Ok(())
+}
+```
+
+Task handles share the parsed source allocation and do not clone values or
+construct merged maps. `value` and `require_value` borrow raw JSON;
+`decode_value` explicitly constructs one requested Rust value. The final sweep
+axis changes fastest. Fixed and swept names must be disjoint.
+
+`ProjectConfig::write_source_config(destination)` reproduces all three original
+files byte for byte beneath a new destination project. It never overwrites an
+existing `config/` directory. `TaskParameters::to_json` instead serializes one
+deterministic derived fixed-plus-sweep dictionary.
+
+The state template is a separate `SystemStateSchema` input, not a fourth file
+owned or exported by `ProjectConfig`. A project may keep it beside the other
+inputs as `config/state.json` and name that location in `paths.json`; the
+standalone attractor example uses this arrangement.
 
 ## State Template
 
@@ -244,6 +361,46 @@ position without reconstructing state, while
 `continue_recording_from_latest_checkpoint` also returns a complete typed
 checkpoint through registered decoders.
 
+### Custom Payload Decoders
+
+Each decoder is registered for one exact state key and returns that key's
+concrete payload type. A closure is sufficient for stateless conversion; a
+named decoder can carry configuration or shared resources:
+
+```rust
+use scientific_workflow::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ParticleBlock {
+    positions: Vec<[f64; 3]>,
+}
+
+struct ParticleBlockDecoder;
+
+impl JsonPayloadDecoder<ParticleBlock> for ParticleBlockDecoder {
+    type Error = serde_json::Error;
+
+    fn decode_json_payload(&self, raw_json: &str) -> Result<ParticleBlock, Self::Error> {
+        serde_json::from_str(raw_json)
+    }
+}
+
+fn configure() -> Result<JsonPayloadDecoderRegistry, StorageError> {
+    let mut decoders = JsonPayloadDecoderRegistry::new();
+    decoders.register_for_field("particles", ParticleBlockDecoder)?;
+    decoders.register_for_field::<Vec<u64>, _>("counts", |raw_json: &str| {
+        serde_json::from_str(raw_json)
+    })?;
+    Ok(decoders)
+}
+```
+
+The reader performs record parsing and key lookup, passes only the matching raw
+JSON value to each decoder, and moves the returned payload into the reconstructed
+state. Custom decoders do not handle chunks, metadata, sibling fields, or state
+assembly.
+
 ## Testing
 
 From the package directory:
@@ -252,8 +409,14 @@ From the package directory:
 cargo test --all-targets --no-fail-fast --locked
 ```
 
-The permanent suite contains five logged integration workflows. Run each with
+The permanent suite contains six logged integration workflows. Run each with
 `--nocapture` to display its stable semantic report.
+
+Project configuration and task expansion:
+
+```bash
+cargo test --test configuration_workflow -- --nocapture
+```
 
 Simulation-owned state:
 

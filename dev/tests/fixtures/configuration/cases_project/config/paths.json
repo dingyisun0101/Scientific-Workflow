@@ -1,0 +1,4 @@
+{
+  "input_data": "datasets/correlated.json",
+  "output_root": "case-results"
+}

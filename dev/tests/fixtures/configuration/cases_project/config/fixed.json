@@ -1,0 +1,4 @@
+{
+  "lattice_shape": [16, 16],
+  "integrator": "adaptive"
+}

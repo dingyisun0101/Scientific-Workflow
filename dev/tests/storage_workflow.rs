@@ -289,6 +289,17 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .unwrap()
             .is_empty()
     );
+    // This value exposed a one-ULP discrepancy before the crate enabled
+    // serde_json's `float_roundtrip` parser. Preserve it as an exact-bit
+    // integration regression because scientific checkpoints may depend on
+    // reproducible finite floating-point payloads.
+    let sensitive_float = f64::from_bits(0xbfc1_5855_07ca_40c8);
+    let encoded_sensitive_float = serde_json::to_string(&[sensitive_float]).unwrap();
+    let decoded_sensitive_float = JsonVecF64Decoder
+        .decode_json_payload(&encoded_sensitive_float)
+        .unwrap()[0];
+    assert_eq!(decoded_sensitive_float.to_bits(), sensitive_float.to_bits());
+    println!("[float-round-trip] encoded={encoded_sensitive_float} exact_bits=true");
     assert_eq!(
         JsonStringDecoder
             .decode_json_payload(r#""hello 世界""#)

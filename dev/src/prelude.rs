@@ -10,12 +10,17 @@
 //! assert_eq!(time.step(), 0);
 //! let decoders = JsonPayloadDecoderRegistry::new();
 //! assert!(decoders.is_empty());
+//! let _: Option<ProjectConfig> = None;
 //! ```
 //!
 //! The prelude is explicit rather than a wildcard re-export of internal
 //! modules. General-purpose external traits, including Serde traits, remain the
 //! responsibility of the application that uses them.
 
+pub use crate::configuration::{
+    ConfigurationError, ParameterSpace, ProjectConfig, ProjectPaths, TaskParameters,
+    TaskParametersIter,
+};
 pub use crate::storage::{
     JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder,
     StateStreamConfig, StorageError, StoredStateSeriesReader, SystemStateWriter,

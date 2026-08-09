@@ -51,10 +51,18 @@ fn fixture_path() -> PathBuf {
 }
 
 fn builder(run: &Path, spec: &SystemStateSchema) -> SystemStateWriterBuilder {
+    builder_with_chunk_limit(run, spec, 1_000_000)
+}
+
+fn builder_with_chunk_limit(
+    run: &Path,
+    spec: &SystemStateSchema,
+    max_chunk_bytes: u64,
+) -> SystemStateWriterBuilder {
     SystemStateWriter::builder(run, spec).add_state_stream(StateStreamConfig::new(
         "checkpoint",
         ["population", "space", "activity"],
-        NonZeroU64::new(1_000_000).unwrap(),
+        NonZeroU64::new(max_chunk_bytes).unwrap(),
         NonZeroU64::new(1_000_000).unwrap(),
     ))
 }
@@ -288,4 +296,102 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
         "[schema] partial_checkpoint_rejected=true output_continued=true final_states={}",
         series.len()
     );
+}
+
+#[test]
+fn several_sealed_chunks_are_trusted_before_recovering_only_the_open_tail() {
+    let workspace = TempWorkspace::new("multi-chunk-resume");
+    let run = workspace.run();
+    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let recording_builder = || builder_with_chunk_limit(&run, &spec, 1);
+
+    let output = recording_builder().create_new_recording().unwrap();
+    for index in 0..3 {
+        output
+            .record_state_to_stream("checkpoint", &state(&spec, index))
+            .unwrap();
+    }
+    output.complete_recording().unwrap();
+
+    let mut manifest = metadata(&run);
+    manifest["status"] = serde_json::json!({"state": "running"});
+    let chunks = manifest["streams"][0]["chunks"].as_array_mut().unwrap();
+    assert_eq!(chunks.len(), 3);
+    chunks.pop();
+    write_metadata(&run, &manifest);
+
+    let stream_directory = run.join("checkpoint");
+    let sealed_zero = stream_directory.join("chunk-000000.jsonl");
+    let sealed_two = stream_directory.join("chunk-000002.jsonl");
+    let open_two = stream_directory.join("chunk-000002.jsonl.tmp");
+    fs::write(&sealed_zero, b"deliberately invalid sealed history\n").unwrap();
+    fs::rename(&sealed_two, &open_two).unwrap();
+
+    let (output, resumed) = recording_builder()
+        .continue_recording_from_latest_checkpoint("checkpoint", decoders())
+        .expect("resume must trust sealed history and decode only the open tail");
+    assert_eq!(resumed.simulation_time().step(), 2);
+    assert_eq!(resumed.payload::<String>("activity").unwrap(), "step-2");
+
+    output
+        .record_state_to_stream("checkpoint", &state(&spec, 3))
+        .unwrap();
+    output.complete_recording().unwrap();
+
+    let completed = metadata(&run);
+    let chunks = completed["streams"][0]["chunks"].as_array().unwrap();
+    assert_eq!(chunks.len(), 4);
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| chunk["ordinal"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert!((0..4).all(|ordinal| {
+        stream_directory
+            .join(format!("chunk-{ordinal:06}.jsonl"))
+            .is_file()
+    }));
+    assert!(!open_two.exists());
+    println!(
+        "[multi-chunk] sealed_history_trusted=true open_tail_scanned=true resumed_index=2 next_ordinal=3"
+    );
+}
+
+#[test]
+fn continuation_rejects_terminal_mismatched_and_empty_recordings() {
+    let workspace = TempWorkspace::new("resume-rejections");
+    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+
+    let terminal = workspace.root.join("terminal");
+    builder(&terminal, &spec)
+        .create_new_recording()
+        .unwrap()
+        .complete_recording()
+        .unwrap();
+    assert!(matches!(
+        builder(&terminal, &spec).continue_existing_recording(),
+        Err(StorageError::RecordingNotContinuable { path }) if path == terminal.join("metadata.json")
+    ));
+
+    let mismatched = workspace.root.join("mismatched");
+    drop(builder(&mismatched, &spec).create_new_recording().unwrap());
+    assert!(matches!(
+        builder(&mismatched, &spec)
+            .with_time_axis_metadata(TimeAxisMetadata::new("iteration"))
+            .continue_existing_recording(),
+        Err(StorageError::RecordingConfigurationMismatch { path, .. })
+            if path == mismatched.join("metadata.json")
+    ));
+
+    let empty = workspace.root.join("empty");
+    drop(builder(&empty, &spec).create_new_recording().unwrap());
+    assert!(matches!(
+        builder(&empty, &spec)
+            .continue_recording_from_latest_checkpoint("checkpoint", decoders()),
+        Err(StorageError::NoCheckpointState { stream }) if stream == "checkpoint"
+    ));
+
+    println!("[resume-rejections] terminal=true configuration_mismatch=true no_checkpoint=true");
 }

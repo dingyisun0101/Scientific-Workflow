@@ -1,0 +1,4 @@
+{
+  "state_template": "config/state.json",
+  "recording_root": "target/recordings"
+}

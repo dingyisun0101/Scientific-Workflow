@@ -17,6 +17,8 @@ Current scope:
 
 Implemented and verified:
 
+- `configuration`: standard three-file project loading, deterministic task
+  expansion, dict-like resolved parameters, named paths, and exact export;
 - `system_state`: mutable simulation-owned heterogeneous state;
 - `time_series`: eager in-memory analysis collection;
 - storage format, borrowed encoder, bounded writer, decoder registry, two
@@ -46,6 +48,816 @@ together with every supported crate API through `scientific_workflow::prelude`.
 
 `StateSeries` is an analysis result, not a runtime writer buffer. The persisted
 stream is the authoritative sampled history.
+
+## Parameter configuration stage (under discussion)
+
+The next proposed module reads two conventional JSON files: `fixed.json`
+declares values shared by every task, while `sweep.json` declares values that
+vary across tasks. This module defines and resolves parameter combinations; it
+does not execute tasks, allocate output directories, write recording metadata,
+or manage threads.
+
+The agreed public module name is `configuration`. It covers the complete
+three-file project configuration while leaving execution and persistence to
+later layers. `parameters` would exclude `paths.json`, `constants` would
+misdescribe swept values, and `dispatcher` would imply task execution that this
+module deliberately does not perform. A swept value is constant during one
+task but is scientifically a parameter across the complete study. The public
+model distinguishes:
+
+- `ParameterSpace`: the validated, immutable study definition loaded from both
+  files; and
+- `TaskParameters`: one resolved task's immutable union of all fixed values and
+  one selected value from every sweep axis; and
+- `ProjectPaths`: the immutable named path table resolved relative to the
+  project root.
+
+The public namespace is therefore:
+
+```text
+scientific_workflow::configuration::{
+    ProjectConfig,
+    ParameterSpace,
+    TaskParameters,
+    ProjectPaths,
+    ConfigurationError,
+}
+```
+
+`ParameterSpace` should own parsed JSON once. Each `TaskParameters` can retain a
+shared owner plus compact selected-value indices, avoiding a clone of every
+JSON value for every generated task. Iteration and indexed task lookup must be
+deterministic, and task-count multiplication must be checked for overflow.
+
+The agreed standard project layout is:
+
+```text
+project-root/
+└── config/
+    ├── fixed.json
+    ├── sweep.json
+    └── paths.json
+```
+
+`ProjectConfig::load(project_root)` should locate this exact directory and own
+the resulting `ParameterSpace` and `ProjectPaths`. The lower-level types remain
+independently useful, but callers should not normally assemble standard paths
+manually.
+
+`fixed.json` remains a plain object:
+
+```json
+{
+  "lattice_shape": [1024, 1024],
+  "time_step": 0.01
+}
+```
+
+The agreed `sweep.json` contract is tagged. Cartesian mode preserves declared
+axis order and changes the last axis fastest:
+
+```json
+{
+  "mode": "cartesian",
+  "axes": [
+    {"name": "temperature", "values": [280.0, 300.0, 320.0]},
+    {"name": "seed", "values": [1, 2, 3]}
+  ]
+}
+```
+
+Explicit correlated cases use:
+
+```json
+{
+  "mode": "cases",
+  "cases": [
+    {"temperature": 280.0, "time_step": 0.1},
+    {"temperature": 300.0, "time_step": 0.05}
+  ]
+}
+```
+
+Every fixed value, Cartesian candidate, and explicit case value may be any JSON
+value, including an object or another array. No Cartesian axes means one
+fixed-only task; an individual axis with no candidates is rejected. Explicit
+cases must share one key set. Fixed and swept keys are disjoint so `fixed.json`
+remains semantically truthful and lookup never needs override precedence.
+Duplicate object keys and structurally invalid roots are rejected with path
+and key context.
+
+`paths.json` is a separate plain object whose values are path strings. It
+contains shared named input roots, data locations, and output roots; it does not
+contain per-task output paths derived later by dispatcher. Relative paths are
+resolved against `project_root` on access, without canonicalizing or requiring
+the target to exist. The original string remains authoritative for JSON
+round-trip. Environment-variable and tilde expansion are initially out of
+scope because they make resolution and reproducibility host-dependent.
+
+The central output is a dict-like resolved task, not an application-defined
+Rust configuration structure. The API is:
+
+```text
+space = ParameterSpace::load(directory)
+space.task_count()
+space.task(index)
+space.tasks()
+
+task.task_index()
+task.value(key) -> Option<&serde_json::Value>
+task.require_value(key) -> Result<&serde_json::Value, ConfigurationError>
+task.decode_value<T>(key) -> Result<T, ConfigurationError>
+task.contains(key) / keys() / iter() / len() / is_empty()
+task.to_json() -> Result<String, ConfigurationError>
+```
+
+`TaskParameters` is the logical read-only union of every fixed entry and the
+selected sweep entries for one task. The application uses the exact JSON names
+as lookup keys and decodes each required value to its concrete type once before
+entering a hot loop. Resolved JSON output is useful for provenance and later
+dispatcher metadata, but this module remains independent of storage
+recordings.
+
+`TaskParameters` should be cheap to produce and clone. It stores an `Arc` to the
+immutable parsed parameter space plus one task ordinal; it does not allocate a
+merged map or clone JSON values. Cartesian selection is calculated from
+precomputed axis lengths and strides. Explicit-case selection refers directly
+to the chosen shared case. Materialization occurs only when a caller explicitly
+decodes an owned value or serializes the resolved task.
+
+### JSON names and Rust access
+
+JSON keys are preserved exactly and become the runtime lookup names. The
+program uses them directly through the read-only dictionary API:
+
+```rust
+let time_step = task.decode_value::<f64>("time_step")?;
+let temperature = task.decode_value::<f64>("temperature")?;
+let seed = task.decode_value::<u64>("seed")?;
+```
+
+This is the chosen dynamic boundary. Rust cannot turn runtime strings into
+compile-time local variables or struct fields, and a trait cannot require
+implementors to contain fields named `fixed`, `sweep`, and `paths`. No custom
+`ParameterSpace` trait, derive macro, application configuration structure, or
+compile-time code generator is required.
+
+The library-owned `ParameterSpace` performs the scientifically central
+operation: deterministically combine the fixed map with every Cartesian
+selection or explicit case and expose each combination as `TaskParameters`.
+`ProjectPaths` follows a similar read-only named lookup model but adds raw-path
+and project-root-relative resolution methods; paths are not merged into task
+parameters.
+
+### Exact JSON round-trip
+
+Two meanings of “exact” must remain distinct. Semantic round-trip means the
+same JSON values, object membership, array order, number values, and strings.
+Byte-exact round-trip additionally preserves whitespace, indentation, key
+presentation order, and number spelling such as `1.0` versus `1.00`.
+
+The immutable loader must satisfy both: retain the original bytes
+of all three source files alongside their validated parsed forms. Re-exporting
+or copying the source configuration writes those bytes unchanged. Parsed
+inspection and task expansion use the validated representation. A resolved
+`TaskParameters::to_json` document is derived data and therefore guarantees a
+deterministic canonical semantic representation, not byte identity with either
+input file.
+
+`TaskParameters` does not implement Rust's panicking `Index<&str>` syntax.
+Missing configuration keys return contextual `ConfigurationError` through the
+fallible lookup methods.
+
+### ConfigurationError
+
+The configuration module's non-exhaustive public error type is implemented
+first so every later loader and lookup shares one stable contextual failure
+boundary. It contains:
+
+- source read, JSON parse, and exact-export write errors with preserved
+  filesystem or Serde sources;
+- semantic document rejection and exact duplicate-key context;
+- fixed/sweep key collisions and checked Cartesian task-count overflow;
+- task-index bounds, missing task parameters, and typed decode failures; and
+- missing named project paths.
+
+It never owns a resolved task map or JSON payload. Paths, keys, and task indices
+are owned only on failure paths so errors remain useful after configuration
+objects are dropped.
+
+#### Reference
+
+```text
+ProjectConfig loader/exporter
+    -> ConfigurationError::{ReadConfigurationFile,
+                            ParseConfigurationFile,
+                            WriteConfigurationFile}
+
+ParameterSpace validation and expansion
+    -> ConfigurationError::{InvalidConfigurationDocument,
+                            DuplicateConfigurationKey,
+                            FixedSweepKeyConflict,
+                            TaskCountOverflow,
+                            TaskIndexOutOfBounds}
+
+TaskParameters lookup and conversion
+    -> ConfigurationError::{UnknownTaskParameter,
+                            DecodeTaskParameter,
+                            SerializeTaskParameters}
+
+ProjectPaths lookup
+    -> ConfigurationError::UnknownProjectPath
+```
+
+### ParameterSpace
+
+Public cheap-clone handle to one validated immutable `fixed.json` plus
+`sweep.json` definition. Its shared allocation retains exact source bytes,
+declaration-ordered values, lookup indexes, sweep storage, precomputed
+Cartesian strides, and the checked `u64` task count.
+
+#### ParameterSpace::load
+
+Reads the two standard files from a supplied `config/` directory, strictly
+parses duplicate-preserving JSON, validates the tagged sweep, rejects
+fixed/sweep overlap, and builds all indexes before publishing a space.
+
+##### Reference
+
+```text
+ProjectConfig::load -> ParameterSpace::load(project_root/config)
+direct parameter-only workflows -> ParameterSpace::load(config_directory)
+```
+
+#### ParameterSpace::configuration_directory
+
+Returns the directory exactly as supplied without filesystem
+canonicalization.
+
+##### Reference
+
+```text
+diagnostics and ProjectConfig inspection
+```
+
+#### ParameterSpace::fixed_source_json
+
+Borrows the original validated `fixed.json` bytes unchanged.
+
+##### Reference
+
+```text
+ProjectConfig exact source export and byte-round-trip tests
+```
+
+#### ParameterSpace::sweep_source_json
+
+Borrows the original validated `sweep.json` bytes unchanged.
+
+##### Reference
+
+```text
+ProjectConfig exact source export and byte-round-trip tests
+```
+
+#### ParameterSpace::fixed_parameter_count
+
+Returns the number of fixed names.
+
+##### Reference
+
+```text
+configuration inspection, Debug, and integrated workflow logs
+```
+
+#### ParameterSpace::sweep_parameter_count
+
+Returns the number of selected sweep names in every resolved task.
+
+##### Reference
+
+```text
+configuration inspection, Debug, and integrated workflow logs
+```
+
+#### ParameterSpace::parameter_count
+
+Returns the fixed-plus-swept dictionary size for every resolved task.
+
+##### Reference
+
+```text
+dispatcher validation and task-shape reporting
+```
+
+#### ParameterSpace::task_count
+
+Returns the checked Cartesian product or explicit-case count as `u64`.
+
+##### Reference
+
+```text
+dispatcher task allocation, task bounds validation, tasks(), and Debug
+```
+
+#### ParameterSpace::contains_parameter
+
+Checks both disjoint key indexes without resolving a task.
+
+##### Reference
+
+```text
+dispatcher preflight and configuration inspection
+```
+
+#### ParameterSpace::fixed_keys
+
+Iterates exact fixed keys in source declaration order.
+
+##### Reference
+
+```text
+configuration inspection and deterministic metadata
+```
+
+#### ParameterSpace::sweep_keys
+
+Iterates exact axis or first-case keys in source declaration order.
+
+##### Reference
+
+```text
+configuration inspection and deterministic metadata
+```
+
+#### ParameterSpace::task
+
+Bounds-checks one ordinal and returns a cheap `TaskParameters` owner sharing the
+space. It never clones JSON values or materializes a merged map.
+
+##### Reference
+
+```text
+dispatcher indexed task assignment and restart lookup
+```
+
+#### ParameterSpace::tasks
+
+Returns an owning iterator over increasing deterministic task ordinals.
+
+##### Reference
+
+```text
+sequential or parallel dispatcher task enumeration
+```
+
+#### ParameterSpace::clone / Debug
+
+Clone increments one `Arc`; Debug prints only directory and counts.
+
+##### Reference
+
+```text
+shared dispatcher ownership and bounded diagnostics
+```
+
+### TaskParameters
+
+One immutable dict-like logical union of all fixed values and one sweep
+selection. It stores only the shared space and `u64` task ordinal.
+
+#### TaskParameters::task_index
+
+Returns the stable zero-based ordinal under the loaded sweep definition.
+
+##### Reference
+
+```text
+dispatcher identity, output naming, errors, and provenance
+```
+
+#### TaskParameters::value
+
+Looks up an exact key and returns a borrowed `serde_json::Value`. Fixed lookup
+uses its index; Cartesian lookup calculates one mixed-radix digit from the
+ordinal and precomputed stride; explicit lookup borrows the selected case.
+
+##### Reference
+
+```text
+application zero-copy JSON inspection, require_value, decode_value, and iter
+```
+
+#### TaskParameters::require_value
+
+Adds task-and-key context to a missing lookup.
+
+##### Reference
+
+```text
+application required-configuration access and decode_value
+```
+
+#### TaskParameters::decode_value<T>
+
+Deserializes `T` directly from the borrowed JSON value without cloning the
+generic JSON tree first. The returned domain value is owned and may allocate.
+
+##### Reference
+
+```text
+simulation setup before numerical hot loops
+```
+
+#### TaskParameters::contains
+
+Checks both fixed and sweep indexes for an exact key.
+
+##### Reference
+
+```text
+optional application parameters and dispatcher preflight
+```
+
+#### TaskParameters::len / is_empty
+
+Reports resolved dictionary size or emptiness without iteration.
+
+##### Reference
+
+```text
+SerializeMap length, Debug, and configuration inspection
+```
+
+#### TaskParameters::keys
+
+Iterates fixed keys first and sweep keys second, preserving declaration order
+inside each group.
+
+##### Reference
+
+```text
+application inspection, iter, and deterministic task JSON
+```
+
+#### TaskParameters::iter
+
+Pairs every ordered key with its borrowed resolved value.
+
+##### Reference
+
+```text
+ResolvedTaskRef::serialize and application dictionary traversal
+```
+
+#### TaskParameters::to_json
+
+Serializes borrowed entries directly as one compact deterministic resolved
+object without first allocating a merged `serde_json::Map`.
+
+##### Reference
+
+```text
+dispatcher provenance, task manifests, and semantic round-trip tests
+```
+
+#### TaskParameters::clone / Debug
+
+Clone copies one ordinal and increments one `Arc`; Debug never traverses or
+prints parameter values.
+
+##### Reference
+
+```text
+task handoff between dispatcher threads and bounded diagnostics
+```
+
+### TaskParametersIter
+
+Owning fused iterator over the half-open ordinal range. It keeps the shared
+space alive even if the originating `ParameterSpace` handle is dropped.
+
+#### TaskParametersIter::next / size_hint
+
+`next` creates one cheap task owner. `size_hint` is exact when the remaining
+`u64` count fits the platform `usize` and otherwise reports a saturated lower
+bound with no upper bound.
+
+##### Reference
+
+```text
+ParameterSpace::tasks -> dispatcher task enumeration
+```
+
+#### TaskParametersIter::clone / Debug
+
+Clone preserves an independent cursor; Debug reports only its ordinal range.
+
+##### Reference
+
+```text
+iterator composition and bounded diagnostics
+```
+
+### Parameter parsing internals
+
+`ParameterSpaceInner`, `NamedValue`, `SweepPlan`, and `SweepAxis` own the shared
+validated representation. `SweepPlan::{keys,key_count,task_count,value}` unify
+Cartesian and explicit lookup. `SweepKey` and `SweepKeys` provide one
+allocation-free exact-size key iterator. `ResolvedTaskRef::serialize` streams
+the logical dictionary by reference.
+
+`StrictValue` is a private duplicate-preserving JSON syntax tree.
+`StrictValue::{into_json,duplicate_key}` convert accepted values and detect the
+first repeated exact object key at any nesting depth. Its Serde visitor retains
+ordered object pairs instead of collecting a map. The private read, parse,
+mode-specific validation, collision, object-field, name, and error helpers are
+called only by `ParameterSpace::load` and do not form public extension points.
+
+#### Reference
+
+```text
+ParameterSpace::load -> strict parser and validation helpers
+TaskParameters::value -> SweepPlan::value
+ParameterSpace/TaskParameters key iteration -> SweepPlan::keys -> SweepKeys
+TaskParameters::to_json -> ResolvedTaskRef::serialize
+```
+
+### ProjectPaths
+
+Public cheap-clone immutable dictionary loaded from the standard
+`project-root/config/paths.json`. Each value must be a non-empty path string.
+The shared allocation retains the supplied project root, source path, exact
+source bytes, declaration-ordered entries, and exact-key lookup index.
+
+#### ProjectPaths::load
+
+Derives `config/paths.json` beneath the supplied project root, reuses the strict
+recursive duplicate-aware parser, and validates a string-only root object.
+Loading performs no path expansion, canonicalization, metadata lookup, or
+existence check.
+
+##### Reference
+
+```text
+ProjectConfig::load -> ProjectPaths::load(project_root)
+direct path-only workflows -> ProjectPaths::load(project_root)
+```
+
+#### ProjectPaths::project_root
+
+Returns the root exactly as supplied at load time.
+
+##### Reference
+
+```text
+resolve_path, ProjectConfig inspection, and Debug
+```
+
+#### ProjectPaths::source_path
+
+Returns the derived `project-root/config/paths.json` path.
+
+##### Reference
+
+```text
+diagnostics, ProjectConfig exact export, and Debug
+```
+
+#### ProjectPaths::source_json
+
+Borrows the complete original validated source bytes unchanged.
+
+##### Reference
+
+```text
+ProjectConfig exact source export and byte-round-trip tests
+```
+
+#### ProjectPaths::len / is_empty
+
+Reports the declaration count or whether no path names are configured.
+
+##### Reference
+
+```text
+configuration inspection, Debug, and integrated workflow logs
+```
+
+#### ProjectPaths::contains
+
+Checks the exact case-sensitive name index.
+
+##### Reference
+
+```text
+optional project resources and dispatcher preflight
+```
+
+#### ProjectPaths::path
+
+Returns a borrowed unresolved `Path` exactly represented by the JSON string, or
+`None` for an unknown key. It performs no allocation or filesystem operation.
+
+##### Reference
+
+```text
+application raw-path inspection and require_path
+```
+
+#### ProjectPaths::require_path
+
+Adds the exact missing name to `ConfigurationError::UnknownProjectPath`.
+
+##### Reference
+
+```text
+application required-path access and resolve_path
+```
+
+#### ProjectPaths::resolve_path
+
+Returns absolute configured paths unchanged and lexically joins relative paths
+to the supplied project root. It deliberately does not canonicalize, normalize,
+open, or require the result to exist.
+
+##### Reference
+
+```text
+dispatcher input/output root setup and application resource lookup
+```
+
+#### ProjectPaths::keys
+
+Iterates exact names in JSON declaration order.
+
+##### Reference
+
+```text
+configuration inspection and deterministic metadata
+```
+
+#### ProjectPaths::iter
+
+Iterates declaration-ordered names and borrowed unresolved paths.
+
+##### Reference
+
+```text
+application dictionary traversal and configuration reporting
+```
+
+#### ProjectPaths::clone / Debug
+
+Clone increments one `Arc`; Debug prints only root, source path, and entry
+count.
+
+##### Reference
+
+```text
+shared task ownership and bounded diagnostics
+```
+
+### ProjectPathsInner and PathEntry
+
+Private shared storage and one declaration-ordered name/path pair. They expose
+no extension boundary and are accessed only through `ProjectPaths`.
+
+#### Reference
+
+```text
+ProjectPaths::load -> ProjectPathsInner / PathEntry
+all ProjectPaths accessors -> shared immutable storage
+```
+
+### ProjectConfig
+
+Normal public facade for one standard `project-root/config/` directory. It owns
+the exact supplied root plus compatible `ParameterSpace` and `ProjectPaths`
+handles loaded from that root. It coordinates files but does not merge paths
+into task parameters or perform task execution.
+
+#### ProjectConfig::load
+
+Loads and validates `fixed.json`, `sweep.json`, and `paths.json` as one complete
+read-only operation. Failure drops any earlier validated component and never
+returns a partial facade.
+
+##### Reference
+
+```text
+application and dispatcher startup -> ProjectConfig::load(project_root)
+```
+
+#### ProjectConfig::project_root
+
+Returns the root exactly as supplied without canonicalization.
+
+##### Reference
+
+```text
+dispatcher project identity, path setup, and Debug
+```
+
+#### ProjectConfig::configuration_directory
+
+Returns the standard `config/` directory retained by the parameter space.
+
+##### Reference
+
+```text
+configuration diagnostics and project inspection
+```
+
+#### ProjectConfig::parameters
+
+Borrows the validated parameter-space handle.
+
+##### Reference
+
+```text
+dispatcher task_count/task/tasks access
+```
+
+#### ProjectConfig::paths
+
+Borrows the validated project-path dictionary.
+
+##### Reference
+
+```text
+dispatcher and simulation resource-path access
+```
+
+#### ProjectConfig::into_parts
+
+Consumes only the facade and moves out both cheap shared component handles. No
+source bytes or parsed values are cloned.
+
+##### Reference
+
+```text
+applications that transfer parameter and path ownership independently
+```
+
+#### ProjectConfig::write_source_config
+
+Creates a destination project root when absent, exclusively creates its
+standard `config/` directory, and writes the three validated original byte
+sequences through exclusive files. Every file and both affected directories
+are synchronized. An existing `config/` entry is rejected atomically by
+directory creation and is never overwritten. A failure after directory
+creation may retain the new partial configuration as diagnostic evidence.
+
+##### Reference
+
+```text
+configuration replication and byte-exact three-file round-trip tests
+```
+
+#### ProjectConfig::clone / Debug
+
+Clone copies the root and cheap-clones both shared component handles. Debug
+prints only the root and parameter/task/path counts.
+
+##### Reference
+
+```text
+shared project setup and bounded diagnostics
+```
+
+### Project export helpers
+
+Private helpers create the destination root and standard directory, write and
+synchronize one exclusively created file, synchronize directory entries, and
+construct the shared contextual IO error. They operate only on exact paths
+derived by `ProjectConfig::write_source_config`.
+
+#### Reference
+
+```text
+ProjectConfig::write_source_config -> create_destination_root
+                                  -> create_configuration_directory
+                                  -> write_source_file (three times)
+                                  -> sync_directory (config and project root)
+                                  -> write_error on failure
+```
+
+### configuration facade
+
+`src/configuration.rs` is the documented public boundary. It keeps the four
+implementation files private and re-exports only `ConfigurationError`,
+`ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `ProjectPaths`, and
+`ProjectConfig`. Its crate-level example demonstrates named path resolution and
+typed lookup from generated task dictionaries.
+
+#### Reference
+
+```text
+crate root -> pub mod configuration
+prelude -> explicit configuration type re-exports
+downstream callers -> scientific_workflow::configuration::{...}
+```
 
 ## Core invariants
 
@@ -84,40 +896,52 @@ stream is the authoritative sampled history.
         ├── README.md             crate-facing usage and test documentation
         ├── src/
         │   ├── lib.rs            crate documentation and public module exports
+        │   ├── main.rs           excluded non-package development placeholder
         │   ├── prelude.rs        explicit complete end-user API re-exports
+        │   ├── configuration.rs  standard project-configuration facade
+        │   ├── configuration/
+        │   │   ├── error.rs      configuration error vocabulary
+        │   │   ├── parameters.rs fixed/sweep parsing and resolved task dictionaries
+        │   │   ├── paths.rs      named project paths and lexical resolution
+        │   │   └── project.rs    coordinated loading and exact source export
         │   ├── system_state.rs   system-state facade and re-exports
         │   ├── system_state/
         │   │   ├── error.rs      state and ownership-preserving set errors
-        │   │   ├── spec.rs       JSON template and shared layout
+        │   │   ├── schema.rs     JSON template and shared layout
         │   │   ├── state.rs      SimulationTime and SystemState
         │   │   └── value.rs      private boxed type erasure
         │   ├── time_series.rs    analysis-series facade and re-exports
         │   ├── time_series/
         │   │   ├── error.rs      collection/access errors
-        │   │   └── series.rs     StateSeries, StateSeriesView, and StateSeriesPushError
-        │   ├── storage.rs        public run, reader, and decoder facade
+        │   │   └── state_series.rs StateSeries and StateSeriesView
+        │   ├── storage.rs        public recording facade and configuration
         │   └── storage/
         │       ├── error.rs      complete storage error vocabulary
-        │       ├── format.rs     metadata and encoded-record contract
-        │       ├── encoder.rs    borrowed SystemState-to-JSON encoding
-        │       ├── writer.rs     bounded queue and chunk persistence
-        │       ├── decoder.rs    decoder trait, registry, and re-exports
-        │       ├── decoder/
+        │       ├── jsonl_format.rs metadata and encoded-record contract
+        │       ├── json_state_record_encoder.rs borrowed JSON encoding
+        │       ├── queued_state_writer.rs bounded queue and chunk persistence
+        │       ├── json_payload_decoder.rs decoder trait and registry
+        │       ├── json_payload_decoder/
         │       │   ├── string.rs String default decoder
         │       │   └── vec_f64.rs Vec<f64> default decoder
-        │       └── reader.rs     verified eager reconstruction
+        │       └── stored_state_series_reader.rs verified eager reconstruction
         └── tests/
             ├── fixtures/
+            │   ├── configuration/
+            │   │   ├── cartesian_project/config/{fixed,sweep,paths}.json
+            │   │   └── cases_project/config/{fixed,sweep,paths}.json
             │   ├── state.json
             │   └── coupled_state.json
+            ├── configuration_workflow.rs
             ├── state_workflow.rs
             ├── analysis_workflow.rs
             ├── storage_workflow.rs
-            └── storage_resilience.rs
+            ├── storage_resilience.rs
+            └── resume_workflow.rs
 
 Rust 2024 split-module layout is used. There are no `mod.rs` files. `lib.rs`
-exports all three functional modules and the explicit prelude; storage internals
-remain private behind `storage.rs`.
+exports all four functional modules and the explicit prelude. All implementation
+submodules remain private behind their documented facade files.
 
 ## System state
 
@@ -1849,6 +2673,12 @@ The state and analysis portion includes:
 - `PayloadInsertError` and `StateError`;
 - `StateSeries`, `StateSeriesView`, `StateSeriesPushError`, and `StateSeriesError`.
 
+The configuration portion includes:
+
+- `ProjectConfig`, `ParameterSpace`, `TaskParameters`, and
+  `TaskParametersIter`;
+- `ProjectPaths` and `ConfigurationError`.
+
 The storage portion includes:
 
 - `SystemStateWriter`, `SystemStateWriterBuilder`, `StateStreamConfig`, and `TimeAxisMetadata`;
@@ -1859,8 +2689,8 @@ The storage portion includes:
 Low-level encoding, queue, chunk-format, and metadata implementation types are
 not prelude members. `JsonStateRecordEncoder`, `StateWriterWorker`, `EncodedStateRecord`, and raw
 metadata structures remain private implementation details behind `SystemStateWriter`.
-Both storage integration tests import only the public prelude, so an omitted or
-accidentally private supported type is detected by compilation.
+Storage and configuration integration tests import only the public prelude, so
+an omitted or accidentally private supported type is detected by compilation.
 
 ##### Reference
 
@@ -2370,6 +3200,54 @@ downstream adaptation tasks rather than missing state or storage features.
 
 ## Verification gate
 
+### Audit of `suggestions.md`
+
+The August 2026 audit suggestions were compared with the implemented API,
+public documentation, and consolidated integration workflows. The accepted
+targeted changes below are now implemented; the rejected broad test and
+benchmark proposals remain intentionally out of scope.
+
+- The named state error families, the successful
+  `SystemStateSchema::field_schema` path, tuple borrow arities, and
+  valid/bounds/type-error forms of `StateSeries::payload_mut_at` are already
+  asserted directly by `state_workflow` and `analysis_workflow`. The
+  `field_schema` unknown-key `None` branch is not asserted separately, but is a
+  trivial accessor outcome rather than a missing behavioral workflow.
+- The supported tuple range of two through eight is already stated on both
+  public borrow methods and in the crate README. The private macro centralizes
+  identical implementations, while `disjoint_slots_mut` uses fixed stack
+  arrays, sort-by-index, and safe progressive slice splitting. No simplification
+  is justified without a concrete readability or performance improvement.
+- The custom decoder extension contract is already public: applications may
+  register a named `JsonPayloadDecoder<T>` or any thread-safe closure of the
+  documented form. The storage workflow proves this path with a PiP tensor.
+  A shorter README example may improve discoverability, but it is not an API
+  gap.
+- Testing every error variant in isolation would conflict with the adopted
+  behavior-oriented integration-test policy. New cases should be added only
+  for distinct externally meaningful invariants. Combined malformed-input
+  cases that merely exercise validation order should not become contractual
+  tests.
+- `resume_workflow` now contains several sealed chunks followed by one open
+  chunk. It deliberately corrupts an older sealed payload, then proves recovery
+  still reconstructs the highest open tail and appends at the correct next
+  ordinal. The same workflow now rejects terminal continuation, incompatible
+  continuation configuration, and checkpoint reconstruction without any
+  complete record.
+- Chunk/metadata benchmarks should follow profiling and measure an identified
+  operation separately from filesystem latency. The existing encoder benchmark
+  proposal remains better scoped; a generic micro-test for metadata persistence
+  would not provide a stable performance contract.
+- Responsibility separation remains explicit in the crate-level docs and
+  README: `SystemState` is live mutable state, `StateSeries` is in-memory
+  analysis, and storage owns persistence. The published crate README now also
+  demonstrates both named and closure-based custom payload decoders and states
+  the reader/decoder responsibility boundary directly.
+
+The suggestion to add unit tests inside source modules is rejected: permanent
+tests remain dedicated behavior-oriented integration targets under `tests/`,
+in accordance with the project test architecture.
+
 Before beginning the run-level facade:
 
 1. `cargo fmt --all -- --check` passes.
@@ -2392,17 +3270,22 @@ scope or file allocation changes, update `tests.md` first and keep this summary
 consistent.
 
 The former focused file-mirroring suites were useful during production-file
-review and have now been replaced by four behavior-oriented Cargo integration
+review and have now been replaced by six behavior-oriented Cargo integration
 targets plus their real JSON fixtures:
 
     tests/
     ├── fixtures/
+    │   ├── configuration/
+    │   │   ├── cartesian_project/config/{fixed,sweep,paths}.json
+    │   │   └── cases_project/config/{fixed,sweep,paths}.json
     │   ├── state.json
     │   └── coupled_state.json
+    ├── configuration_workflow.rs
     ├── state_workflow.rs
     ├── analysis_workflow.rs
     ├── storage_workflow.rs
-    └── storage_resilience.rs
+    ├── storage_resilience.rs
+    └── resume_workflow.rs
 
 Every target prints a short stable report under `--nocapture`. Logs contain
 counts, indices, byte sizes, chunk facts, pointer/clone evidence, and expected
@@ -2475,15 +3358,46 @@ Key log output:
     [backpressure] oversized_rejected=true ordering_rejected=true
     [result] storage_resilience=passed
 
+### resume_workflow.rs
+
+Reproduces prepared and unprepared crash windows, trusts sealed history,
+recovers only the highest open tail, reconstructs a complete typed checkpoint,
+continues append ordering, and rejects terminal, mismatched, or empty
+continuation attempts.
+
+Key log output:
+
+    [resume-state] index=... physical=... fields=... complete=true
+    [recovery] incomplete_tail_truncated=true continued_open_chunk=true records=... durable_barrier=true
+    [multi-chunk] sealed_history_trusted=true open_tail_scanned=true resumed_index=... next_ordinal=...
+    [resume-rejections] terminal=true configuration_mismatch=true no_checkpoint=true
+
+### configuration_workflow.rs
+
+Loads real Cartesian and explicit-case project fixtures through the public
+prelude, proves deterministic expansion and shared JSON ownership, exercises
+the complete dict/path API, exports and reloads byte-identical source files,
+and rejects meaningful ambiguity and validation failures.
+
+Key log output:
+
+    [load] fixed=... swept=... parameters=... tasks=... paths=...
+    [cartesian] tasks=... last_axis_fastest=true first=(...) last=(...)
+    [ownership] fixed_shared=true selected_shared=true task_clone_shared=true merged_map_allocated=false
+    [round-trip] fixed_bytes=true sweep_bytes=true paths_bytes=true reload=true overwrite_rejected=true
+    [cases] tasks=... correlated=true key_order_normalized=true
+    [validation] fixed_only=true nested_duplicate=true overlap=true inconsistent_cases=true invalid_path=true
+    [result] configuration_workflow=passed
+
 Trivial getter, formatting, constructor, and one-variant tests are removed when
 the same behavior is naturally exercised by these workflows. High-risk
 properties remain explicit assertions rather than being considered covered
-merely because a method was called. The four targets run independently and
+merely because a method was called. The six targets run independently and
 clean up their own precisely owned temporary directories.
 
 ### Consolidated coverage rule
 
-The four-file design must cover the complete implemented API surface, but it
+The six-file design must cover the complete implemented API surface, but it
 does not recreate one test per method:
 
 - every public structure is constructed or obtained in at least one workflow;
@@ -2510,15 +3424,368 @@ Required method allocation:
 | `analysis_workflow` | `StateSeries`, `StateSeriesView`, `StateSeriesPushError`, `StateSeriesError`; all public construction, capacity, lookup, iteration, mutation, append/rejection, extraction, clear, and clone methods |
 | `storage_workflow` | `TimeAxisMetadata`, `StateStreamConfig`, `SystemStateWriterBuilder`, `SystemStateWriter`, `JsonPayloadDecoder`, `JsonPayloadDecoderRegistry`, both default decoders, and `StoredStateSeriesReader`; every public success-path method including `read_all`, with private encoding/writing/format behavior verified through files and readback |
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
-| `resume_workflow` | explicit `continue_existing_recording`/`continue_recording_from_latest_checkpoint`, full-state schema enforcement, typed checkpoint reconstruction, prepared and unprepared crash windows, append seeding, `flush`, and exclusive root leasing |
+| `resume_workflow` | explicit `continue_existing_recording`/`continue_recording_from_latest_checkpoint`, full-state schema enforcement, typed checkpoint reconstruction, prepared and unprepared crash windows, multi-sealed-plus-open recovery without sealed-content inspection, continuation rejection boundaries, append seeding, `flush`, and exclusive root leasing |
+| `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, generation, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
 
-The finished source reads as five coherent workflows rather than an API census.
+The finished source reads as six coherent workflows rather than an API census.
 The old aggregators and focused subdirectories have been removed.
 
-Current test architecture: five logged integration files plus production
+Current test architecture: six logged integration files plus production
 doctests. Each workflow passes independently and the consolidated all-target
 suite passes. Formatting and Clippy across all targets pass with warnings
 denied. Archive preparation also succeeds. The manifest declares the published
 compatible floor `physics_in_parallel = "3.0.3"` while its development path
 resolves the local 3.0.4 source; this keeps coordinated local development and a
 packageable crates.io dependency declaration compatible.
+
+## Example architecture
+
+Full-stack examples are repository-level downstream applications, not Cargo
+example targets embedded in the publishable library crate. This keeps the
+library package focused while allowing each scientific project to own its
+manifest, source tree, input assets, documentation, and output policy. The
+first proposed application is a complete two-dimensional Hopf-normal-form
+workflow:
+
+```text
+examples/
+└── attractor_2d/
+    ├── Cargo.toml
+    ├── Cargo.lock
+    ├── README.md
+    ├── design.md
+    ├── todo.md
+    ├── config/
+    │   ├── fixed.json
+    │   ├── sweep.json
+    │   ├── paths.json
+    │   └── state.json
+    └── src/
+        └── main.rs
+```
+
+From the repository root, Cargo runs it with:
+
+```text
+cargo run --manifest-path examples/attractor_2d/Cargo.toml
+```
+
+The standalone manifest depends on the local library through
+`scientific-workflow = { version = "0.1.0", path = "../../dev" }`. The version
+constraint documents compatibility while the path keeps repository development
+joint and offline. A root Cargo workspace is not required for the first
+example; adding one should be a separate repository-wide decision if multiple
+standalone projects later need unified commands.
+
+Because the example is an executable application, its generated `Cargo.lock`
+is tracked to make the demonstrated dependency resolution reproducible.
+
+The evolving point follows the supercritical Hopf normal form
+`dx/dt = mu*x - omega*y - (x^2+y^2)*x` and
+`dy/dt = omega*x + mu*y - (x^2+y^2)*y`. `fixed.json` defines the model name,
+initial point, angular frequency, explicit-Euler timestep, iteration count,
+sampling cadence, and storage budgets. `sweep.json` varies `mu` across the Hopf
+bifurcation so every resolved task is one independent recording. `paths.json`
+names the state template and output root. The schema declares only the evolving
+`point` payload (`Vec<f64>`). The immutable model settings remain in fixed
+configuration and are recorded once in task metadata.
+
+The example should demonstrate one coherent full-stack happy path:
+
+1. load the project configuration, resolve paths, inspect declared parameters,
+   and enumerate deterministic parameter-sweep tasks;
+2. load one shared `SystemStateSchema`, create one owned mutable state per task,
+   insert the initial point and radius payloads, and evolve them directly in
+   that state;
+3. configure a bounded asynchronous `SystemStateWriter` with time-axis and task
+   metadata plus independently sampled `trajectory`, `radius`, and `checkpoint`
+   streams;
+4. borrow and encode the current state at each stream's cadence, allowing the
+   writer to apply byte-bounded backpressure and whole-record chunking;
+5. finish each recording, register `JsonVecF64Decoder` plus the example-local
+   scalar decoder, and reconstruct the completed streams with
+   `StoredStateSeriesReader`;
+6. analyze the reconstructed `StateSeries` through owned-series and borrowed-view
+   APIs, reporting sample count, time range, coordinate bounds, and final point;
+7. verify that reconstructed final samples match the points observed during
+   simulation; and
+8. leave the generated recording directory under the example's ignored
+   `target/recordings` area for inspection beneath a timestamp-and-process-based
+   execution directory.
+
+The example covers every primary end-user workflow across configuration,
+system state, recording storage, decoding, and time-series analysis. It should
+not mechanically call every accessor or manufacture every error variant;
+dedicated integration tests remain responsible for exhaustive API and failure
+coverage. Small helper functions keep simulation, writer construction, and
+analysis legible while all crate interaction goes through the public prelude.
+
+Proposed bounded output categories are:
+
+```text
+[project] model=... tasks=... iterations=...
+[task] index=... mu=... omega=... dt=...
+[simulation] task=... samples=... final_point=...
+[storage] task=... recording=... streams=... complete=true
+[analysis] task=... samples=... bounds=... final_point=...
+[plot] task=... legend=S:start,E:end,*:sample
+[verify] task=... round_trip=true
+[result] attractor_2d=complete output_root=...
+```
+
+The source project is self-contained and never depends on test fixtures. It is
+tracked in the Git repository but deliberately excluded from the library's
+crates.io archive. The example writes only beneath its ignored `target`
+directory, so generated recordings are neither source assets nor publishable
+artifacts. CI and release checks must invoke the standalone manifest explicitly.
+This repository-level placement is approved. The configuration and state
+template, manifest, modular executable, typed analysis, and verification now
+live under `examples/attractor_2d`.
+
+The package boundary has been verified with
+`cargo package --allow-dirty --no-verify --list` from `dev/`. The resulting
+44-file manifest contains the library sources, crate documentation, license,
+and integration-test fixtures only. It contains neither the repository-level
+`examples/attractor_2d` project nor any generated `target/recordings` data.
+Both the repository README and packaged crate README provide the standalone
+manifest command and state the full workflow coverage boundary.
+
+### Standard scientific-project procedure
+
+The attractor example establishes a reusable development sequence for projects
+built on `scientific-workflow`:
+
+1. **Define the scientific contract.** State the evolution rule, distinguish
+   evolving state from fixed and swept parameters, define one independent task,
+   and identify the observations needed for analysis or restart.
+2. **Define configuration.** Put shared constants in `fixed.json`, parameter
+   axes or correlated cases in `sweep.json`, and named filesystem locations in
+   `paths.json`. Validate task expansion before running the model.
+3. **Define state shape.** Declare stable field names and descriptions in the
+   state template. Choose the concrete Rust payload type for each field in the
+   state-assembly code; the JSON template does not pretend to encode Rust types.
+4. **Implement state assembly.** Convert one `TaskParameters` value into one
+   complete, directly owned `SystemState`. Reject invalid parameter types and
+   dimensions before starting a recording.
+5. **Implement the evolution kernel.** Evolve only the owned state and explicit
+   task parameters. First establish deterministic single-task behavior without
+   storage or sweep concurrency.
+6. **Design sampling streams.** Group fields by scientific purpose and cadence,
+   such as frequent observations and complete checkpoints. A sampled state is
+   never split, even when it exceeds a chunk-size target.
+7. **Configure recording before evolution.** Create one writer per independent
+   task with schema, time-axis documentation, resolved task metadata, stream
+   definitions, chunk targets, and a finite queue-byte budget. Initial metadata
+   therefore exists before samples are admitted.
+8. **Connect cadence to the loop.** The simulation decides when to sample and
+   passes a borrow of its current state to the appropriate stream. Encoding is
+   synchronous with that borrow; queued writing is asynchronous, and bounded
+   backpressure is accepted as part of the execution contract.
+9. **Close the lifecycle explicitly.** Complete a successful recording or mark
+   it failed with context. Do not treat dropping a writer as successful
+   completion.
+10. **Define readback by payload field.** Register a decoder for every field
+    selected by the stream, open the completed recording, and reconstruct typed
+    `StateSeries` values.
+11. **Implement analysis against series views.** Keep analysis separate from
+    evolution and operate on `StateSeriesView` when ownership is unnecessary.
+    Verify at least one known live value against reconstructed output.
+12. **Scale from one task to the sweep.** Only after one task passes its full
+    round trip should the program enumerate all tasks. Each concurrent task
+    continues to own its state, writer, and output directory.
+13. **Add restart as a distinct path.** A resumable project uses a complete
+    checkpoint stream and matching decoders, reconstructs the latest valid
+    state, continues the existing recording, and then re-enters the same
+    evolution loop.
+
+The normal runtime order is consequently:
+
+```text
+load project config -> load state schema -> resolve task
+-> assemble owned state -> create task writer
+-> evolve / sample / advance time -> complete recording
+-> register decoders -> reconstruct series -> analyze and verify
+```
+
+This ordering keeps scientific computation independent from persistence while
+making configuration, state ownership, recording lifecycle, and readback
+explicit at their boundaries.
+
+### Evolution-phase capability audit
+
+The existing crate has every primitive required for the attractor's evolution
+and recording-submission phase:
+
+- `ProjectConfig` resolves paths and deterministic task dictionaries;
+- `TaskParameters::decode_value` produces owned, typed model settings;
+- `SystemStateSchema` creates one state that shares immutable field metadata;
+- `SystemState::insert_payload` moves the initial allocation into the state;
+- `payload_mut` permits direct in-place evolution without payload cloning;
+- `advance_simulation_time` transactionally advances step and physical time;
+- `SystemStateWriterBuilder` validates independent observation and checkpoint
+  streams before execution;
+- `record_state_to_stream` completes serialization while borrowing the live
+  state, then applies backpressure only to owned encoded bytes; and
+- explicit complete and failed lifecycle methods cover both simulation exits.
+
+Cross-parameter validation, cadence decisions, and collision-free task path
+construction remain application responsibilities by design. Resolved task
+parameters can be collected into writer user metadata by cloning only their
+small JSON configuration values; a dedicated conversion API would be an
+ergonomic convenience, not a capability requirement.
+
+The state boundary is finalized: `model` is immutable fixed configuration and
+belongs in task metadata, not in the evolving state or every checkpoint
+record. The attractor schema contains the evolving `point` plus the retained
+scientific diagnostic `radius`; a complete checkpoint records both.
+
+The first full trial now covers state evolution, sampled record submission,
+explicit recording completion, decoder registration, time-series
+reconstruction, numerical analysis, terminal plotting, and exact final-state
+verification.
+
+The example's post-run ownership boundary has one authority: its domain-named
+`HopfModel` remains the only application structure that owns the live
+`SystemState`. Recording may return storage facts, but it must not manufacture
+a `FinalState` or another scalar mirror of scientific payloads. Logging and
+round-trip verification borrow the completed simulation state directly. This
+prevents duplicated scientific truth even when copying the individual scalars
+would be computationally cheap.
+
+The example is intentionally a minimal happy path. Checked-in inputs are
+decoded directly, crate errors propagate with `?`, and round-trip facts use
+plain assertions. Redundant schema/domain validation, expected-count
+recalculation, collision retry machinery, and layered failure-error rewriting
+are omitted so the core workflow remains visible. The library's integration
+suite, rather than this tutorial application, carries exhaustive validation
+and failure coverage.
+
+Example source modules use descriptive snake-case nouns consistently:
+`project_setup.rs`, `hopf_model.rs`, `state_recording.rs`, and
+`recording_analysis.rs`. These names identify either the primary domain object
+or the module's exact application responsibility and avoid ambiguous generic
+labels such as `project`, `simulation`, or `storage`. `main.rs` remains the
+conventional orchestrator entry point.
+
+The library baseline was cleaned and verified immediately before example
+implementation: formatting passes, all 11 integration tests pass, Clippy passes
+across every target and feature with warnings denied, all 6 doctests pass with
+rustdoc warnings denied, documentation builds without warnings, and isolated
+`cargo package` verification succeeds. The archive contains 44 files and
+excludes the repository-level example and generated output.
+
+### Finalized two-dimensional ODE
+
+The example uses the supercritical Hopf normal form. In polar coordinates its
+dynamics are `dr/dt = mu*r - r^3` and `dtheta/dt = omega`, so `mu < 0` produces
+a stable origin while `mu > 0` produces a stable limit cycle of radius
+`sqrt(mu)`. This gives the parameter sweep a clear qualitative transition and
+an analytic expectation for later verification.
+
+Evolution uses fixed-step explicit Euler. The planned values are
+`omega = 1.0`, `dt = 0.01`, initial point `[0.25, 0.0]`, and
+`mu = [-0.25, 0.25, 1.0]`. Every derivative is evaluated from the same old
+point before both coordinates are updated. The method is intentionally simple,
+allocation-free, and sufficiently stable for these bounded demonstration
+parameters; the example does not introduce a generic integrator abstraction.
+
+The example crate root is also the scientific project root; there is no nested
+`project/` wrapper. `ProjectConfig::load` therefore receives the
+`examples/attractor_2d` path, standard configuration lives directly under
+`config/`, including the state template.
+
+The first example artifact is finalized in `config/fixed.json`:
+`model_name = "supercritical_hopf_normal_form"`, `total_steps = 5000`,
+trajectory samples every 10 steps, radius samples every 5 steps, checkpoints
+every 1000 steps, an 8192-byte chunk target, and a 65536-byte writer queue.
+Together with `dt = 0.01`, one task evolves to physical time `50.0`. These are
+example-local defaults and will be validated by the downstream application
+before recording begins.
+
+The configuration set is complete. `config/sweep.json` defines the ordered
+Cartesian `mu` axis `[-0.25, 0.25, 1.0]`, producing three tasks across the Hopf
+bifurcation. `config/paths.json` resolves `state_template` to
+`config/state.json` and `recording_root` to the ignored `target/recordings` directory,
+both relative to the standalone example root.
+
+The state/recording boundary now deliberately demonstrates heterogeneous
+payloads. A complete Hopf state is built-in `SimulationTime`,
+`point: Vec<f64>` containing `[x, y]`, and `radius: f64` containing the current
+radial amplitude. Although derivable, radius is the model's primary diagnostic:
+it tends to zero for negative `mu` and to `sqrt(mu)` for positive `mu`, and it
+provides a cheap invariant against the point payload.
+
+The planned partial streams are `trajectory` (`point` every 10 steps) and
+`radius` (`radius` every 5 steps). The complete `checkpoint` stream records both
+payloads every 1000 steps. Including endpoints yields respectively 501, 1001,
+and 6 records per task. The approved configuration now uses
+`trajectory_sample_every_steps = 10`, `radius_sample_every_steps = 5`, and
+`checkpoint_every_steps = 1000`.
+
+The scalar payload uses an example-local `JsonPayloadDecoder<f64>` while the
+point uses the built-in vector decoder. This demonstrates custom per-field
+decoding without expanding the library's default-decoder surface.
+
+The point payload uses `Vec<f64>` in this example. For two coordinates it gives
+the leanest JSON representation, avoids an additional numerical dependency,
+and matches the existing default vector decoder. `ndarray::Array1` would add
+Serde feature configuration without helping this kernel. PiP dense tensors are
+already compatible with `SystemState` and are the preferred choice for genuine
+ranked or high-dimensional scientific data, but their repeated kind/shape JSON
+metadata and later PiP-aware decoder would be ornamental overhead for two
+scalars. A later tensor-scale example should demonstrate PiP where its shape
+and algorithms carry real meaning.
+
+`config/state.json` is complete with canonical keys `point` and
+`radius` plus language-neutral scientific descriptions. Concrete Rust types
+remain an assembly-time contract rather than template metadata.
+
+The four JSON inputs pass an end-to-end public-API audit: `ProjectConfig` loads
+10 fixed and one swept parameter into three ordered tasks, typed decoding
+returns the expected values, both named paths resolve relative to the example
+root, and `SystemStateSchema` loads the canonical `point`/`radius` field order.
+
+The example README gives end users
+one coherent introduction to the ODE, exact inputs, state ownership, explicit
+Euler evolution, stream cadences and counts, output policy, typed analysis,
+verification, and the runnable command.
+
+The standalone example manifest is complete: `attractor-2d` is an unpublished
+Rust 2024 binary with a Rust 1.85 floor, an explicit `src/main.rs` target, and
+only `scientific-workflow = { version = "0.1.0", path = "../../dev" }` as its
+dependency. Its application `Cargo.lock` is retained for reproducibility.
+
+The minimal modular executable and `Cargo.lock` are implemented. `main.rs` orchestrates
+dedicated project, simulation, recording, and analysis modules. The program
+preflights configuration, moves `Vec<f64>` into each state without cloning,
+updates heterogeneous payloads through tuple mutation, samples three streams,
+explicitly closes every writer lifecycle, reconstructs all streams, calculates
+bounds, renders an ASCII phase portrait, and verifies final values exactly.
+`HopfModel` is the sole owner of each live state; recording mutably borrows it
+and analysis later immutably borrows the same instance. The successful full
+trial completes all three tasks, each with 501 trajectory,
+1001 radius, and 6 checkpoint records. Example and library formatting, tests,
+doctests, and warnings-denied Clippy pass.
+
+The first full trial initially exposed a one-ULP discrepancy in a vector
+coordinate decoded by Serde JSON's default fast float parser. The stored
+decimal itself round-tripped through the standard parser to the original bit
+pattern. Because exact finite-float reconstruction is important for scientific
+payload verification, the crate now enables Serde JSON's `float_roundtrip`
+feature alongside `raw_value`. The rerun reconstructs every final time and
+payload with exact equality; the example does not hide the issue behind a
+numerical tolerance.
+
+An independent one-file reference at
+`examples/attractor_2d/validation/naive_hopf.rs` now validates the scientific
+kernel without using `scientific-workflow` or any external dependency. Direct
+`rustc` execution matches the workflow's final integer step and the exact
+IEEE-754 bit patterns of accumulated physical time, both coordinates, and
+radius for all three swept tasks. Its scope is deliberately numerical; storage
+and reconstruction remain validated by the workflow and library tests.
+
+The input-layout correction is complete: all four human-authored JSON inputs
+live in `config/`, and the path dictionary resolves `config/state.json`.
+Parsing ownership remains with `SystemStateSchema`, not `ProjectConfig`. The
+existing exact configuration exporter currently copies only fixed, sweep, and
+paths JSON; it does not include the separately owned state template.

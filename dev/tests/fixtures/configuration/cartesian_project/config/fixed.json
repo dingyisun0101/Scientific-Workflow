@@ -1,0 +1,8 @@
+{
+  "time_step": 0.125,
+  "lattice_shape": [4, 8],
+  "solver": {
+    "method": "rk4",
+    "tolerance": 1e-9
+  }
+}

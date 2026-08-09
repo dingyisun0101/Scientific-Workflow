@@ -1,0 +1,411 @@
+//! Logged integration coverage for standard project configuration.
+//!
+//! Run with:
+//!
+//! ```text
+//! cargo test --test configuration_workflow -- --nocapture
+//! ```
+
+use std::error::Error;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use scientific_workflow::prelude::*;
+use serde_json::Value;
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct TempWorkspace {
+    root: PathBuf,
+}
+
+impl TempWorkspace {
+    fn new() -> Self {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "scientific-workflow-configuration-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        Self { root }
+    }
+
+    fn project(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempWorkspace {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.root) {
+            eprintln!("[cleanup] {}: {error}", self.root.display());
+        }
+    }
+}
+
+fn fixture_project(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/configuration")
+        .join(name)
+}
+
+fn write_project(root: &Path, fixed: &[u8], sweep: &[u8], paths: &[u8]) {
+    let configuration = root.join("config");
+    fs::create_dir_all(&configuration).unwrap();
+    fs::write(configuration.join("fixed.json"), fixed).unwrap();
+    fs::write(configuration.join("sweep.json"), sweep).unwrap();
+    fs::write(configuration.join("paths.json"), paths).unwrap();
+}
+
+fn assert_send_sync<T: Send + Sync>() {}
+
+#[test]
+fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
+    assert_send_sync::<ParameterSpace>();
+    assert_send_sync::<TaskParameters>();
+    assert_send_sync::<TaskParametersIter>();
+    assert_send_sync::<ProjectPaths>();
+    assert_send_sync::<ProjectConfig>();
+
+    let cartesian_root = fixture_project("cartesian_project");
+    let project = ProjectConfig::load(&cartesian_root).unwrap();
+    assert_eq!(project.project_root(), cartesian_root);
+    assert_eq!(
+        project.configuration_directory(),
+        cartesian_root.join("config")
+    );
+    let parameters = project.parameters();
+    assert_eq!(
+        parameters.configuration_directory(),
+        cartesian_root.join("config")
+    );
+    assert_eq!(parameters.fixed_parameter_count(), 3);
+    assert_eq!(parameters.sweep_parameter_count(), 2);
+    assert_eq!(parameters.parameter_count(), 5);
+    assert_eq!(parameters.task_count(), 6);
+    assert!(parameters.contains_parameter("temperature"));
+    assert!(!parameters.contains_parameter("missing"));
+    assert_eq!(
+        parameters.fixed_keys().collect::<Vec<_>>(),
+        ["time_step", "lattice_shape", "solver"]
+    );
+    assert_eq!(
+        parameters.sweep_keys().collect::<Vec<_>>(),
+        ["temperature", "seed"]
+    );
+    assert_eq!(
+        parameters.fixed_source_json(),
+        fs::read(cartesian_root.join("config/fixed.json"))
+            .unwrap()
+            .as_slice()
+    );
+    assert_eq!(
+        parameters.sweep_source_json(),
+        fs::read(cartesian_root.join("config/sweep.json"))
+            .unwrap()
+            .as_slice()
+    );
+    println!(
+        "[load] fixed={} swept={} parameters={} tasks={} paths={}",
+        parameters.fixed_parameter_count(),
+        parameters.sweep_parameter_count(),
+        parameters.parameter_count(),
+        parameters.task_count(),
+        project.paths().len()
+    );
+
+    let combinations = parameters
+        .tasks()
+        .map(|task| {
+            (
+                task.task_index(),
+                task.decode_value::<f64>("temperature").unwrap(),
+                task.decode_value::<u64>("seed").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        combinations,
+        [
+            (0, 280.0, 7),
+            (1, 280.0, 11),
+            (2, 280.0, 13),
+            (3, 300.0, 7),
+            (4, 300.0, 11),
+            (5, 300.0, 13),
+        ]
+    );
+    println!(
+        "[cartesian] tasks={} last_axis_fastest=true first=({}, {}) last=({}, {})",
+        combinations.len(),
+        combinations[0].1,
+        combinations[0].2,
+        combinations[5].1,
+        combinations[5].2
+    );
+
+    let first = parameters.task(0).unwrap();
+    let second = parameters.task(1).unwrap();
+    let copied = first.clone();
+    assert_eq!(first.task_index(), 0);
+    assert_eq!(first.len(), 5);
+    assert!(!first.is_empty());
+    assert!(first.contains("solver"));
+    assert!(!first.contains("unknown"));
+    assert_eq!(
+        first.keys().collect::<Vec<_>>(),
+        [
+            "time_step",
+            "lattice_shape",
+            "solver",
+            "temperature",
+            "seed"
+        ]
+    );
+    assert_eq!(first.iter().count(), 5);
+    assert!(std::ptr::eq(
+        first.value("time_step").unwrap(),
+        second.value("time_step").unwrap()
+    ));
+    assert!(std::ptr::eq(
+        first.value("temperature").unwrap(),
+        second.value("temperature").unwrap()
+    ));
+    assert!(std::ptr::eq(
+        first.value("seed").unwrap(),
+        copied.value("seed").unwrap()
+    ));
+    assert_eq!(
+        first.require_value("lattice_shape").unwrap(),
+        &serde_json::json!([4, 8])
+    );
+    assert_eq!(
+        first.decode_value::<Vec<usize>>("lattice_shape").unwrap(),
+        [4, 8]
+    );
+    let resolved_json = first.to_json().unwrap();
+    let resolved: Value = serde_json::from_str(&resolved_json).unwrap();
+    assert_eq!(resolved["time_step"], 0.125);
+    assert_eq!(resolved["temperature"], 280.0);
+    assert_eq!(resolved["seed"], 7);
+    let key_positions = [
+        resolved_json.find("time_step").unwrap(),
+        resolved_json.find("lattice_shape").unwrap(),
+        resolved_json.find("solver").unwrap(),
+        resolved_json.find("temperature").unwrap(),
+        resolved_json.find("seed").unwrap(),
+    ];
+    assert!(key_positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(format!("{parameters:?}").contains("task_count"));
+    assert!(format!("{first:?}").contains("task_index"));
+    println!(
+        "[ownership] fixed_shared=true selected_shared=true task_clone_shared=true merged_map_allocated=false"
+    );
+
+    let mut owning_iter = parameters.tasks();
+    assert_eq!(owning_iter.size_hint(), (6, Some(6)));
+    let mut copied_iter = owning_iter.clone();
+    assert_eq!(owning_iter.next().unwrap().task_index(), 0);
+    assert_eq!(copied_iter.next().unwrap().task_index(), 0);
+    assert!(format!("{owning_iter:?}").contains("next"));
+    let independent_iter = project.parameters().tasks();
+    let project_clone = project.clone();
+    drop(project);
+    assert_eq!(independent_iter.count(), 6);
+    let (separated_parameters, separated_paths) = project_clone.clone().into_parts();
+    assert_eq!(separated_parameters.task_count(), 6);
+    assert_eq!(separated_paths.len(), 3);
+
+    let paths = project_clone.paths();
+    assert_eq!(paths.project_root(), cartesian_root);
+    assert_eq!(
+        paths.source_path(),
+        cartesian_root.join("config/paths.json")
+    );
+    assert_eq!(
+        paths.source_json(),
+        fs::read(cartesian_root.join("config/paths.json"))
+            .unwrap()
+            .as_slice()
+    );
+    assert!(!paths.is_empty());
+    assert!(paths.contains("input_data"));
+    assert_eq!(paths.path("input_data"), Some(Path::new("data/input.json")));
+    assert_eq!(
+        paths.require_path("output_root").unwrap(),
+        Path::new("results")
+    );
+    assert_eq!(
+        paths.resolve_path("input_data").unwrap(),
+        cartesian_root.join("data/input.json")
+    );
+    assert_eq!(
+        paths.keys().collect::<Vec<_>>(),
+        ["input_data", "output_root", "cache"]
+    );
+    assert_eq!(paths.iter().count(), 3);
+    assert!(format!("{paths:?}").contains("entries"));
+    println!(
+        "[paths] declared={} relative_resolution=true canonicalization=false existence_check=false",
+        paths.len()
+    );
+
+    let workspace = TempWorkspace::new();
+    let copied_root = workspace.project("copied");
+    project_clone.write_source_config(&copied_root).unwrap();
+    for name in ["fixed.json", "sweep.json", "paths.json"] {
+        assert_eq!(
+            fs::read(cartesian_root.join("config").join(name)).unwrap(),
+            fs::read(copied_root.join("config").join(name)).unwrap()
+        );
+    }
+    let copied_project = ProjectConfig::load(&copied_root).unwrap();
+    assert_eq!(copied_project.parameters().task_count(), 6);
+    let overwrite = project_clone
+        .write_source_config(&copied_root)
+        .expect_err("exact export must never replace an existing config directory");
+    assert!(matches!(
+        overwrite,
+        ConfigurationError::WriteConfigurationFile { ref path, .. }
+            if path == &copied_root.join("config")
+    ));
+    assert_eq!(
+        overwrite
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .map(io::Error::kind),
+        Some(io::ErrorKind::AlreadyExists)
+    );
+    println!(
+        "[round-trip] fixed_bytes=true sweep_bytes=true paths_bytes=true reload=true overwrite_rejected=true"
+    );
+
+    let bounds = separated_parameters.task(6).unwrap_err();
+    assert!(matches!(
+        bounds,
+        ConfigurationError::TaskIndexOutOfBounds {
+            index: 6,
+            task_count: 6
+        }
+    ));
+    assert!(matches!(
+        first.require_value("unknown"),
+        Err(ConfigurationError::UnknownTaskParameter { task_index: 0, key })
+            if key == "unknown"
+    ));
+    let decode = first.decode_value::<String>("temperature").unwrap_err();
+    assert!(matches!(
+        decode,
+        ConfigurationError::DecodeTaskParameter { task_index: 0, ref key, .. }
+            if key == "temperature"
+    ));
+    assert!(decode.source().unwrap().is::<serde_json::Error>());
+    assert!(matches!(
+        separated_paths.require_path("unknown"),
+        Err(ConfigurationError::UnknownProjectPath { key }) if key == "unknown"
+    ));
+    println!("[lookup-errors] bounds=true missing=true type=true path=true");
+
+    let cases_root = fixture_project("cases_project");
+    let cases = ProjectConfig::load(&cases_root).unwrap();
+    assert_eq!(cases.parameters().task_count(), 3);
+    assert_eq!(
+        cases.parameters().sweep_keys().collect::<Vec<_>>(),
+        ["temperature", "time_step"]
+    );
+    let correlated = cases
+        .parameters()
+        .tasks()
+        .map(|task| {
+            (
+                task.decode_value::<f64>("temperature").unwrap(),
+                task.decode_value::<f64>("time_step").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(correlated, [(275.0, 0.2), (290.0, 0.1), (310.0, 0.05)]);
+    assert_eq!(
+        cases
+            .parameters()
+            .task(1)
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["lattice_shape", "integrator", "temperature", "time_step"]
+    );
+    println!(
+        "[cases] tasks={} correlated=true key_order_normalized=true",
+        correlated.len()
+    );
+
+    let fixed_only_root = workspace.project("fixed-only");
+    write_project(
+        &fixed_only_root,
+        br#"{}"#,
+        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{}"#,
+    );
+    let fixed_only = ProjectConfig::load(&fixed_only_root).unwrap();
+    assert_eq!(fixed_only.parameters().task_count(), 1);
+    let empty_task = fixed_only.parameters().task(0).unwrap();
+    assert!(empty_task.is_empty());
+    assert_eq!(empty_task.to_json().unwrap(), "{}");
+    assert!(fixed_only.paths().is_empty());
+
+    let duplicate_root = workspace.project("duplicate");
+    write_project(
+        &duplicate_root,
+        br#"{"solver":{"method":"rk4","method":"euler"}}"#,
+        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{}"#,
+    );
+    assert!(matches!(
+        ProjectConfig::load(&duplicate_root),
+        Err(ConfigurationError::DuplicateConfigurationKey { key, .. }) if key == "method"
+    ));
+
+    let overlap_root = workspace.project("overlap");
+    write_project(
+        &overlap_root,
+        br#"{"temperature":300}"#,
+        br#"{"mode":"cartesian","axes":[{"name":"temperature","values":[280,300]}]}"#,
+        br#"{}"#,
+    );
+    assert!(matches!(
+        ProjectConfig::load(&overlap_root),
+        Err(ConfigurationError::FixedSweepKeyConflict { key, .. })
+            if key == "temperature"
+    ));
+
+    let inconsistent_root = workspace.project("inconsistent");
+    write_project(
+        &inconsistent_root,
+        br#"{}"#,
+        br#"{"mode":"cases","cases":[{"a":1},{"b":2}]}"#,
+        br#"{}"#,
+    );
+    assert!(matches!(
+        ProjectConfig::load(&inconsistent_root),
+        Err(ConfigurationError::InvalidConfigurationDocument { ref path, .. })
+            if path == &inconsistent_root.join("config/sweep.json")
+    ));
+
+    let invalid_path_root = workspace.project("invalid-path");
+    write_project(
+        &invalid_path_root,
+        br#"{}"#,
+        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{"output_root":42}"#,
+    );
+    assert!(matches!(
+        ProjectConfig::load(&invalid_path_root),
+        Err(ConfigurationError::InvalidConfigurationDocument { ref path, .. })
+            if path == &invalid_path_root.join("config/paths.json")
+    ));
+    println!(
+        "[validation] fixed_only=true nested_duplicate=true overlap=true inconsistent_cases=true invalid_path=true"
+    );
+    println!("[result] configuration_workflow=passed");
+}

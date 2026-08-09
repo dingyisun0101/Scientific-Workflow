@@ -1,0 +1,18 @@
+[package]
+name = "attractor-2d"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+autobins = false
+description = "Two-dimensional Hopf-attractor workflow using scientific-workflow"
+license = "MIT"
+repository = "https://github.com/dingyisun0101/Scientific-Workflow"
+readme = "README.md"
+
+[[bin]]
+name = "attractor-2d"
+path = "src/main.rs"
+
+[dependencies]
+scientific-workflow = { version = "0.1.0", path = "../../dev" }

@@ -9,6 +9,11 @@
 //!
 //! # Current modules
 //!
+//! [`configuration`] provides the standard `config/{fixed,sweep,paths}.json`
+//! project layout, deterministic Cartesian or explicit-case task expansion,
+//! immutable dict-like resolved parameters, named path resolution, and
+//! byte-exact source export.
+//!
 //! [`system_state`] provides:
 //!
 //! - JSON-defined, immutable field layouts;
@@ -63,6 +68,7 @@
 //! Future dispatcher functionality will organize scoped workflow execution
 //! without changing the public state-value ownership or storage contracts.
 
+pub mod configuration;
 pub mod prelude;
 pub mod storage;
 pub mod system_state;

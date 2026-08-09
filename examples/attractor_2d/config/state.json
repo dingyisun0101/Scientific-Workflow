@@ -1,0 +1,12 @@
+{
+  "fields": [
+    {
+      "name": "point",
+      "description": "Current two-dimensional phase-space point ordered as x then y"
+    },
+    {
+      "name": "radius",
+      "description": "Current radial amplitude sqrt(x^2 + y^2), synchronized with point"
+    }
+  ]
+}

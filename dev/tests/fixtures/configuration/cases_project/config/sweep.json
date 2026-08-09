@@ -1,0 +1,17 @@
+{
+  "mode": "cases",
+  "cases": [
+    {
+      "temperature": 275.0,
+      "time_step": 0.2
+    },
+    {
+      "time_step": 0.1,
+      "temperature": 290.0
+    },
+    {
+      "temperature": 310.0,
+      "time_step": 0.05
+    }
+  ]
+}

@@ -25,8 +25,12 @@ replace many narrow tests.
 
     tests/
     ├── fixtures/
+    │   ├── configuration/
+    │   │   ├── cartesian_project/config/{fixed,sweep,paths}.json
+    │   │   └── cases_project/config/{fixed,sweep,paths}.json
     │   ├── state.json
     │   └── coupled_state.json
+    ├── configuration_workflow.rs
     ├── state_workflow.rs
     ├── analysis_workflow.rs
     ├── storage_workflow.rs
@@ -34,7 +38,7 @@ replace many narrow tests.
     └── resume_workflow.rs
 
 The former `tests/system_state/`, `tests/time_series/`, and `tests/storage/`
-subdirectories and their aggregator files have been removed. All five
+subdirectories and their aggregator files have been removed. All six
 replacement targets pass independently with the logs specified below.
 
 Doctests remain in production documentation and are not replaced by this
@@ -348,7 +352,8 @@ through the operation that produces it.
 Reproduce both crash windows using real encoded chunks, explicitly reopen the
 running output, reconstruct a complete typed checkpoint, continue append
 ordering, force a durability barrier, and finish into an ordinarily readable
-analysis series.
+analysis series. Separately exercise a multi-chunk open tail and meaningful
+continuation rejection boundaries.
 
 ### Required behavior
 
@@ -363,9 +368,15 @@ analysis series.
   sealed filename and incrementally updated running metadata before finish.
 - Reproduce the prepared-descriptor/before-rename crash window and verify the
   rename is completed without scanning sealed history.
+- Build several one-record sealed chunks, corrupt an older sealed payload,
+  convert only the highest chunk to an unprepared open tail, and verify resume
+  still reconstructs that tail and continues at the next ordinal. Successful
+  continuation is direct evidence that sealed history was not opened.
 - Reject a competing writer through the artifact-free advisory root lease.
 - Reject a partial stream as a full-state checkpoint while allowing the same
-  output to continue through plain `resume`.
+  output to continue through `continue_existing_recording`.
+- Reject continuation of terminal metadata, mismatched builder configuration,
+  and checkpoint reconstruction when no complete record exists.
 - Append later indices after both recovery paths, finish, and reconstruct the
   complete final series through `StoredStateSeriesReader`.
 
@@ -375,17 +386,76 @@ analysis series.
   `continue_recording_from_latest_checkpoint`;
 - `SystemStateWriter::flush_stream_to_storage`;
 - interrupted descriptor preparation and sealing through `RecordingManifest`;
-- `StateWriterWorker::recover_state_stream`, `resume`, recovered ordering, and flush barriers;
+- `StateWriterWorker::recover_state_stream`,
+  `continue_recovered_recording`, recovered ordering, and flush barriers;
 - open-tail scanning/truncation and latest sealed-record fallback;
-- `StorageError::RecordingDirectoryInUse` plus recovery conflict paths indirectly.
+- `StorageError::RecordingDirectoryInUse`, `RecordingNotContinuable`,
+  `RecordingConfigurationMismatch`, and `NoCheckpointState`, plus recovery
+  conflict paths indirectly.
 
 ### Log contract
 
     [resume-state] index=... physical=... fields=... complete=true
     [recovery] incomplete_tail_truncated=true continued_open_chunk=true records=... durable_barrier=true
     [prepared] descriptor_verified=true rename_completed=true sealed_history_scanned=false lease_exclusive=true
+    [multi-chunk] sealed_history_trusted=true open_tail_scanned=true resumed_index=... next_ordinal=...
+    [resume-rejections] terminal=true configuration_mismatch=true no_checkpoint=true
     [schema] partial_checkpoint_rejected=true output_continued=true final_states=...
     [result] ..._resume=passed final_states=...
+
+## Test 6: configuration_workflow.rs
+
+### Scenario
+
+Load real standard project directories through the public prelude, generate
+Cartesian and correlated explicit tasks, use their dict-like interfaces,
+resolve project paths, export the three source documents byte for byte, reload
+the copy, and reject meaningful ambiguous or invalid inputs.
+
+### Required behavior
+
+- Load `config/{fixed,sweep,paths}.json` through `ProjectConfig`.
+- Verify fixed, sweep, resolved-parameter, task, and path counts and ordered
+  name iteration.
+- Expand a two-axis Cartesian product with the final axis changing fastest.
+- Expand explicit correlated cases whose later object declaration order differs
+  from the first case, normalizing lookup/output order without changing values.
+- Prove fixed values, repeated selected candidates, and cloned task handles
+  refer to shared JSON values without allocating merged maps.
+- Exercise raw, required, and typed parameter lookup; resolved task iteration;
+  deterministic task JSON; cheap cloning; owning iterator independence; and
+  `Send + Sync` boundaries.
+- Inspect unresolved paths and resolve relative paths against the project root
+  without canonicalization or existence checks.
+- Export all three exact source byte sequences to a new project, reload the
+  exported configuration, and reject an overwrite attempt with its preserved
+  IO source.
+- Accept an empty Cartesian axis list as one empty fixed-only task.
+- Reject out-of-range tasks, unknown parameters and paths, typed decode
+  mismatch, recursively duplicated JSON keys, fixed/sweep overlap,
+  inconsistent explicit cases, and non-string path values.
+
+### Structures and methods
+
+- `ProjectConfig::{load,project_root,configuration_directory,parameters,paths,
+  into_parts,write_source_config,clone}`;
+- all public `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, and
+  `ProjectPaths` methods;
+- reachable configuration error families with source preservation;
+- strict parser, mixed-radix selection, explicit-case normalization, borrowed
+  serialization, and exclusive exact export indirectly.
+
+### Log contract
+
+    [load] fixed=... swept=... parameters=... tasks=... paths=...
+    [cartesian] tasks=... last_axis_fastest=true first=(...) last=(...)
+    [ownership] fixed_shared=true selected_shared=true task_clone_shared=true merged_map_allocated=false
+    [paths] declared=... relative_resolution=true canonicalization=false existence_check=false
+    [round-trip] fixed_bytes=true sweep_bytes=true paths_bytes=true reload=true overwrite_rejected=true
+    [lookup-errors] bounds=true missing=true type=true path=true
+    [cases] tasks=... correlated=true key_order_normalized=true
+    [validation] fixed_only=true nested_duplicate=true overlap=true inconsistent_cases=true invalid_path=true
+    [result] configuration_workflow=passed
 
 ## Logging rules
 
@@ -407,12 +477,14 @@ analysis series.
 3. `storage_workflow.rs` implemented and run independently.
 4. `storage_resilience.rs` implemented and run independently.
 5. `resume_workflow.rs` implemented for crash recovery and append.
-6. Meaningful ownership, invariant, storage, decoder, integrity, and recovery
-   assertions mapped into the five scenarios.
-7. Old aggregators and test subdirectories removed after replacements passed.
-8. README and architecture documentation updated to the consolidated layout.
-9. Storage tests migrated from source-path harnesses to the public prelude.
-10. Full formatting, all-target, doctest, and Clippy verification is the final
+6. `configuration_workflow.rs` implemented for project configuration and task
+   expansion.
+7. Meaningful ownership, invariant, storage, decoder, integrity, recovery, and
+   configuration assertions mapped into the six scenarios.
+8. Old aggregators and test subdirectories removed after replacements passed.
+9. README and architecture documentation updated to the consolidated layout.
+10. Storage and configuration tests use only the public prelude.
+11. Full formatting, all-target, doctest, and Clippy verification is the final
    closeout gate for every later change.
 
 The migration preserved old tests until the replacement workflows compiled and
@@ -428,6 +500,7 @@ cargo test --test analysis_workflow -- --nocapture
 cargo test --test storage_workflow -- --nocapture
 cargo test --test storage_resilience -- --nocapture
 cargo test --test resume_workflow -- --nocapture
+cargo test --test configuration_workflow -- --nocapture
 cargo test --all-targets --no-fail-fast --locked
 cargo test --doc --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -437,10 +510,10 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 
 The cleanup is complete only when:
 
-- the final tree contains the fixtures and five integration files;
+- the final tree contains the fixtures and six integration files;
 - every implemented public structure and method is checked off above;
 - every high-risk private subsystem has observable behavioral coverage;
-- all five targets emit their documented bounded logs;
+- all six targets emit their documented bounded logs;
 - no test depends on execution order or retained generated data;
 - the complete verification command set passes.
 
