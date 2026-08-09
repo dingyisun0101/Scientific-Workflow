@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use physics_in_parallel::engines::soa::{AttrsCore, AttrsMeta, PhysObj};
 use physics_in_parallel::math::{Dense, Tensor};
 use scientific_workflow::prelude::*;
 use serde::{Serialize, Serializer};
@@ -306,13 +307,12 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     );
     let decoders = JsonPayloadDecoderRegistry::with_capacity(3);
     assert!(decoders.is_empty());
-    let mut decoders = decoders
+    let decoders = decoders
         .with_json_field::<Vec<f64>>("population")
         .unwrap()
         .with_json_field::<String>("activity")
-        .unwrap();
-    decoders
-        .register_for_field::<Tensor<u64, Dense>, _>("space", |raw: &str| serde_json::from_str(raw))
+        .unwrap()
+        .with_json_field::<Tensor<u64, Dense>>("space")
         .unwrap();
     assert_eq!(decoders.len(), 3);
     assert!(decoders.has_decoder_for_field("space"));
@@ -408,6 +408,63 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     assert_eq!(task_metadata["user_metadata"]["seed"], 7);
     println!("[task-metadata] task_index=0 temperature=280 seed=7");
     println!("[result] storage_workflow=passed");
+}
+
+#[test]
+fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
+    let workspace = TempWorkspace::new();
+    let template = workspace.root.join("phys-obj-state.json");
+    fs::write(
+        &template,
+        br#"{"fields":[{"name":"particles","description":"typed particle columns"}]}"#,
+    )
+    .unwrap();
+    let spec = SystemStateSchema::load_json_template(&template).unwrap();
+
+    let mut attributes = AttrsCore::empty();
+    attributes.allocate::<f64>("position", 2, 2).unwrap();
+    attributes.allocate::<i64>("species", 1, 2).unwrap();
+    attributes
+        .set_vector_of("position", 1, &[1.25_f64, -2.5])
+        .unwrap();
+    attributes.set_vector_of("species", 0, &[7_i64]).unwrap();
+    let particles = PhysObj::new(AttrsMeta::new(3, "particles", "mixed"), attributes);
+    let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+    state.insert_payload("particles", particles).unwrap();
+
+    let run = workspace.root.join("phys-obj-run");
+    let writer = SystemStateWriter::builder(&run, &spec)
+        .with_shared_stream_limits(
+            NonZeroU64::new(16_384).unwrap(),
+            NonZeroU64::new(65_536).unwrap(),
+        )
+        .add_periodic_state_stream("checkpoint", ["particles"], NonZeroU64::new(1).unwrap())
+        .create_new_recording()
+        .unwrap();
+    writer.complete_recording_with_final_state(&state).unwrap();
+
+    let decoders = JsonPayloadDecoderRegistry::new()
+        .with_json_field::<PhysObj>("particles")
+        .unwrap();
+    let series = StoredStateSeriesReader::open_completed_recording(&run, decoders)
+        .unwrap()
+        .read_stream_as_state_series("checkpoint")
+        .unwrap();
+    let decoded = series
+        .last_state()
+        .unwrap()
+        .payload::<PhysObj>("particles")
+        .unwrap();
+    assert_eq!(decoded.meta.label, "particles");
+    assert_eq!(
+        decoded.core.vector_of::<f64>("position", 1).unwrap(),
+        [1.25, -2.5]
+    );
+    assert_eq!(
+        decoded.core.vector_of::<i64>("species", 0).unwrap(),
+        [7_i64]
+    );
+    println!("[pip-payload] phys_obj=true mixed_types=true generic_decoder=true");
 }
 
 /// Returns every regular file recursively for sidecar/temp-file assertions.

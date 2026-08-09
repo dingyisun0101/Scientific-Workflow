@@ -314,6 +314,19 @@ The tensor crate is not a required runtime dependency of
 `scientific-workflow`; applications use their own concrete serializable
 scientific payload types without registering codecs.
 
+The PiP 3.0.4 integration uses versioned Serde schemas for dense and
+sparse tensors, matrices, vector lists, square lattices, and heterogeneous
+`PhysObj` values. They reconstruct through the same generic registry path:
+
+```rust,ignore
+let decoders = JsonPayloadDecoderRegistry::new()
+    .with_json_field::<Tensor<f64, Dense>>("population")?
+    .with_json_field::<PhysObj>("particles")?;
+```
+
+Sparse PiP records contain only sorted nonzero indices and values; Scientific
+Workflow does not densify them during encoding or reconstruction.
+
 ## Persistent State Recording
 
 One import brings the complete supported state, analysis, storage, reader, and

@@ -72,15 +72,13 @@ fn builder_with_chunk_limit(
 }
 
 fn decoders() -> JsonPayloadDecoderRegistry {
-    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(3)
+    JsonPayloadDecoderRegistry::with_capacity(3)
         .with_json_field::<Vec<f64>>("population")
         .unwrap()
         .with_json_field::<String>("activity")
-        .unwrap();
-    decoders
-        .register_for_field::<Tensor<u64, Dense>, _>("space", |raw: &str| serde_json::from_str(raw))
-        .unwrap();
-    decoders
+        .unwrap()
+        .with_json_field::<Tensor<u64, Dense>>("space")
+        .unwrap()
 }
 
 fn state(spec: &SystemStateSchema, index: u64) -> SystemState {

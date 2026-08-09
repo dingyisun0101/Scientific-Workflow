@@ -233,12 +233,15 @@ surface.
   this exercises the successful file-sync, rename, and directory-sync path.
 - Register ordinary vector and string payloads through `with_json_field` under
   exact keys.
-- Register an application-provided PiP tensor decoder under its exact key.
+- Register a PiP tensor through `with_json_field` under its exact key.
 - Open a completed run, enumerate streams, read one stream, and read all
   streams.
 - Verify complete `StateSeries` lengths, times, schemas, and typed payloads.
 - Verify raw output remains readable without making a `serde_json::Value` tree
   part of the production reader API.
+- Round-trip a heterogeneous PiP `PhysObj` through `SystemState`, queued JSONL
+  storage, `with_json_field::<PhysObj>`, and typed reconstructed access; verify
+  its mixed `f64`/`i64` columns.
 
 ### Structures and methods
 
@@ -368,7 +371,7 @@ continuation rejection boundaries.
 - Verify recovery examines only that open payload, truncates only the fragment,
   retains all complete records, and continues the same chunk owner.
 - Reconstruct every full-state field through
-  `continue_recording_from_latest_checkpoint`, including a PiP tensor decoder,
+  `continue_recording_from_latest_checkpoint`, including a generic PiP tensor decoder,
   and verify time and typed values.
 - Force `flush_stream_to_storage(stream)` below the automatic byte target and observe both the
   sealed filename and incrementally updated running metadata before finish.

@@ -2785,7 +2785,8 @@ Already compatible:
 - exact encoded-byte chunking is a stricter implementation of simulator's
   desired maximum-file-size policy than its current estimated record sizing;
 - bounded stream queues provide deterministic per-stream backpressure;
-- application decoders can reconstruct `Vec<usize>`, PiP lattices,
+- generic Serde decoders can reconstruct `Vec<usize>`, PiP tensors, lattices,
+  matrices, vector lists, and `PhysObj`; application decoders can reconstruct
   `ActivityStatus`, and scalar payloads without built-in crate support;
 - immutable JSONL chunks, checksums, and complete-run reconstruction satisfy
   analysis once a run has terminated successfully.
@@ -3289,7 +3290,8 @@ benchmark proposals remain intentionally out of scope.
   is justified without a concrete readability or performance improvement.
 - The custom decoder extension contract is already public: applications may
   register a named `JsonPayloadDecoder<T>` or any thread-safe closure of the
-  documented form. The storage workflow proves this path with a PiP tensor.
+  documented form. Ordinary PiP payloads now use the generic Serde path, while
+  resilience coverage retains the custom decoder path for domain conversions.
   A shorter README example may improve discoverability, but it is not an API
   gap.
 - Testing every error variant in isolation would conflict with the adopted
@@ -3326,8 +3328,8 @@ Before beginning the run-level facade:
    availability permits it.
 5. `git diff --check` passes.
 
-The unified storage target must prove both default decoder round trips and a
-real PiP tensor workflow using application-provided per-key decoders. It prints
+The unified storage target must prove both default decoder round trips and
+real PiP tensor/`PhysObj` workflows using generic per-key Serde decoders. It prints
 bounded logs under `cargo test --test storage_workflow -- --nocapture` and removes all
 temporary output afterward.
 
@@ -3399,9 +3401,9 @@ Key log output:
 The principal success-path test. It evolves one live state, samples multiple
 streams at different cadences, uses borrowed encoding and bounded writers,
 commits one metadata file, verifies automatic byte chunking, then reconstructs
-complete series. It exercises `JsonStringDecoder`, `JsonVecF64Decoder`, and an
-application-provided PiP tensor decoder. It explicitly asserts semantic JSON
-metadata round trip and typed payload equality.
+complete series. It exercises the generic JSON path for strings, vectors, PiP
+tensors, and a heterogeneous PiP `PhysObj`. It explicitly asserts semantic
+JSON metadata round trip and typed payload equality.
 
 Key log output:
 
@@ -3503,9 +3505,8 @@ Current test architecture: six logged integration files plus production
 doctests. Each workflow passes independently and the consolidated all-target
 suite passes. Formatting and Clippy across all targets pass with warnings
 denied. Archive preparation also succeeds. The manifest declares the published
-compatible floor `physics_in_parallel = "3.0.3"` while its development path
-resolves the local 3.0.4 source; this keeps coordinated local development and a
-packageable crates.io dependency declaration compatible.
+development dependency `physics_in_parallel = "3.0.4"`, resolved directly from
+crates.io without a local path override.
 
 ## Example architecture
 
@@ -3891,3 +3892,75 @@ live in `config/`, and the path dictionary resolves `config/state.json`.
 Parsing ownership remains with `SystemStateSchema`, not `ProjectConfig`. The
 existing exact configuration exporter currently copies only fixed, sweep, and
 paths JSON; it does not include the separately owned state template.
+
+### PiP serialization audit
+
+The published `physics_in_parallel` 3.0.4 crate has the correct primary
+integration boundary for ordinary Scientific Workflow payloads: dense tensors,
+vector lists, matrices, and square lattices implement Serde `Serialize`, and
+the state writer invokes that borrowed implementation directly. Dense tensor,
+vector-list, and lattice serializers use borrowed shape/data slices, so they do
+not clone the scientific allocation before producing the unavoidable encoded
+record bytes. Typed reconstruction can use
+`JsonPayloadDecoderRegistry::with_json_field::<T>` because these types also
+implement `Deserialize`.
+
+The coordinated PiP serialization refactor is implemented:
+
+1. Sparse tensors and sparse matrices use `kind`, `version`, `scalar`, `shape`,
+   strictly increasing row-major `indices`, and matching `values`. Encoding
+   sorts and copies only `nnz` entries; decoding validates shape products,
+   lengths, bounds, ordering, duplicates, scalar identity, and explicit zeros
+   before direct sparse construction. No logical-dense intermediate remains.
+2. `AttrsCore` and `PhysObj` directly stream Serde output. Their versioned
+   schema persists stable attribute IDs, slot count, labels, sealed PiP scalar
+   tags, and typed vector-list payloads. Raw per-attribute JSON is dispatched
+   by scalar tag during deserialization without a `serde_json::Value` tree.
+   `PhysObj` now satisfies the Scientific Workflow payload contract and has an
+   end-to-end writer/reader integration test using `with_json_field::<PhysObj>`.
+3. PiP independently enables `float_roundtrip`. Exact-bit regression coverage
+   retains the previously sensitive `f64` value without relying on downstream
+   Cargo feature unification.
+4. Every current PiP payload schema is version 1 and includes a stable scalar
+   identifier. Serialization rejects non-finite real or complex scalar values
+   because ordinary JSON numbers cannot preserve NaN or infinity.
+5. Direct Serde remains the canonical high-performance API; the allocating
+   payload, value-tree, and pretty-string helpers remain convenience APIs and
+   still allocate by design.
+6. Standalone lattice and `PhysObj` file helpers write through `BufWriter`,
+   accept path-like inputs, and propagate serialization errors. Scientific
+   Workflow remains responsible for durable chunk publication.
+7. The Python loader recognizes current sparse matrix/tensor and emitted square
+   lattice tags, validates version and sparse invariants, restores scalar
+   dtypes including complex values, rejects lossy or non-finite numeric input,
+   and uses overflow-safe shape products.
+8. Validation errors report received tags, unknown fields are rejected, and
+   Rust tests cover exact schemas, compact sparse size, malformed inputs,
+   deterministic round trips, mixed composite types, and file helpers.
+
+Encoded-size estimation is not required for Scientific Workflow integration:
+its writer chunks and applies backpressure using the exact serialized record
+length after encoding. PiP should avoid maintaining a second estimator unless
+a separate PiP use case demonstrates a need for it.
+
+#### Scientific Workflow coordination status
+
+No further storage or `SystemState` API change is required for the current PiP
+serialization contract. Scientific Workflow already borrows every payload
+through `Serialize`, stores the resulting JSON field unchanged, and delegates
+typed reconstruction to `with_json_field::<T>`. The integration suite now
+proves this boundary for dense PiP tensors and heterogeneous `PhysObj` values,
+including checkpoint continuation. PiP's wire-level `version` and `scalar`
+metadata remain opaque payload content here; validating them belongs to PiP's
+own `Deserialize` implementations.
+
+Scientific Workflow resolves PiP 3.0.4 from crates.io as a development-only
+integration dependency. There is no local path override, compatibility adapter,
+or PiP-specific decoder.
+
+The dependency boundary is strict: Scientific Workflow may consume PiP values
+through their public Serde implementations, but PiP must never depend on
+Scientific Workflow. PiP owns scientific container representation and typed
+round trips; Scientific Workflow owns sampling cadence, asynchronous writing,
+chunk lifecycle, run metadata, checkpoint continuation, and analysis-series
+reconstruction.

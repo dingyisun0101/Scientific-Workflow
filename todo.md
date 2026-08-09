@@ -16,22 +16,18 @@ Ordinary Serde JSON payloads now use
 `JsonPayloadDecoderRegistry::with_json_field::<T>` and require no dedicated
 decoder type. Add named decoders only when their concrete wire conversion,
 configuration, or validation behavior differs from direct Serde decoding.
-Application-specific payloads, including PiP tensors, already work through
-registered closures or named `JsonPayloadDecoder<T>` implementations.
+PiP tensors, matrices, vector lists, lattices, and `PhysObj` now implement
+complete versioned Serde round trips and use `with_json_field::<T>` directly.
+Other application-specific payloads already work through registered closures
+or named `JsonPayloadDecoder<T>` implementations.
 
-## Deferred PiP work
+## PiP integration status
 
-`physics_in_parallel` remains a local development dependency at `../pip` until
-its coordinated version is published. Sparse tensor behavior and its remaining
-publication work are tracked in the sibling PiP repository's `todo.md`, which
-is intentionally ignored there.
-
-The manifest declares `physics_in_parallel = "3.0.3"` and uses the sibling
-3.0.4 checkout through `path = "../../pip"`. Cargo's compatible-version rule
-allows local joint development while `cargo package --allow-dirty --no-verify`
-resolves the published 3.0.3 dependency successfully. After PiP 3.0.4 is
-published, raise the declared floor and rerun the archive and publish dry-run
-checks.
+`physics_in_parallel` 3.0.4 is published and used as a crates.io development
+dependency without a local path override. Its dense, sparse, heterogeneous
+composite, float-fidelity, file-helper, and Python serialization refactor is
+covered by Scientific Workflow's generic Serde integration tests. No active PiP
+migration work remains.
 
 ## Deferred project stages
 
