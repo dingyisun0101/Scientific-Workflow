@@ -29,8 +29,8 @@
 //! {
 //!   "mode": "cases",
 //!   "cases": [
-//!     {"temperature": 280.0, "time_step": 0.1},
-//!     {"temperature": 300.0, "time_step": 0.05}
+//!     {"temperature": 280.0, "physical_time_increment": 0.1},
+//!     {"temperature": 300.0, "physical_time_increment": 0.05}
 //!   ]
 //! }
 //! ```

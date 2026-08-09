@@ -62,22 +62,22 @@ use super::value::StateValue;
 
 /// The temporal coordinate associated with one [`SystemState`].
 ///
-/// `index` is always present and provides deterministic ordering, chunk
-/// boundaries, and checkpoint identity. `physical` optionally records a
+/// `iteration` is always present and provides deterministic ordering, chunk
+/// boundaries, and checkpoint identity. `physical_time` optionally records a
 /// finite domain time such as seconds or model time. Time-axis units belong to
 /// stream metadata so they are not repeated in every state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SimulationTime {
-    index: u64,
-    physical: Option<f64>,
+    iteration: u64,
+    physical_time: Option<f64>,
 }
 
 impl SimulationTime {
-    /// Creates an index-only time point.
-    pub const fn from_step(index: u64) -> Self {
+    /// Creates an iteration-only time point.
+    pub const fn from_iteration(iteration: u64) -> Self {
         Self {
-            index,
-            physical: None,
+            iteration,
+            physical_time: None,
         }
     }
 
@@ -86,21 +86,21 @@ impl SimulationTime {
     /// Returns `None` for `NaN` or either infinity. Negative finite values are
     /// accepted because some scientific coordinate systems use an origin after
     /// the beginning of a simulation or observation.
-    pub fn from_step_and_physical_time(index: u64, physical: f64) -> Option<Self> {
-        physical.is_finite().then_some(Self {
-            index,
-            physical: Some(physical),
+    pub fn from_iteration_and_physical_time(iteration: u64, physical_time: f64) -> Option<Self> {
+        physical_time.is_finite().then_some(Self {
+            iteration,
+            physical_time: Some(physical_time),
         })
     }
 
-    /// Returns the deterministic integer index.
-    pub const fn step(self) -> u64 {
-        self.index
+    /// Returns the deterministic iteration coordinate.
+    pub const fn iteration(self) -> u64 {
+        self.iteration
     }
 
     /// Returns the optional physical coordinate.
     pub const fn physical_time(self) -> Option<f64> {
-        self.physical
+        self.physical_time
     }
 }
 
@@ -214,7 +214,7 @@ impl SystemState {
     /// Replacing the complete value rather than exposing its individual fields
     /// ensures that a physical coordinate can enter a state only through the
     /// finite-value validation performed by
-    /// [`SimulationTime::from_step_and_physical_time`].
+    /// [`SimulationTime::from_iteration_and_physical_time`].
     ///
     /// # Collection invariants
     ///
@@ -226,13 +226,13 @@ impl SystemState {
         std::mem::replace(&mut self.time, time)
     }
 
-    /// Advances the integer index by one and optionally advances physical time.
+    /// Advances the iteration by one after one completed model step.
     ///
-    /// Passing `None` increments only the authoritative integer index and
+    /// Passing `None` increments only the authoritative iteration and
     /// preserves the current optional physical coordinate. Passing
     /// `Some(delta)` additionally requires an existing physical coordinate,
     /// a finite `delta`, and a finite sum. Negative and zero finite deltas are
-    /// valid because integer index—not physical time—defines record ordering.
+    /// valid because iteration—not physical time—defines record ordering.
     ///
     /// On success, the new [`SimulationTime`] is stored and returned. All validation
     /// occurs before assignment, so every error leaves the original time point
@@ -242,7 +242,7 @@ impl SystemState {
     ///
     /// Returns:
     ///
-    /// - [`StateError::TimeIndexOverflow`] when the current index is
+    /// - [`StateError::IterationOverflow`] when the current iteration is
     ///   `u64::MAX`;
     /// - [`StateError::MissingPhysicalTime`] when a delta is supplied but the
     ///   current state has no physical coordinate;
@@ -250,21 +250,21 @@ impl SystemState {
     ///   coordinate is not finite.
     pub fn advance_simulation_time(
         &mut self,
-        physical_delta: Option<f64>,
+        physical_time_increment: Option<f64>,
     ) -> Result<SimulationTime, StateError> {
-        let next_index = self
-            .time
-            .index
-            .checked_add(1)
-            .ok_or(StateError::TimeIndexOverflow {
-                index: self.time.index,
-            })?;
+        let next_iteration =
+            self.time
+                .iteration
+                .checked_add(1)
+                .ok_or(StateError::IterationOverflow {
+                    iteration: self.time.iteration,
+                })?;
 
-        let next_physical = match (self.time.physical, physical_delta) {
-            (physical, None) => physical,
+        let next_physical_time = match (self.time.physical_time, physical_time_increment) {
+            (physical_time, None) => physical_time,
             (None, Some(_)) => {
                 return Err(StateError::MissingPhysicalTime {
-                    index: self.time.index,
+                    iteration: self.time.iteration,
                 });
             }
             (Some(current), Some(delta)) => {
@@ -277,8 +277,8 @@ impl SystemState {
         };
 
         let next = SimulationTime {
-            index: next_index,
-            physical: next_physical,
+            iteration: next_iteration,
+            physical_time: next_physical_time,
         };
         self.time = next;
         Ok(next)
@@ -372,7 +372,7 @@ impl SystemState {
     /// ```no_run
     /// # use scientific_workflow::system_state::{SystemStateSchema, SimulationTime};
     /// # fn example(spec: &SystemStateSchema) -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+    /// let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
     /// drop(state.insert_payload("population", vec![1_u64, 2, 3])?);
     /// # Ok(())
     /// # }

@@ -1,11 +1,11 @@
 //! Recording persistence and reconstruction for scientific state samples.
 //!
 //! This module is the complete public storage boundary. Simulations configure
-//! named output streams with fixed step cadences through
+//! named output streams with coordinate-aware sampling intervals through
 //! [`SystemStateWriterBuilder`], then offer a borrowed live [`SystemState`] to
 //! [`SystemStateWriter::observe_state`] after each evolution step. The writer
 //! checks time before accessing any payload and encodes only streams whose
-//! cadence is due. One bounded queue
+//! sampling interval includes the current iteration. One bounded queue
 //! and worker serve every configured stream, while each stream retains an
 //! independent byte-targeted chunk sequence. The recording owns exactly one
 //! authoritative `metadata.json` lifecycle.
@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use fs2::FileExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::configuration::TaskParameters;
@@ -87,37 +88,37 @@ const METADATA_TEMP_FILE: &str = ".metadata.json.tmp";
 
 /// Public description of the temporal coordinates used by a run.
 ///
-/// Every record always has an integer simulation index. Physical time remains
+/// Every record always has an integer iteration. Physical time remains
 /// optional, and its unit is legal only when a physical-coordinate name is
 /// configured. Labels are documentation persisted once in `metadata.json`;
 /// they do not change [`crate::system_state::SimulationTime`] representation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TimeAxisMetadata {
-    step_name: String,
-    step_unit: Option<String>,
+    iteration_name: String,
+    iteration_unit: Option<String>,
     physical_time_name: Option<String>,
     physical_time_unit: Option<String>,
 }
 
 impl TimeAxisMetadata {
-    /// Creates a time-axis declaration with a mandatory index label.
+    /// Creates a time-axis declaration with a mandatory iteration label.
     ///
     /// Whitespace is retained in the builder and rejected by
     /// [`SystemStateWriterBuilder::create_new_recording`], keeping fluent configuration infallible
     /// while ensuring persisted labels are never silently normalized.
-    pub fn new(step_name: impl Into<String>) -> Self {
+    pub fn new(iteration_name: impl Into<String>) -> Self {
         Self {
-            step_name: step_name.into(),
-            step_unit: None,
+            iteration_name: iteration_name.into(),
+            iteration_unit: None,
             physical_time_name: None,
             physical_time_unit: None,
         }
     }
 
-    /// Sets the optional unit of the integer simulation index.
+    /// Sets the optional unit of the iteration coordinate.
     #[must_use]
-    pub fn with_step_unit(mut self, unit: impl Into<String>) -> Self {
-        self.step_unit = Some(unit.into());
+    pub fn with_iteration_unit(mut self, unit: impl Into<String>) -> Self {
+        self.iteration_unit = Some(unit.into());
         self
     }
 
@@ -149,8 +150,8 @@ impl TimeAxisMetadata {
     /// Converts public configuration into the private persisted representation.
     fn into_stored(self) -> StoredTimeAxis {
         StoredTimeAxis {
-            step_name: self.step_name,
-            step_unit: self.step_unit,
+            iteration_name: self.iteration_name,
+            iteration_unit: self.iteration_unit,
             physical_time_name: self.physical_time_name,
             physical_time_unit: self.physical_time_unit,
         }
@@ -158,10 +159,40 @@ impl TimeAxisMetadata {
 }
 
 impl Default for TimeAxisMetadata {
-    /// Uses `index` as the simulation-index label and declares no units or
+    /// Uses `iteration` as the integer-time label and declares no units or
     /// physical coordinate.
     fn default() -> Self {
-        Self::new("index")
+        Self::new("iteration")
+    }
+}
+
+/// Coordinate-aware interval used to select states for one output stream.
+///
+/// The noun variant identifies the coordinate on which the interval is
+/// measured. The current storage format supports iteration-based sampling;
+/// adding physical-time sampling later will not require overloading the word
+/// `step` or changing the surrounding stream API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingInterval {
+    /// Select iteration zero and each iteration divisible by this interval.
+    Iterations(NonZeroU64),
+}
+
+impl SamplingInterval {
+    /// Creates an iteration interval, returning `None` for zero.
+    pub const fn iterations(interval: u64) -> Option<Self> {
+        match NonZeroU64::new(interval) {
+            Some(interval) => Some(Self::Iterations(interval)),
+            None => None,
+        }
+    }
+
+    /// Reports whether this interval selects `iteration`.
+    const fn includes(self, iteration: u64) -> bool {
+        match self {
+            Self::Iterations(interval) => iteration % interval.get() == 0,
+        }
     }
 }
 
@@ -177,7 +208,7 @@ impl Default for TimeAxisMetadata {
 pub struct StateStreamConfig {
     name: String,
     directory: String,
-    every_steps: NonZeroU64,
+    sampling_interval: SamplingInterval,
     fields: Vec<String>,
     storage_limits: Option<(NonZeroU64, NonZeroU64)>,
 }
@@ -186,14 +217,14 @@ impl StateStreamConfig {
     /// Creates a stream whose relative output directory initially equals its
     /// logical name.
     ///
-    /// Non-zero types make cadence and both storage limits valid by
+    /// Non-zero types make the sampling interval and both storage limits valid by
     /// construction. Names, paths, duplicate fields, and state-key membership
     /// are validated together by
     /// [`SystemStateWriterBuilder::create_new_recording`].
     pub fn new<I, K>(
         name: impl Into<String>,
         fields: I,
-        every_steps: NonZeroU64,
+        sampling_interval: SamplingInterval,
         max_chunk_bytes: NonZeroU64,
         queue_bytes: NonZeroU64,
     ) -> Self
@@ -205,14 +236,18 @@ impl StateStreamConfig {
         Self {
             directory: name.clone(),
             name,
-            every_steps,
+            sampling_interval,
             fields: fields.into_iter().map(Into::into).collect(),
             storage_limits: Some((max_chunk_bytes, queue_bytes)),
         }
     }
 
-    /// Creates a periodic stream that inherits the writer-wide storage limits.
-    fn periodic<I, K>(name: impl Into<String>, fields: I, every_steps: NonZeroU64) -> Self
+    /// Creates a sampled stream that inherits writer-wide storage limits.
+    fn sampled<I, K>(
+        name: impl Into<String>,
+        fields: I,
+        sampling_interval: SamplingInterval,
+    ) -> Self
     where
         I: IntoIterator<Item = K>,
         K: Into<String>,
@@ -221,7 +256,7 @@ impl StateStreamConfig {
         Self {
             directory: name.clone(),
             name,
-            every_steps,
+            sampling_interval,
             fields: fields.into_iter().map(Into::into).collect(),
             storage_limits: None,
         }
@@ -292,7 +327,7 @@ impl SystemStateWriterBuilder {
     ///
     /// Limits supplied directly through [`StateStreamConfig::new`] remain
     /// stream-specific and take precedence. Streams added through
-    /// [`SystemStateWriterBuilder::add_periodic_state_stream`] require these
+    /// [`SystemStateWriterBuilder::add_sampled_state_stream`] require these
     /// shared limits.
     #[must_use]
     pub fn with_shared_stream_limits(
@@ -332,25 +367,25 @@ impl SystemStateWriterBuilder {
         self
     }
 
-    /// Adds a cadence-controlled stream using writer-wide storage limits.
+    /// Adds a sampled stream using writer-wide storage limits.
     ///
     /// The logical name is also its relative output directory. Applications
     /// needing a different directory or per-stream limits can use
     /// [`SystemStateWriterBuilder::add_state_stream`] with an explicit
     /// [`StateStreamConfig`].
     #[must_use]
-    pub fn add_periodic_state_stream<I, K>(
+    pub fn add_sampled_state_stream<I, K>(
         mut self,
         name: impl Into<String>,
         fields: I,
-        every_steps: NonZeroU64,
+        sampling_interval: SamplingInterval,
     ) -> Self
     where
         I: IntoIterator<Item = K>,
         K: Into<String>,
     {
         self.streams
-            .push(StateStreamConfig::periodic(name, fields, every_steps));
+            .push(StateStreamConfig::sampled(name, fields, sampling_interval));
         self
     }
 
@@ -432,7 +467,7 @@ impl SystemStateWriter {
 
     /// Offers the current live state to every configured sampling stream.
     ///
-    /// The writer first reads only the state's integer step. Streams that are
+    /// The writer first reads only the state's iteration. Streams that are
     /// not due perform no field lookup, payload borrow, serialization,
     /// allocation, or queue operation. Every due stream encodes its selected
     /// fields before bounded queue admission, so backpressure retains only
@@ -444,7 +479,7 @@ impl SystemStateWriter {
     /// queue-limit and ordering errors, or the writer's authoritative terminal
     /// failure.
     pub fn observe_state(&mut self, state: &SystemState) -> Result<(), StorageError> {
-        let step = state.simulation_time().step();
+        let iteration = state.simulation_time().iteration();
         let writer = self
             .writer
             .as_ref()
@@ -454,12 +489,14 @@ impl SystemStateWriter {
                 .streams
                 .get_mut(name)
                 .expect("stream order contains every configured stream");
-            if step % stream.every_steps.get() != 0 || stream.last_recorded_step == Some(step) {
+            if !stream.sampling_interval.includes(iteration)
+                || stream.last_recorded_iteration == Some(iteration)
+            {
                 continue;
             }
             let record = stream.encoder.encode(state)?;
             writer.submit_record(name, record)?;
-            stream.last_recorded_step = Some(step);
+            stream.last_recorded_iteration = Some(iteration);
         }
         Ok(())
     }
@@ -501,10 +538,10 @@ impl SystemStateWriter {
 
     /// Records one final state to every stream exactly once, then completes.
     ///
-    /// This terminal observation is independent of periodic cadence. A stream
-    /// already recorded at the same step is skipped, while a non-aligned final
-    /// step is encoded once. The writer therefore owns both periodic and final
-    /// sampling decisions; the simulation supplies only a borrowed state.
+    /// This terminal observation is independent of the sampling interval. A stream
+    /// already recorded at the same iteration is skipped, while a non-aligned final
+    /// iteration is encoded once. The writer therefore owns both interval-based and
+    /// terminal sampling decisions; the simulation supplies only a borrowed state.
     pub fn complete_recording_with_final_state(
         mut self,
         state: &SystemState,
@@ -513,9 +550,9 @@ impl SystemStateWriter {
         self.complete_recording()
     }
 
-    /// Encodes the supplied terminal state for streams that lack this step.
+    /// Encodes the supplied terminal state for streams that lack this iteration.
     fn record_final_state(&mut self, state: &SystemState) -> Result<(), StorageError> {
-        let step = state.simulation_time().step();
+        let iteration = state.simulation_time().iteration();
         let writer = self
             .writer
             .as_ref()
@@ -525,12 +562,12 @@ impl SystemStateWriter {
                 .streams
                 .get_mut(name)
                 .expect("stream order contains every configured stream");
-            if stream.last_recorded_step == Some(step) {
+            if stream.last_recorded_iteration == Some(iteration) {
                 continue;
             }
             let record = stream.encoder.encode(state)?;
             writer.submit_record(name, record)?;
-            stream.last_recorded_step = Some(step);
+            stream.last_recorded_iteration = Some(iteration);
         }
         Ok(())
     }
@@ -657,8 +694,8 @@ impl SystemStateWriter {
                 name,
                 ScheduledStateStream {
                     encoder: prepared.encoder,
-                    every_steps: prepared.every_steps,
-                    last_recorded_step: None,
+                    sampling_interval: prepared.sampling_interval,
+                    last_recorded_iteration: None,
                 },
             );
             configs.push(prepared.writer);
@@ -691,8 +728,8 @@ impl SystemStateWriter {
                 name,
                 ScheduledStateStream {
                     encoder: prepared.encoder,
-                    every_steps: prepared.every_steps,
-                    last_recorded_step: seed.last_index(),
+                    sampling_interval: prepared.sampling_interval,
+                    last_recorded_iteration: seed.last_iteration(),
                 },
             );
             recovered_streams.push((prepared.writer, seed));
@@ -782,7 +819,7 @@ impl PreparedRecording {
             declarations.push(StateStreamMetadata {
                 name: config.name.clone(),
                 directory: config.directory.clone(),
-                every_steps: config.every_steps.get(),
+                sampling_interval: config.sampling_interval,
                 fields,
                 max_chunk_bytes: max_chunk_bytes.get(),
                 queue_bytes: queue_bytes.get(),
@@ -791,7 +828,7 @@ impl PreparedRecording {
             streams.push(PreparedStateStream {
                 name: config.name.clone(),
                 encoder,
-                every_steps: config.every_steps,
+                sampling_interval: config.sampling_interval,
                 writer: StateStreamStorageConfig::new(
                     &config.name,
                     builder.root.join(&config.directory),
@@ -817,15 +854,15 @@ impl PreparedRecording {
 struct PreparedStateStream {
     name: String,
     encoder: JsonStateRecordEncoder,
-    every_steps: NonZeroU64,
+    sampling_interval: SamplingInterval,
     writer: StateStreamStorageConfig,
 }
 
 /// Runtime sampling policy and encoder for one logical stream.
 struct ScheduledStateStream {
     encoder: JsonStateRecordEncoder,
-    every_steps: NonZeroU64,
-    last_recorded_step: Option<u64>,
+    sampling_interval: SamplingInterval,
+    last_recorded_iteration: Option<u64>,
 }
 
 /// Serialized authority over the sole mutable metadata document.

@@ -1,5 +1,5 @@
 {
-  "time_step": 0.125,
+  "physical_time_increment": 0.125,
   "lattice_shape": [4, 8],
   "solver": {
     "method": "rk4",

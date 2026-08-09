@@ -2,11 +2,11 @@
   "model_name": "supercritical_hopf_normal_form",
   "initial_point": [0.25, 0.0],
   "angular_frequency": 1.0,
-  "physical_time_step": 0.01,
-  "total_steps": 5000,
-  "trajectory_sample_every_steps": 10,
-  "radius_sample_every_steps": 5,
-  "checkpoint_every_steps": 1000,
+  "physical_time_increment_per_step": 0.01,
+  "step_count": 5000,
+  "trajectory_sampling_interval": {"iterations": 10},
+  "radius_sampling_interval": {"iterations": 5},
+  "checkpoint_sampling_interval": {"iterations": 1000},
   "maximum_chunk_bytes": 8192,
   "writer_queue_bytes": 65536
 }

@@ -37,7 +37,7 @@ fn sample_state(
     values: Vec<u64>,
     clones: &Arc<AtomicUsize>,
 ) -> scientific_workflow::system_state::SystemState {
-    let mut state = spec.create_empty_state(SimulationTime::from_step(index));
+    let mut state = spec.create_empty_state(SimulationTime::from_iteration(index));
     assert!(
         state
             .insert_payload(
@@ -85,10 +85,16 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
 
     assert_eq!(series.len(), 2);
     assert!(!series.is_empty());
-    assert_eq!(series.state_at(0).unwrap().simulation_time().step(), 0);
+    assert_eq!(series.state_at(0).unwrap().simulation_time().iteration(), 0);
     assert!(series.state_at(2).is_none());
-    assert_eq!(series.first_state().unwrap().simulation_time().step(), 0);
-    assert_eq!(series.last_state().unwrap().simulation_time().step(), 4);
+    assert_eq!(
+        series.first_state().unwrap().simulation_time().iteration(),
+        0
+    );
+    assert_eq!(
+        series.last_state().unwrap().simulation_time().iteration(),
+        4
+    );
     assert_eq!(series.as_state_slice().len(), 2);
     assert_eq!(series.iter().count(), 2);
     assert_eq!(
@@ -148,10 +154,10 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
     ));
     assert_eq!(view.len(), 2);
     assert!(!view.is_empty());
-    assert_eq!(view.state_at(0).unwrap().simulation_time().step(), 0);
+    assert_eq!(view.state_at(0).unwrap().simulation_time().iteration(), 0);
     assert!(view.state_at(5).is_none());
-    assert_eq!(view.first_state().unwrap().simulation_time().step(), 0);
-    assert_eq!(view.last_state().unwrap().simulation_time().step(), 4);
+    assert_eq!(view.first_state().unwrap().simulation_time().iteration(), 0);
+    assert_eq!(view.last_state().unwrap().simulation_time().iteration(), 4);
     assert_eq!(view.as_state_slice().len(), 2);
     assert_eq!(view.iter().count(), 2);
     assert_eq!((&series).into_iter().count(), 2);
@@ -170,35 +176,35 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
         .expect_err("foreign layout must fail");
     assert!(matches!(
         layout_rejection.error(),
-        StateSeriesError::SchemaMismatch { index: 8 }
+        StateSeriesError::SchemaMismatch { iteration: 8 }
     ));
-    assert_eq!(layout_rejection.state().simulation_time().step(), 8);
+    assert_eq!(layout_rejection.state().simulation_time().iteration(), 8);
     assert!(format!("{layout_rejection:?}").contains("StateSeriesPushError"));
     assert!(layout_rejection.to_string().contains("does not share"));
     assert!(layout_rejection.source().is_some());
     let (layout_error, recovered_foreign) = layout_rejection.into_parts();
     assert!(matches!(
         layout_error,
-        StateSeriesError::SchemaMismatch { index: 8 }
+        StateSeriesError::SchemaMismatch { iteration: 8 }
     ));
-    assert_eq!(recovered_foreign.simulation_time().step(), 8);
+    assert_eq!(recovered_foreign.simulation_time().iteration(), 8);
 
     let duplicate = sample_state(&spec, 4, vec![23], &clones);
     let ordering_rejection = series
         .push_state(duplicate)
-        .expect_err("duplicate simulation index must fail");
+        .expect_err("duplicate iteration must fail");
     assert!(matches!(
         ordering_rejection.error(),
-        StateSeriesError::NonIncreasingTime {
+        StateSeriesError::NonIncreasingIteration {
             previous: 4,
             next: 4
         }
     ));
     let (_, recovered_duplicate) = ordering_rejection.into_parts();
-    assert_eq!(recovered_duplicate.simulation_time().step(), 4);
+    assert_eq!(recovered_duplicate.simulation_time().iteration(), 4);
 
     let popped = series.pop_state().expect("last state must move out");
-    assert_eq!(popped.simulation_time().step(), 4);
+    assert_eq!(popped.simulation_time().iteration(), 4);
     assert_eq!(series.len(), 1);
     series.push_state(popped).unwrap();
     assert_eq!(clones.load(Ordering::Relaxed), 0);
@@ -228,7 +234,7 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
         reserved_capacity,
         states
             .iter()
-            .map(|state| state.simulation_time().step())
+            .map(|state| state.simulation_time().iteration())
             .collect::<Vec<_>>()
     );
     println!("[invariants] layout_rejected=true ordering_rejected=true");

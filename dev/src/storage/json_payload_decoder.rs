@@ -206,7 +206,7 @@ impl JsonPayloadDecoderRegistry {
     pub(crate) fn decode_into(
         &self,
         stream: &str,
-        index: u64,
+        iteration: u64,
         field: &str,
         raw_json: &str,
         state: &mut SystemState,
@@ -221,7 +221,7 @@ impl JsonPayloadDecoderRegistry {
             .decode_into(raw_json, field, state)
             .map_err(|source| StorageError::DecodeField {
                 stream: stream.to_owned(),
-                index,
+                iteration,
                 field: field.to_owned(),
                 source,
             })

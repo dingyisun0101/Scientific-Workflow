@@ -10,7 +10,7 @@
 //!
 //! A [`StateSeries`](super::state_series::StateSeries) accepts a state only when it
 //! shares the series' exact immutable layout allocation and has a simulation
-//! index greater than the current final index. These requirements make layout
+//! iteration greater than the current final iteration. These requirements make layout
 //! checks constant-time and preserve one unambiguous iteration order while
 //! still allowing gaps between sampled indices.
 //!
@@ -43,31 +43,31 @@ pub enum StateSeriesError {
     ///
     /// Structural equality is insufficient: accepted states must derive from
     /// the same [`SystemStateSchema`](crate::system_state::SystemStateSchema) allocation. The
-    /// rejected state's simulation index is retained for diagnostics without
+    /// rejected state's iteration is retained for diagnostics without
     /// inspecting or formatting any scientific payload.
-    #[error("state at time index {index} does not share the series specification")]
+    #[error("state at iteration {iteration} does not share the series specification")]
     SchemaMismatch {
-        /// Simulation index carried by the rejected state.
-        index: u64,
+        /// Iteration carried by the rejected state.
+        iteration: u64,
     },
 
     /// The rejected state would violate strictly increasing simulation order.
     ///
-    /// Index gaps are permitted, but an equal or decreasing index would make
+    /// Iteration gaps are permitted, but an equal or decreasing value would make
     /// ordered iteration ambiguous. Physical time is not used for ordering
     /// because it is optional and may follow an application-specific scale.
-    #[error("state time index {next} must be greater than the previous index {previous}")]
-    NonIncreasingTime {
-        /// Simulation index of the series' current final state.
+    #[error("state iteration {next} must be greater than the previous iteration {previous}")]
+    NonIncreasingIteration {
+        /// Iteration of the series' current final state.
         previous: u64,
-        /// Simulation index carried by the rejected state.
+        /// Iteration carried by the rejected state.
         next: u64,
     },
 
     /// A mutable analysis request selected no stored state.
     ///
     /// `position` is a zero-based position in the series rather than a
-    /// simulation time index. Both the attempted position and current length
+    /// simulation iteration. Both the attempted position and current length
     /// are recorded so callers can diagnose stale analysis selections.
     #[error("state-series position {position} is out of bounds for length {len}")]
     PositionOutOfBounds {

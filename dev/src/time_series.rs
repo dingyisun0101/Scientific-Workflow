@@ -20,7 +20,7 @@
 //!
 //! Every state accepted by a series must share its exact immutable
 //! [`SystemStateSchema`](crate::system_state::SystemStateSchema) layout allocation and carry a
-//! simulation index greater than the current final index. Gaps between indices
+//! iteration greater than the current final iteration. Gaps between iterations
 //! are valid; optional physical time does not determine ordering.
 //!
 //! A complete mutable state is never exposed from the collection because its
@@ -43,7 +43,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let spec = SystemStateSchema::load_json_template("state.json")?;
-//! let mut first = spec.create_empty_state(SimulationTime::from_step(0));
+//! let mut first = spec.create_empty_state(SimulationTime::from_iteration(0));
 //! drop(first.insert_payload("population", vec![10_u64, 20, 30])?);
 //!
 //! let mut series = StateSeries::new(spec.clone());

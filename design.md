@@ -31,7 +31,7 @@ together with every supported crate API through `scientific_workflow::prelude`.
 ## End-to-end workflow
 
     simulation owns and mutates one complete SystemState
-        -> SystemStateWriter::observe_state checks every typed stream cadence
+        -> SystemStateWriter::observe_state checks every typed stream sampling interval
         -> non-due streams return without payload access
         -> due JsonStateRecordEncoder borrows only selected fields
         -> one owned EncodedStateRecord is produced
@@ -110,7 +110,7 @@ manually.
 ```json
 {
   "lattice_shape": [1024, 1024],
-  "time_step": 0.01
+  "physical_time_increment": 0.01
 }
 ```
 
@@ -133,8 +133,8 @@ Explicit correlated cases use:
 {
   "mode": "cases",
   "cases": [
-    {"temperature": 280.0, "time_step": 0.1},
-    {"temperature": 300.0, "time_step": 0.05}
+    {"temperature": 280.0, "physical_time_increment": 0.1},
+    {"temperature": 300.0, "physical_time_increment": 0.05}
   ]
 }
 ```
@@ -192,7 +192,7 @@ JSON keys are preserved exactly and become the runtime lookup names. The
 program uses them directly through the read-only dictionary API:
 
 ```rust
-let time_step = task.decode_value::<f64>("time_step")?;
+let physical_time_increment = task.decode_value::<f64>("physical_time_increment")?;
 let temperature = task.decode_value::<f64>("temperature")?;
 let seed = task.decode_value::<u64>("seed")?;
 ```
@@ -873,7 +873,7 @@ downstream callers -> scientific_workflow::configuration::{...}
    should be avoided in performance-sensitive paths.
 6. Encoding borrows payloads but necessarily allocates the owned serialized
    record bytes.
-7. Each stream has independent selected keys, cadence, directory, queue,
+7. Each stream has independent selected keys, sampling interval, directory, queue,
    chunk sequence, and analysis series.
 8. One sampled partial state is one indivisible JSONL record.
 9. Chunk rollover uses exact framed bytes; no record is split.
@@ -1094,18 +1094,18 @@ Private semantic validation and layout construction.
 
 ### SimulationTime
 
-Small `Copy` coordinate with mandatory `u64` simulation index and optional
+Small `Copy` coordinate with mandatory `u64` iteration and optional
 finite physical time.
 
-#### SimulationTime::from_step
+#### SimulationTime::from_iteration
 
-Creates an index-only coordinate.
+Creates an iteration-only coordinate.
 
 ##### Reference
 
-    simulation or reader without physical time -> SimulationTime::from_step
+    simulation or reader without physical time -> SimulationTime::from_iteration
 
-#### SimulationTime::from_step_and_physical_time
+#### SimulationTime::from_iteration_and_physical_time
 
 Creates a coordinate only when physical time is finite.
 
@@ -1113,9 +1113,9 @@ Creates a coordinate only when physical time is finite.
 
     simulation initialization and StoredStateSeriesReader record reconstruction
 
-#### SimulationTime::step
+#### SimulationTime::iteration
 
-Returns the authoritative ordering index.
+Returns the authoritative iteration coordinate.
 
 ##### Reference
 
@@ -1179,7 +1179,7 @@ Replaces time and returns the previous coordinate.
 
 #### SystemState::advance_simulation_time
 
-Increments index by one and optionally adds a physical-time delta
+Increments iteration by one after a completed model step and optionally adds a physical-time increment
 transactionally.
 
 ##### Reference
@@ -1641,10 +1641,9 @@ Returns `(StateSeriesError, SystemState)` without cloning.
 
 ## Storage format
 
-Format version 2 replaces descriptive cadence text with the machine-readable
-positive `every_steps` value used by writer-side scheduling. Backward
-compatibility with version 1 is intentionally not provided in this clean-slate
-stage.
+Format version 3 stores the machine-readable positive
+the typed `sampling_interval` used by writer-side scheduling. Earlier format
+versions are intentionally unsupported in this clean-slate stage.
 
 ### On-disk layout
 
@@ -1658,9 +1657,9 @@ stage.
 
 One compact record:
 
-    {"index":12,"physical":0.25,"values":{"values":[1.0,2.0],"label":"sample"}}
+    {"iteration":12,"physical_time":0.25,"values":{"values":[1.0,2.0],"label":"sample"}}
 
-`physical` is omitted when absent. Field keys remain for readability and exact
+`physical_time` is omitted when absent. Field keys remain for readability and exact
 decoder dispatch. Metadata stores schemas, run facts, byte limits, lifecycle,
 and chunk descriptors once; no sidecar metadata exists.
 
@@ -1730,12 +1729,12 @@ Rejects empty labels and a physical unit without a physical name.
 
 ### StateStreamMetadata
 
-One logical stream's directory, positive `every_steps` cadence, ordered fields,
+One logical stream's directory, positive typed `sampling_interval`, ordered fields,
 byte limits, and committed chunk inventory.
 
 #### StateStreamMetadata::validate
 
-Validates exact names, safe paths, non-zero cadence and limits, unique fields,
+Validates exact names, safe paths, typed sampling intervals and non-zero limits, unique fields,
 and ordered non-overlapping chunks.
 
 ##### Reference
@@ -1756,7 +1755,7 @@ Rejects empty names and empty present descriptions.
 
 ### ChunkMetadata
 
-Immutable ordinal, filename, record/byte counts, checksum, and index range.
+Immutable ordinal, filename, record/byte counts, checksum, and iteration range.
 
 #### ChunkMetadata::validate
 
@@ -1884,7 +1883,7 @@ Creates the configured stream directory without replacing an existing entry.
 
 ### RecoveredStateStream
 
-Owned append position for one stream: next ordinal, final accepted step,
+Owned append position for one stream: next ordinal, final accepted iteration,
 optional active chunk, and optional locator for its latest complete open
 record.
 
@@ -1997,12 +1996,12 @@ record locators, and transfers every file handle into the sole worker thread.
 condition variables. `QueueState` owns the recording-wide FIFO, count permit,
 barrier acknowledgements, lifecycle, and per-stream admission map.
 `StreamQueueState` owns one stream's byte limit, outstanding bytes, and final
-accepted step.
+accepted iteration.
 
 #### Shared::new
 
 Creates an open empty queue with one admission state seeded from each recovered
-stream's final accepted step.
+stream's final accepted iteration.
 
 ##### Reference
 
@@ -2357,13 +2356,13 @@ implementation details.
 
 ### `TimeAxisMetadata`
 
-Public run-level documentation for integer simulation time and optional
+Public run-level documentation for the iteration coordinate and optional
 physical time. It owns only small labels and units; it never stores a time
 sample.
 
 #### `TimeAxisMetadata::new`
 
-Creates an index-only declaration. Complete semantic validation is deferred to
+Creates an iteration-only declaration. Complete semantic validation is deferred to
 run startup so fluent configuration remains infallible.
 
 ##### Reference
@@ -2371,13 +2370,13 @@ run startup so fluent configuration remains infallible.
     SystemStateWriterBuilder::default time -> TimeAxisMetadata::default -> TimeAxisMetadata::new
     downstream run configuration -> TimeAxisMetadata::new
 
-#### `TimeAxisMetadata::with_step_unit`
+#### `TimeAxisMetadata::with_iteration_unit`
 
-Fluently declares the optional simulation-index unit.
+Fluently declares the optional iteration unit.
 
 ##### Reference
 
-    downstream run configuration -> TimeAxisMetadata::with_step_unit
+    downstream run configuration -> TimeAxisMetadata::with_iteration_unit
 
 #### `TimeAxisMetadata::with_physical_time_name`
 
@@ -2405,7 +2404,7 @@ Declares the physical-coordinate name and unit together for the common case.
 
 #### `TimeAxisMetadata::default`
 
-Uses `index` with no unit or physical coordinate.
+Uses `iteration` with no unit or physical coordinate.
 
 ##### Reference
 
@@ -2419,31 +2418,65 @@ Moves public configuration into the private versioned metadata representation.
 
     SystemStateWriter::create_new_recording -> TimeAxisMetadata::into_stored
 
+### `SamplingInterval`
+
+Public coordinate-aware sampling policy. Its Serde representation is externally
+tagged so metadata and project configuration retain the coordinate together
+with the interval.
+
+#### `SamplingInterval::Iterations`
+
+Selects iteration zero and every iteration divisible by its `NonZeroU64`
+interval.
+
+##### Reference
+
+    stream configuration -> SamplingInterval::Iterations -> writer observation scheduling
+    JSON {"iterations":N} -> TaskParameters::decode_value<SamplingInterval>
+
+#### `SamplingInterval::iterations`
+
+Convenience constructor from `u64`; returns `None` for zero rather than
+constructing an invalid policy.
+
+##### Reference
+
+    hard-coded downstream stream setup -> SamplingInterval::iterations
+
+#### `SamplingInterval::includes`
+
+Private constant-time scheduling predicate used only after a state is offered
+to the writer.
+
+##### Reference
+
+    SystemStateWriter::observe_state -> SamplingInterval::includes
+
 ### `StateStreamConfig`
 
 Owns one logical stream's exact selected keys, safe relative directory, and
-typed nonzero step cadence. Explicit declarations also own a soft chunk-byte
-target and strict queue-byte budget; concise periodic declarations inherit
-both from their writer builder. Non-zero types reject zero cadence and limits
+typed `SamplingInterval`. Explicit declarations also own a soft chunk-byte
+target and strict queue-byte budget; concise sampled declarations inherit both
+from their writer builder. Typed/non-zero values reject invalid intervals and limits
 at the public boundary.
 
 #### `StateStreamConfig::new`
 
 Creates a declaration whose directory initially equals its stream name and
-stores the cadence used by writer-side observation.
+stores the sampling interval used by writer-side observation.
 
 ##### Reference
 
     downstream run construction -> StateStreamConfig::new
 
-#### `StateStreamConfig::periodic`
+#### `StateStreamConfig::sampled`
 
 Private constructor used by the concise builder path. It retains no local
 storage limits and therefore requires writer-wide limits during preparation.
 
 ##### Reference
 
-    SystemStateWriterBuilder::add_periodic_state_stream -> StateStreamConfig::periodic -> PreparedRecording::from_builder
+    SystemStateWriterBuilder::add_sampled_state_stream -> StateStreamConfig::sampled -> PreparedRecording::from_builder
 
 #### `StateStreamConfig::with_relative_directory`
 
@@ -2504,7 +2537,7 @@ limits and takes precedence.
 
 ##### Reference
 
-    recording setup -> SystemStateWriterBuilder::with_shared_stream_limits -> periodic stream preparation
+    recording setup -> SystemStateWriterBuilder::with_shared_stream_limits -> sampled stream preparation
 
 #### `SystemStateWriterBuilder::add_state_stream`
 
@@ -2515,14 +2548,14 @@ validated together at startup.
 
     downstream run configuration -> SystemStateWriterBuilder::add_state_stream
 
-#### `SystemStateWriterBuilder::add_periodic_state_stream`
+#### `SystemStateWriterBuilder::add_sampled_state_stream`
 
-Adds a name, selected keys, and typed cadence while inheriting writer-wide
+Adds a name, selected keys, and typed sampling interval while inheriting writer-wide
 storage limits. Its relative directory initially equals the stream name.
 
 ##### Reference
 
-    common recording setup -> SystemStateWriterBuilder::add_periodic_state_stream -> StateStreamConfig::periodic
+    common recording setup -> SystemStateWriterBuilder::add_sampled_state_stream -> StateStreamConfig::sampled
 
 #### `SystemStateWriterBuilder::create_new_recording`
 
@@ -2536,7 +2569,7 @@ initial atomic metadata publication, and writer startup to `SystemStateWriter`.
 #### `SystemStateWriterBuilder::continue_existing_recording`
 
 Explicitly reopens a matching running recording, recovers at most one open chunk
-per stream, seeds ordinal/index continuation, and starts append worker. It
+per stream, seeds ordinal/iteration continuation, and starts append worker. It
 never makes `start` silently reuse existing output.
 
 ##### Reference
@@ -2584,11 +2617,11 @@ Iterates names in deterministic declaration order.
 
 #### `SystemStateWriter::observe_state`
 
-Reads the offered state's integer step and evaluates every stream cadence.
+Reads the offered state's iteration and evaluates every stream sampling interval.
 Non-due streams perform no payload lookup or allocation. Due streams borrow
 selected payloads for encoding, end those borrows, and submit owned records;
 submission is the blocking backpressure boundary. Repeated observation of an
-already recorded step is an idempotent no-op for that stream.
+already recorded iteration is an idempotent no-op for that stream.
 
 ##### Reference
 
@@ -2603,7 +2636,7 @@ is durable in `metadata.json`.
 
 ##### Reference
 
-    resume-critical checkpoint cadence -> SystemStateWriter::flush_stream_to_storage
+    resume-critical checkpoint interval -> SystemStateWriter::flush_stream_to_storage
 
 #### `SystemStateWriter::complete_recording`
 
@@ -2618,7 +2651,7 @@ failure it attempts `Failed` metadata without hiding the first writer error.
 #### `SystemStateWriter::complete_recording_with_final_state`
 
 Offers one terminal state to every stream, skips streams that already recorded
-the same step, records non-aligned endpoints once, then delegates normal drain
+the same iteration, records non-aligned endpoints once, then delegates normal drain
 and completion. Cadence and endpoint policy therefore remain inside the writer.
 
 ##### Reference
@@ -2779,7 +2812,7 @@ not required to begin simulator migration.
 Already compatible:
 
 - named `signal` and `space` streams naturally preserve independent sampling
-  cadences and output identities;
+  intervals and output identities;
 - PiP's local `SquareLattice` serializer borrows its dense storage, so
   `SystemStateWriter::observe_state` can encode a due lattice without first cloning it;
 - exact encoded-byte chunking is a stricter implementation of simulator's
@@ -3151,7 +3184,7 @@ The snapshot exposes:
 - time-axis documentation;
 - immutable run metadata supplied at startup;
 - terminal result metadata supplied when finishing or failing;
-- stream names, field declarations, cadence, and configured byte limits; and
+- stream names, field declarations, sampling intervals, and configured byte limits; and
 - derived per-stream chunk count, record count, encoded bytes, and first/last
   recorded index.
 
@@ -3245,7 +3278,7 @@ prelude, examples, diagnostics, and internal modules. Public concepts are
 `SystemStateSchema`, `SystemState`, `StateSeries`, `SystemStateWriter`,
 `StateStreamConfig`, `JsonPayloadDecoderRegistry`, and
 `StoredStateSeriesReader`. “Recording” means the complete on-disk directory and
-its lifecycle; “stream” means one named cadence and field selection within that
+its lifecycle; “stream” means one named sampling interval and field selection within that
 recording. The former ambiguous coordinator name and method vocabulary no
 longer exist.
 
@@ -3265,7 +3298,7 @@ limit apply backpressure before queue admission.
 Migration can now begin. It consists of adding local scientific-workflow and
 PiP dependencies, declaring simulator keys and streams, using checked
 `usize`/`u64` time conversion, registering application decoders, replacing
-cadence writes, and updating dispatcher completion validation. Those are
+sampling-interval writes, and updating dispatcher completion validation. Those are
 downstream adaptation tasks rather than missing state or storage features.
 
 ## Verification gate
@@ -3375,7 +3408,7 @@ rejected-set payload recovery, and bounded diagnostics.
 Key log output:
 
     [template] fields=3 round_trip=true
-    [state] index=... loaded=... mutation=verified
+    [state] iteration=... physical_time=... loaded=... mutation=verified
     [ownership] set_take_pointer_preserved=true clone_calls=...
     [tuple] immutable=true mutable=true duplicate_rejected=true unknown_rejected=true preflight_atomic=true
     [type-contract] take_retained=true clear_retained=true empty_inherited=true
@@ -3399,7 +3432,7 @@ Key log output:
 ### storage_workflow.rs
 
 The principal success-path test. It evolves one live state, samples multiple
-streams at different cadences, uses borrowed encoding and bounded writers,
+streams at different sampling intervals, uses borrowed encoding and bounded writers,
 commits one metadata file, verifies automatic byte chunking, then reconstructs
 complete series. It exercises the generic JSON path for strings, vectors, PiP
 tensors, and a heterogeneous PiP `PhysObj`. It explicitly asserts semantic
@@ -3407,7 +3440,7 @@ JSON metadata round trip and typed payload equality.
 
 Key log output:
 
-    [sample] index=... physical=... signal=true space=...
+    [sample] iteration=... physical_time=... signal=true space=...
     [writer] signal_records=... signal_bytes=... space_records=... space_bytes=...
     [chunk] stream=... file=... records=... bytes=... checksum_verified=true
     [readback] signal_states=... space_states=... typed_round_trip=true clone_calls=0
@@ -3438,7 +3471,7 @@ continuation attempts.
 
 Key log output:
 
-    [resume-state] index=... physical=... fields=... complete=true
+    [resume-state] iteration=... physical_time=... fields=... complete=true
     [recovery] incomplete_tail_truncated=true continued_open_chunk=true records=... durable_barrier=true
     [multi-chunk] sealed_history_trusted=true open_tail_scanned=true resumed_index=... next_ordinal=...
     [resume-rejections] terminal=true configuration_mismatch=true no_checkpoint=true
@@ -3554,7 +3587,7 @@ The evolving point follows the supercritical Hopf normal form
 `dx/dt = mu*x - omega*y - (x^2+y^2)*x` and
 `dy/dt = omega*x + mu*y - (x^2+y^2)*y`. `fixed.json` defines the model name,
 initial point, angular frequency, explicit-Euler timestep, iteration count,
-sampling cadence, and storage budgets. `sweep.json` varies `mu` across the Hopf
+sampling intervals, and storage budgets. `sweep.json` varies `mu` across the Hopf
 bifurcation so every resolved task is one independent recording. `paths.json`
 names the state template and output root. The schema declares the evolving
 `point` payload (`Vec<f64>`) and retained scalar `radius` diagnostic. The immutable model settings remain in fixed
@@ -3570,7 +3603,7 @@ The example should demonstrate one coherent full-stack happy path:
 3. configure a bounded asynchronous `SystemStateWriter` with time-axis and task
    metadata plus independently sampled `trajectory`, `radius`, and `checkpoint`
    streams;
-4. borrow and encode the current state at each stream's cadence, allowing the
+4. borrow and encode the current state at each stream's sampling interval, allowing the
    writer to apply byte-bounded backpressure and whole-record chunking;
 5. finish each recording, register direct Serde JSON decoding for `Vec<f64>`
    and `f64`, and reconstruct the completed streams with
@@ -3640,7 +3673,7 @@ built on `scientific-workflow`:
 5. **Implement the evolution kernel.** Evolve only the owned state and explicit
    task parameters. First establish deterministic single-task behavior without
    storage or sweep concurrency.
-6. **Design sampling streams.** Group fields by scientific purpose and cadence,
+6. **Design sampling streams.** Group fields by scientific purpose and sampling interval,
    such as frequent observations and complete checkpoints. A sampled state is
    never split, even when it exceeds a chunk-size target.
 7. **Configure recording before evolution.** Create one writer per independent
@@ -3648,7 +3681,7 @@ built on `scientific-workflow`:
    definitions, chunk targets, and a finite queue-byte budget. Initial metadata
    therefore exists before samples are admitted.
 8. **Offer state after evolution.** The model passes one borrow of its current
-   state to the writer after every step. The writer evaluates stream cadences;
+   state to the writer after every step. The writer evaluates stream sampling intervals;
    encoding is synchronous only for due streams, queued writing is
    asynchronous, and bounded backpressure is accepted as part of execution.
 9. **Close the lifecycle explicitly.** Complete a successful recording or mark
@@ -3691,10 +3724,10 @@ and recording-submission phase:
 - `SystemStateSchema` creates one state that shares immutable field metadata;
 - `SystemState::insert_payload` moves the initial allocation into the state;
 - `payload_mut` permits direct in-place evolution without payload cloning;
-- `advance_simulation_time` transactionally advances step and physical time;
+- `advance_simulation_time` transactionally increments iteration and advances physical time;
 - `SystemStateWriterBuilder` validates independent observation and checkpoint
   streams before execution;
-- `observe_state` checks writer-owned cadence before borrowing live payloads,
+- `observe_state` checks writer-owned sampling intervals before borrowing live payloads,
   then applies backpressure only to owned encoded bytes; and
 - explicit complete and failed lifecycle methods cover both simulation exits.
 
@@ -3765,9 +3798,10 @@ The example crate root is also the scientific project root; there is no nested
 `config/`, including the state template.
 
 The first example artifact is finalized in `config/fixed.json`:
-`model_name = "supercritical_hopf_normal_form"`, `total_steps = 5000`,
-trajectory samples every 10 steps, radius samples every 5 steps, checkpoints
-every 1000 steps, an 8192-byte chunk target, and a 65536-byte writer queue.
+`model_name = "supercritical_hopf_normal_form"`, `step_count = 5000`,
+trajectory sampling interval of 10 iterations, radius interval of 5 iterations,
+checkpoint interval of 1000 iterations, an 8192-byte chunk target, and a
+65536-byte writer queue.
 Together with `dt = 0.01`, one task evolves to physical time `50.0`. These are
 example-local defaults and will be validated by the downstream application
 before recording begins.
@@ -3785,12 +3819,13 @@ radial amplitude. Although derivable, radius is the model's primary diagnostic:
 it tends to zero for negative `mu` and to `sqrt(mu)` for positive `mu`, and it
 provides a cheap invariant against the point payload.
 
-The planned partial streams are `trajectory` (`point` every 10 steps) and
-`radius` (`radius` every 5 steps). The complete `checkpoint` stream records both
-payloads every 1000 steps. Including endpoints yields respectively 501, 1001,
+The planned partial streams are `trajectory` (`point` at a 10-iteration interval) and
+`radius` (`radius` at a 5-iteration interval). The complete `checkpoint` stream records both
+payloads at a 1000-iteration interval. Including endpoints yields respectively 501, 1001,
 and 6 records per task. The approved configuration now uses
-`trajectory_sample_every_steps = 10`, `radius_sample_every_steps = 5`, and
-`checkpoint_every_steps = 1000`.
+`trajectory_sampling_interval = {"iterations":10}`,
+`radius_sampling_interval = {"iterations":5}`, and
+`checkpoint_sampling_interval = {"iterations":1000}`.
 
 Both scalar and vector payloads use the registry's generic Serde JSON path:
 `with_json_field::<f64>` and `with_json_field::<Vec<f64>>`. Applications need
@@ -3818,7 +3853,7 @@ root, and `SystemStateSchema` loads the canonical `point`/`radius` field order.
 
 The example README gives end users
 one coherent introduction to the ODE, exact inputs, state ownership, explicit
-Euler evolution, stream cadences and counts, output policy, typed analysis,
+Euler evolution, stream sampling intervals and counts, output policy, typed analysis,
 verification, and the runnable command.
 
 The standalone example manifest is complete: `attractor-2d` is an unpublished
@@ -3850,7 +3885,7 @@ numerical tolerance.
 An independent one-file reference at
 `examples/attractor_2d/validation/naive_hopf.rs` now validates the scientific
 kernel without using `scientific-workflow` or any external dependency. Direct
-`rustc` execution matches the workflow's final integer step and the exact
+`rustc` execution matches the workflow's final iteration and the exact
 IEEE-754 bit patterns of accumulated physical time, both coordinates, and
 radius for all three swept tasks. Its scope is deliberately numerical; storage
 and reconstruction remain validated by the workflow and library tests.
@@ -3861,7 +3896,7 @@ The crate and attractor example retain explicit live-state ownership and the
 observation loop while simplifying common setup. The completed changes are:
 
 1. Writer-wide shared chunk and queue byte limits, plus
-   `add_periodic_state_stream(name, fields, every_steps)`. The common path then
+   `add_sampled_state_stream(name, fields, sampling_interval)`. The common path then
    stops repeating identical limits for every stream. Per-stream overrides
    remain available for asymmetric workloads, and byte budgets remain explicit
    rather than silently hard-coded.
@@ -3961,6 +3996,68 @@ or PiP-specific decoder.
 The dependency boundary is strict: Scientific Workflow may consume PiP values
 through their public Serde implementations, but PiP must never depend on
 Scientific Workflow. PiP owns scientific container representation and typed
-round trips; Scientific Workflow owns sampling cadence, asynchronous writing,
+round trips; Scientific Workflow owns sampling intervals, asynchronous writing,
 chunk lifecycle, run metadata, checkpoint continuation, and analysis-series
 reconstruction.
+
+## Time vocabulary clarification
+
+The former verb-based sampling-interval spelling was grammatically awkward and did not
+clearly distinguish a sampling rule from a time coordinate. It was not renamed
+to “sweep epoch.” Within this project, *sweep* already means the
+parameter-space expansion that produces independent tasks, while *epoch* often
+means a full optimization pass, Monte Carlo sweep, or wall-clock era. Combining
+them would make the ambiguity worse.
+
+The corrected vocabulary distinguishes an action from every coordinate and
+count derived from it:
+
+1. **Step** means exactly one successful model-evolution action. Completing one
+   step increments the iteration counter by one. A step is not a timestamp,
+   counter, interval, duration, or parameter-sweep task.
+2. **Iteration** is the monotonic integer coordinate stored in
+   `SimulationTime`. Initial state is iteration 0; after one completed step the
+   state is at iteration 1.
+3. **Physical time** is the optional modeled continuous coordinate stored in
+   `SimulationTime`. A fixed solver may add one physical-time increment when a
+   step completes, but adaptive solvers need not use a constant increment.
+4. **Task index** identifies one fixed-plus-sweep parameter selection. It is
+   configuration provenance, not simulation time.
+5. **Record position** is a stream-local storage/analysis ordinal. It must not
+   be confused with iteration or physical time.
+
+The implementation now reserves “step” for the evolution action and uses
+**sampling interval** for the selection policy. Its coordinate belongs in its
+type rather than in an awkward field or method name. The public API is
+`SimulationTime::from_iteration`, `SimulationTime::iteration`,
+`SamplingInterval::Iterations(NonZeroU64)`, and
+`add_sampled_state_stream(name, fields, sampling_interval)`. The noun variant
+states that the interval is measured on the iteration coordinate without
+calling an iteration a step.
+
+Persisted stream metadata should use a typed value:
+
+```json
+{"sampling_interval":{"iterations":10}}
+```
+
+This keeps `sampling_interval` as the stable concept and leaves room for a
+future explicitly different coordinate such as
+`{"sampling_interval":{"physical_time":0.5}}`. Example project keys may stay
+purpose-oriented—`trajectory_sampling_interval`, `radius_sampling_interval`,
+and `checkpoint_sampling_interval`—with the same typed JSON value. An
+iteration interval of 10 selects iterations 0, 10, 20, and so on. The
+final-state rule may add a terminal iteration that is not aligned to that
+interval.
+
+Solver configuration must call a duration what it is:
+`physical_time_increment_per_step`, not a “physical time step.” A configured
+`step_count` may count how many evolution actions to perform, but an iteration
+number must never be called a step. Persisted records should therefore use
+`iteration` and `physical_time`; chunk ranges should use `first_iteration` and
+`last_iteration`.
+
+Future physical-time sampling should be a separate noun-based policy such as
+`SamplingSchedule::PhysicalTimeInterval`. Domain-specific Monte Carlo sweeps
+remain model terminology and must not redefine the generic meanings of step or
+iteration.

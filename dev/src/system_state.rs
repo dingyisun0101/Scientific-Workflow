@@ -51,7 +51,7 @@
 //! use scientific_workflow::system_state::{SystemStateSchema, SimulationTime};
 //!
 //! # fn example(spec: &SystemStateSchema) -> Result<(), Box<dyn std::error::Error>> {
-//! let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+//! let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
 //!
 //! let previous = state.insert_payload("population", vec![1_u64, 2, 3])?;
 //! assert!(previous.is_none());
@@ -60,7 +60,7 @@
 //! assert_eq!(previous, Some(vec![1, 2, 3]));
 //!
 //! let time = state.advance_simulation_time(None)?;
-//! assert_eq!(time.step(), 1);
+//! assert_eq!(time.iteration(), 1);
 //! # Ok(())
 //! # }
 //! ```

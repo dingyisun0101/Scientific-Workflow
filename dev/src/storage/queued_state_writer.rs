@@ -111,7 +111,7 @@ impl StateStreamStorageConfig {
 /// writer ordering or publish a chunk without the manifest transaction.
 pub(crate) struct RecoveredStateStream {
     next_ordinal: u64,
-    last_index: Option<u64>,
+    last_iteration: Option<u64>,
     active: Option<ActiveChunk>,
     latest_open_record: Option<RecoveredUnsealedRecord>,
 }
@@ -121,7 +121,7 @@ impl RecoveredStateStream {
     fn empty() -> Self {
         Self {
             next_ordinal: 0,
-            last_index: None,
+            last_iteration: None,
             active: None,
             latest_open_record: None,
         }
@@ -132,9 +132,9 @@ impl RecoveredStateStream {
         self.latest_open_record.as_ref()
     }
 
-    /// Returns the newest recovered simulation step, if the stream is nonempty.
-    pub(crate) fn last_index(&self) -> Option<u64> {
-        self.last_index
+    /// Returns the newest recovered iteration, if the stream is nonempty.
+    pub(crate) fn last_iteration(&self) -> Option<u64> {
+        self.last_iteration
     }
 }
 
@@ -230,19 +230,19 @@ impl StateWriterWorker {
             });
         }
 
-        let index = record.simulation_time().step();
+        let iteration = record.simulation_time().iteration();
         loop {
             ensure_accepting(&state)?;
             let stream_state = state
                 .streams
                 .get(stream)
                 .expect("validated stream remains registered");
-            if let Some(previous) = stream_state.last_accepted_step
-                && index <= previous
+            if let Some(previous) = stream_state.last_accepted_iteration
+                && iteration <= previous
             {
-                return Err(StorageError::OutOfOrderRecord {
+                return Err(StorageError::OutOfOrderIteration {
                     stream: stream.to_owned(),
-                    index,
+                    iteration,
                     previous,
                 });
             }
@@ -258,7 +258,7 @@ impl StateWriterWorker {
                     .get_mut(stream)
                     .expect("validated stream remains registered");
                 stream_state.outstanding_bytes += record_bytes;
-                stream_state.last_accepted_step = Some(index);
+                stream_state.last_accepted_iteration = Some(iteration);
                 state.queue.push_back(Work::Record {
                     stream: stream.to_owned(),
                     record,
@@ -337,7 +337,7 @@ impl StateWriterWorker {
                 StreamQueueState {
                     queue_bytes: config.queue_bytes.get(),
                     outstanding_bytes: 0,
-                    last_accepted_step: recovered.last_index,
+                    last_accepted_iteration: recovered.last_iteration,
                 },
             );
             drop(recovered.latest_open_record.take());
@@ -410,7 +410,7 @@ struct Shared {
 }
 
 impl Shared {
-    /// Creates an open queue seeded with the recovered final accepted index.
+    /// Creates an open queue seeded with the recovered final accepted iteration.
     fn new(streams: HashMap<String, StreamQueueState>) -> Self {
         Self {
             state: Mutex::new(QueueState {
@@ -445,7 +445,7 @@ struct QueueState {
 struct StreamQueueState {
     queue_bytes: u64,
     outstanding_bytes: u64,
-    last_accepted_step: Option<u64>,
+    last_accepted_iteration: Option<u64>,
 }
 
 /// Worker-owned persistence state for one named stream.
@@ -492,7 +492,7 @@ impl StateStreamSink {
             self.active = Some(ActiveChunk::create(
                 &self.directory,
                 self.next_ordinal,
-                record.simulation_time().step(),
+                record.simulation_time().iteration(),
             )?);
             self.next_ordinal = self.next_ordinal.checked_add(1).ok_or_else(|| {
                 StorageError::ByteCountOverflow {
@@ -529,13 +529,13 @@ struct ActiveChunk {
     hasher: Sha256,
     records: u64,
     bytes: u64,
-    first_index: u64,
-    last_index: u64,
+    first_iteration: u64,
+    last_iteration: u64,
 }
 
 impl ActiveChunk {
     /// Exclusively creates one new open payload under its lifecycle name.
-    fn create(directory: &Path, ordinal: u64, index: u64) -> Result<Self, StorageError> {
+    fn create(directory: &Path, ordinal: u64, iteration: u64) -> Result<Self, StorageError> {
         let final_path = directory.join(chunk_filename(ordinal));
         if final_path.exists() {
             return Err(StorageError::RecordingDirectoryExists { path: final_path });
@@ -558,8 +558,8 @@ impl ActiveChunk {
             hasher: Sha256::new(),
             records: 0,
             bytes: 0,
-            first_index: index,
-            last_index: index,
+            first_iteration: iteration,
+            last_iteration: iteration,
         })
     }
 
@@ -570,8 +570,8 @@ impl ActiveChunk {
         hasher: Sha256,
         records: u64,
         bytes: u64,
-        first_index: u64,
-        last_index: u64,
+        first_iteration: u64,
+        last_iteration: u64,
     ) -> Result<Self, StorageError> {
         let temporary_path = directory.join(chunk_temp_filename(ordinal));
         let file = OpenOptions::new()
@@ -590,8 +590,8 @@ impl ActiveChunk {
             hasher,
             records,
             bytes,
-            first_index,
-            last_index,
+            first_iteration,
+            last_iteration,
         })
     }
 
@@ -620,7 +620,7 @@ impl ActiveChunk {
                 .ok_or_else(|| StorageError::ByteCountOverflow {
                     stream: stream.to_owned(),
                 })?;
-        self.last_index = record.simulation_time().step();
+        self.last_iteration = record.simulation_time().iteration();
         Ok(())
     }
 
@@ -633,8 +633,8 @@ impl ActiveChunk {
             records: self.records,
             bytes: self.bytes,
             checksum: format!("sha256:{digest}"),
-            first_index: self.first_index,
-            last_index: self.last_index,
+            first_iteration: self.first_iteration,
+            last_iteration: self.last_iteration,
         }
     }
 
@@ -681,9 +681,9 @@ impl ActiveChunk {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RecoveryRecord<'a> {
-    index: u64,
+    iteration: u64,
     #[serde(default)]
-    physical: Option<f64>,
+    physical_time: Option<f64>,
     #[serde(borrow)]
     values: &'a RawValue,
 }
@@ -860,7 +860,7 @@ fn recover_stream(
                 .ordinal
                 .checked_sub(1)
                 .and_then(|ordinal| declaration.chunks.get(ordinal as usize))
-                .map(|chunk| chunk.last_index);
+                .map(|chunk| chunk.last_iteration);
             let scan = scan_open_chunk(config, descriptor.ordinal, prior)?;
             let active = scan.active.ok_or_else(|| StorageError::RecoveryConflict {
                 path: config
@@ -900,11 +900,11 @@ fn recover_stream(
         }
     }
 
-    let previous = declaration.chunks.last().map(|chunk| chunk.last_index);
+    let previous = declaration.chunks.last().map(|chunk| chunk.last_iteration);
     let Some(names) = inventory.get(&committed) else {
         return Ok(RecoveredStateStream {
             next_ordinal: committed,
-            last_index: previous,
+            last_iteration: previous,
             active: None,
             latest_open_record: None,
         });
@@ -927,7 +927,7 @@ fn recover_stream(
         sync_directory(&config.directory, "synchronize empty chunk removal")?;
         return Ok(RecoveredStateStream {
             next_ordinal: committed,
-            last_index: previous,
+            last_iteration: previous,
             active: None,
             latest_open_record: None,
         });
@@ -937,10 +937,10 @@ fn recover_stream(
         .ok_or_else(|| StorageError::ByteCountOverflow {
             stream: config.stream.clone(),
         })?;
-    let last_index = Some(active.last_index);
+    let last_iteration = Some(active.last_iteration);
     Ok(RecoveredStateStream {
         next_ordinal,
-        last_index,
+        last_iteration,
         active: Some(active),
         latest_open_record: scan.latest_record,
     })
@@ -1005,7 +1005,7 @@ fn parse_chunk_name(name: &str) -> Option<(u64, bool)> {
 fn scan_open_chunk(
     config: &StateStreamStorageConfig,
     ordinal: u64,
-    previous_index: Option<u64>,
+    previous_iteration: Option<u64>,
 ) -> Result<OpenScan, StorageError> {
     let path = config.directory.join(chunk_temp_filename(ordinal));
     let file = File::open(&path).map_err(|source| StorageError::Io {
@@ -1018,8 +1018,8 @@ fn scan_open_chunk(
     let mut line_number = 0_u64;
     let mut valid_bytes = 0_u64;
     let mut records = 0_u64;
-    let mut first_index = None;
-    let mut last_index = previous_index;
+    let mut first_iteration = None;
+    let mut last_iteration = previous_iteration;
     let mut latest_record = None;
     let mut hasher = Sha256::new();
 
@@ -1053,8 +1053,8 @@ fn scan_open_chunk(
                 }
             })?;
         if record
-            .physical
-            .is_some_and(|physical| !physical.is_finite())
+            .physical_time
+            .is_some_and(|physical_time| !physical_time.is_finite())
         {
             return Err(StorageError::InvalidRecord {
                 path: path.clone(),
@@ -1070,20 +1070,20 @@ fn scan_open_chunk(
                 reason: "record values must be a JSON object".to_owned(),
             });
         }
-        if let Some(previous) = last_index
-            && record.index <= previous
+        if let Some(previous) = last_iteration
+            && record.iteration <= previous
         {
             return Err(StorageError::InvalidRecord {
                 path: path.clone(),
                 line: line_number,
                 reason: format!(
-                    "time index {} is not greater than previous index {previous}",
-                    record.index
+                    "iteration {} is not greater than previous iteration {previous}",
+                    record.iteration
                 ),
             });
         }
-        first_index.get_or_insert(record.index);
-        last_index = Some(record.index);
+        first_iteration.get_or_insert(record.iteration);
+        last_iteration = Some(record.iteration);
         records = records
             .checked_add(1)
             .ok_or_else(|| StorageError::ByteCountOverflow {
@@ -1126,21 +1126,21 @@ fn scan_open_chunk(
         })?;
     drop(writable);
 
-    let Some(first_index) = first_index else {
+    let Some(first_iteration) = first_iteration else {
         return Ok(OpenScan {
             active: None,
             latest_record: None,
         });
     };
-    let last_index = last_index.expect("a recovered first record has a last index");
+    let last_iteration = last_iteration.expect("a recovered first record has a final iteration");
     let active = ActiveChunk::recovered(
         &config.directory,
         ordinal,
         hasher,
         records,
         valid_bytes,
-        first_index,
-        last_index,
+        first_iteration,
+        last_iteration,
     )?;
     Ok(OpenScan {
         active: Some(active),

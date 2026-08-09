@@ -158,16 +158,16 @@ fn tensor_state_round_trip_integrates_public_modules() {
         Err(StateError::DuplicateField { field }) if field == "x"
     ));
 
-    assert!(SimulationTime::from_step_and_physical_time(0, f64::NAN).is_none());
-    assert!(SimulationTime::from_step_and_physical_time(0, f64::INFINITY).is_none());
+    assert!(SimulationTime::from_iteration_and_physical_time(0, f64::NAN).is_none());
+    assert!(SimulationTime::from_iteration_and_physical_time(0, f64::INFINITY).is_none());
 
     // State construction retains both the exact integer index and optional
     // finite physical coordinate.
-    let initial_time = SimulationTime::from_step_and_physical_time(0, 0.25)
+    let initial_time = SimulationTime::from_iteration_and_physical_time(0, 0.25)
         .expect("finite physical time must be accepted");
     let mut state: SystemState = specification.create_empty_state(initial_time);
 
-    assert_eq!(state.simulation_time().step(), 0);
+    assert_eq!(state.simulation_time().iteration(), 0);
     assert_eq!(state.simulation_time().physical_time(), Some(0.25));
     assert_eq!(state.declared_field_count(), 3);
     assert!(!state.has_no_declared_fields());
@@ -181,7 +181,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // The owning simulation may replace or advance time without touching
     // payload layout. Checked advancement returns the new complete coordinate.
-    let replacement_time = SimulationTime::from_step(10);
+    let replacement_time = SimulationTime::from_iteration(10);
     assert_eq!(
         state.replace_simulation_time(replacement_time),
         initial_time
@@ -193,21 +193,23 @@ fn tensor_state_round_trip_integrates_public_modules() {
     let advanced = state
         .advance_simulation_time(Some(0.25))
         .expect("finite physical time must advance");
-    assert_eq!(advanced.step(), 1);
+    assert_eq!(advanced.iteration(), 1);
     assert_eq!(advanced.physical_time(), Some(0.5));
     let before_failed_advance = state.simulation_time();
     assert!(state.advance_simulation_time(Some(f64::INFINITY)).is_err());
     assert_eq!(state.simulation_time(), before_failed_advance);
-    let mut overflow = specification.create_empty_state(SimulationTime::from_step(u64::MAX));
+    let mut overflow = specification.create_empty_state(SimulationTime::from_iteration(u64::MAX));
     assert!(matches!(
         overflow.advance_simulation_time(None),
-        Err(StateError::TimeIndexOverflow { index: u64::MAX })
+        Err(StateError::IterationOverflow {
+            iteration: u64::MAX
+        })
     ));
-    assert_eq!(overflow.simulation_time().step(), u64::MAX);
-    let mut no_physical = specification.create_empty_state(SimulationTime::from_step(3));
+    assert_eq!(overflow.simulation_time().iteration(), u64::MAX);
+    let mut no_physical = specification.create_empty_state(SimulationTime::from_iteration(3));
     assert!(matches!(
         no_physical.advance_simulation_time(Some(0.25)),
-        Err(StateError::MissingPhysicalTime { index: 3 })
+        Err(StateError::MissingPhysicalTime { iteration: 3 })
     ));
 
     // Empty and unknown fields produce distinct public errors before any
@@ -472,7 +474,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // A separately assembled state can bind the same JSON field to a vector.
     // Ordinary vector payloads make allocation identity directly observable.
-    let mut allocation_state = specification.create_empty_state(SimulationTime::from_step(2));
+    let mut allocation_state = specification.create_empty_state(SimulationTime::from_iteration(2));
     let owned = vec![3_u64, 5, 8, 13];
     let owned_pointer = owned.as_ptr();
     assert!(
@@ -496,7 +498,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
         .unwrap();
     assert_eq!(extracted.as_ptr(), replacement_pointer);
 
-    let mut clone_state = specification.create_empty_state(SimulationTime::from_step(3));
+    let mut clone_state = specification.create_empty_state(SimulationTime::from_iteration(3));
     let clones = Arc::new(AtomicUsize::new(0));
     assert!(
         clone_state
@@ -545,8 +547,8 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // Derived states share immutable schema storage and type definitions while
     // beginning with no payloads.
-    let mut later = state.clone_structure_without_payloads(SimulationTime::from_step(1));
-    assert_eq!(later.simulation_time().step(), 1);
+    let mut later = state.clone_structure_without_payloads(SimulationTime::from_iteration(1));
+    assert_eq!(later.simulation_time().iteration(), 1);
     assert_eq!(later.simulation_time().physical_time(), None);
     assert!(later.has_no_payloads());
     assert_eq!(later.field_schemas(), state.field_schemas());
@@ -580,8 +582,8 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert!(!debug.contains("active"));
 
     println!(
-        "[state] index={} physical={:?} loaded={} mutation_verified=true",
-        advanced.step(),
+        "[state] iteration={} physical_time={:?} loaded={} mutation_verified=true",
+        advanced.iteration(),
         advanced.physical_time(),
         3
     );
@@ -607,7 +609,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
 fn generated_tuple_arities_two_through_eight_are_available() {
     let specification = SystemStateSchema::load_json_template(COUPLED_TEMPLATE)
         .expect("coupled state fixture must load");
-    let mut state = specification.create_empty_state(SimulationTime::from_step(0));
+    let mut state = specification.create_empty_state(SimulationTime::from_iteration(0));
     for (key, value) in [
         ("a", 1_u64),
         ("b", 2),

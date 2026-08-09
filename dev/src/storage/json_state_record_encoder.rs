@@ -141,10 +141,10 @@ impl JsonStateRecordEncoder {
     /// framing newline:
     ///
     /// ```json
-    /// {"index":12,"physical":0.25,"values":{"population":[1,2,3]}}
+    /// {"iteration":12,"physical_time":0.25,"values":{"population":[1,2,3]}}
     /// ```
     ///
-    /// `physical` is omitted when absent. `values` keys follow canonical
+    /// `physical_time` is omitted when absent. `values` keys follow canonical
     /// template order. The payload objects are borrowed for serialization and
     /// every borrow ends before this method returns.
     ///
@@ -168,7 +168,7 @@ impl JsonStateRecordEncoder {
                     .serializable(field)
                     .map_err(|source| StorageError::StateAccess {
                         stream: self.stream.to_string(),
-                        index: time.step(),
+                        iteration: time.iteration(),
                         field: field.to_string(),
                         source,
                     })
@@ -177,8 +177,8 @@ impl JsonStateRecordEncoder {
 
         let active_field = Cell::new(None);
         let document = RecordRef {
-            index: time.step(),
-            physical: time.physical_time(),
+            iteration: time.iteration(),
+            physical_time: time.physical_time(),
             values: ValuesRef {
                 fields: &self.fields,
                 payloads: &payloads,
@@ -192,7 +192,7 @@ impl JsonStateRecordEncoder {
                 .map_or_else(|| "<record>".to_owned(), ToString::to_string);
             StorageError::EncodeField {
                 stream: self.stream.to_string(),
-                index: time.step(),
+                iteration: time.iteration(),
                 field,
                 source,
             }
@@ -205,9 +205,9 @@ impl JsonStateRecordEncoder {
 /// Borrowed top-level JSON representation before newline framing.
 #[derive(Serialize)]
 struct RecordRef<'a> {
-    index: u64,
+    iteration: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    physical: Option<f64>,
+    physical_time: Option<f64>,
     values: ValuesRef<'a>,
 }
 

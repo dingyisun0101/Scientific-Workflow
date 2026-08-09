@@ -58,7 +58,7 @@ and transfer payload ownership into and out of the state.
 - Assert semantic template JSON round trip explicitly.
 - Verify deterministic field order, normalized descriptions, lookup, and
   shared-layout identity.
-- Construct index-only and physical `SimulationTime` values and reject non-finite
+- Construct iteration-only and physical `SimulationTime` values and reject non-finite
   physical time.
 - Create a blank state and inspect structural versus populated counts.
 - Insert, borrow, type-check, mutate, replace, take, clear, and clear-all
@@ -101,7 +101,8 @@ and transfer payload ownership into and out of the state.
 
 `SimulationTime`:
 
-- `new`, `from_physical`, `index`, `physical`.
+- `from_iteration`, `from_iteration_and_physical_time`, `iteration`, and
+  `physical_time`.
 
 `SystemState`:
 
@@ -132,7 +133,7 @@ deep cloning are covered through the `SystemState` operations above.
 ### Log contract
 
     [template] fields=3 round_trip=true shared_layout=true
-    [state] index=... physical=... loaded=... mutation_verified=true
+    [state] iteration=... physical_time=... loaded=... mutation_verified=true
     [ownership] pointer_preserved=true rejected_payload_recovered=true
     [tuple] immutable=true mutable=true duplicate_rejected=true unknown_rejected=true preflight_atomic=true
     [type-contract] take_retained=true clear_retained=true empty_inherited=true
@@ -153,9 +154,9 @@ appends, and recover ownership from failures.
 - Create empty series with and without reserved capacity.
 - Reserve and reuse state-vector capacity.
 - Move states into and out of the collection without cloning payloads.
-- Verify strict increasing-index and shared-layout invariants.
+- Verify strictly increasing iteration and shared-layout invariants.
 - Recover unchanged rejected states from both invariant failures.
-- Distinguish zero-based collection position from simulation index.
+- Distinguish zero-based collection position from simulation iteration.
 - Exercise immutable lookup, first/last access, slices, iteration, and owned
   iteration.
 - Exercise every `StateSeriesView` accessor and its copyable behavior.
@@ -208,7 +209,7 @@ appends, and recover ownership from failures.
 ### Scenario
 
 Run the complete successful persistence path. Evolve one live state, sample
-multiple logical streams at different cadences, encode borrowed payloads,
+multiple logical streams at different sampling intervals, encode borrowed payloads,
 write byte-targeted chunks through bounded queues, commit one metadata file,
 and reconstruct typed analysis series.
 
@@ -218,14 +219,14 @@ surface.
 
 ### Required behavior
 
-- Configure at least two streams with different field selections and cadences.
+- Configure at least two streams with different field selections and sampling intervals.
 - Prove encoding does not clone or retain the simulation payload borrow.
 - Submit samples through `SystemStateWriter` and its bounded writer boundary.
 - Produce multiple chunks through exact-byte rollover without splitting a
   record.
 - Include one record larger than the chunk target but smaller than the queue
   budget and verify it occupies one oversized chunk.
-- Verify deterministic filenames, counts, exact bytes, index ranges, and
+- Verify deterministic filenames, counts, exact bytes, iteration ranges, and
   SHA-256 descriptors.
 - Persist and semantically round-trip the sole `metadata.json`.
 - Assert no per-chunk metadata sidecars or temporary files remain.
@@ -247,20 +248,21 @@ surface.
 
 Public run configuration and lifecycle:
 
-- `TimeAxisMetadata::new`, `default`, `with_step_unit`,
+- `TimeAxisMetadata::new`, `default`, `with_iteration_unit`,
   `with_physical_time_name`, `with_physical_time_unit`, and
   `with_physical_axis`;
-- `StateStreamConfig::new` with typed nonzero cadence and
+- `SamplingInterval::Iterations` and `iterations`;
+- `StateStreamConfig::new` with a typed sampling interval and
   `with_relative_directory`;
 - `SystemStateWriterBuilder::new`, `with_time_axis_metadata`,
   `with_user_metadata`, `with_task_parameters`, `with_shared_stream_limits`,
-  `add_state_stream`, `add_periodic_state_stream`, and
+  `add_state_stream`, `add_sampled_state_stream`, and
   `create_new_recording`;
 - `SystemStateWriter::builder`, `recording_directory`, `stream_names`,
   `observe_state`, `flush_stream_to_storage`, `complete_recording`,
   `complete_recording_with_final_state`, and `mark_recording_failed` across the
-  successful, resume, and resilience workflows. Different stream cadences,
-  repeated-step no-op behavior, and non-aligned final-state insertion are
+  successful, resume, and resilience workflows. Different stream sampling intervals,
+  repeated-iteration no-op behavior, and non-aligned final-state insertion are
   observable in reconstructed record counts and times.
 
 Private format, encoder, record, writer configuration, writer queue, summary,
@@ -290,7 +292,7 @@ Decoder structures:
 
 ### Log contract
 
-    [sample] index=... physical=... signal=true space=...
+    [sample] iteration=... physical_time=... signal=true space=...
     [writer] signal_records=... signal_bytes=... space_records=... space_bytes=...
     [chunk] stream=... file=... records=... bytes=... checksum_verified=true
     [durability] final_chunk_names=true temporary_files=false
@@ -404,7 +406,7 @@ continuation rejection boundaries.
 
 ### Log contract
 
-    [resume-state] index=... physical=... fields=... complete=true
+    [resume-state] iteration=... physical_time=... fields=... complete=true
     [recovery] incomplete_tail_truncated=true continued_open_chunk=true records=... durable_barrier=true
     [prepared] descriptor_verified=true rename_completed=true sealed_history_scanned=false lease_exclusive=true
     [multi-chunk] sealed_history_trusted=true open_tail_scanned=true resumed_index=... next_ordinal=...

@@ -15,14 +15,14 @@ use scientific_workflow::prelude::*;
 use crate::AppResult;
 use crate::hopf_model::HopfModel;
 
-/// Immutable model, cadence, and storage settings for one swept task.
+/// Immutable model, sampling, and storage settings for one swept task.
 #[derive(Debug)]
 pub(crate) struct TaskSettings {
     pub(crate) task_index: u64,
-    pub(crate) total_steps: u64,
-    pub(crate) trajectory_every: NonZeroU64,
-    pub(crate) radius_every: NonZeroU64,
-    pub(crate) checkpoint_every: NonZeroU64,
+    pub(crate) step_count: u64,
+    pub(crate) trajectory_sampling_interval: SamplingInterval,
+    pub(crate) radius_sampling_interval: SamplingInterval,
+    pub(crate) checkpoint_sampling_interval: SamplingInterval,
     pub(crate) maximum_chunk_bytes: NonZeroU64,
     pub(crate) writer_queue_bytes: NonZeroU64,
 }
@@ -67,10 +67,11 @@ pub(crate) fn prepare_task(
 ) -> AppResult<(HopfModel, TaskSettings)> {
     let settings = TaskSettings {
         task_index: parameters.task_index(),
-        total_steps: parameters.decode_value("total_steps")?,
-        trajectory_every: parameters.decode_value("trajectory_sample_every_steps")?,
-        radius_every: parameters.decode_value("radius_sample_every_steps")?,
-        checkpoint_every: parameters.decode_value("checkpoint_every_steps")?,
+        step_count: parameters.decode_value("step_count")?,
+        trajectory_sampling_interval: parameters
+            .decode_value("trajectory_sampling_interval")?,
+        radius_sampling_interval: parameters.decode_value("radius_sampling_interval")?,
+        checkpoint_sampling_interval: parameters.decode_value("checkpoint_sampling_interval")?,
         maximum_chunk_bytes: parameters.decode_value("maximum_chunk_bytes")?,
         writer_queue_bytes: parameters.decode_value("writer_queue_bytes")?,
     };
@@ -79,7 +80,7 @@ pub(crate) fn prepare_task(
         parameters.decode_value("initial_point")?,
         parameters.decode_value("mu")?,
         parameters.decode_value("angular_frequency")?,
-        parameters.decode_value("physical_time_step")?,
+        parameters.decode_value("physical_time_increment_per_step")?,
     )?;
     Ok((model, settings))
 }

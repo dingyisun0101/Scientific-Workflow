@@ -39,8 +39,8 @@ pub(crate) fn record_model(
     let mut writer = build_writer(schema, &directory, settings, parameters)?;
 
     writer.observe_state(model.state())?;
-    for _ in 0..settings.total_steps {
-        model.advance()?;
+    for _ in 0..settings.step_count {
+        model.step()?;
         writer.observe_state(model.state())?;
     }
 
@@ -55,20 +55,28 @@ fn build_writer(
     settings: &TaskSettings,
     parameters: &TaskParameters,
 ) -> Result<SystemStateWriter, StorageError> {
-    let time_axis = TimeAxisMetadata::new("step")
-        .with_step_unit("iteration")
-        .with_physical_axis("time", "model_time");
+    let time_axis = TimeAxisMetadata::new("iteration")
+        .with_iteration_unit("iteration")
+        .with_physical_axis("physical_time", "dimensionless_model_time");
 
     SystemStateWriter::builder(directory, schema)
         .with_time_axis_metadata(time_axis)
         .with_task_parameters(parameters)
         .with_shared_stream_limits(settings.maximum_chunk_bytes, settings.writer_queue_bytes)
-        .add_periodic_state_stream(TRAJECTORY_STREAM, [POINT_FIELD], settings.trajectory_every)
-        .add_periodic_state_stream(RADIUS_STREAM, [RADIUS_FIELD], settings.radius_every)
-        .add_periodic_state_stream(
+        .add_sampled_state_stream(
+            TRAJECTORY_STREAM,
+            [POINT_FIELD],
+            settings.trajectory_sampling_interval,
+        )
+        .add_sampled_state_stream(
+            RADIUS_STREAM,
+            [RADIUS_FIELD],
+            settings.radius_sampling_interval,
+        )
+        .add_sampled_state_stream(
             CHECKPOINT_STREAM,
             [POINT_FIELD, RADIUS_FIELD],
-            settings.checkpoint_every,
+            settings.checkpoint_sampling_interval,
         )
         .create_new_recording()
 }

@@ -78,11 +78,11 @@ For a reusable explanation of this organization, see [steps.md](steps.md).
 | `model_name` | `supercritical_hopf_normal_form` | Stable model identifier |
 | `initial_point` | `[0.25, 0.0]` | Initial `[x, y]` coordinates |
 | `angular_frequency` | `1.0` | `omega` in the ODE |
-| `physical_time_step` | `0.01` | Explicit-Euler timestep |
-| `total_steps` | `5000` | Steps per task |
-| `trajectory_sample_every_steps` | `10` | Point sampling cadence |
-| `radius_sample_every_steps` | `5` | Radius sampling cadence |
-| `checkpoint_every_steps` | `1000` | Complete-state cadence |
+| `physical_time_increment_per_step` | `0.01` | Physical-time increment applied by one Euler step |
+| `step_count` | `5000` | Number of model-evolution actions per task |
+| `trajectory_sampling_interval` | `{"iterations":10}` | Point sampling interval on the iteration coordinate |
+| `radius_sampling_interval` | `{"iterations":5}` | Radius sampling interval on the iteration coordinate |
+| `checkpoint_sampling_interval` | `{"iterations":1000}` | Complete-state sampling interval on the iteration coordinate |
 | `maximum_chunk_bytes` | `8192` | Per-stream chunk rollover target |
 | `writer_queue_bytes` | `65536` | Bounded asynchronous queue budget |
 
@@ -131,8 +131,8 @@ types become retained slot contracts when application code first inserts each
 payload.
 
 Every task directly owns one `SystemState`. It also carries built-in
-`SimulationTime`, containing the authoritative integer step and physical time.
-Parameters, paths, cadence, and writer limits remain outside the evolving
+`SimulationTime`, containing the authoritative iteration and physical time.
+Parameters, paths, sampling intervals, and writer limits remain outside the evolving
 state.
 
 `Vec<f64>` is used instead of `ndarray` or a PiP tensor because this model has
@@ -159,19 +159,19 @@ One task owns one `SystemStateWriter` with three independently sampled streams:
 
 | Stream | Selected fields | Cadence | Expected records |
 |---|---|---:|---:|
-| `trajectory` | `point` | 10 steps | 501 |
-| `radius` | `radius` | 5 steps | 1001 |
-| `checkpoint` | `point`, `radius` | 1000 steps | 6 |
+| `trajectory` | `point` | 10 iterations | 501 |
+| `radius` | `radius` | 5 iterations | 1001 |
+| `checkpoint` | `point`, `radius` | 1000 iterations | 6 |
 
-Step 0 and step 5000 are included. `trajectory` and `radius` demonstrate partial
+Iterations 0 and 5000 are included. `trajectory` and `radius` demonstrate partial
 state recording, while `checkpoint` contains every payload required to restore
 a complete state.
 
-The writer owns each cadence decoded from `fixed.json`. The evolution loop
+The writer owns each sampling interval decoded from `fixed.json`. The evolution loop
 offers the current state after every step; non-due streams return before field
 lookup or serialization. Due streams borrow selected payloads only for
 encoding, then queue owned JSON records under byte-bounded backpressure. Final
-completion offers the endpoint once more so a cadence-misaligned final state is
+completion offers the endpoint once more so a sampling-interval-misaligned final state is
 recorded exactly once. Records remain whole across chunk rollover.
 
 ## Run the example
@@ -194,7 +194,7 @@ recordings are not deleted or deliberately reused.
 The complete run reports structured output resembling:
 
 ```text
-[project] model=supercritical_hopf_normal_form tasks=3 steps=5000
+[project] model=supercritical_hopf_normal_form tasks=3 step_count=5000
 [task] index=0 mu=-0.25 omega=1.0 dt=0.01
 [simulation] task=0 trajectory=501 radius=1001 checkpoints=6 final_point=...
 [storage] task=0 recording=... streams=3 complete=true
@@ -237,5 +237,5 @@ target/naive_hopf
 ```
 
 The workflow and naive implementation have been compared for every swept
-`mu`. Their final step, accumulated physical time, both point coordinates, and
+`mu`. Their final iteration, accumulated physical time, both point coordinates, and
 radius have identical `f64` bit patterns for all three tasks.

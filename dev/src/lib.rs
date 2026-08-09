@@ -32,8 +32,8 @@
 //! mutation without exposing mutable state time. It deliberately performs no
 //! serialization, chunking, or filesystem IO.
 //!
-//! [`storage`] provides named partial-state streams with writer-owned step
-//! cadences, borrowed JSON encoding only when due, bounded asynchronous
+//! [`storage`] provides named partial-state streams with writer-owned sampling
+//! sampling intervals, borrowed JSON encoding only when due, bounded asynchronous
 //! persistence through one worker per recording, byte-targeted chunking, atomic recording
 //! metadata, per-key payload decoders, and verified analysis reconstruction.
 //! Import [`prelude`] when an application wants the complete supported API in
@@ -46,7 +46,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let spec = SystemStateSchema::load_json_template("state.json")?;
-//! let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+//! let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
 //!
 //! assert!(
 //!     state
@@ -57,7 +57,7 @@
 //!     .payload_mut::<Vec<u64>>("population")?
 //!     .push(40);
 //! let time = state.advance_simulation_time(None)?;
-//! assert_eq!(time.step(), 1);
+//! assert_eq!(time.iteration(), 1);
 //! let population = state.take_payload::<Vec<u64>>("population")?;
 //!
 //! assert_eq!(population, vec![10, 20, 30, 40]);

@@ -20,10 +20,10 @@
 //! One logical partial state occupies exactly one line:
 //!
 //! ```json
-//! {"index":12,"physical":0.25,"values":{"population":[1,2,3]}}
+//! {"iteration":12,"physical_time":0.25,"values":{"population":[1,2,3]}}
 //! ```
 //!
-//! `physical` is omitted when absent. `values` retains field keys for readable
+//! `physical_time` is omitted when absent. `values` retains field keys for readable
 //! raw output and decoder dispatch. [`EncodedStateRecord`] owns the complete framed
 //! line including its trailing newline, so writer byte accounting is exact and
 //! no downstream layer can accidentally split a record.
@@ -32,7 +32,7 @@
 //!
 //! [`RecordingMetadata::validate`] rejects unknown format versions, unsafe relative
 //! paths, duplicate stream or field names, non-deterministic chunk filenames,
-//! empty committed chunks, inconsistent chunk ordinals or index ranges,
+//! empty committed chunks, inconsistent chunk ordinals or iteration ranges,
 //! unsupported encoding labels, and malformed lifecycle descriptions. It does
 //! not check filesystem existence, actual byte lengths, or checksums; readers
 //! perform those external integrity checks after metadata validation.
@@ -46,13 +46,14 @@ use serde_json::{Map, Value};
 
 use crate::system_state::SimulationTime;
 
+use super::SamplingInterval;
 use super::error::StorageError;
 
 /// Stable name written into every metadata file owned by this format.
 pub(crate) const FORMAT_NAME: &str = "scientific-workflow-jsonl";
 
 /// Current metadata and record schema version.
-pub(crate) const FORMAT_VERSION: u32 = 2;
+pub(crate) const FORMAT_VERSION: u32 = 3;
 
 /// Payload encoding supported by the current storage stage.
 pub(crate) const PAYLOAD_ENCODING: &str = "json";
@@ -239,11 +240,11 @@ impl RecordFormat {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TimeAxisMetadata {
-    /// Human-facing name for the mandatory integer simulation index.
-    pub(crate) step_name: String,
-    /// Optional unit for the integer index, such as `step` or `sweep`.
+    /// Human-facing name for the mandatory iteration coordinate.
+    pub(crate) iteration_name: String,
+    /// Optional unit for the iteration coordinate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) step_unit: Option<String>,
+    pub(crate) iteration_unit: Option<String>,
     /// Optional name for the floating physical coordinate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) physical_time_name: Option<String>,
@@ -255,17 +256,20 @@ pub(crate) struct TimeAxisMetadata {
 impl TimeAxisMetadata {
     /// Validates non-empty labels and physical-name/unit consistency.
     fn validate(&self, path: &Path) -> Result<(), StorageError> {
-        if self.step_name.trim().is_empty() {
-            return Err(invalid_metadata(path, "time.step_name must not be empty"));
+        if self.iteration_name.trim().is_empty() {
+            return Err(invalid_metadata(
+                path,
+                "time.iteration_name must not be empty",
+            ));
         }
         if self
-            .step_unit
+            .iteration_unit
             .as_deref()
             .is_some_and(|unit| unit.trim().is_empty())
         {
             return Err(invalid_metadata(
                 path,
-                "time.step_unit must not be empty when present",
+                "time.iteration_unit must not be empty when present",
             ));
         }
         if self
@@ -306,8 +310,8 @@ pub(crate) struct StateStreamMetadata {
     pub(crate) name: String,
     /// Safe relative directory beneath the recording root.
     pub(crate) directory: String,
-    /// Positive periodic sampling interval measured in simulation steps.
-    pub(crate) every_steps: u64,
+    /// Positive sampling interval and the coordinate on which it is measured.
+    pub(crate) sampling_interval: SamplingInterval,
     /// Ordered partial-state schema persisted once for this stream.
     pub(crate) fields: Vec<StateFieldMetadata>,
     /// Soft maximum chunk size; complete oversized records remain indivisible.
@@ -330,12 +334,6 @@ impl StateStreamMetadata {
             return Err(invalid_metadata(path, "stream name must not be empty"));
         }
         validate_relative_path(path, "stream directory", &self.directory)?;
-        if self.every_steps == 0 {
-            return Err(invalid_metadata(
-                path,
-                format!("stream `{}` has a zero step cadence", self.name),
-            ));
-        }
         if self.max_chunk_bytes == 0 || self.queue_bytes == 0 {
             return Err(invalid_metadata(
                 path,
@@ -361,17 +359,17 @@ impl StateStreamMetadata {
         for (expected_ordinal, chunk) in self.chunks.iter().enumerate() {
             chunk.validate(path, &self.name, expected_ordinal as u64)?;
             if let Some(previous) = previous_last {
-                if chunk.first_index <= previous {
+                if chunk.first_iteration <= previous {
                     return Err(invalid_metadata(
                         path,
                         format!(
-                            "stream `{}` chunk {} begins at index {}, not after {}",
-                            self.name, chunk.ordinal, chunk.first_index, previous
+                            "stream `{}` chunk {} begins at iteration {}, not after {}",
+                            self.name, chunk.ordinal, chunk.first_iteration, previous
                         ),
                     ));
                 }
             }
-            previous_last = Some(chunk.last_index);
+            previous_last = Some(chunk.last_iteration);
         }
         Ok(())
     }
@@ -428,10 +426,10 @@ pub(crate) struct ChunkMetadata {
     pub(crate) bytes: u64,
     /// Checksum string including its algorithm prefix.
     pub(crate) checksum: String,
-    /// Simulation index of the first record.
-    pub(crate) first_index: u64,
-    /// Simulation index of the final record.
-    pub(crate) last_index: u64,
+    /// Iteration of the first record.
+    pub(crate) first_iteration: u64,
+    /// Iteration of the final record.
+    pub(crate) last_iteration: u64,
 }
 
 impl ChunkMetadata {
@@ -468,12 +466,12 @@ impl ChunkMetadata {
                 format!("stream `{stream}` chunk {} is empty", self.ordinal),
             ));
         }
-        if self.first_index > self.last_index {
+        if self.first_iteration > self.last_iteration {
             return Err(invalid_metadata(
                 path,
                 format!(
-                    "stream `{stream}` chunk {} index range {}..={} is reversed",
-                    self.ordinal, self.first_index, self.last_index
+                    "stream `{stream}` chunk {} iteration range {}..={} is reversed",
+                    self.ordinal, self.first_iteration, self.last_iteration
                 ),
             ));
         }

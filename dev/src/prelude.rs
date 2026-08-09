@@ -6,8 +6,8 @@
 //! ```
 //! use scientific_workflow::prelude::*;
 //!
-//! let time = SimulationTime::from_step(0);
-//! assert_eq!(time.step(), 0);
+//! let time = SimulationTime::from_iteration(0);
+//! assert_eq!(time.iteration(), 0);
 //! let decoders = JsonPayloadDecoderRegistry::new();
 //! assert!(decoders.is_empty());
 //! let _: Option<ProjectConfig> = None;
@@ -23,7 +23,7 @@ pub use crate::configuration::{
 };
 pub use crate::storage::{
     JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder,
-    StateStreamConfig, StorageError, StoredStateSeriesReader, SystemStateWriter,
+    SamplingInterval, StateStreamConfig, StorageError, StoredStateSeriesReader, SystemStateWriter,
     SystemStateWriterBuilder, TimeAxisMetadata,
 };
 pub use crate::system_state::{

@@ -30,9 +30,9 @@
 //! Every accepted state must:
 //!
 //! - share the exact immutable layout allocation held by the series; and
-//! - have a simulation index greater than the current final index.
+//! - have an iteration greater than the current final iteration.
 //!
-//! Time-index gaps are valid. Optional physical time does not determine
+//! Iteration gaps are valid. Optional physical time does not determine
 //! ordering. The module never exposes `&mut SystemState`, because callers could
 //! otherwise change time or replace structural state behind the collection's
 //! validation boundary. [`StateSeries::payload_mut_at`] permits mutation of one
@@ -124,7 +124,7 @@ impl StateSeries {
     ///
     /// This follows slice conventions and returns `None` when `position` is
     /// outside the collection. The position is distinct from the state's
-    /// simulation index because sampled indices may contain gaps.
+    /// iteration because sampled iterations may contain gaps.
     pub fn state_at(&self, position: usize) -> Option<&SystemState> {
         self.states.get(position)
     }
@@ -178,12 +178,12 @@ impl StateSeries {
     /// Returns every state as one immutable contiguous slice.
     ///
     /// No mutable slice is exposed because element replacement could bypass
-    /// both shared-layout validation and increasing-index validation.
+    /// both shared-layout validation and increasing-iteration validation.
     pub fn as_state_slice(&self) -> &[SystemState] {
         &self.states
     }
 
-    /// Returns an iterator over immutable states in increasing index order.
+    /// Returns an iterator over immutable states in increasing iteration order.
     pub fn iter(&self) -> std::slice::Iter<'_, SystemState> {
         self.states.iter()
     }
@@ -199,13 +199,13 @@ impl StateSeries {
     ///
     /// - [`StateSeriesError::SchemaMismatch`] if `state` does not share the exact
     ///   canonical layout allocation;
-    /// - [`StateSeriesError::NonIncreasingTime`] if its simulation index is not
-    ///   greater than the current final index.
+    /// - [`StateSeriesError::NonIncreasingIteration`] if its iteration is not
+    ///   greater than the current final iteration.
     pub fn push_state(&mut self, state: SystemState) -> Result<(), StateSeriesPushError> {
         if !self.spec.shares_schema_instance(state.schema()) {
             return Err(StateSeriesPushError::new(
                 StateSeriesError::SchemaMismatch {
-                    index: state.simulation_time().step(),
+                    iteration: state.simulation_time().iteration(),
                 },
                 state,
             ));
@@ -213,12 +213,12 @@ impl StateSeries {
 
         if let Some(previous) = self
             .last_state()
-            .map(|state| state.simulation_time().step())
+            .map(|state| state.simulation_time().iteration())
         {
-            let next = state.simulation_time().step();
+            let next = state.simulation_time().iteration();
             if next <= previous {
                 return Err(StateSeriesPushError::new(
-                    StateSeriesError::NonIncreasingTime { previous, next },
+                    StateSeriesError::NonIncreasingIteration { previous, next },
                     state,
                 ));
             }
@@ -231,7 +231,7 @@ impl StateSeries {
     /// Removes and returns the latest state without cloning its payloads.
     ///
     /// A later append is compared with the new final state. Once empty, the
-    /// series accepts any simulation index from a state sharing its layout.
+    /// series accepts any iteration from a state sharing its layout.
     pub fn pop_state(&mut self) -> Option<SystemState> {
         self.states.pop()
     }
@@ -281,16 +281,16 @@ impl fmt::Debug for StateSeries {
             .field("source", &self.spec.template_path())
             .field("states", &self.len())
             .field(
-                "first_index",
+                "first_iteration",
                 &self
                     .first_state()
-                    .map(|state| state.simulation_time().step()),
+                    .map(|state| state.simulation_time().iteration()),
             )
             .field(
-                "last_index",
+                "last_iteration",
                 &self
                     .last_state()
-                    .map(|state| state.simulation_time().step()),
+                    .map(|state| state.simulation_time().iteration()),
             )
             .finish_non_exhaustive()
     }
@@ -310,7 +310,7 @@ impl IntoIterator for StateSeries {
     type Item = SystemState;
     type IntoIter = std::vec::IntoIter<SystemState>;
 
-    /// Consumes the series and moves each owned state out in index order.
+    /// Consumes the series and moves each owned state out in iteration order.
     fn into_iter(self) -> Self::IntoIter {
         self.states.into_iter()
     }
@@ -370,7 +370,7 @@ impl<'a> StateSeriesView<'a> {
         self.states
     }
 
-    /// Returns an iterator over borrowed states in increasing index order.
+    /// Returns an iterator over borrowed states in increasing iteration order.
     pub fn iter(self) -> std::slice::Iter<'a, SystemState> {
         self.states.iter()
     }
@@ -384,16 +384,16 @@ impl fmt::Debug for StateSeriesView<'_> {
             .field("source", &self.spec.template_path())
             .field("states", &self.len())
             .field(
-                "first_index",
+                "first_iteration",
                 &self
                     .first_state()
-                    .map(|state| state.simulation_time().step()),
+                    .map(|state| state.simulation_time().iteration()),
             )
             .field(
-                "last_index",
+                "last_iteration",
                 &self
                     .last_state()
-                    .map(|state| state.simulation_time().step()),
+                    .map(|state| state.simulation_time().iteration()),
             )
             .finish_non_exhaustive()
     }

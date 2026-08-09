@@ -64,10 +64,10 @@ fn builder_with_chunk_limit(
             NonZeroU64::new(max_chunk_bytes).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
         )
-        .add_periodic_state_stream(
+        .add_sampled_state_stream(
             "checkpoint",
             ["population", "space", "activity"],
-            NonZeroU64::new(1).unwrap(),
+            SamplingInterval::iterations(1).unwrap(),
         )
 }
 
@@ -86,14 +86,14 @@ fn state(spec: &SystemStateSchema, index: u64) -> SystemState {
     lattice.set(&[0], index + 10);
     lattice.set(&[1], index + 20);
     let mut state = spec.create_empty_state(
-        SimulationTime::from_step_and_physical_time(index, index as f64 * 0.5).unwrap(),
+        SimulationTime::from_iteration_and_physical_time(index, index as f64 * 0.5).unwrap(),
     );
     state
         .insert_payload("population", vec![index as f64, index as f64 + 0.25])
         .unwrap();
     state.insert_payload("space", lattice).unwrap();
     state
-        .insert_payload("activity", format!("step-{index}"))
+        .insert_payload("activity", format!("iteration-{index}"))
         .unwrap();
     state
 }
@@ -136,19 +136,22 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
         .append(true)
         .open(&open)
         .unwrap()
-        .write_all(br#"{"index":2,"physical":"#)
+        .write_all(br#"{"iteration":2,"physical_time":"#)
         .unwrap();
 
     let (mut output, mut resumed) = builder(&run, &spec)
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .unwrap();
-    assert_eq!(resumed.simulation_time().step(), 1);
+    assert_eq!(resumed.simulation_time().iteration(), 1);
     assert_eq!(resumed.simulation_time().physical_time(), Some(0.5));
     assert_eq!(
         resumed.payload::<Vec<f64>>("population").unwrap(),
         &[1.0, 1.25]
     );
-    assert_eq!(resumed.payload::<String>("activity").unwrap(), "step-1");
+    assert_eq!(
+        resumed.payload::<String>("activity").unwrap(),
+        "iteration-1"
+    );
     assert_eq!(
         resumed
             .payload::<Tensor<u64, Dense>>("space")
@@ -161,8 +164,8 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
         resumed.declared_field_count()
     );
     println!(
-        "[resume-state] index={} physical={:?} fields={} complete=true",
-        resumed.simulation_time().step(),
+        "[resume-state] iteration={} physical_time={:?} fields={} complete=true",
+        resumed.simulation_time().iteration(),
         resumed.simulation_time().physical_time(),
         resumed.populated_field_count()
     );
@@ -183,7 +186,10 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
     let reader = StoredStateSeriesReader::open_completed_recording(&run, decoders()).unwrap();
     let series = reader.read_stream_as_state_series("checkpoint").unwrap();
     assert_eq!(series.len(), 3);
-    assert_eq!(series.last_state().unwrap().simulation_time().step(), 2);
+    assert_eq!(
+        series.last_state().unwrap().simulation_time().iteration(),
+        2
+    );
     println!(
         "[result] unprepared_resume=passed final_states={}",
         series.len()
@@ -212,7 +218,7 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     let (mut output, resumed) = builder(&run, &spec)
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .unwrap();
-    assert_eq!(resumed.simulation_time().step(), 4);
+    assert_eq!(resumed.simulation_time().iteration(), 4);
     assert!(sealed.is_file());
     assert!(!open.exists());
     assert!(matches!(
@@ -230,7 +236,7 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     assert_eq!(
         series
             .iter()
-            .map(|state| state.simulation_time().step())
+            .map(|state| state.simulation_time().iteration())
             .collect::<Vec<_>>(),
         [4, 5]
     );
@@ -249,7 +255,7 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
         SystemStateWriter::builder(&run, &spec).add_state_stream(StateStreamConfig::new(
             "signal",
             ["population"],
-            NonZeroU64::new(1).unwrap(),
+            SamplingInterval::iterations(1).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
         ))
@@ -315,8 +321,11 @@ fn several_sealed_chunks_are_trusted_before_recovering_only_the_open_tail() {
     let (mut output, resumed) = recording_builder()
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .expect("resume must trust sealed history and decode only the open tail");
-    assert_eq!(resumed.simulation_time().step(), 2);
-    assert_eq!(resumed.payload::<String>("activity").unwrap(), "step-2");
+    assert_eq!(resumed.simulation_time().iteration(), 2);
+    assert_eq!(
+        resumed.payload::<String>("activity").unwrap(),
+        "iteration-2"
+    );
 
     output.observe_state(&state(&spec, 3)).unwrap();
     output.complete_recording().unwrap();
@@ -362,7 +371,7 @@ fn continuation_rejects_terminal_mismatched_and_empty_recordings() {
     drop(builder(&mismatched, &spec).create_new_recording().unwrap());
     assert!(matches!(
         builder(&mismatched, &spec)
-            .with_time_axis_metadata(TimeAxisMetadata::new("iteration"))
+            .with_time_axis_metadata(TimeAxisMetadata::new("cycle"))
             .continue_existing_recording(),
         Err(StorageError::RecordingConfigurationMismatch { path, .. })
             if path == mismatched.join("metadata.json")

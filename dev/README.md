@@ -29,8 +29,8 @@ making them suitable for large arrays and tensors.
 - Ordered state-series collection with strict shared-layout identity.
 - Lightweight copyable series views and field-level analysis mutation.
 - Borrowed JSON encoding without payload cloning.
-- Writer-owned per-stream step cadence with no payload access for skipped states.
-- Automatic exactly-once final-state sampling across cadence boundaries.
+- Writer-owned typed sampling intervals with no payload access for skipped states.
+- Automatic exactly-once final-state sampling across sampling-interval boundaries.
 - Exact finite-`f64` JSON reconstruction through Serde JSON's round-trip parser.
 - Finite byte- and record-bounded asynchronous writers.
 - Exact-byte automatic chunking with indivisible JSONL records.
@@ -90,7 +90,7 @@ project-root/
 
 ```json
 {
-  "time_step": 0.125,
+  "physical_time_increment": 0.125,
   "lattice_shape": [4, 8]
 }
 ```
@@ -113,8 +113,8 @@ or correlated explicit cases:
 {
   "mode": "cases",
   "cases": [
-    {"temperature": 280.0, "time_step": 0.1},
-    {"temperature": 300.0, "time_step": 0.05}
+    {"temperature": 280.0, "physical_time_increment": 0.1},
+    {"temperature": 300.0, "physical_time_increment": 0.05}
   ]
 }
 ```
@@ -139,11 +139,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_root = project.paths().resolve_path("output_root")?;
 
     for task in project.parameters().tasks() {
-        let time_step = task.decode_value::<f64>("time_step")?;
+        let physical_time_increment =
+            task.decode_value::<f64>("physical_time_increment")?;
         let temperature = task.decode_value::<f64>("temperature")?;
         let seed = task.decode_value::<u64>("seed")?;
         println!(
-            "task={} dt={time_step} temperature={temperature} seed={seed} output={}",
+            "task={} dt={physical_time_increment} temperature={temperature} seed={seed} output={}",
             task.task_index(),
             output_root.display()
         );
@@ -201,7 +202,7 @@ use scientific_workflow::prelude::*;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
     std::fs::create_dir_all("output")?;
-    let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+    let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
 
     drop(state.insert_payload("population", vec![10_u64, 20, 30])?);
 
@@ -236,7 +237,7 @@ use scientific_workflow::prelude::*;
 # }
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let spec = SystemStateSchema::load_json_template("state.json")?;
-let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
 drop(state.insert_payload("position", vec![0.0_f64])?);
 drop(state.insert_payload("velocity", vec![1.0_f64])?);
 
@@ -264,7 +265,7 @@ use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
-    let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+    let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
     drop(state.insert_payload("population", vec![10_u64, 20, 30])?);
 
     let mut series = StateSeries::new(spec);
@@ -299,7 +300,7 @@ use physics_in_parallel::math::{Dense, Tensor};
 use scientific_workflow::prelude::*;
 
 let spec = SystemStateSchema::load_json_template("state.json")?;
-let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
 
 let mut population = Tensor::<u64, Dense>::zeros(&[3]);
 population.set(&[0], 10);
@@ -339,19 +340,25 @@ use scientific_workflow::prelude::*;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
     let mut writer = SystemStateWriter::builder("output/recording-001", &spec)
-        .with_time_axis_metadata(TimeAxisMetadata::new("step").with_physical_axis("time", "s"))
+        .with_time_axis_metadata(
+            TimeAxisMetadata::new("iteration")
+                .with_iteration_unit("iteration")
+                .with_physical_axis("physical_time", "s"),
+        )
         .with_shared_stream_limits(
             NonZeroU64::new(64 * 1024 * 1024).unwrap(),
             NonZeroU64::new(256 * 1024 * 1024).unwrap(),
         )
-        .add_periodic_state_stream(
+        .add_sampled_state_stream(
             "signal",
             ["population"],
-            NonZeroU64::new(1).unwrap(),
+            SamplingInterval::iterations(1).unwrap(),
         )
         .create_new_recording()?;
 
-    let mut state = spec.create_empty_state(SimulationTime::from_step_and_physical_time(0, 0.0).unwrap());
+    let mut state = spec.create_empty_state(
+        SimulationTime::from_iteration_and_physical_time(0, 0.0).unwrap(),
+    );
     drop(state.insert_payload("population", vec![10.0_f64, 20.0, 30.0])?);
     writer.observe_state(&state)?;
     writer.complete_recording_with_final_state(&state)?;
@@ -365,7 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`observe_state` checks each stream's typed step cadence before accessing any
+`observe_state` checks each stream's typed sampling interval before accessing any
 payload. Non-due streams perform no serialization or queue work. Due streams
 resolve each selected key once and borrow payloads only while producing owned
 encoded bytes, after which bounded blocking backpressure applies through the

@@ -227,12 +227,14 @@ pub enum StorageError {
     // State borrowing, encoding, and decoding
     // ---------------------------------------------------------------------
     /// The encoder could not borrow one declared field from the live state.
-    #[error("cannot sample field `{field}` for stream `{stream}` at time index {index}: {source}")]
+    #[error(
+        "cannot sample field `{field}` for stream `{stream}` at iteration {iteration}: {source}"
+    )]
     StateAccess {
         /// Logical output stream being sampled.
         stream: String,
-        /// Simulation index of the sampled state.
-        index: u64,
+        /// Iteration of the sampled state.
+        iteration: u64,
         /// Declared stream field that could not be borrowed.
         field: String,
         /// Original SystemState access failure.
@@ -241,12 +243,12 @@ pub enum StorageError {
     },
 
     /// Serde failed while encoding one borrowed payload.
-    #[error("failed to encode field `{field}` for stream `{stream}` at time index {index}")]
+    #[error("failed to encode field `{field}` for stream `{stream}` at iteration {iteration}")]
     EncodeField {
         /// Logical output stream being encoded.
         stream: String,
-        /// Simulation index of the sampled state.
-        index: u64,
+        /// Iteration of the sampled state.
+        iteration: u64,
         /// Field whose payload serializer failed.
         field: String,
         /// Underlying JSON serializer failure.
@@ -269,12 +271,12 @@ pub enum StorageError {
     },
 
     /// A user-supplied field decoder failed to reconstruct its concrete value.
-    #[error("failed to decode field `{field}` for stream `{stream}` at time index {index}")]
+    #[error("failed to decode field `{field}` for stream `{stream}` at iteration {iteration}")]
     DecodeField {
         /// Logical stream being reconstructed.
         stream: String,
-        /// Simulation index of the raw record.
-        index: u64,
+        /// Iteration of the raw record.
+        iteration: u64,
         /// Field whose registered decoder failed.
         field: String,
         /// Decoder-specific failure retained behind an object-safe boundary.
@@ -287,12 +289,12 @@ pub enum StorageError {
     /// The rejected state is intentionally not retained in this error: it was
     /// created from persisted input and is dropped on failed reconstruction,
     /// preventing an error value from pinning arbitrarily large payloads.
-    #[error("decoded state for stream `{stream}` at time index {index} cannot enter its series")]
+    #[error("decoded state for stream `{stream}` at iteration {iteration} cannot enter its series")]
     StateSeriesInvariant {
         /// Logical stream being reconstructed.
         stream: String,
-        /// Simulation index of the rejected decoded state.
-        index: u64,
+        /// Iteration of the rejected decoded state.
+        iteration: u64,
         /// Original in-memory collection invariant failure.
         #[source]
         source: StateSeriesError,
@@ -348,16 +350,16 @@ pub enum StorageError {
         limit: u64,
     },
 
-    /// A stream submission did not advance its simulation index.
+    /// A stream submission did not advance its iteration.
     #[error(
-        "record index {index} for stream `{stream}` does not follow previously accepted index {previous}"
+        "record iteration {iteration} for stream `{stream}` does not follow previously accepted iteration {previous}"
     )]
-    OutOfOrderRecord {
+    OutOfOrderIteration {
         /// Logical stream receiving the record.
         stream: String,
-        /// Rejected simulation index.
-        index: u64,
-        /// Most recently accepted simulation index.
+        /// Rejected iteration.
+        iteration: u64,
+        /// Most recently accepted iteration.
         previous: u64,
     },
 

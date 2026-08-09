@@ -106,9 +106,9 @@ values:
 - iteration count;
 - explicit-Euler timestep;
 - fixed angular frequency `omega`;
-- trajectory sampling cadence;
-- radius sampling cadence;
-- checkpoint cadence;
+- trajectory sampling interval;
+- radius sampling interval;
+- checkpoint sampling interval;
 - maximum chunk bytes; and
 - bounded writer queue bytes.
 
@@ -119,18 +119,18 @@ The finalized fixed values are:
 | `model_name` | `"supercritical_hopf_normal_form"` | Stable model identity for logs and recording metadata |
 | `initial_point` | `[0.25, 0.0]` | Nonzero initial condition shared by every task |
 | `angular_frequency` | `1.0` | Fixed angular velocity `omega` |
-| `physical_time_step` | `0.01` | Explicit-Euler step size |
-| `total_steps` | `5000` | Evolves each task through physical time `50.0` |
-| `trajectory_sample_every_steps` | `10` | Samples the point every `0.1` physical-time units |
-| `radius_sample_every_steps` | `5` | Samples the scalar diagnostic every `0.05` physical-time units |
-| `checkpoint_every_steps` | `1000` | Samples restart state every `10.0` physical-time units |
+| `physical_time_increment_per_step` | `0.01` | Physical-time increment applied by one Euler step |
+| `step_count` | `5000` | Performs 5000 model-evolution actions and reaches physical time `50.0` |
+| `trajectory_sampling_interval` | `{"iterations":10}` | Samples the point at a 10-iteration interval (`0.1` physical-time units) |
+| `radius_sampling_interval` | `{"iterations":5}` | Samples the scalar diagnostic at a 5-iteration interval (`0.05` physical-time units) |
+| `checkpoint_sampling_interval` | `{"iterations":1000}` | Samples restart state at a 1000-iteration interval (`10.0` physical-time units) |
 | `maximum_chunk_bytes` | `8192` | Small rollover target that visibly exercises trajectory chunking |
 | `writer_queue_bytes` | `65536` | Finite asynchronous queue budget comfortably larger than one record |
 
 These values are operational defaults for the example, not universal
 recommendations. Model-specific validation in the executable will require a
-two-element finite initial point, finite positive timestep, positive step and
-cadence counts, and nonzero storage byte limits.
+two-element finite initial point, finite positive timestep, positive step count and
+sampling intervals, and nonzero storage byte limits.
 
 `config/sweep.json` uses Cartesian mode with one `mu` axis containing
 `[-0.25, 0.25, 1.0]` in that order. It therefore resolves exactly three tasks:
@@ -171,14 +171,14 @@ Every sweep task will create a new empty state from one shared
 `SystemStateSchema`, move the initial point payload into it, and retain direct
 ownership of that state for the simulation lifetime. The immutable model name
 remains in fixed configuration and recording user metadata. The simulation
-will mutate `point` in place and advance both the integer step and physical
+will mutate `point` in place and increment both the iteration and physical
 time after each Euler step.
 
 ### State-content decision
 
 The complete runnable state contains exactly:
 
-- built-in `SimulationTime`, holding the authoritative integer step and
+- built-in `SimulationTime`, holding the authoritative iteration and
   physical time; and
 - `point: Vec<f64>`, containing the evolving coordinates `[x, y]`; and
 - `radius: f64`, containing the current radial amplitude
@@ -187,12 +187,12 @@ The complete runnable state contains exactly:
 `radius` is intentionally retained even though it is derivable from `point`.
 For the Hopf normal form it is the primary scientific diagnostic: it decays to
 zero for `mu < 0` and approaches `sqrt(mu)` for `mu > 0`. Retaining one scalar
-allows an inexpensive high-cadence diagnostic stream, demonstrates
+allows an inexpensive frequently sampled diagnostic stream, demonstrates
 heterogeneous state payloads, and provides an invariant that can be checked
 against `point` after every update and during later readback.
 
-No other value belongs in the state. `mu`, `omega`, and `physical_time_step`
-are immutable task parameters; model identity, cadence, and storage budgets are
+No other value belongs in the state. `mu`, `omega`, and `physical_time_increment_per_step`
+are immutable task parameters; model identity, sampling intervals, and storage budgets are
 configuration; task identity belongs in recording metadata; derivatives are
 temporary locals; and explicit Euler has no hidden integrator history. A
 restart combines the recorded payloads and time with the task parameters
@@ -209,19 +209,19 @@ recomputed from that new point before simulation time advances.
 
 Three streams now have distinct scientific and operational roles:
 
-- `trajectory` records only `point` every 10 steps for phase-space output;
-- `radius` records only the scalar `radius` every 5 steps for a lean,
-  higher-cadence convergence diagnostic; and
-- `checkpoint` records both `point` and `radius` every 1000 steps, forming the
+- `trajectory` records only `point` at a 10-iteration interval for phase-space output;
+- `radius` records only the scalar `radius` at a 5-iteration interval for a lean,
+  more frequently sampled convergence diagnostic; and
+- `checkpoint` records both `point` and `radius` at a 1000-iteration interval, forming the
   complete state required for direct restart.
 
-All streams include step 0 and step 5000. The resulting expected counts are 501
+All streams include iterations 0 and 5000. The resulting expected counts are 501
 trajectory records, 1001 radius records, and 6 checkpoint records per task.
 Neither partial stream alone is a complete `SystemState`; the checkpoint is.
 
-The approved configuration retains `checkpoint_every_steps`, uses
-`trajectory_sample_every_steps = 10`, and defines
-`radius_sample_every_steps = 5`.
+The approved configuration uses `checkpoint_sampling_interval = {"iterations":1000}`,
+`trajectory_sampling_interval = {"iterations":10}`, and
+`radius_sampling_interval = {"iterations":5}`.
 
 ## Recording contract
 
@@ -230,17 +230,18 @@ directory. The directory name will include the task index and a per-execution
 identifier, preventing accidental overwrite on repeated runs.
 
 The writer exposes the three streams defined above: partial `trajectory` and
-`radius` streams at independent cadences, plus the complete `checkpoint`
+`radius` streams at independent sampling intervals, plus the complete `checkpoint`
 stream.
 
-Each stream stores a typed nonzero step cadence decoded from `fixed.json`. The
+Each stream stores a typed nonzero simulation-step interval decoded from `fixed.json`. The
 model loop offers its state after every step; the writer checks time and returns
 without payload access for non-due streams. Due streams serialize borrowed
 payloads, block when the finite byte queue is full, and keep records whole
 across chunk boundaries. Completion receives the final state and records it
-only for streams that did not already accept that step. Time-axis metadata
-identifies the iteration index and physical time, while `every_steps` persists
-the machine-readable cadence once per stream.
+only for streams that did not already accept that iteration. Time-axis metadata
+identifies the simulation-step index and physical time, while
+`sampling_interval` persists the machine-readable coordinate and interval once per
+stream.
 
 ## Readback and analysis contract
 
@@ -314,7 +315,7 @@ general scientific project:
    owned `SystemState`;
 5. implement and verify the deterministic evolution kernel against one state,
    before connecting storage or executing multiple tasks;
-6. define observation and checkpoint streams by selected fields and cadence;
+6. define observation and checkpoint streams by selected fields and sampling interval;
 7. create the task writer with complete metadata and bounded storage settings
    before the first evolution step;
 8. evolve the state, submit borrowed samples when due, and advance simulation
@@ -344,7 +345,7 @@ submission. The current public API supports the complete required path:
 ```text
 load ProjectConfig -> decode one TaskParameters selection
 -> load shared SystemStateSchema -> move initial payload into SystemState
--> mutate payload in place -> advance step and physical time
+-> mutate payload in place -> increment iteration and advance physical time
 -> borrow state for stream encoding -> queue owned bytes with backpressure
 -> explicitly complete or fail the recording
 ```
@@ -399,7 +400,7 @@ and output, typed analysis, and verification boundary.
 The application uses only the public crate prelude and standard library. It
 decodes all three tasks, moves each initial point into an owned state, updates
 `point` and `radius` through one tuple borrow, advances physical time, and
-samples endpoint-inclusive cadences. One writer per task owns all three streams
+samples endpoint-inclusive intervals. One writer per task owns all three streams
 and is explicitly completed. After completion, all streams are reconstructed
 and analyzed through typed decoders.
 
@@ -512,7 +513,7 @@ use any `scientific-workflow` type, serialization, storage, decoder, or
 analysis interface. Compiling it directly with `rustc` keeps the comparison
 outside the example application's dependency graph.
 
-Validation compares the workflow and reference by task index. The final step
+Validation compares the workflow and reference by task index. The final iteration
 is compared as an integer; physical time, both coordinates, and radius are
 parsed from each program's shortest round-trippable decimal output and compared
 as IEEE-754 bit patterns. Tasks `mu = -0.25`, `0.25`, and `1.0` all match in
@@ -530,12 +531,12 @@ boilerplate. Its common-path writer shape is:
 SystemStateWriter::builder(directory, schema)
     .with_task_parameters(task)
     .with_shared_stream_limits(chunk_bytes, queue_bytes)
-    .add_periodic_state_stream("trajectory", ["point"], trajectory_every)
-    .add_periodic_state_stream("radius", ["radius"], radius_every)
-    .add_periodic_state_stream(
+    .add_sampled_state_stream("trajectory", ["point"], trajectory_sampling_interval)
+    .add_sampled_state_stream("radius", ["radius"], radius_sampling_interval)
+    .add_sampled_state_stream(
         "checkpoint",
         ["point", "radius"],
-        checkpoint_every,
+        checkpoint_sampling_interval,
     )
     .create_new_recording()
 ```

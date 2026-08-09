@@ -119,14 +119,14 @@ pub enum StateError {
         actual: &'static str,
     },
 
-    /// Incrementing the authoritative integer time index would overflow `u64`.
+    /// Incrementing the authoritative iteration would overflow `u64`.
     ///
     /// `SystemState::advance_simulation_time` will detect this condition before mutating the
     /// state, so the original time point remains unchanged.
-    #[error("cannot advance state time index {index}: the next index exceeds u64::MAX")]
-    TimeIndexOverflow {
-        /// Current index that cannot be incremented.
-        index: u64,
+    #[error("cannot advance state iteration {iteration}: the next iteration exceeds u64::MAX")]
+    IterationOverflow {
+        /// Current iteration that cannot be incremented.
+        iteration: u64,
     },
 
     /// A physical-time delta was requested for a state without a physical
@@ -135,11 +135,11 @@ pub enum StateError {
     /// Absence is not interpreted as zero: callers must establish a known
     /// origin explicitly before advancing physical time.
     #[error(
-        "cannot advance physical time at state index {index}: no physical coordinate is present"
+        "cannot advance physical time at iteration {iteration}: no physical coordinate is present"
     )]
     MissingPhysicalTime {
-        /// Integer index at which physical advancement was requested.
-        index: u64,
+        /// Iteration at which physical advancement was requested.
+        iteration: u64,
     },
 
     /// A physical-time delta or its sum with the current coordinate is not

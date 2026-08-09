@@ -12,7 +12,7 @@ retains the development sequence as a concise record of completed scope.
 
 ## Input files
 
-- [x] Create `config/fixed.json` with shared model, cadence, and storage
+- [x] Create `config/fixed.json` with shared model, sampling-interval, and storage
   settings.
 - [x] Create `config/sweep.json` with the Cartesian `mu` axis.
 - [x] Create `config/paths.json` with state-template and generated-output
@@ -40,7 +40,7 @@ retains the development sequence as a concise record of completed scope.
 - [x] Implement the Hopf-normal-form explicit-Euler loop with direct state
   mutation and simulation-time advancement.
 - [x] Configure the `trajectory`, `radius`, and `checkpoint` streams and record
-  them at separate cadences.
+  them at separate sampling intervals.
 - [x] Explicitly complete successful recordings; leave production-grade failed
   lifecycle policy to the library tests and future applications.
 - [x] Generate and retain `Cargo.lock`, as is conventional for an executable
@@ -59,9 +59,9 @@ retains the development sequence as a concise record of completed scope.
 - [x] Normalize module names to `project_setup`, `hopf_model`,
   `state_recording`, and `recording_analysis`.
 - [x] Add a one-file standard-library Hopf reference and confirm bit-identical
-  final step, time, point, and radius for all three tasks.
+  final iteration, physical time, point, and radius for all three tasks.
 - [x] Move periodic and final-state sampling decisions into
-  `SystemStateWriter`; the model loop now offers every state without cadence
+  `SystemStateWriter`; the model loop now offers every state without sampling-interval
   branches.
 - [x] Adopt shared stream limits, concise periodic stream declarations,
   automatic task metadata, paired physical-axis setup, and generic Serde JSON

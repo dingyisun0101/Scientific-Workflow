@@ -76,14 +76,14 @@ fn stream(queue_bytes: u64) -> StateStreamConfig {
     StateStreamConfig::new(
         "signal",
         ["population", "activity"],
-        NonZeroU64::new(1).unwrap(),
+        SamplingInterval::iterations(1).unwrap(),
         NonZeroU64::new(128).unwrap(),
         NonZeroU64::new(queue_bytes).unwrap(),
     )
 }
 
 fn populated_state(spec: &SystemStateSchema, index: u64) -> SystemState {
-    let mut state = spec.create_empty_state(SimulationTime::from_step(index));
+    let mut state = spec.create_empty_state(SimulationTime::from_iteration(index));
     state
         .insert_payload("population", vec![index as f64, 2.5])
         .unwrap();
@@ -137,8 +137,8 @@ fn replace_first_chunk(run: &Path, bytes: &[u8], records: u64, first: u64, last:
     let descriptor = &mut metadata["streams"][0]["chunks"][0];
     descriptor["records"] = records.into();
     descriptor["bytes"] = (bytes.len() as u64).into();
-    descriptor["first_index"] = first.into();
-    descriptor["last_index"] = last.into();
+    descriptor["first_iteration"] = first.into();
+    descriptor["last_iteration"] = last.into();
     descriptor["checksum"] = sha256_checksum(bytes).into();
     fs::write(first_chunk(run), bytes).unwrap();
     fs::write(metadata_file, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
@@ -163,7 +163,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
             .add_state_stream(StateStreamConfig::new(
                 "signal",
                 ["absent"],
-                NonZeroU64::new(1).unwrap(),
+                SamplingInterval::iterations(1).unwrap(),
                 NonZeroU64::new(1).unwrap(),
                 NonZeroU64::new(1).unwrap(),
             ))
@@ -187,7 +187,9 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let invalid_time = TempWorkspace::new("time");
     assert!(matches!(
         SystemStateWriter::builder(invalid_time.run(), &state_spec)
-            .with_time_axis_metadata(TimeAxisMetadata::new("step").with_physical_time_unit("s"))
+            .with_time_axis_metadata(
+                TimeAxisMetadata::new("iteration").with_physical_time_unit("s"),
+            )
             .add_state_stream(stream(4_096))
             .create_new_recording(),
         Err(StorageError::InvalidMetadata { .. })
@@ -199,7 +201,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         .add_state_stream(stream(64))
         .create_new_recording()
         .unwrap();
-    let mut huge = state_spec.create_empty_state(SimulationTime::from_step(1));
+    let mut huge = state_spec.create_empty_state(SimulationTime::from_iteration(1));
     huge.insert_payload("population", vec![1.0]).unwrap();
     huge.insert_payload("activity", "x".repeat(512)).unwrap();
     assert!(matches!(
@@ -218,11 +220,11 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let mut state = populated_state(&state_spec, 5);
     output.observe_state(&state).unwrap();
     output.observe_state(&state).unwrap();
-    state.replace_simulation_time(SimulationTime::from_step(4));
+    state.replace_simulation_time(SimulationTime::from_iteration(4));
     assert!(matches!(
         output.observe_state(&state),
-        Err(StorageError::OutOfOrderRecord {
-            index: 4,
+        Err(StorageError::OutOfOrderIteration {
+            iteration: 4,
             previous: 5,
             ..
         })
@@ -251,18 +253,18 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         .add_state_stream(StateStreamConfig::new(
             "signal",
             ["population", "activity"],
-            NonZeroU64::new(2).unwrap(),
+            SamplingInterval::iterations(2).unwrap(),
             NonZeroU64::new(128).unwrap(),
             NonZeroU64::new(4_096).unwrap(),
         ))
         .create_new_recording()
         .unwrap();
-    let mut empty = state_spec.create_empty_state(SimulationTime::from_step(3));
+    let mut empty = state_spec.create_empty_state(SimulationTime::from_iteration(3));
     output.observe_state(&empty).unwrap();
-    empty.replace_simulation_time(SimulationTime::from_step(4));
+    empty.replace_simulation_time(SimulationTime::from_iteration(4));
     assert!(matches!(
         output.observe_state(&empty),
-        Err(StorageError::StateAccess { index: 4, .. })
+        Err(StorageError::StateAccess { iteration: 4, .. })
     ));
     empty.insert_payload("population", RejectEncoding).unwrap();
     empty
@@ -273,7 +275,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         &encode_error,
         StorageError::EncodeField {
             stream,
-            index: 4,
+            iteration: 4,
             field,
             ..
         } if stream == "signal" && field == "population"
@@ -340,7 +342,8 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let wrong_type = TempWorkspace::new("wrong-type");
     write_valid_run(&wrong_type);
-    let wrong_bytes = b"{\"index\":2,\"values\":{\"population\":\"bad\",\"activity\":\"valid\"}}\n";
+    let wrong_bytes =
+        b"{\"iteration\":2,\"values\":{\"population\":\"bad\",\"activity\":\"valid\"}}\n";
     replace_first_chunk(&wrong_type.run(), wrong_bytes, 1, 2, 2);
     let error = StoredStateSeriesReader::open_completed_recording(wrong_type.run(), decoders())
         .unwrap()
@@ -350,7 +353,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         &error,
         StorageError::DecodeField {
             stream,
-            index: 2,
+            iteration: 2,
             field,
             ..
         } if stream == "signal" && field == "population"
@@ -370,7 +373,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let missing_field = TempWorkspace::new("missing-field");
     write_valid_run(&missing_field);
-    let missing_field_bytes = b"{\"index\":2,\"values\":{\"population\":[2.0]}}\n";
+    let missing_field_bytes = b"{\"iteration\":2,\"values\":{\"population\":[2.0]}}\n";
     replace_first_chunk(&missing_field.run(), missing_field_bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(missing_field.run(), decoders())
@@ -382,7 +385,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let duplicate_field = TempWorkspace::new("duplicate-field");
     write_valid_run(&duplicate_field);
     let duplicate_bytes =
-        b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"activity\":\"b\"}}\n";
+        b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"activity\":\"b\"}}\n";
     replace_first_chunk(&duplicate_field.run(), duplicate_bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(duplicate_field.run(), decoders())
@@ -394,7 +397,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let additional_field = TempWorkspace::new("additional-field");
     write_valid_run(&additional_field);
     let additional_bytes =
-        b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"extra\":0}}\n";
+        b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"extra\":0}}\n";
     replace_first_chunk(&additional_field.run(), additional_bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(additional_field.run(), decoders())
@@ -406,7 +409,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let invalid_physical = TempWorkspace::new("invalid-physical");
     write_valid_run(&invalid_physical);
     let physical_bytes =
-        b"{\"index\":2,\"physical\":1e400,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n";
+        b"{\"iteration\":2,\"physical_time\":1e400,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n";
     replace_first_chunk(&invalid_physical.run(), physical_bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(invalid_physical.run(), decoders())
@@ -417,7 +420,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let non_increasing = TempWorkspace::new("non-increasing");
     write_valid_run(&non_increasing);
-    let repeated = b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n{\"index\":2,\"values\":{\"population\":[3.0],\"activity\":\"b\"}}\n";
+    let repeated = b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n{\"iteration\":2,\"values\":{\"population\":[3.0],\"activity\":\"b\"}}\n";
     replace_first_chunk(&non_increasing.run(), repeated, 2, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(non_increasing.run(), decoders())
@@ -469,7 +472,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let unterminated = TempWorkspace::new("unterminated");
     write_valid_run(&unterminated);
-    let bytes = b"{\"index\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}";
+    let bytes = b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}";
     replace_first_chunk(&unterminated.run(), bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(unterminated.run(), decoders())

@@ -24,7 +24,7 @@ A project has three different kinds of information:
 One resolved parameter combination is one independent **task**. Each running
 task owns its own `SystemState`, `SystemStateWriter`, and recording directory.
 The model offers its current state after every evolution step; the writer owns
-the configured stream cadences and decides whether to encode, queue, chunk, or
+the configured stream sampling intervals and decides whether to encode, queue, chunk, or
 ignore each observation.
 
 The normal runtime flow is:
@@ -91,7 +91,7 @@ resolved `TaskParameters` values before implementing the numerical model. This
 is where incorrect sweep dimensions, parameter names, and JSON types should be
 found.
 
-Keep operational values such as sampling cadence and storage budgets in
+Keep operational values such as sampling intervals and storage budgets in
 configuration when users are expected to tune them between runs.
 
 **Ready when:** the program can load the project, enumerate tasks in the
@@ -107,7 +107,7 @@ inserts values into a newly created state.
 
 Choose fields according to scientific meaning and sampling needs. A field
 should be independently addressable when it has a distinct payload type,
-mutation pattern, cadence, or analysis role.
+mutation pattern, sampling interval, or analysis role.
 
 Load the template once as a `SystemStateSchema`. Its clones are lightweight
 shared schema handles, so all states and storage components for a project can
@@ -143,7 +143,7 @@ the storage writer or parameter-space iterator.
 
 When several next values depend on the same old state, read the required old
 values first, calculate the transition, and then write the new values. Advance
-the integer simulation step and, when applicable, physical time only after a
+the iteration and, when applicable, physical time only after a
 successful transition.
 
 Run this kernel for one task without recording. Check known values,
@@ -154,11 +154,11 @@ correctness can be evaluated without involving I/O.
 
 ## Step 6: Design sample streams
 
-Group recorded fields by purpose and cadence. Common stream roles include:
+Group recorded fields by purpose and sampling interval. Common stream roles include:
 
 - frequent, partial observations for analysis;
 - infrequent, complete checkpoints for restart; and
-- specialized diagnostics sampled on their own cadence.
+- specialized diagnostics sampled on their own interval.
 
 Every stream selects exact schema keys. A checkpoint intended for restart must
 contain every payload required to reconstruct a complete runnable state.
@@ -169,7 +169,7 @@ one sampled state across chunks. Choose a finite queue-byte budget that bounds
 memory use; reaching that budget deliberately blocks simulation submission
 until storage catches up.
 
-**Ready when:** every stream has a name, field set, cadence, chunk-byte target,
+**Ready when:** every stream has a name, field set, sampling interval, chunk-byte target,
 queue-byte budget, and documented scientific purpose.
 
 ## Step 7: Create the task writer
@@ -194,7 +194,7 @@ is validated against the state schema.
 
 ## Step 8: Offer each evolved state to the writer
 
-The writer owns the typed cadence configured for every stream. A typical loop
+The writer owns the typed sampling interval configured for every stream. A typical loop
 has this shape:
 
 ```text
@@ -213,7 +213,7 @@ simulation.
 
 Observe the initial state before evolution. Complete the recording with a
 borrow of the final state; the writer adds it only when that stream did not
-already record the same step through normal cadence.
+already record the same iteration through normal sampling.
 
 **Ready when:** expected sample counts and sample times can be calculated before
 the run and match the produced recording.
@@ -257,7 +257,7 @@ by earlier executions.
 
 Compare at least one reconstructed sample with a value retained or logged by
 the live simulation. This explicit round-trip check catches incorrect field
-selection, cadence assumptions, and decoder registration.
+selection, sampling-interval assumptions, and decoder registration.
 
 **Ready when:** recorded states reconstruct with the correct types, times, and
 values, and the analysis consumes only the data it actually needs.
@@ -293,7 +293,7 @@ for every checkpoint field. The restart path should:
 2. open the existing running recording for continuation;
 3. reconstruct the latest valid complete checkpoint state;
 4. verify its task identity and simulation time;
-5. continue with the same evolution kernel and cadence rules; and
+5. continue with the same evolution kernel and sampling-interval rules; and
 6. explicitly complete or fail the continued recording.
 
 Sealed chunks are treated as committed. Recovery examines the latest unsealed

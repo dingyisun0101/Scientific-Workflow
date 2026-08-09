@@ -154,17 +154,17 @@ impl StoredStateSeriesReader {
                 stream: declaration.name.clone(),
             })?;
         let mut series = StateSeries::with_capacity(spec, capacity);
-        let mut previous_index = None;
+        let mut previous_iteration = None;
 
         for chunk in &declaration.chunks {
-            self.read_chunk(declaration, chunk, &mut previous_index, &mut series)?;
+            self.read_chunk(declaration, chunk, &mut previous_iteration, &mut series)?;
         }
         Ok(series)
     }
 
     /// Reconstructs every declared stream in metadata order.
     ///
-    /// Distinct stream schemas and cadences remain distinct series. If any
+    /// Distinct stream schemas and sampling intervals remain distinct series. If any
     /// stream fails, already reconstructed series are dropped and no partial
     /// vector is returned.
     pub fn read_all_streams_as_state_series(
@@ -185,7 +185,7 @@ impl StoredStateSeriesReader {
         &self,
         stream: &StateStreamMetadata,
         chunk: &ChunkMetadata,
-        previous_index: &mut Option<u64>,
+        previous_iteration: &mut Option<u64>,
         series: &mut StateSeries,
     ) -> Result<(), StorageError> {
         let path = self.root.join(&stream.directory).join(&chunk.file);
@@ -205,8 +205,8 @@ impl StoredStateSeriesReader {
         let mut line = Vec::new();
         let mut line_number = 0_u64;
         let mut records = 0_u64;
-        let mut first_index = None;
-        let mut last_index = None;
+        let mut first_iteration = None;
+        let mut last_iteration = None;
         let mut hasher = Sha256::new();
 
         loop {
@@ -248,18 +248,20 @@ impl StoredStateSeriesReader {
             let record: BorrowedRecord<'_> = serde_json::from_slice(&line).map_err(|source| {
                 invalid_record(&path, line_number, format!("invalid JSON record: {source}"))
             })?;
-            validate_index(&path, line_number, record.index, *previous_index)?;
-            let index = record.index;
-            first_index.get_or_insert(index);
-            last_index = Some(index);
-            *previous_index = Some(index);
+            validate_iteration(&path, line_number, record.iteration, *previous_iteration)?;
+            let iteration = record.iteration;
+            first_iteration.get_or_insert(iteration);
+            last_iteration = Some(iteration);
+            *previous_iteration = Some(iteration);
 
-            let time = match record.physical {
-                Some(physical) => SimulationTime::from_step_and_physical_time(index, physical)
-                    .ok_or_else(|| {
-                        invalid_record(&path, line_number, "physical time must be finite")
-                    })?,
-                None => SimulationTime::from_step(index),
+            let time = match record.physical_time {
+                Some(physical_time) => {
+                    SimulationTime::from_iteration_and_physical_time(iteration, physical_time)
+                        .ok_or_else(|| {
+                            invalid_record(&path, line_number, "physical time must be finite")
+                        })?
+                }
+                None => SimulationTime::from_iteration(iteration),
             };
             let mut state = series.schema().create_empty_state(time);
             decode_values(
@@ -272,11 +274,11 @@ impl StoredStateSeriesReader {
             )?;
             series.push_state(state).map_err(|rejection| {
                 let (source, state) = rejection.into_parts();
-                let index = state.simulation_time().step();
+                let index = state.simulation_time().iteration();
                 drop(state);
                 StorageError::StateSeriesInvariant {
                     stream: stream.name.clone(),
-                    index,
+                    iteration: index,
                     source,
                 }
             })?;
@@ -292,8 +294,8 @@ impl StoredStateSeriesReader {
             stream,
             chunk,
             records,
-            first_index,
-            last_index,
+            first_iteration,
+            last_iteration,
         )?;
         verify_checksum(
             &self.metadata_path,
@@ -435,10 +437,12 @@ fn decode_state_record_with_decoders(
 ) -> Result<SystemState, StorageError> {
     let record: BorrowedRecord<'_> = serde_json::from_slice(record)
         .map_err(|source| invalid_record(path, 1, format!("invalid JSON record: {source}")))?;
-    let time = match record.physical {
-        Some(physical) => SimulationTime::from_step_and_physical_time(record.index, physical)
-            .ok_or_else(|| invalid_record(path, 1, "physical time must be finite"))?,
-        None => SimulationTime::from_step(record.index),
+    let time = match record.physical_time {
+        Some(physical_time) => {
+            SimulationTime::from_iteration_and_physical_time(record.iteration, physical_time)
+                .ok_or_else(|| invalid_record(path, 1, "physical time must be finite"))?
+        }
+        None => SimulationTime::from_iteration(record.iteration),
     };
     let mut state = full_spec.create_empty_state(time);
     decode_values(decoders, stream, path, 1, record.values, &mut state)?;
@@ -538,9 +542,9 @@ fn read_last_sealed_record(path: &Path) -> Result<Vec<u8>, StorageError> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BorrowedRecord<'a> {
-    index: u64,
+    iteration: u64,
     #[serde(default)]
-    physical: Option<f64>,
+    physical_time: Option<f64>,
     #[serde(borrow)]
     values: BorrowedValues<'a>,
 }
@@ -653,20 +657,20 @@ fn verify_file_size(path: &Path, expected: u64) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// Enforces strict simulation-index order across chunk boundaries.
-fn validate_index(
+/// Enforces strict iteration order across chunk boundaries.
+fn validate_iteration(
     path: &Path,
     line: u64,
-    index: u64,
+    iteration: u64,
     previous: Option<u64>,
 ) -> Result<(), StorageError> {
     if let Some(previous) = previous
-        && index <= previous
+        && iteration <= previous
     {
         return Err(invalid_record(
             path,
             line,
-            format!("time index {index} is not greater than previous index {previous}"),
+            format!("iteration {iteration} is not greater than previous iteration {previous}"),
         ));
     }
     Ok(())
@@ -696,7 +700,7 @@ fn decode_values(
         let (_, raw) = values.entries.swap_remove(position);
         decoders.decode_into(
             &stream.name,
-            state.simulation_time().step(),
+            state.simulation_time().iteration(),
             &field.name,
             raw.get(),
             state,
@@ -724,12 +728,12 @@ fn validate_chunk_facts(
     stream: &StateStreamMetadata,
     chunk: &ChunkMetadata,
     records: u64,
-    first_index: Option<u64>,
-    last_index: Option<u64>,
+    first_iteration: Option<u64>,
+    last_iteration: Option<u64>,
 ) -> Result<(), StorageError> {
     if records != chunk.records
-        || first_index != Some(chunk.first_index)
-        || last_index != Some(chunk.last_index)
+        || first_iteration != Some(chunk.first_iteration)
+        || last_iteration != Some(chunk.last_iteration)
     {
         return Err(StorageError::InvalidMetadata {
             path: metadata_path.to_path_buf(),
@@ -738,11 +742,11 @@ fn validate_chunk_facts(
                 stream.name,
                 chunk.ordinal,
                 chunk.records,
-                chunk.first_index,
-                chunk.last_index,
+                chunk.first_iteration,
+                chunk.last_iteration,
                 records,
-                first_index,
-                last_index
+                first_iteration,
+                last_iteration
             ),
         });
     }

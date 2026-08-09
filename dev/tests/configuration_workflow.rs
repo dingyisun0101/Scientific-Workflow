@@ -89,7 +89,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert!(!parameters.contains_parameter("missing"));
     assert_eq!(
         parameters.fixed_keys().collect::<Vec<_>>(),
-        ["time_step", "lattice_shape", "solver"]
+        ["physical_time_increment", "lattice_shape", "solver"]
     );
     assert_eq!(
         parameters.sweep_keys().collect::<Vec<_>>(),
@@ -157,7 +157,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_eq!(
         first.keys().collect::<Vec<_>>(),
         [
-            "time_step",
+            "physical_time_increment",
             "lattice_shape",
             "solver",
             "temperature",
@@ -166,8 +166,8 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     );
     assert_eq!(first.iter().count(), 5);
     assert!(std::ptr::eq(
-        first.value("time_step").unwrap(),
-        second.value("time_step").unwrap()
+        first.value("physical_time_increment").unwrap(),
+        second.value("physical_time_increment").unwrap()
     ));
     assert!(std::ptr::eq(
         first.value("temperature").unwrap(),
@@ -187,11 +187,11 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     );
     let resolved_json = first.to_json().unwrap();
     let resolved: Value = serde_json::from_str(&resolved_json).unwrap();
-    assert_eq!(resolved["time_step"], 0.125);
+    assert_eq!(resolved["physical_time_increment"], 0.125);
     assert_eq!(resolved["temperature"], 280.0);
     assert_eq!(resolved["seed"], 7);
     let key_positions = [
-        resolved_json.find("time_step").unwrap(),
+        resolved_json.find("physical_time_increment").unwrap(),
         resolved_json.find("lattice_shape").unwrap(),
         resolved_json.find("solver").unwrap(),
         resolved_json.find("temperature").unwrap(),
@@ -313,7 +313,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_eq!(cases.parameters().task_count(), 3);
     assert_eq!(
         cases.parameters().sweep_keys().collect::<Vec<_>>(),
-        ["temperature", "time_step"]
+        ["temperature", "physical_time_increment"]
     );
     let correlated = cases
         .parameters()
@@ -321,7 +321,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         .map(|task| {
             (
                 task.decode_value::<f64>("temperature").unwrap(),
-                task.decode_value::<f64>("time_step").unwrap(),
+                task.decode_value::<f64>("physical_time_increment").unwrap(),
             )
         })
         .collect::<Vec<_>>();
@@ -333,7 +333,12 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             .unwrap()
             .keys()
             .collect::<Vec<_>>(),
-        ["lattice_shape", "integrator", "temperature", "time_step"]
+        [
+            "lattice_shape",
+            "integrator",
+            "temperature",
+            "physical_time_increment"
+        ]
     );
     println!(
         "[cases] tasks={} correlated=true key_order_normalized=true",

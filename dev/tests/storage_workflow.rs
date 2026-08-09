@@ -114,8 +114,14 @@ fn verify_chunks(run: &Path, stream: &Value) -> (u64, u64) {
             .map(|line| serde_json::from_slice::<Value>(line).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(records.len() as u64, chunk["records"].as_u64().unwrap());
-        assert_eq!(records.first().unwrap()["index"], chunk["first_index"]);
-        assert_eq!(records.last().unwrap()["index"], chunk["last_index"]);
+        assert_eq!(
+            records.first().unwrap()["iteration"],
+            chunk["first_iteration"]
+        );
+        assert_eq!(
+            records.last().unwrap()["iteration"],
+            chunk["last_iteration"]
+        );
         let checksum = sha256_checksum(&bytes);
         assert_eq!(checksum, chunk["checksum"].as_str().unwrap());
         total_records += records.len() as u64;
@@ -136,6 +142,21 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     const SPACE_CHUNK_BYTES: u64 = 64;
     const QUEUE_BYTES: u64 = 16_384;
 
+    let interval = SamplingInterval::iterations(2).expect("positive interval must be valid");
+    assert_eq!(
+        serde_json::to_value(interval).unwrap(),
+        serde_json::json!({"iterations": 2})
+    );
+    assert_eq!(
+        serde_json::from_value::<SamplingInterval>(serde_json::json!({"iterations": 2})).unwrap(),
+        interval
+    );
+    assert!(SamplingInterval::iterations(0).is_none());
+    assert!(
+        serde_json::from_value::<SamplingInterval>(serde_json::json!({"iterations": 0})).is_err()
+    );
+    println!("[sampling-interval] coordinate=iterations interval=2 zero_rejected=true");
+
     let workspace = TempWorkspace::new();
     let run_path = workspace.run();
     let spec = SystemStateSchema::load_json_template(fixture_path())
@@ -145,7 +166,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let signal = StateStreamConfig::new(
         "signal",
         ["activity", "population"],
-        NonZeroU64::new(1).unwrap(),
+        SamplingInterval::iterations(1).unwrap(),
         NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
         NonZeroU64::new(QUEUE_BYTES).unwrap(),
     )
@@ -153,7 +174,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let space = StateStreamConfig::new(
         "space",
         ["space"],
-        NonZeroU64::new(2).unwrap(),
+        SamplingInterval::iterations(2).unwrap(),
         NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
         NonZeroU64::new(QUEUE_BYTES).unwrap(),
     );
@@ -163,9 +184,9 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     annotations.insert("program".to_owned(), Value::from("public-api-demo"));
     let mut output = SystemStateWriterBuilder::new(&run_path, &spec)
         .with_time_axis_metadata(
-            TimeAxisMetadata::new("simulation_step")
-                .with_step_unit("step")
-                .with_physical_axis("time", "s"),
+            TimeAxisMetadata::new("simulation_iteration")
+                .with_iteration_unit("iteration")
+                .with_physical_axis("physical_time", "s"),
         )
         .with_user_metadata(annotations)
         .add_state_stream(signal)
@@ -184,7 +205,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         lattice.set(&coordinate, value);
     }
     let mut live =
-        spec.create_empty_state(SimulationTime::from_step_and_physical_time(0, 0.0).unwrap());
+        spec.create_empty_state(SimulationTime::from_iteration_and_physical_time(0, 0.0).unwrap());
     live.insert_payload(
         "population",
         TrackedVec {
@@ -197,20 +218,21 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     live.insert_payload("activity", String::from("initial"))
         .unwrap();
 
-    for index in 0..4_u64 {
+    for iteration in 0..4_u64 {
         output.observe_state(&live).unwrap();
         assert_eq!(clones.load(Ordering::SeqCst), 0);
         println!(
-            "[sample] index={index} physical={:.2} signal=true space={}",
+            "[sample] iteration={iteration} physical_time={:.2} signal=true space={}",
             live.simulation_time().physical_time().unwrap(),
-            index % 2 == 0
+            iteration % 2 == 0
         );
 
-        if index < 3 {
+        if iteration < 3 {
             live.payload_mut::<TrackedVec>("population").unwrap().values[0] += 1.0;
             let lattice = live.payload_mut::<Tensor<u64, Dense>>("space").unwrap();
             lattice.set(&[0, 0], lattice.get(&[0, 0]) + 10);
-            *live.payload_mut::<String>("activity").unwrap() = format!("step-{index} 世界");
+            *live.payload_mut::<String>("activity").unwrap() =
+                format!("evolved-to-iteration-{} 世界", iteration + 1);
             live.advance_simulation_time(Some(0.25)).unwrap();
         }
     }
@@ -222,6 +244,9 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let metadata_bytes = fs::read(run_path.join("metadata.json")).unwrap();
     let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
     assert_eq!(metadata["status"]["state"], "complete");
+    assert_eq!(metadata["time"]["iteration_name"], "simulation_iteration");
+    assert_eq!(metadata["time"]["iteration_unit"], "iteration");
+    assert!(metadata["time"].get("step_name").is_none());
     assert_eq!(metadata["user_metadata"]["seed"], 42);
     assert_eq!(
         serde_json::from_slice::<Value>(&serde_json::to_vec_pretty(&metadata).unwrap()).unwrap(),
@@ -334,11 +359,15 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .first_state()
             .unwrap()
             .simulation_time()
-            .step(),
+            .iteration(),
         0
     );
     assert_eq!(
-        signal_series.last_state().unwrap().simulation_time().step(),
+        signal_series
+            .last_state()
+            .unwrap()
+            .simulation_time()
+            .iteration(),
         3
     );
     assert_eq!(
@@ -355,7 +384,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .unwrap()
             .payload::<String>("activity")
             .unwrap(),
-        "step-2 世界"
+        "evolved-to-iteration-3 世界"
     );
     let all = reader.read_all_streams_as_state_series().unwrap();
     assert_eq!(all.len(), 2);
@@ -391,10 +420,10 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             NonZeroU64::new(4_096).unwrap(),
             NonZeroU64::new(16_384).unwrap(),
         )
-        .add_periodic_state_stream(
+        .add_sampled_state_stream(
             "checkpoint",
             ["population", "space", "activity"],
-            NonZeroU64::new(1).unwrap(),
+            SamplingInterval::iterations(1).unwrap(),
         )
         .create_new_recording()
         .unwrap()
@@ -406,6 +435,11 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     assert_eq!(task_metadata["user_metadata"]["task_index"], 0);
     assert_eq!(task_metadata["user_metadata"]["temperature"], 280.0);
     assert_eq!(task_metadata["user_metadata"]["seed"], 7);
+    assert_eq!(task_metadata["version"], 3);
+    assert_eq!(
+        task_metadata["streams"][0]["sampling_interval"],
+        serde_json::json!({"iterations": 1})
+    );
     println!("[task-metadata] task_index=0 temperature=280 seed=7");
     println!("[result] storage_workflow=passed");
 }
@@ -429,7 +463,7 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
         .unwrap();
     attributes.set_vector_of("species", 0, &[7_i64]).unwrap();
     let particles = PhysObj::new(AttrsMeta::new(3, "particles", "mixed"), attributes);
-    let mut state = spec.create_empty_state(SimulationTime::from_step(0));
+    let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
     state.insert_payload("particles", particles).unwrap();
 
     let run = workspace.root.join("phys-obj-run");
@@ -438,7 +472,11 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
             NonZeroU64::new(16_384).unwrap(),
             NonZeroU64::new(65_536).unwrap(),
         )
-        .add_periodic_state_stream("checkpoint", ["particles"], NonZeroU64::new(1).unwrap())
+        .add_sampled_state_stream(
+            "checkpoint",
+            ["particles"],
+            SamplingInterval::iterations(1).unwrap(),
+        )
         .create_new_recording()
         .unwrap();
     writer.complete_recording_with_final_state(&state).unwrap();

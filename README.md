@@ -13,7 +13,7 @@ application built against the local crate. It loads project-root
 `config/{fixed,sweep,paths,state}.json` inputs, expands a parameter sweep,
 evolves one directly owned `SystemState` per task with explicit Euler, and
 offers every evolved state to one writer that owns the independent trajectory,
-radius, and checkpoint cadences.
+radius, and checkpoint sampling intervals.
 
 Run it from the repository root:
 

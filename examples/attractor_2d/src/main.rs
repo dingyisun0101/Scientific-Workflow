@@ -43,13 +43,13 @@ fn run() -> AppResult<()> {
     let task_count = project.parameters().task_count();
     let first = project.parameters().task(0)?;
     let model_name: String = first.decode_value("model_name")?;
-    let total_steps: u64 = first.decode_value("total_steps")?;
+    let step_count: u64 = first.decode_value("step_count")?;
 
     println!(
-        "[project] model={} tasks={} steps={} fields={} config={}",
+        "[project] model={} tasks={} step_count={} fields={} config={}",
         model_name,
         task_count,
-        total_steps,
+        step_count,
         schema.len(),
         project.configuration_directory().display()
     );
@@ -58,20 +58,20 @@ fn run() -> AppResult<()> {
     for parameters in project.parameters().tasks() {
         let (mut model, settings) = prepare_task(&schema, &parameters)?;
         println!(
-            "[task] index={} mu={} omega={} dt={}",
+            "[task] index={} mu={} omega={} physical_time_increment_per_step={}",
             settings.task_index,
             model.mu(),
             model.omega(),
-            model.time_step()
+            model.physical_time_increment_per_step()
         );
 
         let recording = record_model(&schema, &execution_root, &parameters, &settings, &mut model)?;
         let time = model.state().simulation_time();
         let point = model.point()?;
         println!(
-            "[simulation] task={} final_step={} final_time={} final_point=[{}, {}] final_radius={}",
+            "[simulation] task={} final_iteration={} final_physical_time={} final_point=[{}, {}] final_radius={}",
             settings.task_index,
-            time.step(),
+            time.iteration(),
             time.physical_time()
                 .expect("the model tracks physical time"),
             point[0],
