@@ -31,8 +31,9 @@ together with every supported crate API through `scientific_workflow::prelude`.
 ## End-to-end workflow
 
     simulation owns and mutates one complete SystemState
-        -> simulation cadence selects a logical stream
-        -> JsonStateRecordEncoder borrows only that stream's selected fields
+        -> SystemStateWriter::observe_state checks every typed stream cadence
+        -> non-due streams return without payload access
+        -> due JsonStateRecordEncoder borrows only selected fields
         -> one owned EncodedStateRecord is produced
         -> StateWriterWorker::submit_record applies bounded backpressure
         -> worker appends indivisible records to byte-targeted chunks
@@ -1640,6 +1641,11 @@ Returns `(StateSeriesError, SystemState)` without cloning.
 
 ## Storage format
 
+Format version 2 replaces descriptive cadence text with the machine-readable
+positive `every_steps` value used by writer-side scheduling. Backward
+compatibility with version 1 is intentionally not provided in this clean-slate
+stage.
+
 ### On-disk layout
 
     run/
@@ -1724,13 +1730,13 @@ Rejects empty labels and a physical unit without a physical name.
 
 ### StateStreamMetadata
 
-One logical stream's directory, cadence, ordered fields, byte limits, and
-committed chunk inventory.
+One logical stream's directory, positive `every_steps` cadence, ordered fields,
+byte limits, and committed chunk inventory.
 
 #### StateStreamMetadata::validate
 
-Validates exact names, safe paths, non-zero limits, unique fields, and ordered
-non-overlapping chunks.
+Validates exact names, safe paths, non-zero cadence and limits, unique fields,
+and ordered non-overlapping chunks.
 
 ##### Reference
 
@@ -1840,7 +1846,7 @@ performance effect remains a benchmark question rather than an assumed gain.
 
 ##### Reference
 
-    SystemStateWriter::record_state_to_stream -> JsonStateRecordEncoder::encode -> StateWriterWorker::submit_record
+    SystemStateWriter::observe_state -> JsonStateRecordEncoder::encode -> StateWriterWorker::submit_record
 
 ### RecordRef, ValuesRef, and ErasedRef
 
@@ -1945,7 +1951,7 @@ oversized records fail immediately.
 
 ##### Reference
 
-    SystemStateWriter::record_state_to_stream -> StateWriterWorker::submit_record
+    SystemStateWriter::observe_state -> StateWriterWorker::submit_record
 
 #### StateWriterWorker::flush_state_stream
 
@@ -2398,12 +2404,13 @@ Moves public configuration into the private versioned metadata representation.
 ### `StateStreamConfig`
 
 Owns one logical stream's exact selected keys, safe relative directory,
-optional cadence description, soft chunk-byte target, and strict queue-byte
-budget. Non-zero byte types reject zero limits at the public boundary.
+typed nonzero step cadence, soft chunk-byte target, and strict queue-byte
+budget. Non-zero types reject zero cadence and limits at the public boundary.
 
 #### `StateStreamConfig::new`
 
-Creates a declaration whose directory initially equals its stream name.
+Creates a declaration whose directory initially equals its stream name and
+stores the cadence used by writer-side observation.
 
 ##### Reference
 
@@ -2417,14 +2424,6 @@ directory collisions.
 ##### Reference
 
     downstream stream path customization -> StateStreamConfig::with_relative_directory
-
-#### `StateStreamConfig::with_cadence_description`
-
-Adds descriptive cadence metadata without scheduling samples.
-
-##### Reference
-
-    downstream cadence documentation -> StateStreamConfig::with_cadence_description
 
 ### `SystemStateWriterBuilder`
 
@@ -2525,16 +2524,18 @@ Iterates names in deterministic declaration order.
 
     diagnostics and run logging -> SystemStateWriter::stream_names
 
-#### `SystemStateWriter::record_state_to_stream`
+#### `SystemStateWriter::observe_state`
 
-Looks up one stream, borrows selected live-state payloads for encoding, ends
-those borrows, then submits the owned encoded record. Submission is the
-blocking backpressure boundary.
+Reads the offered state's integer step and evaluates every stream cadence.
+Non-due streams perform no payload lookup or allocation. Due streams borrow
+selected payloads for encoding, end those borrows, and submit owned records;
+submission is the blocking backpressure boundary. Repeated observation of an
+already recorded step is an idempotent no-op for that stream.
 
 ##### Reference
 
-    simulation cadence event -> SystemStateWriter::record_state_to_stream -> JsonStateRecordEncoder::encode
-    SystemStateWriter::record_state_to_stream -> StateWriterWorker::submit_record
+    model evolution loop -> SystemStateWriter::observe_state
+    SystemStateWriter::observe_state -> JsonStateRecordEncoder::encode -> StateWriterWorker::submit_record
 
 #### `SystemStateWriter::flush_stream_to_storage`
 
@@ -2555,6 +2556,16 @@ failure it attempts `Failed` metadata without hiding the first writer error.
 ##### Reference
 
     successful simulation termination -> SystemStateWriter::complete_recording
+
+#### `SystemStateWriter::complete_recording_with_final_state`
+
+Offers one terminal state to every stream, skips streams that already recorded
+the same step, records non-aligned endpoints once, then delegates normal drain
+and completion. Cadence and endpoint policy therefore remain inside the writer.
+
+##### Reference
+
+    successful model termination -> SystemStateWriter::complete_recording_with_final_state
 
 #### `SystemStateWriter::mark_recording_failed`
 
@@ -2712,7 +2723,7 @@ Already compatible:
 - named `signal` and `space` streams naturally preserve independent sampling
   cadences and output identities;
 - PiP's local `SquareLattice` serializer borrows its dense storage, so
-  `SystemStateWriter::record_state_to_stream` can encode a lattice without first cloning it;
+  `SystemStateWriter::observe_state` can encode a due lattice without first cloning it;
 - exact encoded-byte chunking is a stricter implementation of simulator's
   desired maximum-file-size policy than its current estimated record sizing;
 - bounded stream queues provide deterministic per-stream backpressure;
@@ -3577,10 +3588,10 @@ built on `scientific-workflow`:
    task with schema, time-axis documentation, resolved task metadata, stream
    definitions, chunk targets, and a finite queue-byte budget. Initial metadata
    therefore exists before samples are admitted.
-8. **Connect cadence to the loop.** The simulation decides when to sample and
-   passes a borrow of its current state to the appropriate stream. Encoding is
-   synchronous with that borrow; queued writing is asynchronous, and bounded
-   backpressure is accepted as part of the execution contract.
+8. **Offer state after evolution.** The model passes one borrow of its current
+   state to the writer after every step. The writer evaluates stream cadences;
+   encoding is synchronous only for due streams, queued writing is
+   asynchronous, and bounded backpressure is accepted as part of execution.
 9. **Close the lifecycle explicitly.** Complete a successful recording or mark
    it failed with context. Do not treat dropping a writer as successful
    completion.
@@ -3624,11 +3635,11 @@ and recording-submission phase:
 - `advance_simulation_time` transactionally advances step and physical time;
 - `SystemStateWriterBuilder` validates independent observation and checkpoint
   streams before execution;
-- `record_state_to_stream` completes serialization while borrowing the live
-  state, then applies backpressure only to owned encoded bytes; and
+- `observe_state` checks writer-owned cadence before borrowing live payloads,
+  then applies backpressure only to owned encoded bytes; and
 - explicit complete and failed lifecycle methods cover both simulation exits.
 
-Cross-parameter validation, cadence decisions, and collision-free task path
+Cross-parameter validation and collision-free task path
 construction remain application responsibilities by design. Resolved task
 parameters can be collected into writer user metadata by cloning only their
 small JSON configuration values; a dedicated conversion API would be an

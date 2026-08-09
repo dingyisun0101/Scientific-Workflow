@@ -32,9 +32,9 @@
 //! mutation without exposing mutable state time. It deliberately performs no
 //! serialization, chunking, or filesystem IO.
 //!
-//! [`storage`] provides named partial-state streams, borrowed JSON encoding,
-//! bounded asynchronous persistence through one worker per recording,
-//! byte-targeted chunking, atomic recording
+//! [`storage`] provides named partial-state streams with writer-owned step
+//! cadences, borrowed JSON encoding only when due, bounded asynchronous
+//! persistence through one worker per recording, byte-targeted chunking, atomic recording
 //! metadata, per-key payload decoders, and verified analysis reconstruction.
 //! Import [`prelude`] when an application wants the complete supported API in
 //! scope without listing each module separately.

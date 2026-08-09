@@ -52,7 +52,7 @@ use super::error::StorageError;
 pub(crate) const FORMAT_NAME: &str = "scientific-workflow-jsonl";
 
 /// Current metadata and record schema version.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+pub(crate) const FORMAT_VERSION: u32 = 2;
 
 /// Payload encoding supported by the current storage stage.
 pub(crate) const PAYLOAD_ENCODING: &str = "json";
@@ -306,9 +306,8 @@ pub(crate) struct StateStreamMetadata {
     pub(crate) name: String,
     /// Safe relative directory beneath the recording root.
     pub(crate) directory: String,
-    /// Optional human-readable sampling cadence description.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) cadence: Option<String>,
+    /// Positive periodic sampling interval measured in simulation steps.
+    pub(crate) every_steps: u64,
     /// Ordered partial-state schema persisted once for this stream.
     pub(crate) fields: Vec<StateFieldMetadata>,
     /// Soft maximum chunk size; complete oversized records remain indivisible.
@@ -331,14 +330,10 @@ impl StateStreamMetadata {
             return Err(invalid_metadata(path, "stream name must not be empty"));
         }
         validate_relative_path(path, "stream directory", &self.directory)?;
-        if self
-            .cadence
-            .as_deref()
-            .is_some_and(|cadence| cadence.trim().is_empty())
-        {
+        if self.every_steps == 0 {
             return Err(invalid_metadata(
                 path,
-                format!("stream `{}` has an empty cadence", self.name),
+                format!("stream `{}` has a zero step cadence", self.name),
             ));
         }
         if self.max_chunk_bytes == 0 || self.queue_bytes == 0 {

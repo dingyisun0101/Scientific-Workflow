@@ -23,8 +23,9 @@ A project has three different kinds of information:
 
 One resolved parameter combination is one independent **task**. Each running
 task owns its own `SystemState`, `SystemStateWriter`, and recording directory.
-The simulation decides when to sample; the writer decides how to queue, chunk,
-and commit those samples.
+The model offers its current state after every evolution step; the writer owns
+the configured stream cadences and decides whether to encode, queue, chunk, or
+ignore each observation.
 
 The normal runtime flow is:
 
@@ -191,33 +192,28 @@ deleting an existing recording automatically.
 **Ready when:** a new recording starts with complete metadata and every stream
 is validated against the state schema.
 
-## Step 8: Connect sampling to the evolution loop
+## Step 8: Offer each evolved state to the writer
 
-The simulation remains responsible for cadence. A typical loop has this shape:
+The writer owns the typed cadence configured for every stream. A typical loop
+has this shape:
 
 ```text
 for each iteration:
     evolve the owned state
     advance its simulation time
-
-    if trajectory sample is due:
-        writer records the current state to the trajectory stream
-
-    if diagnostic sample is due:
-        writer records the current state to the diagnostic stream
-
-    if checkpoint sample is due:
-        writer records the current state to the checkpoint stream
+    writer observes the current state
 ```
 
-Recording borrows selected payloads only for encoding. The live state remains
-owned by the simulation and can continue evolving after submission returns.
-The encoded record moves into the writer's bounded queue. Submission can block
-under backpressure; this is expected behavior that protects memory when the
-storage device is slower than the simulation.
+Observation first inspects simulation time. Non-due streams do not look up or
+borrow payloads. Due streams borrow selected payloads only for encoding; the
+live state remains owned by the model and continues evolving after observation
+returns. Encoded records move into the writer's bounded queue. Submission can
+block under backpressure; this protects memory when storage is slower than the
+simulation.
 
-Define whether the initial state, final state, or both must always be sampled.
-Do not leave endpoint behavior implicit in a modulo expression.
+Observe the initial state before evolution. Complete the recording with a
+borrow of the final state; the writer adds it only when that stream did not
+already record the same step through normal cadence.
 
 **Ready when:** expected sample counts and sample times can be calculated before
 the run and match the produced recording.

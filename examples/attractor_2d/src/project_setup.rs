@@ -23,9 +23,9 @@ pub(crate) struct TaskSettings {
     pub(crate) omega: f64,
     pub(crate) time_step: f64,
     pub(crate) total_steps: u64,
-    pub(crate) trajectory_every: u64,
-    pub(crate) radius_every: u64,
-    pub(crate) checkpoint_every: u64,
+    pub(crate) trajectory_every: NonZeroU64,
+    pub(crate) radius_every: NonZeroU64,
+    pub(crate) checkpoint_every: NonZeroU64,
     pub(crate) maximum_chunk_bytes: NonZeroU64,
     pub(crate) writer_queue_bytes: NonZeroU64,
 }
@@ -85,11 +85,11 @@ fn decode_task_plan(parameters: TaskParameters) -> AppResult<TaskPlan> {
         omega: parameters.decode_value("angular_frequency")?,
         time_step: parameters.decode_value("physical_time_step")?,
         total_steps: parameters.decode_value("total_steps")?,
-        trajectory_every: parameters.decode_value("trajectory_sample_every_steps")?,
-        radius_every: parameters.decode_value("radius_sample_every_steps")?,
-        checkpoint_every: parameters.decode_value("checkpoint_every_steps")?,
-        maximum_chunk_bytes: decode_byte_limit(&parameters, "maximum_chunk_bytes")?,
-        writer_queue_bytes: decode_byte_limit(&parameters, "writer_queue_bytes")?,
+        trajectory_every: decode_nonzero(&parameters, "trajectory_sample_every_steps")?,
+        radius_every: decode_nonzero(&parameters, "radius_sample_every_steps")?,
+        checkpoint_every: decode_nonzero(&parameters, "checkpoint_every_steps")?,
+        maximum_chunk_bytes: decode_nonzero(&parameters, "maximum_chunk_bytes")?,
+        writer_queue_bytes: decode_nonzero(&parameters, "writer_queue_bytes")?,
     };
     let initial_point = parameters.decode_value("initial_point")?;
 
@@ -100,8 +100,8 @@ fn decode_task_plan(parameters: TaskParameters) -> AppResult<TaskPlan> {
     })
 }
 
-/// Decodes a checked-in nonzero byte limit required by the writer API.
-fn decode_byte_limit(parameters: &TaskParameters, key: &str) -> AppResult<NonZeroU64> {
+/// Decodes a checked-in nonzero cadence or byte limit required by the writer.
+fn decode_nonzero(parameters: &TaskParameters, key: &str) -> AppResult<NonZeroU64> {
     let value = parameters.decode_value(key)?;
-    Ok(NonZeroU64::new(value).expect("checked-in writer byte limits are nonzero"))
+    Ok(NonZeroU64::new(value).expect("checked-in writer settings are nonzero"))
 }

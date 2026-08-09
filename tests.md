@@ -245,14 +245,16 @@ Public run configuration and lifecycle:
 
 - `TimeAxisMetadata::new`, `default`, `with_step_unit`,
   `with_physical_time_name`, and `with_physical_time_unit`;
-- `StateStreamConfig::new`, `with_relative_directory`, and
-  `with_cadence_description`;
+- `StateStreamConfig::new` with typed nonzero cadence and
+  `with_relative_directory`;
 - `SystemStateWriterBuilder::new`, `with_time_axis_metadata`,
   `with_user_metadata`, `add_state_stream`, and `create_new_recording`;
 - `SystemStateWriter::builder`, `recording_directory`, `stream_names`,
-  `record_state_to_stream`, `flush_stream_to_storage`,
-  `complete_recording`, and `mark_recording_failed` across the successful and
-  resilience workflows.
+  `observe_state`, `flush_stream_to_storage`, `complete_recording`,
+  `complete_recording_with_final_state`, and `mark_recording_failed` across the
+  successful, resume, and resilience workflows. Different stream cadences,
+  repeated-step no-op behavior, and non-aligned final-state insertion are
+  observable in reconstructed record counts and times.
 
 Private format, encoder, record, writer configuration, writer queue, summary,
 and metadata transaction structures are covered only through observable public

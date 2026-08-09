@@ -144,23 +144,23 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let signal = StateStreamConfig::new(
         "signal",
         ["activity", "population"],
+        NonZeroU64::new(1).unwrap(),
         NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
         NonZeroU64::new(QUEUE_BYTES).unwrap(),
     )
-    .with_relative_directory("streams/signals")
-    .with_cadence_description("every simulation step");
+    .with_relative_directory("streams/signals");
     let space = StateStreamConfig::new(
         "space",
         ["space"],
+        NonZeroU64::new(2).unwrap(),
         NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
         NonZeroU64::new(QUEUE_BYTES).unwrap(),
-    )
-    .with_cadence_description("every two simulation steps");
+    );
 
     let mut annotations = Map::new();
     annotations.insert("seed".to_owned(), Value::from(42));
     annotations.insert("program".to_owned(), Value::from("public-api-demo"));
-    let output = SystemStateWriterBuilder::new(&run_path, &spec)
+    let mut output = SystemStateWriterBuilder::new(&run_path, &spec)
         .with_time_axis_metadata(
             TimeAxisMetadata::new("simulation_step")
                 .with_step_unit("step")
@@ -198,10 +198,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         .unwrap();
 
     for index in 0..4_u64 {
-        output.record_state_to_stream("signal", &live).unwrap();
-        if index % 2 == 0 {
-            output.record_state_to_stream("space", &live).unwrap();
-        }
+        output.observe_state(&live).unwrap();
         assert_eq!(clones.load(Ordering::SeqCst), 0);
         println!(
             "[sample] index={index} physical={:.2} signal=true space={}",
@@ -217,12 +214,8 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             live.advance_simulation_time(Some(0.25)).unwrap();
         }
     }
-    assert!(matches!(
-        output.record_state_to_stream("absent", &live),
-        Err(StorageError::UnknownStateStream { stream }) if stream == "absent"
-    ));
     output
-        .complete_recording()
+        .complete_recording_with_final_state(&live)
         .expect("all writers must drain and finish");
     assert_eq!(clones.load(Ordering::SeqCst), 0);
 
@@ -242,7 +235,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let (signal_records, signal_bytes) = verify_chunks(&run_path, signal_metadata);
     let (space_records, space_bytes) = verify_chunks(&run_path, space_metadata);
     assert_eq!(signal_records, 4);
-    assert_eq!(space_records, 2);
+    assert_eq!(space_records, 3);
     assert!(signal_metadata["chunks"].as_array().unwrap().len() >= 2);
     assert!(
         space_metadata["chunks"]
@@ -378,7 +371,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .payload::<Tensor<u64, Dense>>("space")
             .unwrap()
             .get(&[0, 0]),
-        21
+        31
     );
     println!(
         "[readback] signal_states={} space_states={} typed_round_trip=true clone_calls={}",

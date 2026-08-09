@@ -1,9 +1,11 @@
 //! Recording persistence and reconstruction for scientific state samples.
 //!
 //! This module is the complete public storage boundary. Simulations configure
-//! named output streams through [`SystemStateWriterBuilder`], borrow their live
-//! [`SystemState`] at each sampling cadence, and hand the resulting encoded
-//! record to [`SystemStateWriter::record_state_to_stream`]. One bounded queue
+//! named output streams with fixed step cadences through
+//! [`SystemStateWriterBuilder`], then offer a borrowed live [`SystemState`] to
+//! [`SystemStateWriter::observe_state`] after each evolution step. The writer
+//! checks time before accessing any payload and encodes only streams whose
+//! cadence is due. One bounded queue
 //! and worker serve every configured stream, while each stream retains an
 //! independent byte-targeted chunk sequence. The recording owns exactly one
 //! authoritative `metadata.json` lifecycle.
@@ -13,7 +15,7 @@
 //! Sampling never clones, removes, or retains a scientific payload. The
 //! selected values are borrowed only while Serde creates one owned JSONL
 //! record. That record is then moved into the recording writer. If the configured
-//! queue-byte budget is full, [`SystemStateWriter::record_state_to_stream`] blocks until the writer
+//! queue-byte budget is full, [`SystemStateWriter::observe_state`] blocks until the writer
 //! commits enough queued bytes or reports a terminal error. Records are never
 //! split between chunks.
 //!
@@ -166,7 +168,7 @@ impl Default for TimeAxisMetadata {
 pub struct StateStreamConfig {
     name: String,
     directory: String,
-    cadence: Option<String>,
+    every_steps: NonZeroU64,
     fields: Vec<String>,
     max_chunk_bytes: NonZeroU64,
     queue_bytes: NonZeroU64,
@@ -176,12 +178,14 @@ impl StateStreamConfig {
     /// Creates a stream whose relative output directory initially equals its
     /// logical name.
     ///
-    /// Non-zero byte types make both storage limits valid by construction.
-    /// Names, paths, duplicate fields, and state-key membership are validated
-    /// together by [`SystemStateWriterBuilder::create_new_recording`].
+    /// Non-zero types make cadence and both storage limits valid by
+    /// construction. Names, paths, duplicate fields, and state-key membership
+    /// are validated together by
+    /// [`SystemStateWriterBuilder::create_new_recording`].
     pub fn new<I, K>(
         name: impl Into<String>,
         fields: I,
+        every_steps: NonZeroU64,
         max_chunk_bytes: NonZeroU64,
         queue_bytes: NonZeroU64,
     ) -> Self
@@ -193,7 +197,7 @@ impl StateStreamConfig {
         Self {
             directory: name.clone(),
             name,
-            cadence: None,
+            every_steps,
             fields: fields.into_iter().map(Into::into).collect(),
             max_chunk_bytes,
             queue_bytes,
@@ -207,16 +211,6 @@ impl StateStreamConfig {
     #[must_use]
     pub fn with_relative_directory(mut self, directory: impl Into<String>) -> Self {
         self.directory = directory.into();
-        self
-    }
-
-    /// Adds an optional human-readable cadence description to metadata.
-    ///
-    /// Cadence is descriptive only. The simulation remains responsible for
-    /// deciding when to call [`SystemStateWriter::record_state_to_stream`].
-    #[must_use]
-    pub fn with_cadence_description(mut self, cadence: impl Into<String>) -> Self {
-        self.cadence = Some(cadence.into());
         self
     }
 }
@@ -327,12 +321,12 @@ impl SystemStateWriterBuilder {
 /// This type is intentionally non-Clone. It owns the only writer handles and
 /// the only legal transition from `running` metadata to a terminal status.
 /// It owns no [`SystemState`] and never extends a payload borrow beyond one
-/// synchronous [`SystemStateWriter::record_state_to_stream`] call.
+/// synchronous [`SystemStateWriter::observe_state`] call.
 pub struct SystemStateWriter {
     root: PathBuf,
     stream_order: Vec<String>,
     manifest: Arc<RecordingManifest>,
-    encoders: HashMap<String, JsonStateRecordEncoder>,
+    streams: HashMap<String, ScheduledStateStream>,
     writer: Option<StateWriterWorker>,
     /// Held after writers so normal field drop keeps the lease until every
     /// worker has drained and released its manifest handle.
@@ -355,34 +349,38 @@ impl SystemStateWriter {
         self.stream_order.iter().map(String::as_str)
     }
 
-    /// Samples selected fields from one live state and transfers the encoded
-    /// record into that stream's bounded writer.
+    /// Offers the current live state to every configured sampling stream.
     ///
-    /// The encoder borrows payloads only during this call. Queue admission may
-    /// then block on owned encoded bytes, but the state borrow and every payload
-    /// borrow have already ended before writer backpressure begins.
+    /// The writer first reads only the state's integer step. Streams that are
+    /// not due perform no field lookup, payload borrow, serialization,
+    /// allocation, or queue operation. Every due stream encodes its selected
+    /// fields before bounded queue admission, so backpressure retains only
+    /// owned bytes and never extends a scientific payload borrow.
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::UnknownStateStream`] for an undeclared name, state or
-    /// payload serialization errors from borrowed encoding, queue-limit and
-    /// ordering errors, or the writer's authoritative terminal failure.
-    pub fn record_state_to_stream(
-        &self,
-        stream: &str,
-        state: &SystemState,
-    ) -> Result<(), StorageError> {
-        let encoder =
-            self.encoders
-                .get(stream)
-                .ok_or_else(|| StorageError::UnknownStateStream {
-                    stream: stream.to_owned(),
-                })?;
-        let record = encoder.encode(state)?;
-        self.writer
+    /// Returns state or payload serialization errors from a due stream,
+    /// queue-limit and ordering errors, or the writer's authoritative terminal
+    /// failure.
+    pub fn observe_state(&mut self, state: &SystemState) -> Result<(), StorageError> {
+        let step = state.simulation_time().step();
+        let writer = self
+            .writer
             .as_ref()
-            .expect("an active recording owns its writer worker")
-            .submit_record(stream, record)
+            .expect("an active recording owns its writer worker");
+        for name in &self.stream_order {
+            let stream = self
+                .streams
+                .get_mut(name)
+                .expect("stream order contains every configured stream");
+            if step % stream.every_steps.get() != 0 || stream.last_recorded_step == Some(step) {
+                continue;
+            }
+            let record = stream.encoder.encode(state)?;
+            writer.submit_record(name, record)?;
+            stream.last_recorded_step = Some(step);
+        }
+        Ok(())
     }
 
     /// Durably seals every record accepted earlier by one logical stream.
@@ -392,7 +390,7 @@ impl SystemStateWriter {
     /// metadata document, renamed to its sealed filename, and directory-synced
     /// before this method returns.
     pub fn flush_stream_to_storage(&self, stream: &str) -> Result<(), StorageError> {
-        if !self.encoders.contains_key(stream) {
+        if !self.streams.contains_key(stream) {
             return Err(StorageError::UnknownStateStream {
                 stream: stream.to_owned(),
             });
@@ -418,6 +416,42 @@ impl SystemStateWriter {
             return Err(error);
         }
         self.manifest.transition(RecordingStatus::Complete)
+    }
+
+    /// Records one final state to every stream exactly once, then completes.
+    ///
+    /// This terminal observation is independent of periodic cadence. A stream
+    /// already recorded at the same step is skipped, while a non-aligned final
+    /// step is encoded once. The writer therefore owns both periodic and final
+    /// sampling decisions; the simulation supplies only a borrowed state.
+    pub fn complete_recording_with_final_state(
+        mut self,
+        state: &SystemState,
+    ) -> Result<(), StorageError> {
+        self.record_final_state(state)?;
+        self.complete_recording()
+    }
+
+    /// Encodes the supplied terminal state for streams that lack this step.
+    fn record_final_state(&mut self, state: &SystemState) -> Result<(), StorageError> {
+        let step = state.simulation_time().step();
+        let writer = self
+            .writer
+            .as_ref()
+            .expect("an active recording owns its writer worker");
+        for name in &self.stream_order {
+            let stream = self
+                .streams
+                .get_mut(name)
+                .expect("stream order contains every configured stream");
+            if stream.last_recorded_step == Some(step) {
+                continue;
+            }
+            let record = stream.encoder.encode(state)?;
+            writer.submit_record(name, record)?;
+            stream.last_recorded_step = Some(step);
+        }
+        Ok(())
     }
 
     /// Drains every stream and atomically records an intentional failed run.
@@ -532,13 +566,20 @@ impl SystemStateWriter {
         manifest: Arc<RecordingManifest>,
         lease: RecordingLease,
     ) -> Result<Self, StorageError> {
-        let mut encoders = HashMap::with_capacity(streams.len());
+        let mut scheduled = HashMap::with_capacity(streams.len());
         let mut configs = Vec::with_capacity(streams.len());
         let mut stream_order = Vec::with_capacity(streams.len());
         for prepared in streams {
             let name = prepared.name;
             stream_order.push(name.clone());
-            encoders.insert(name, prepared.encoder);
+            scheduled.insert(
+                name,
+                ScheduledStateStream {
+                    encoder: prepared.encoder,
+                    every_steps: prepared.every_steps,
+                    last_recorded_step: None,
+                },
+            );
             configs.push(prepared.writer);
         }
         let writer = StateWriterWorker::start_new_recording(configs, Arc::clone(&manifest))?;
@@ -546,7 +587,7 @@ impl SystemStateWriter {
             root,
             stream_order,
             manifest,
-            encoders,
+            streams: scheduled,
             writer: Some(writer),
             _lease: lease,
         })
@@ -559,13 +600,20 @@ impl SystemStateWriter {
         manifest: Arc<RecordingManifest>,
         lease: RecordingLease,
     ) -> Result<Self, StorageError> {
-        let mut encoders = HashMap::with_capacity(streams.len());
+        let mut scheduled = HashMap::with_capacity(streams.len());
         let mut recovered_streams = Vec::with_capacity(streams.len());
         let mut stream_order = Vec::with_capacity(streams.len());
         for (prepared, seed) in streams {
             let name = prepared.name;
             stream_order.push(name.clone());
-            encoders.insert(name, prepared.encoder);
+            scheduled.insert(
+                name,
+                ScheduledStateStream {
+                    encoder: prepared.encoder,
+                    every_steps: prepared.every_steps,
+                    last_recorded_step: seed.last_index(),
+                },
+            );
             recovered_streams.push((prepared.writer, seed));
         }
         let writer = StateWriterWorker::continue_recovered_recording(
@@ -576,7 +624,7 @@ impl SystemStateWriter {
             root,
             stream_order,
             manifest,
-            encoders,
+            streams: scheduled,
             writer: Some(writer),
             _lease: lease,
         })
@@ -643,7 +691,7 @@ impl PreparedRecording {
             declarations.push(StateStreamMetadata {
                 name: config.name.clone(),
                 directory: config.directory.clone(),
-                cadence: config.cadence,
+                every_steps: config.every_steps.get(),
                 fields,
                 max_chunk_bytes: config.max_chunk_bytes.get(),
                 queue_bytes: config.queue_bytes.get(),
@@ -652,6 +700,7 @@ impl PreparedRecording {
             streams.push(PreparedStateStream {
                 name: config.name.clone(),
                 encoder,
+                every_steps: config.every_steps,
                 writer: StateStreamStorageConfig::new(
                     &config.name,
                     builder.root.join(&config.directory),
@@ -677,7 +726,15 @@ impl PreparedRecording {
 struct PreparedStateStream {
     name: String,
     encoder: JsonStateRecordEncoder,
+    every_steps: NonZeroU64,
     writer: StateStreamStorageConfig,
+}
+
+/// Runtime sampling policy and encoder for one logical stream.
+struct ScheduledStateStream {
+    encoder: JsonStateRecordEncoder,
+    every_steps: NonZeroU64,
+    last_recorded_step: Option<u64>,
 }
 
 /// Serialized authority over the sole mutable metadata document.

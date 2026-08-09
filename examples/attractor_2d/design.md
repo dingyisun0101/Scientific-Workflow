@@ -233,11 +233,14 @@ The writer exposes the three streams defined above: partial `trajectory` and
 `radius` streams at independent cadences, plus the complete `checkpoint`
 stream.
 
-The simulation decides when a sample is due. The writer serializes borrowed
-payloads, blocks when its finite byte queue is full, keeps records whole across
-chunk boundaries, and completes the recording before analysis begins. Time-axis
-metadata will identify the iteration index and physical time. User metadata
-will capture the resolved task index, `mu`, and fixed model parameters.
+Each stream stores a typed nonzero step cadence decoded from `fixed.json`. The
+model loop offers its state after every step; the writer checks time and returns
+without payload access for non-due streams. Due streams serialize borrowed
+payloads, block when the finite byte queue is full, and keep records whole
+across chunk boundaries. Completion receives the final state and records it
+only for streams that did not already accept that step. Time-axis metadata
+identifies the iteration index and physical time, while `every_steps` persists
+the machine-readable cadence once per stream.
 
 ## Readback and analysis contract
 

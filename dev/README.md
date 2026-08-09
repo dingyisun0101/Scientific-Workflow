@@ -29,6 +29,8 @@ making them suitable for large arrays and tensors.
 - Ordered state-series collection with strict shared-layout identity.
 - Lightweight copyable series views and field-level analysis mutation.
 - Borrowed JSON encoding without payload cloning.
+- Writer-owned per-stream step cadence with no payload access for skipped states.
+- Automatic exactly-once final-state sampling across cadence boundaries.
 - Exact finite-`f64` JSON reconstruction through Serde JSON's round-trip parser.
 - Finite byte- and record-bounded asynchronous writers.
 - Exact-byte automatic chunking with indivisible JSONL records.
@@ -326,20 +328,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = StateStreamConfig::new(
         "signal",
         ["population"],
+        NonZeroU64::new(1).unwrap(),
         NonZeroU64::new(64 * 1024 * 1024).unwrap(),
         NonZeroU64::new(256 * 1024 * 1024).unwrap(),
-    )
-    .with_cadence_description("every simulation step");
+    );
 
-    let writer = SystemStateWriter::builder("output/recording-001", &spec)
+    let mut writer = SystemStateWriter::builder("output/recording-001", &spec)
         .with_time_axis_metadata(TimeAxisMetadata::new("step").with_physical_time_name("time").with_physical_time_unit("s"))
         .add_state_stream(stream)
         .create_new_recording()?;
 
     let mut state = spec.create_empty_state(SimulationTime::from_step_and_physical_time(0, 0.0).unwrap());
     drop(state.insert_payload("population", vec![10.0_f64, 20.0, 30.0])?);
-    writer.record_state_to_stream("signal", &state)?;
-    writer.complete_recording()?;
+    writer.observe_state(&state)?;
+    writer.complete_recording_with_final_state(&state)?;
 
     let mut decoders = JsonPayloadDecoderRegistry::new();
     decoders.register_for_field("population", JsonVecF64Decoder)?;
@@ -350,9 +352,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`record_state_to_stream` resolves each selected key once and borrows its
-payload only while producing owned encoded bytes. It then applies bounded
-blocking backpressure through the recording's single queue and worker. Each
+`observe_state` checks each stream's typed step cadence before accessing any
+payload. Non-due streams perform no serialization or queue work. Due streams
+resolve each selected key once and borrow payloads only while producing owned
+encoded bytes, after which bounded blocking backpressure applies through the
+recording's single queue and worker. `complete_recording_with_final_state`
+records a non-aligned endpoint exactly once per stream before completion. Each
 chunk is synchronized, described in the sole
 metadata file, atomically renamed from `.jsonl.tmp` to `.jsonl`, and followed by
 a stream-directory sync. `flush_stream_to_storage(stream)` exposes this as an

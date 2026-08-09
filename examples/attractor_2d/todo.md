@@ -60,6 +60,9 @@ retains the development sequence as a concise record of completed scope.
   `state_recording`, and `recording_analysis`.
 - [x] Add a one-file standard-library Hopf reference and confirm bit-identical
   final step, time, point, and radius for all three tasks.
+- [x] Move periodic and final-state sampling decisions into
+  `SystemStateWriter`; the model loop now offers every state without cadence
+  branches.
 
 ## Packaging and verification
 

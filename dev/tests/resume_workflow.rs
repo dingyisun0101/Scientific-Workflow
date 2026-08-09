@@ -62,6 +62,7 @@ fn builder_with_chunk_limit(
     SystemStateWriter::builder(run, spec).add_state_stream(StateStreamConfig::new(
         "checkpoint",
         ["population", "space", "activity"],
+        NonZeroU64::new(1).unwrap(),
         NonZeroU64::new(max_chunk_bytes).unwrap(),
         NonZeroU64::new(1_000_000).unwrap(),
     ))
@@ -114,13 +115,9 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
     let run = workspace.run();
     let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
 
-    let output = builder(&run, &spec).create_new_recording().unwrap();
-    output
-        .record_state_to_stream("checkpoint", &state(&spec, 0))
-        .unwrap();
-    output
-        .record_state_to_stream("checkpoint", &state(&spec, 1))
-        .unwrap();
+    let mut output = builder(&run, &spec).create_new_recording().unwrap();
+    output.observe_state(&state(&spec, 0)).unwrap();
+    output.observe_state(&state(&spec, 1)).unwrap();
     output.complete_recording().unwrap();
 
     // Reproduce a crash before descriptor preparation: the real payload keeps
@@ -143,7 +140,7 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
         .write_all(br#"{"index":2,"physical":"#)
         .unwrap();
 
-    let (output, mut resumed) = builder(&run, &spec)
+    let (mut output, mut resumed) = builder(&run, &spec)
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .unwrap();
     assert_eq!(resumed.simulation_time().step(), 1);
@@ -172,9 +169,7 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
     );
 
     resumed = state(&spec, 2);
-    output
-        .record_state_to_stream("checkpoint", &resumed)
-        .unwrap();
+    output.observe_state(&resumed).unwrap();
     output.flush_stream_to_storage("checkpoint").unwrap();
     assert!(sealed.is_file());
     assert!(!open.exists());
@@ -202,10 +197,8 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     let run = workspace.run();
     let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
 
-    let output = builder(&run, &spec).create_new_recording().unwrap();
-    output
-        .record_state_to_stream("checkpoint", &state(&spec, 4))
-        .unwrap();
+    let mut output = builder(&run, &spec).create_new_recording().unwrap();
+    output.observe_state(&state(&spec, 4)).unwrap();
     output.complete_recording().unwrap();
 
     // Reproduce the narrow crash window after metadata preparation but before
@@ -217,7 +210,7 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     let open = run.join("checkpoint/chunk-000000.jsonl.tmp");
     fs::rename(&sealed, &open).unwrap();
 
-    let (output, resumed) = builder(&run, &spec)
+    let (mut output, resumed) = builder(&run, &spec)
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .unwrap();
     assert_eq!(resumed.simulation_time().step(), 4);
@@ -231,9 +224,7 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
         "[prepared] descriptor_verified=true rename_completed=true sealed_history_scanned=false lease_exclusive=true"
     );
 
-    output
-        .record_state_to_stream("checkpoint", &state(&spec, 5))
-        .unwrap();
+    output.observe_state(&state(&spec, 5)).unwrap();
     output.complete_recording().unwrap();
     let reader = StoredStateSeriesReader::open_completed_recording(&run, decoders()).unwrap();
     let series = reader.read_stream_as_state_series("checkpoint").unwrap();
@@ -259,15 +250,14 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
         SystemStateWriter::builder(&run, &spec).add_state_stream(StateStreamConfig::new(
             "signal",
             ["population"],
+            NonZeroU64::new(1).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
         ))
     };
 
-    let output = partial_builder().create_new_recording().unwrap();
-    output
-        .record_state_to_stream("signal", &state(&spec, 8))
-        .unwrap();
+    let mut output = partial_builder().create_new_recording().unwrap();
+    output.observe_state(&state(&spec, 8)).unwrap();
     output.complete_recording().unwrap();
     let mut manifest = metadata(&run);
     manifest["status"] = serde_json::json!({"state": "running"});
@@ -277,10 +267,8 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
         partial_builder().continue_recording_from_latest_checkpoint("signal", decoders()),
         Err(StorageError::IncompleteCheckpointStream { stream, .. }) if stream == "signal"
     ));
-    let output = partial_builder().continue_existing_recording().unwrap();
-    output
-        .record_state_to_stream("signal", &state(&spec, 9))
-        .unwrap();
+    let mut output = partial_builder().continue_existing_recording().unwrap();
+    output.observe_state(&state(&spec, 9)).unwrap();
     output.complete_recording().unwrap();
 
     let mut population_decoder = JsonPayloadDecoderRegistry::new();
@@ -305,11 +293,9 @@ fn several_sealed_chunks_are_trusted_before_recovering_only_the_open_tail() {
     let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
     let recording_builder = || builder_with_chunk_limit(&run, &spec, 1);
 
-    let output = recording_builder().create_new_recording().unwrap();
+    let mut output = recording_builder().create_new_recording().unwrap();
     for index in 0..3 {
-        output
-            .record_state_to_stream("checkpoint", &state(&spec, index))
-            .unwrap();
+        output.observe_state(&state(&spec, index)).unwrap();
     }
     output.complete_recording().unwrap();
 
@@ -327,15 +313,13 @@ fn several_sealed_chunks_are_trusted_before_recovering_only_the_open_tail() {
     fs::write(&sealed_zero, b"deliberately invalid sealed history\n").unwrap();
     fs::rename(&sealed_two, &open_two).unwrap();
 
-    let (output, resumed) = recording_builder()
+    let (mut output, resumed) = recording_builder()
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .expect("resume must trust sealed history and decode only the open tail");
     assert_eq!(resumed.simulation_time().step(), 2);
     assert_eq!(resumed.payload::<String>("activity").unwrap(), "step-2");
 
-    output
-        .record_state_to_stream("checkpoint", &state(&spec, 3))
-        .unwrap();
+    output.observe_state(&state(&spec, 3)).unwrap();
     output.complete_recording().unwrap();
 
     let completed = metadata(&run);

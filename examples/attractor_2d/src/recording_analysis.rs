@@ -8,11 +8,19 @@ use crate::AppResult;
 use crate::hopf_model::{HopfModel, POINT_FIELD, RADIUS_FIELD};
 use crate::project_setup::TaskSettings;
 use crate::state_recording::{
-    CHECKPOINT_STREAM, CompletedRecording, RADIUS_STREAM, SampleCounts, TRAJECTORY_STREAM,
+    CHECKPOINT_STREAM, CompletedRecording, RADIUS_STREAM, TRAJECTORY_STREAM,
 };
 
 const PLOT_WIDTH: usize = 41;
 const PLOT_HEIGHT: usize = 17;
+
+/// Numbers of reconstructed records in the three logical streams.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SampleCounts {
+    pub(crate) trajectory: u64,
+    pub(crate) radius: u64,
+    pub(crate) checkpoint: u64,
+}
 
 /// User-facing metrics calculated from the reconstructed series.
 pub(crate) struct AnalysisSummary {
@@ -56,8 +64,6 @@ pub(crate) fn analyze_recording(
         radius: radius.len() as u64,
         checkpoint: checkpoint.len() as u64,
     };
-    assert_eq!(samples, recording.samples);
-
     let points = trajectory
         .iter()
         .map(|state| {

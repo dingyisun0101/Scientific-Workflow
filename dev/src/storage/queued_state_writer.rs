@@ -131,6 +131,11 @@ impl RecoveredStateStream {
     pub(crate) fn latest_open_record(&self) -> Option<&RecoveredUnsealedRecord> {
         self.latest_open_record.as_ref()
     }
+
+    /// Returns the newest recovered simulation step, if the stream is nonempty.
+    pub(crate) fn last_index(&self) -> Option<u64> {
+        self.last_index
+    }
 }
 
 /// File range of the latest complete record in a recovered open payload.

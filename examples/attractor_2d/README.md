@@ -167,10 +167,12 @@ Step 0 and step 5000 are included. `trajectory` and `radius` demonstrate partial
 state recording, while `checkpoint` contains every payload required to restore
 a complete state.
 
-The simulation decides when each sample is due. Encoding borrows the selected
-payloads only for the duration of submission. The writer then queues owned JSON
-records, blocks under byte-bounded backpressure, keeps individual records whole
-across chunk rollover, and commits completion explicitly.
+The writer owns each cadence decoded from `fixed.json`. The evolution loop
+offers the current state after every step; non-due streams return before field
+lookup or serialization. Due streams borrow selected payloads only for
+encoding, then queue owned JSON records under byte-bounded backpressure. Final
+completion offers the endpoint once more so a cadence-misaligned final state is
+recorded exactly once. Records remain whole across chunk rollover.
 
 ## Run the example
 

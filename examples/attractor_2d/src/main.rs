@@ -72,11 +72,8 @@ fn run() -> AppResult<()> {
         let time = model.state().simulation_time();
         let point = model.point()?;
         println!(
-            "[simulation] task={} trajectory={} radius={} checkpoints={} final_step={} final_time={} final_point=[{}, {}] final_radius={}",
+            "[simulation] task={} final_step={} final_time={} final_point=[{}, {}] final_radius={}",
             settings.task_index,
-            recording.samples.trajectory,
-            recording.samples.radius,
-            recording.samples.checkpoint,
             time.step(),
             time.physical_time()
                 .expect("the model tracks physical time"),
