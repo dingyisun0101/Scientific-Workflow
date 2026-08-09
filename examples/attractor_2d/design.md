@@ -245,13 +245,13 @@ the machine-readable cadence once per stream.
 ## Readback and analysis contract
 
 After a task recording is complete, the example creates a
-`JsonPayloadDecoderRegistry` and registers:
+`JsonPayloadDecoderRegistry` and fluently registers direct Serde JSON decoding
+for:
 
-- `JsonVecF64Decoder` for `point`; and
-- a scalar `f64` decoder for `radius`.
+- `Vec<f64>` under `point`; and
+- `f64` under `radius`.
 
-The scalar decoder is example-local and demonstrates the public extension
-contract without enlarging the library's small default-decoder set.
+Specialized payloads would instead use the registry's custom decoder contract.
 
 `StoredStateSeriesReader` reconstructs all three streams. Analysis uses owned
 `StateSeries` values to report:
@@ -453,8 +453,9 @@ the bounded result summary. It contains no scientific kernel, decoder,
 configuration parser, writer-construction details, or reusable data model.
 
 The modules exchange small application-level values with explicit ownership.
-`project_setup.rs` produces decoded task plans; `hopf_model.rs` owns and mutates
-each live `SystemState`; `state_recording.rs` borrows that state only long
+`project_setup.rs` loads shared project resources and prepares each task on
+demand; `hopf_model.rs` owns and mutates each live `SystemState`;
+`state_recording.rs` borrows that state only long
 enough to encode due samples; and `recording_analysis.rs` receives the
 completed recording path plus an immutable borrow of the same completed model.
 None of these boundaries clones scientific payload allocations or creates a
@@ -470,9 +471,10 @@ After completion, logging and analysis borrow the unchanged state directly
 from `HopfModel`; they never extract, clone, or mirror its payloads into a
 second result structure.
 
-The name deliberately omits `Task`: task identity and swept constants belong
-to `TaskPlan` and `TaskSettings`, while `HopfModel` represents the scientific
-system itself. It also avoids the generic `AttractorModel`, which would hide
+The name deliberately omits `Task`: task identity and recording settings
+remain outside the model, while `HopfModel` owns the immutable coefficients
+required by its own evolution. It represents the scientific system itself and
+avoids the generic `AttractorModel`, which would hide
 the exact equation family demonstrated by this project. In another scientific
 project, the corresponding state-owning type should use that project's domain
 name rather than inherit a framework-level `TaskSimulation` abstraction.
@@ -517,3 +519,31 @@ as IEEE-754 bit patterns. Tasks `mu = -0.25`, `0.25`, and `1.0` all match in
 every compared field. This validates that the workflow abstractions preserve
 the naive kernel's final numerical result; it does not attempt to duplicate or
 validate the workflow's storage behavior.
+
+## Implemented concise API
+
+The example retains explicit state ownership and evolution while removing
+repeated writer limits, manual metadata-map assembly, and ordinary decoder
+boilerplate. Its common-path writer shape is:
+
+```text
+SystemStateWriter::builder(directory, schema)
+    .with_task_parameters(task)
+    .with_shared_stream_limits(chunk_bytes, queue_bytes)
+    .add_periodic_state_stream("trajectory", ["point"], trajectory_every)
+    .add_periodic_state_stream("radius", ["radius"], radius_every)
+    .add_periodic_state_stream(
+        "checkpoint",
+        ["point", "radius"],
+        checkpoint_every,
+    )
+    .create_new_recording()
+```
+
+Readback uses a fluent registry with generic Serde JSON decoding for ordinary
+payloads and explicit custom decoders only for domain types. Tasks are
+generated lazily rather than collected into a redundant task-plan vector,
+`NonZeroU64` settings decode directly, and `HopfModel` owns `mu`, `omega`, and
+its time step so callers simply invoke `advance()`. The existing `observe_state` and
+`complete_recording_with_final_state` calls are already the desired runtime
+API and should not be collapsed further.

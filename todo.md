@@ -10,17 +10,14 @@ implemented architecture and per-method references live in `design.md`.
   and large selected-field counts; functional tests already verify ownership,
   encoded output, and error semantics.
 
-## Deferred decoder catalog
+## Deferred specialized decoders
 
-The main-development defaults are intentionally limited to:
-
-- `JsonStringDecoder`;
-- `JsonVecF64Decoder`.
-
-After core development, consider additional decoders only when their concrete
-wire conversion or validation behavior is well defined. Application-specific
-payloads, including PiP tensors, already work through registered closures or
-named `JsonPayloadDecoder<T>` implementations.
+Ordinary Serde JSON payloads now use
+`JsonPayloadDecoderRegistry::with_json_field::<T>` and require no dedicated
+decoder type. Add named decoders only when their concrete wire conversion,
+configuration, or validation behavior differs from direct Serde decoding.
+Application-specific payloads, including PiP tensors, already work through
+registered closures or named `JsonPayloadDecoder<T>` implementations.
 
 ## Deferred PiP work
 

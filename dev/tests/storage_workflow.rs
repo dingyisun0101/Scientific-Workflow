@@ -164,8 +164,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         .with_time_axis_metadata(
             TimeAxisMetadata::new("simulation_step")
                 .with_step_unit("step")
-                .with_physical_time_name("time")
-                .with_physical_time_unit("s"),
+                .with_physical_axis("time", "s"),
         )
         .with_user_metadata(annotations)
         .add_state_stream(signal)
@@ -305,13 +304,12 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .unwrap()
             .is_empty()
     );
-    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(3);
+    let decoders = JsonPayloadDecoderRegistry::with_capacity(3);
     assert!(decoders.is_empty());
-    decoders
-        .register_for_field("population", JsonVecF64Decoder)
-        .unwrap();
-    decoders
-        .register_for_field("activity", JsonStringDecoder)
+    let mut decoders = decoders
+        .with_json_field::<Vec<f64>>("population")
+        .unwrap()
+        .with_json_field::<String>("activity")
         .unwrap();
     decoders
         .register_for_field::<Tensor<u64, Dense>, _>("space", |raw: &str| serde_json::from_str(raw))
@@ -379,6 +377,36 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         all[1].1.len(),
         clones.load(Ordering::SeqCst)
     );
+
+    let project = ProjectConfig::load(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/configuration/cartesian_project"),
+    )
+    .unwrap();
+    let task = project.parameters().task(0).unwrap();
+    let task_metadata_run = workspace.root.join("task-metadata-run");
+    SystemStateWriter::builder(&task_metadata_run, &spec)
+        .with_task_parameters(&task)
+        .with_shared_stream_limits(
+            NonZeroU64::new(4_096).unwrap(),
+            NonZeroU64::new(16_384).unwrap(),
+        )
+        .add_periodic_state_stream(
+            "checkpoint",
+            ["population", "space", "activity"],
+            NonZeroU64::new(1).unwrap(),
+        )
+        .create_new_recording()
+        .unwrap()
+        .complete_recording()
+        .unwrap();
+    let task_metadata: Value =
+        serde_json::from_slice(&fs::read(task_metadata_run.join("metadata.json")).unwrap())
+            .unwrap();
+    assert_eq!(task_metadata["user_metadata"]["task_index"], 0);
+    assert_eq!(task_metadata["user_metadata"]["temperature"], 280.0);
+    assert_eq!(task_metadata["user_metadata"]["seed"], 7);
+    println!("[task-metadata] task_index=0 temperature=280 seed=7");
     println!("[result] storage_workflow=passed");
 }
 

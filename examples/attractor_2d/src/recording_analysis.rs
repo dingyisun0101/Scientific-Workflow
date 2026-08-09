@@ -1,12 +1,9 @@
 //! Reconstructs completed streams and summarizes the recorded dynamics.
 
-use std::num::ParseFloatError;
-
 use scientific_workflow::prelude::*;
 
 use crate::AppResult;
 use crate::hopf_model::{HopfModel, POINT_FIELD, RADIUS_FIELD};
-use crate::project_setup::TaskSettings;
 use crate::state_recording::{
     CHECKPOINT_STREAM, CompletedRecording, RADIUS_STREAM, TRAJECTORY_STREAM,
 };
@@ -33,26 +30,14 @@ pub(crate) struct AnalysisSummary {
     pub(crate) phase_portrait: String,
 }
 
-/// Minimal application-defined decoder for the scalar radius field.
-struct JsonF64Decoder;
-
-impl JsonPayloadDecoder<f64> for JsonF64Decoder {
-    type Error = ParseFloatError;
-
-    fn decode_json_payload(&self, raw_json: &str) -> Result<f64, Self::Error> {
-        raw_json.parse()
-    }
-}
-
 /// Reads all streams, verifies their final state, and computes plot metrics.
 pub(crate) fn analyze_recording(
-    settings: &TaskSettings,
     model: &HopfModel,
     recording: &CompletedRecording,
 ) -> AppResult<AnalysisSummary> {
-    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(2);
-    decoders.register_for_field::<Vec<f64>, _>(POINT_FIELD, JsonVecF64Decoder)?;
-    decoders.register_for_field::<f64, _>(RADIUS_FIELD, JsonF64Decoder)?;
+    let decoders = JsonPayloadDecoderRegistry::new()
+        .with_json_field::<Vec<f64>>(POINT_FIELD)?
+        .with_json_field::<f64>(RADIUS_FIELD)?;
 
     let reader = StoredStateSeriesReader::open_completed_recording(&recording.directory, decoders)?;
     let trajectory = reader.read_stream_as_state_series(TRAJECTORY_STREAM)?;
@@ -86,7 +71,7 @@ pub(crate) fn analyze_recording(
         y_bounds,
         radius_bounds,
         final_radius: *radii.last().expect("the radius stream contains samples"),
-        expected_attractor_radius: settings.mu.max(0.0).sqrt(),
+        expected_attractor_radius: model.mu().max(0.0).sqrt(),
         phase_portrait: render_phase_portrait(&points, x_bounds, y_bounds),
     })
 }

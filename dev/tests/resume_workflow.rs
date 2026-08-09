@@ -59,22 +59,23 @@ fn builder_with_chunk_limit(
     spec: &SystemStateSchema,
     max_chunk_bytes: u64,
 ) -> SystemStateWriterBuilder {
-    SystemStateWriter::builder(run, spec).add_state_stream(StateStreamConfig::new(
-        "checkpoint",
-        ["population", "space", "activity"],
-        NonZeroU64::new(1).unwrap(),
-        NonZeroU64::new(max_chunk_bytes).unwrap(),
-        NonZeroU64::new(1_000_000).unwrap(),
-    ))
+    SystemStateWriter::builder(run, spec)
+        .with_shared_stream_limits(
+            NonZeroU64::new(max_chunk_bytes).unwrap(),
+            NonZeroU64::new(1_000_000).unwrap(),
+        )
+        .add_periodic_state_stream(
+            "checkpoint",
+            ["population", "space", "activity"],
+            NonZeroU64::new(1).unwrap(),
+        )
 }
 
 fn decoders() -> JsonPayloadDecoderRegistry {
-    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(3);
-    decoders
-        .register_for_field("population", JsonVecF64Decoder)
-        .unwrap();
-    decoders
-        .register_for_field("activity", JsonStringDecoder)
+    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(3)
+        .with_json_field::<Vec<f64>>("population")
+        .unwrap()
+        .with_json_field::<String>("activity")
         .unwrap();
     decoders
         .register_for_field::<Tensor<u64, Dense>, _>("space", |raw: &str| serde_json::from_str(raw))

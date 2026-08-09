@@ -63,6 +63,12 @@ retains the development sequence as a concise record of completed scope.
 - [x] Move periodic and final-state sampling decisions into
   `SystemStateWriter`; the model loop now offers every state without cadence
   branches.
+- [x] Adopt shared stream limits, concise periodic stream declarations,
+  automatic task metadata, paired physical-axis setup, and generic Serde JSON
+  decoder registration.
+- [x] Generate tasks lazily, decode `NonZeroU64` settings directly, and make
+  `HopfModel::advance()` self-contained by retaining its immutable ODE
+  coefficients.
 
 ## Packaging and verification
 

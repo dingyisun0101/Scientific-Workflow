@@ -40,7 +40,7 @@ pub(crate) fn record_model(
 
     writer.observe_state(model.state())?;
     for _ in 0..settings.total_steps {
-        model.advance(settings)?;
+        model.advance()?;
         writer.observe_state(model.state())?;
     }
 
@@ -55,42 +55,20 @@ fn build_writer(
     settings: &TaskSettings,
     parameters: &TaskParameters,
 ) -> Result<SystemStateWriter, StorageError> {
-    let user_metadata = parameters
-        .iter()
-        .map(|(key, value)| (key.to_owned(), value.clone()))
-        .collect();
     let time_axis = TimeAxisMetadata::new("step")
         .with_step_unit("iteration")
-        .with_physical_time_name("time")
-        .with_physical_time_unit("model_time");
-
-    let trajectory = StateStreamConfig::new(
-        TRAJECTORY_STREAM,
-        [POINT_FIELD],
-        settings.trajectory_every,
-        settings.maximum_chunk_bytes,
-        settings.writer_queue_bytes,
-    );
-    let radius = StateStreamConfig::new(
-        RADIUS_STREAM,
-        [RADIUS_FIELD],
-        settings.radius_every,
-        settings.maximum_chunk_bytes,
-        settings.writer_queue_bytes,
-    );
-    let checkpoint = StateStreamConfig::new(
-        CHECKPOINT_STREAM,
-        [POINT_FIELD, RADIUS_FIELD],
-        settings.checkpoint_every,
-        settings.maximum_chunk_bytes,
-        settings.writer_queue_bytes,
-    );
+        .with_physical_axis("time", "model_time");
 
     SystemStateWriter::builder(directory, schema)
         .with_time_axis_metadata(time_axis)
-        .with_user_metadata(user_metadata)
-        .add_state_stream(trajectory)
-        .add_state_stream(radius)
-        .add_state_stream(checkpoint)
+        .with_task_parameters(parameters)
+        .with_shared_stream_limits(settings.maximum_chunk_bytes, settings.writer_queue_bytes)
+        .add_periodic_state_stream(TRAJECTORY_STREAM, [POINT_FIELD], settings.trajectory_every)
+        .add_periodic_state_stream(RADIUS_STREAM, [RADIUS_FIELD], settings.radius_every)
+        .add_periodic_state_stream(
+            CHECKPOINT_STREAM,
+            [POINT_FIELD, RADIUS_FIELD],
+            settings.checkpoint_every,
+        )
         .create_new_recording()
 }

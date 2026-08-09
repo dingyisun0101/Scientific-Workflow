@@ -231,7 +231,8 @@ surface.
 - Assert no per-chunk metadata sidecars or temporary files remain.
 - Assert every sealed chunk is visible only under its deterministic final name;
   this exercises the successful file-sync, rename, and directory-sync path.
-- Register `JsonVecF64Decoder` and `JsonStringDecoder` under exact keys.
+- Register ordinary vector and string payloads through `with_json_field` under
+  exact keys.
 - Register an application-provided PiP tensor decoder under its exact key.
 - Open a completed run, enumerate streams, read one stream, and read all
   streams.
@@ -244,11 +245,14 @@ surface.
 Public run configuration and lifecycle:
 
 - `TimeAxisMetadata::new`, `default`, `with_step_unit`,
-  `with_physical_time_name`, and `with_physical_time_unit`;
+  `with_physical_time_name`, `with_physical_time_unit`, and
+  `with_physical_axis`;
 - `StateStreamConfig::new` with typed nonzero cadence and
   `with_relative_directory`;
 - `SystemStateWriterBuilder::new`, `with_time_axis_metadata`,
-  `with_user_metadata`, `add_state_stream`, and `create_new_recording`;
+  `with_user_metadata`, `with_task_parameters`, `with_shared_stream_limits`,
+  `add_state_stream`, `add_periodic_state_stream`, and
+  `create_new_recording`;
 - `SystemStateWriter::builder`, `recording_directory`, `stream_names`,
   `observe_state`, `flush_stream_to_storage`, `complete_recording`,
   `complete_recording_with_final_state`, and `mark_recording_failed` across the
@@ -266,7 +270,7 @@ Decoder structures:
 
 - `JsonPayloadDecoder::decode_json_payload` through both default and custom decoders;
 - `JsonPayloadDecoderRegistry::new`, `with_capacity`, `register_for_field`,
-  `len`, `is_empty`, `has_decoder_for_field`, and
+  `with_json_field`, `len`, `is_empty`, `has_decoder_for_field`, and
   `registered_field_names`;
 - crate-private coverage and insertion paths through complete reader dispatch;
 - `JsonVecF64Decoder` and `JsonStringDecoder`, including empty values, escaped text,

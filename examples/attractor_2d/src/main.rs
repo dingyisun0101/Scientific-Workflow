@@ -14,8 +14,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::process;
 
-use hopf_model::HopfModel;
-use project_setup::{ProjectPlan, TaskPlan, create_execution_directory, load_project};
+use project_setup::{ProjectSetup, create_execution_directory, load_project, prepare_task};
 use recording_analysis::analyze_recording;
 use state_recording::record_model;
 
@@ -36,38 +35,36 @@ fn main() {
 /// Sequences the full project without implementing any individual stage.
 fn run() -> AppResult<()> {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let ProjectPlan {
+    let ProjectSetup {
+        project,
         schema,
-        tasks,
-        configuration_directory,
         recording_root,
     } = load_project(&project_root)?;
-    let first = tasks
-        .first()
-        .expect("the checked-in sweep contains at least one task");
+    let task_count = project.parameters().task_count();
+    let first = project.parameters().task(0)?;
+    let model_name: String = first.decode_value("model_name")?;
+    let total_steps: u64 = first.decode_value("total_steps")?;
 
     println!(
         "[project] model={} tasks={} steps={} fields={} config={}",
-        first.settings.model_name,
-        tasks.len(),
-        first.settings.total_steps,
+        model_name,
+        task_count,
+        total_steps,
         schema.len(),
-        configuration_directory.display()
+        project.configuration_directory().display()
     );
 
     let execution_root = create_execution_directory(&recording_root)?;
-    for plan in tasks {
-        let TaskPlan {
-            parameters,
-            settings,
-            initial_point,
-        } = plan;
+    for parameters in project.parameters().tasks() {
+        let (mut model, settings) = prepare_task(&schema, &parameters)?;
         println!(
             "[task] index={} mu={} omega={} dt={}",
-            settings.task_index, settings.mu, settings.omega, settings.time_step
+            settings.task_index,
+            model.mu(),
+            model.omega(),
+            model.time_step()
         );
 
-        let mut model = HopfModel::new(&schema, initial_point)?;
         let recording = record_model(&schema, &execution_root, &parameters, &settings, &mut model)?;
         let time = model.state().simulation_time();
         let point = model.point()?;
@@ -87,7 +84,7 @@ fn run() -> AppResult<()> {
             recording.directory.display()
         );
 
-        let analysis = analyze_recording(&settings, &model, &recording)?;
+        let analysis = analyze_recording(&model, &recording)?;
         println!(
             "[analysis] task={} trajectory={} radius={} checkpoints={} x=[{}, {}] y=[{}, {}] radius=[{}, {}] final_radius={} expected_radius={}",
             settings.task_index,

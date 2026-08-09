@@ -325,17 +325,17 @@ use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
-    let stream = StateStreamConfig::new(
-        "signal",
-        ["population"],
-        NonZeroU64::new(1).unwrap(),
-        NonZeroU64::new(64 * 1024 * 1024).unwrap(),
-        NonZeroU64::new(256 * 1024 * 1024).unwrap(),
-    );
-
     let mut writer = SystemStateWriter::builder("output/recording-001", &spec)
-        .with_time_axis_metadata(TimeAxisMetadata::new("step").with_physical_time_name("time").with_physical_time_unit("s"))
-        .add_state_stream(stream)
+        .with_time_axis_metadata(TimeAxisMetadata::new("step").with_physical_axis("time", "s"))
+        .with_shared_stream_limits(
+            NonZeroU64::new(64 * 1024 * 1024).unwrap(),
+            NonZeroU64::new(256 * 1024 * 1024).unwrap(),
+        )
+        .add_periodic_state_stream(
+            "signal",
+            ["population"],
+            NonZeroU64::new(1).unwrap(),
+        )
         .create_new_recording()?;
 
     let mut state = spec.create_empty_state(SimulationTime::from_step_and_physical_time(0, 0.0).unwrap());
@@ -343,8 +343,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer.observe_state(&state)?;
     writer.complete_recording_with_final_state(&state)?;
 
-    let mut decoders = JsonPayloadDecoderRegistry::new();
-    decoders.register_for_field("population", JsonVecF64Decoder)?;
+    let decoders = JsonPayloadDecoderRegistry::new()
+        .with_json_field::<Vec<f64>>("population")?;
     let series = StoredStateSeriesReader::open_completed_recording("output/recording-001", decoders)?
         .read_stream_as_state_series("signal")?;
     assert_eq!(series.len(), 1);

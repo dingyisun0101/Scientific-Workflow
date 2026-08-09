@@ -208,8 +208,8 @@ The complete run reports structured output resembling:
 
 After each writer reaches completed status, the application:
 
-- registers the built-in `Vec<f64>` decoder for `point` and an example-local
-  `f64` decoder for `radius`;
+- registers direct Serde JSON decoding for `Vec<f64>` under `point` and `f64`
+  under `radius`;
 - reconstructs trajectory, radius, and checkpoint `StateSeries` values;
 - calculates coordinate and radius bounds;
 - reports the continuous model's expected asymptotic radius;

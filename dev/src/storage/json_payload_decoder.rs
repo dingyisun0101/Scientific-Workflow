@@ -26,6 +26,7 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::system_state::{StateError, SystemState};
 
@@ -92,6 +93,27 @@ impl JsonPayloadDecoderRegistry {
         Self {
             entries: HashMap::with_capacity(capacity),
         }
+    }
+
+    /// Adds a field decoded directly through Serde JSON into `T`.
+    ///
+    /// This is the concise path for payload types whose JSON representation
+    /// already matches their Rust representation. Specialized decoders remain
+    /// available through [`JsonPayloadDecoderRegistry::register_for_field`]
+    /// when conversion requires configuration, validation, or a different
+    /// wire shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same empty-key or duplicate-key errors as
+    /// [`JsonPayloadDecoderRegistry::register_for_field`]. Payload parse
+    /// failures are reported later with their field context by the reader.
+    pub fn with_json_field<T>(mut self, key: impl Into<String>) -> Result<Self, StorageError>
+    where
+        T: DeserializeOwned + Serialize + Clone + Send + 'static,
+    {
+        self.register_for_field::<T, _>(key, |raw_json: &str| serde_json::from_str::<T>(raw_json))?;
+        Ok(self)
     }
 
     /// Registers one typed decoder under one exact state field key.

@@ -56,6 +56,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use fs2::FileExt;
 use serde_json::{Map, Value};
 
+use crate::configuration::TaskParameters;
 use crate::system_state::{SystemState, SystemStateSchema};
 
 mod error;
@@ -137,6 +138,14 @@ impl TimeAxisMetadata {
         self
     }
 
+    /// Declares the physical-time name and unit together.
+    #[must_use]
+    pub fn with_physical_axis(mut self, name: impl Into<String>, unit: impl Into<String>) -> Self {
+        self.physical_time_name = Some(name.into());
+        self.physical_time_unit = Some(unit.into());
+        self
+    }
+
     /// Converts public configuration into the private persisted representation.
     fn into_stored(self) -> StoredTimeAxis {
         StoredTimeAxis {
@@ -170,8 +179,7 @@ pub struct StateStreamConfig {
     directory: String,
     every_steps: NonZeroU64,
     fields: Vec<String>,
-    max_chunk_bytes: NonZeroU64,
-    queue_bytes: NonZeroU64,
+    storage_limits: Option<(NonZeroU64, NonZeroU64)>,
 }
 
 impl StateStreamConfig {
@@ -199,8 +207,23 @@ impl StateStreamConfig {
             name,
             every_steps,
             fields: fields.into_iter().map(Into::into).collect(),
-            max_chunk_bytes,
-            queue_bytes,
+            storage_limits: Some((max_chunk_bytes, queue_bytes)),
+        }
+    }
+
+    /// Creates a periodic stream that inherits the writer-wide storage limits.
+    fn periodic<I, K>(name: impl Into<String>, fields: I, every_steps: NonZeroU64) -> Self
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        let name = name.into();
+        Self {
+            directory: name.clone(),
+            name,
+            every_steps,
+            fields: fields.into_iter().map(Into::into).collect(),
+            storage_limits: None,
         }
     }
 
@@ -227,6 +250,7 @@ pub struct SystemStateWriterBuilder {
     spec: SystemStateSchema,
     time: TimeAxisMetadata,
     user_metadata: Map<String, Value>,
+    shared_stream_limits: Option<(NonZeroU64, NonZeroU64)>,
     streams: Vec<StateStreamConfig>,
 }
 
@@ -241,6 +265,7 @@ impl SystemStateWriterBuilder {
             spec: spec.clone(),
             time: TimeAxisMetadata::default(),
             user_metadata: Map::new(),
+            shared_stream_limits: None,
             streams: Vec::new(),
         }
     }
@@ -263,6 +288,40 @@ impl SystemStateWriterBuilder {
         self
     }
 
+    /// Uses one chunk target and one bounded-queue budget for concise stream declarations.
+    ///
+    /// Limits supplied directly through [`StateStreamConfig::new`] remain
+    /// stream-specific and take precedence. Streams added through
+    /// [`SystemStateWriterBuilder::add_periodic_state_stream`] require these
+    /// shared limits.
+    #[must_use]
+    pub fn with_shared_stream_limits(
+        mut self,
+        max_chunk_bytes: NonZeroU64,
+        queue_bytes: NonZeroU64,
+    ) -> Self {
+        self.shared_stream_limits = Some((max_chunk_bytes, queue_bytes));
+        self
+    }
+
+    /// Records one resolved task dictionary as the recording's user metadata.
+    ///
+    /// Fixed and swept values retain their resolved JSON representation.
+    /// The synthetic `task_index` entry is always set from the task itself and
+    /// therefore replaces any same-named input entry.
+    #[must_use]
+    pub fn with_task_parameters(mut self, parameters: &TaskParameters) -> Self {
+        self.user_metadata = parameters
+            .iter()
+            .map(|(key, value)| (key.to_owned(), value.clone()))
+            .collect();
+        self.user_metadata.insert(
+            "task_index".to_owned(),
+            Value::from(parameters.task_index()),
+        );
+        self
+    }
+
     /// Appends one logical stream declaration in deterministic metadata order.
     ///
     /// Duplicate names or directories are reported at start so fluent builder
@@ -270,6 +329,28 @@ impl SystemStateWriterBuilder {
     #[must_use]
     pub fn add_state_stream(mut self, stream: StateStreamConfig) -> Self {
         self.streams.push(stream);
+        self
+    }
+
+    /// Adds a cadence-controlled stream using writer-wide storage limits.
+    ///
+    /// The logical name is also its relative output directory. Applications
+    /// needing a different directory or per-stream limits can use
+    /// [`SystemStateWriterBuilder::add_state_stream`] with an explicit
+    /// [`StateStreamConfig`].
+    #[must_use]
+    pub fn add_periodic_state_stream<I, K>(
+        mut self,
+        name: impl Into<String>,
+        fields: I,
+        every_steps: NonZeroU64,
+    ) -> Self
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        self.streams
+            .push(StateStreamConfig::periodic(name, fields, every_steps));
         self
     }
 
@@ -674,6 +755,16 @@ impl PreparedRecording {
                 });
             }
 
+            let (max_chunk_bytes, queue_bytes) = config
+                .storage_limits
+                .or(builder.shared_stream_limits)
+                .ok_or_else(|| StorageError::InvalidConfiguration {
+                    setting: "stream.storage_limits",
+                    reason: format!(
+                        "stream `{}` has no explicit limits and the writer has no shared limits",
+                        config.name
+                    ),
+                })?;
             let encoder = JsonStateRecordEncoder::new(&config.name, &builder.spec, &config.fields)?;
             let fields = encoder
                 .fields()
@@ -693,8 +784,8 @@ impl PreparedRecording {
                 directory: config.directory.clone(),
                 every_steps: config.every_steps.get(),
                 fields,
-                max_chunk_bytes: config.max_chunk_bytes.get(),
-                queue_bytes: config.queue_bytes.get(),
+                max_chunk_bytes: max_chunk_bytes.get(),
+                queue_bytes: queue_bytes.get(),
                 chunks: Vec::new(),
             });
             streams.push(PreparedStateStream {
@@ -704,8 +795,8 @@ impl PreparedRecording {
                 writer: StateStreamStorageConfig::new(
                     &config.name,
                     builder.root.join(&config.directory),
-                    config.max_chunk_bytes,
-                    config.queue_bytes,
+                    max_chunk_bytes,
+                    queue_bytes,
                 )?,
             });
         }

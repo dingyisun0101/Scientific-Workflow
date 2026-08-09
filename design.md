@@ -2150,6 +2150,16 @@ Binds one exact key to one typed decoder, rejecting empty or duplicate keys.
 
     application reader configuration -> JsonPayloadDecoderRegistry::register_for_field
 
+#### JsonPayloadDecoderRegistry::with_json_field
+
+Fluently registers ordinary `DeserializeOwned + Serialize + Clone + Send`
+payloads using their direct Serde JSON representation. Specialized,
+configured, or validating conversions continue to use `register_for_field`.
+
+##### Reference
+
+    common reader setup -> JsonPayloadDecoderRegistry::with_json_field -> register_for_field -> serde_json::from_str
+
 #### JsonPayloadDecoderRegistry::len / is_empty / has_decoder_for_field / registered_field_names
 
 Expose registry configuration without decoder internals.
@@ -2385,6 +2395,14 @@ Fluently declares the physical unit; startup requires a physical name.
 
     downstream run configuration -> TimeAxisMetadata::with_physical_time_unit
 
+#### `TimeAxisMetadata::with_physical_axis`
+
+Declares the physical-coordinate name and unit together for the common case.
+
+##### Reference
+
+    downstream run configuration -> TimeAxisMetadata::with_physical_axis
+
 #### `TimeAxisMetadata::default`
 
 Uses `index` with no unit or physical coordinate.
@@ -2403,9 +2421,11 @@ Moves public configuration into the private versioned metadata representation.
 
 ### `StateStreamConfig`
 
-Owns one logical stream's exact selected keys, safe relative directory,
-typed nonzero step cadence, soft chunk-byte target, and strict queue-byte
-budget. Non-zero types reject zero cadence and limits at the public boundary.
+Owns one logical stream's exact selected keys, safe relative directory, and
+typed nonzero step cadence. Explicit declarations also own a soft chunk-byte
+target and strict queue-byte budget; concise periodic declarations inherit
+both from their writer builder. Non-zero types reject zero cadence and limits
+at the public boundary.
 
 #### `StateStreamConfig::new`
 
@@ -2415,6 +2435,15 @@ stores the cadence used by writer-side observation.
 ##### Reference
 
     downstream run construction -> StateStreamConfig::new
+
+#### `StateStreamConfig::periodic`
+
+Private constructor used by the concise builder path. It retains no local
+storage limits and therefore requires writer-wide limits during preparation.
+
+##### Reference
+
+    SystemStateWriterBuilder::add_periodic_state_stream -> StateStreamConfig::periodic -> PreparedRecording::from_builder
 
 #### `StateStreamConfig::with_relative_directory`
 
@@ -2457,6 +2486,26 @@ separate from scientific payload records.
     dispatcher fixed/sweep provenance -> SystemStateWriterBuilder::with_user_metadata
     simulation run annotations -> SystemStateWriterBuilder::with_user_metadata
 
+#### `SystemStateWriterBuilder::with_task_parameters`
+
+Copies one resolved task's small JSON values into recording metadata and adds
+its authoritative task index. A same-named input value is replaced by the
+actual index.
+
+##### Reference
+
+    TaskParameters for one simulation -> SystemStateWriterBuilder::with_task_parameters -> metadata.json user_metadata
+
+#### `SystemStateWriterBuilder::with_shared_stream_limits`
+
+Sets the chunk rollover target and bounded-queue budget inherited by concise
+periodic stream declarations. An explicit `StateStreamConfig` retains its own
+limits and takes precedence.
+
+##### Reference
+
+    recording setup -> SystemStateWriterBuilder::with_shared_stream_limits -> periodic stream preparation
+
 #### `SystemStateWriterBuilder::add_state_stream`
 
 Appends one stream in deterministic metadata order. Cross-stream conflicts are
@@ -2465,6 +2514,15 @@ validated together at startup.
 ##### Reference
 
     downstream run configuration -> SystemStateWriterBuilder::add_state_stream
+
+#### `SystemStateWriterBuilder::add_periodic_state_stream`
+
+Adds a name, selected keys, and typed cadence while inheriting writer-wide
+storage limits. Its relative directory initially equals the stream name.
+
+##### Reference
+
+    common recording setup -> SystemStateWriterBuilder::add_periodic_state_stream -> StateStreamConfig::periodic
 
 #### `SystemStateWriterBuilder::create_new_recording`
 
@@ -3497,8 +3555,8 @@ The evolving point follows the supercritical Hopf normal form
 initial point, angular frequency, explicit-Euler timestep, iteration count,
 sampling cadence, and storage budgets. `sweep.json` varies `mu` across the Hopf
 bifurcation so every resolved task is one independent recording. `paths.json`
-names the state template and output root. The schema declares only the evolving
-`point` payload (`Vec<f64>`). The immutable model settings remain in fixed
+names the state template and output root. The schema declares the evolving
+`point` payload (`Vec<f64>`) and retained scalar `radius` diagnostic. The immutable model settings remain in fixed
 configuration and are recorded once in task metadata.
 
 The example should demonstrate one coherent full-stack happy path:
@@ -3513,8 +3571,8 @@ The example should demonstrate one coherent full-stack happy path:
    streams;
 4. borrow and encode the current state at each stream's cadence, allowing the
    writer to apply byte-bounded backpressure and whole-record chunking;
-5. finish each recording, register `JsonVecF64Decoder` plus the example-local
-   scalar decoder, and reconstruct the completed streams with
+5. finish each recording, register direct Serde JSON decoding for `Vec<f64>`
+   and `f64`, and reconstruct the completed streams with
    `StoredStateSeriesReader`;
 6. analyze the reconstructed `StateSeries` through owned-series and borrowed-view
    APIs, reporting sample count, time range, coordinate bounds, and final point;
@@ -3733,9 +3791,10 @@ and 6 records per task. The approved configuration now uses
 `trajectory_sample_every_steps = 10`, `radius_sample_every_steps = 5`, and
 `checkpoint_every_steps = 1000`.
 
-The scalar payload uses an example-local `JsonPayloadDecoder<f64>` while the
-point uses the built-in vector decoder. This demonstrates custom per-field
-decoding without expanding the library's default-decoder surface.
+Both scalar and vector payloads use the registry's generic Serde JSON path:
+`with_json_field::<f64>` and `with_json_field::<Vec<f64>>`. Applications need
+custom per-field decoders only when a payload uses a specialized wire shape or
+requires configured conversion.
 
 The point payload uses `Vec<f64>` in this example. For two coordinates it gives
 the leanest JSON representation, avoids an additional numerical dependency,
@@ -3794,6 +3853,38 @@ kernel without using `scientific-workflow` or any external dependency. Direct
 IEEE-754 bit patterns of accumulated physical time, both coordinates, and
 radius for all three swept tasks. Its scope is deliberately numerical; storage
 and reconstruction remain validated by the workflow and library tests.
+
+### User-API simplification implementation
+
+The crate and attractor example retain explicit live-state ownership and the
+observation loop while simplifying common setup. The completed changes are:
+
+1. Writer-wide shared chunk and queue byte limits, plus
+   `add_periodic_state_stream(name, fields, every_steps)`. The common path then
+   stops repeating identical limits for every stream. Per-stream overrides
+   remain available for asymmetric workloads, and byte budgets remain explicit
+   rather than silently hard-coded.
+2. `SystemStateWriterBuilder::with_task_parameters(&TaskParameters)`
+   copies the small resolved JSON values and task index into user metadata
+   internally, removing application knowledge of `serde_json::Map` without
+   coupling the writer to `fixed.json` loading.
+3. Generic JSON decoder registration through
+   `with_json_field::<T>(key)`, for any supported `DeserializeOwned` payload.
+   Domain-specific or validating decoders continue using
+   `register_for_field`. This removes one-off scalar decoders and makes common
+   vectors, strings, numbers, booleans, and plain structs uniform.
+4. `TimeAxisMetadata::with_physical_axis(name, unit)` replaces the common
+   two-call name/unit pair while retaining the existing granular methods.
+5. The example decodes `NonZeroU64`
+   directly through `TaskParameters::decode_value`, stops pre-collecting a
+   redundant task-plan vector, and lets `HopfModel` own its immutable scientific
+   coefficients so evolution becomes `model.advance()`.
+
+The following boundaries should remain explicit: the writer must not read
+project JSON itself; `observe_state` must not retain the state; byte limits
+must not become invisible defaults; recording completion must remain an
+explicit lifecycle call; and reader/decoder configuration must remain separate
+from scientific analysis.
 
 The input-layout correction is complete: all four human-authored JSON inputs
 live in `config/`, and the path dictionary resolves `config/state.json`.
