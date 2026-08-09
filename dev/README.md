@@ -10,7 +10,7 @@ making them suitable for large arrays and tensors.
 
 ## Features
 
-- Standard `config/{fixed,sweep,paths}.json` project configuration.
+- Standard `config/{fixed,sweep,paths,state}.json` scientific-project definition.
 - Deterministic Cartesian and correlated explicit-case task expansion.
 - Clone-free dict-like resolved task views over shared JSON values.
 - Named project-root-relative path resolution and byte-exact source export.
@@ -38,6 +38,10 @@ making them suitable for large arrays and tensors.
   preparation, atomic lifecycle rename, and stream-directory sync.
 - Explicit interrupted-run append and complete typed checkpoint recovery.
 - SHA-256-verified eager reconstruction through per-key payload decoders.
+- Efficient latest-state reconstruction without loading earlier chunks.
+- Automatic UTC lifecycle timestamps and monotonic active durations.
+- Collision-resistant generated or caller-named execution scopes.
+- Structurally separate terminal metadata and immutable completed-recording handles.
 
 The public `SystemStateWriter` facade owns multi-stream metadata, one bounded
 queue and worker, and the recording's completion or failure lifecycle.
@@ -76,14 +80,15 @@ ignored `target/recordings` directory.
 
 ## Project Configuration
 
-A standard project keeps three files together:
+A standard scientific project keeps four files together:
 
 ```text
 project-root/
 └── config/
     ├── fixed.json
     ├── sweep.json
-    └── paths.json
+    ├── paths.json
+    └── state.json
 ```
 
 `fixed.json` contains values shared by every task:
@@ -135,7 +140,7 @@ read-only dictionary:
 use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let project = ProjectConfig::load("project-root")?;
+    let project = ScientificProject::load("project-root")?;
     let output_root = project.paths().resolve_path("output_root")?;
 
     for task in project.parameters().tasks() {
@@ -158,15 +163,15 @@ construct merged maps. `value` and `require_value` borrow raw JSON;
 `decode_value` explicitly constructs one requested Rust value. The final sweep
 axis changes fastest. Fixed and swept names must be disjoint.
 
-`ProjectConfig::write_source_config(destination)` reproduces all three original
-files byte for byte beneath a new destination project. It never overwrites an
+`ProjectConfig::write_source_config(destination)` reproduces the three
+parameter/path files byte for byte beneath a new destination project. It never overwrites an
 existing `config/` directory. `TaskParameters::to_json` instead serializes one
 deterministic derived fixed-plus-sweep dictionary.
 
-The state template is a separate `SystemStateSchema` input, not a fourth file
-owned or exported by `ProjectConfig`. A project may keep it beside the other
-inputs as `config/state.json` and name that location in `paths.json`; the
-standalone attractor example uses this arrangement.
+`ScientificProject::load` additionally requires `config/state.json` and exposes
+its shared schema through `state_schema()`. The lower-level `ProjectConfig`
+remains available when an application intentionally needs only parameter and
+path configuration.
 
 ## State Template
 

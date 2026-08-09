@@ -140,6 +140,13 @@ pub enum StorageError {
         stream: String,
     },
 
+    /// A completed stream contains no record to reconstruct.
+    #[error("stream `{stream}` contains no recorded state")]
+    NoRecordedState {
+        /// Logical completed stream searched for its latest state.
+        stream: String,
+    },
+
     /// Chunk filenames do not describe one recoverable committed prefix and
     /// at most one highest open chunk.
     #[error("cannot recover stream output at `{path}`: {reason}")]
@@ -149,6 +156,21 @@ pub enum StorageError {
         /// Concise filename/inventory conflict.
         reason: String,
     },
+
+    /// The host UTC clock could not be represented in the canonical metadata
+    /// timestamp format.
+    #[error("failed to format the operational timestamp while attempting to {operation}")]
+    OperationalTimestamp {
+        /// Lifecycle action requesting the timestamp.
+        operation: &'static str,
+        /// Timestamp-formatting failure.
+        #[source]
+        source: time::error::Format,
+    },
+
+    /// A monotonic writer session exceeded the exact persisted duration range.
+    #[error("active recording duration exceeds the supported u64 nanosecond range")]
+    OperationalDurationOverflow,
 
     // ---------------------------------------------------------------------
     // Persisted format and integrity

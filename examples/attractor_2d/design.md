@@ -138,15 +138,15 @@ a stable-origin regime followed by limit cycles with expected radii `0.5` and
 `1.0`. Task order is the deterministic source order produced by
 `ParameterSpace`.
 
-`config/paths.json` names `state_template` as `config/state.json` and
-`recording_root` as `target/recordings`. The standalone crate root is also the
-project root supplied to
-`ProjectConfig::load`; there is no redundant nested `project/` directory.
+`config/state.json` is the conventional schema loaded by `ScientificProject`.
+`config/paths.json` names only `recording_root` as `target/recordings`. The
+standalone crate root is also the project root supplied to
+`ScientificProject::load`; there is no redundant nested `project/` directory.
 Configured paths are resolved relative to this root. The
 generated root will be beneath the standalone project's ignored
 `target/recordings` area so running the example does not dirty tracked source.
 
-The example will load the three files through `ProjectConfig`, retrieve values
+The example loads the complete definition through `ScientificProject`, retrieves values
 through `TaskParameters`, and resolve named paths through `ProjectPaths`.
 
 ## System-state contract
@@ -160,8 +160,8 @@ The template remains language-neutral and records no Rust type names. State
 assembly binds `point` to `Vec<f64>` and `radius` to `f64` on first insertion.
 
 Its location alongside the other declarative project inputs does not merge
-module responsibilities:
-`ProjectPaths` resolves its name, and `SystemStateSchema` validates its content.
+module responsibilities: `ScientificProject` coordinates loading while
+`SystemStateSchema` validates its content.
 One current limitation remains explicit: `ProjectConfig::write_source_config`
 round-trips only the three standard configuration files and does not copy the
 state template. Extending that export contract, if desired, is separate crate
@@ -343,8 +343,8 @@ No crate capability blocks implementation through state evolution and sample
 submission. The current public API supports the complete required path:
 
 ```text
-load ProjectConfig -> decode one TaskParameters selection
--> load shared SystemStateSchema -> move initial payload into SystemState
+load ScientificProject -> decode one TaskParameters selection
+-> borrow shared SystemStateSchema -> move initial payload into SystemState
 -> mutate payload in place -> increment iteration and advance physical time
 -> borrow state for stream encoding -> queue owned bytes with backpressure
 -> explicitly complete or fail the recording
@@ -401,7 +401,8 @@ The application uses only the public crate prelude and standard library. It
 decodes all three tasks, moves each initial point into an owned state, updates
 `point` and `radius` through one tuple borrow, advances physical time, and
 samples endpoint-inclusive intervals. One writer per task owns all three streams
-and is explicitly completed. After completion, all streams are reconstructed
+and is explicitly completed with terminal metadata. After completion,
+trajectory and radius series plus the latest checkpoint state are reconstructed
 and analyzed through typed decoders.
 
 Two real executions pass. Every task completes with exactly 501 trajectory,
@@ -447,15 +448,15 @@ while the library owns the general `storage` module.
 not repeat `attractor_2d`, because the crate already supplies that namespace.
 
 `main.rs` is the application orchestrator. It composes the other modules
-without absorbing their implementation details: load the project, allocate a
-fresh timestamped execution directory, simulate and record
+without absorbing their implementation details: load the project, create an
+automatic `ExecutionScope`, simulate and record
 each task, analyze the completed recording, verify the round trip, and print
 the bounded result summary. It contains no scientific kernel, decoder,
 configuration parser, writer-construction details, or reusable data model.
 
 The modules exchange small application-level values with explicit ownership.
-`project_setup.rs` loads shared project resources and prepares each task on
-demand; `hopf_model.rs` owns and mutates each live `SystemState`;
+`project_setup.rs` prepares each task on demand; `hopf_model.rs` owns and
+mutates each live `SystemState`;
 `state_recording.rs` borrows that state only long
 enough to encode due samples; and `recording_analysis.rs` receives the
 completed recording path plus an immutable borrow of the same completed model.

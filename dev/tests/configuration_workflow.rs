@@ -68,8 +68,19 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_send_sync::<TaskParametersIter>();
     assert_send_sync::<ProjectPaths>();
     assert_send_sync::<ProjectConfig>();
+    assert_send_sync::<ScientificProject>();
+    assert_send_sync::<ExecutionScope>();
 
     let cartesian_root = fixture_project("cartesian_project");
+    let scientific_project = ScientificProject::load(&cartesian_root).unwrap();
+    assert_eq!(scientific_project.state_schema().len(), 2);
+    assert!(
+        scientific_project
+            .state_schema()
+            .contains_field("population")
+    );
+    assert_eq!(scientific_project.parameters().task_count(), 6);
+    assert!(format!("{scientific_project:?}").contains("state_fields"));
     let project = ProjectConfig::load(&cartesian_root).unwrap();
     assert_eq!(project.project_root(), cartesian_root);
     assert_eq!(
@@ -253,6 +264,29 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     );
 
     let workspace = TempWorkspace::new();
+    let generated_scope =
+        ExecutionScope::create_generated(workspace.project("recordings")).unwrap();
+    assert!(generated_scope.directory().is_dir());
+    assert!(generated_scope.created_at_utc().unwrap().ends_with('Z'));
+    let task_recording = generated_scope.task_recording_directory(12);
+    assert!(task_recording.ends_with("task-000012"));
+    assert!(!task_recording.exists());
+    let reopened = ExecutionScope::open_existing(generated_scope.directory()).unwrap();
+    assert_eq!(reopened.directory(), generated_scope.directory());
+    assert_eq!(reopened.created_at_utc(), None);
+    let named_scope =
+        ExecutionScope::create_named(workspace.project("recordings"), "reference-run").unwrap();
+    assert!(named_scope.directory().ends_with("reference-run"));
+    assert!(matches!(
+        ExecutionScope::create_named(workspace.project("recordings"), "../unsafe"),
+        Err(ExecutionScopeError::InvalidName { .. })
+    ));
+    println!(
+        "[execution-scope] generated={} named={} task_path={} timestamp_managed=true",
+        generated_scope.directory().display(),
+        named_scope.directory().display(),
+        task_recording.display()
+    );
     let copied_root = workspace.project("copied");
     project_clone.write_source_config(&copied_root).unwrap();
     for name in ["fixed.json", "sweep.json", "paths.json"] {

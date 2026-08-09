@@ -229,6 +229,8 @@ surface.
 - Verify deterministic filenames, counts, exact bytes, iteration ranges, and
   SHA-256 descriptors.
 - Persist and semantically round-trip the sole `metadata.json`.
+- Verify automatic UTC creation/finalization timestamps, monotonic active
+  duration, continuation count, and separate terminal metadata.
 - Assert no per-chunk metadata sidecars or temporary files remain.
 - Assert every sealed chunk is visible only under its deterministic final name;
   this exercises the successful file-sync, rename, and directory-sync path.
@@ -237,6 +239,8 @@ surface.
 - Register a PiP tensor through `with_json_field` under its exact key.
 - Open a completed run, enumerate streams, read one stream, and read all
   streams.
+- Read only the latest state of one stream and inspect aggregate record/byte
+  facts without loading earlier chunks.
 - Verify complete `StateSeries` lengths, times, schemas, and typed payloads.
 - Verify raw output remains readable without making a `serde_json::Value` tree
   part of the production reader API.
@@ -260,7 +264,10 @@ Public run configuration and lifecycle:
   `create_new_recording`;
 - `SystemStateWriter::builder`, `recording_directory`, `stream_names`,
   `observe_state`, `flush_stream_to_storage`, `complete_recording`,
-  `complete_recording_with_final_state`, and `mark_recording_failed` across the
+  `complete_recording_with_terminal_metadata`,
+  `complete_recording_with_final_state`,
+  `complete_recording_with_final_state_and_terminal_metadata`,
+  `mark_recording_failed`, and `mark_recording_failed_with_terminal_metadata` across the
   successful, resume, and resilience workflows. Different stream sampling intervals,
   repeated-iteration no-op behavior, and non-aligned final-state insertion are
   observable in reconstructed record counts and times.
@@ -284,8 +291,13 @@ Decoder structures:
 `StoredStateSeriesReader`:
 
 - `open_completed_recording`, `recording_directory`, `stream_names`,
-  `read_stream_as_state_series`, `read_all_streams_as_state_series`, and
+  `format_version`, `user_metadata`, `terminal_metadata`, `recording_timing`,
+  `stream_record_count`, `stream_encoded_bytes`,
+  `read_latest_state_from_stream`, `read_stream_as_state_series`,
+  `read_all_streams_as_state_series`, and
   bounded `Debug`.
+- `CompletedRecording`, `RecordingTiming`, and `CompletedStreamSummary` through
+  every public accessor.
 - Private chunk traversal, borrowed raw-value parsing, schema reconstruction,
   canonical decoder dispatch, and checksumming are covered by exact readback
   and the resilience target.
@@ -418,14 +430,18 @@ continuation rejection boundaries.
 
 ### Scenario
 
-Load real standard project directories through the public prelude, generate
+Load real standard project directories through the public prelude, including
+their conventional state schemas and execution scopes; generate
 Cartesian and correlated explicit tasks, use their dict-like interfaces,
 resolve project paths, export the three source documents byte for byte, reload
 the copy, and reject meaningful ambiguous or invalid inputs.
 
 ### Required behavior
 
-- Load `config/{fixed,sweep,paths}.json` through `ProjectConfig`.
+- Load `config/{fixed,sweep,paths,state}.json` through `ScientificProject` and
+  retain lower-level `ProjectConfig` coverage.
+- Create generated and named execution scopes, reopen one, reject an unsafe
+  name, and derive an absent deterministic task recording path.
 - Verify fixed, sweep, resolved-parameter, task, and path counts and ordered
   name iteration.
 - Expand a two-axis Cartesian product with the final axis changing fastest.
@@ -450,6 +466,7 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 
 - `ProjectConfig::{load,project_root,configuration_directory,parameters,paths,
   into_parts,write_source_config,clone}`;
+- every public `ScientificProject` and `ExecutionScope` method;
 - all public `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, and
   `ProjectPaths` methods;
 - reachable configuration error families with source preservation;
@@ -459,6 +476,7 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 ### Log contract
 
     [load] fixed=... swept=... parameters=... tasks=... paths=...
+    [execution-scope] generated=... named=... task_path=... timestamp_managed=true
     [cartesian] tasks=... last_axis_fastest=true first=(...) last=(...)
     [ownership] fixed_shared=true selected_shared=true task_clone_shared=true merged_map_allocated=false
     [paths] declared=... relative_resolution=true canonicalization=false existence_check=false

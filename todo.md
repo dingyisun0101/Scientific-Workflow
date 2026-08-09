@@ -63,22 +63,59 @@ There is no centralized manager or process-global runtime. The public API,
 prelude, tests, documentation, diagnostics, internal vocabulary, and filenames
 use the approved explicit names without compatibility aliases.
 
-Public manifest/logging work is deliberately deferred. The remaining
+Public manifest/logging work is partially deferred. Terminal metadata,
+automatic timing, and the completed-recording handle are implemented. The remaining
 integration policy is:
 
-1. **Deferred public manifest and terminal summary.** Expose read-only run status and
-   user metadata, permit terminal values known only at finish, and return or
-   expose aggregate per-stream record and byte statistics.
+1. **Deferred public manifest and aggregate summary.** Expose read-only run status and
+   initial user metadata, and return or expose aggregate per-stream record and
+   byte statistics.
 
 Failure lifecycle is resolved: unexpected early returns deliberately leave a
 recoverable `Running` recording; only intentional terminal decisions call
 `mark_recording_failed`.
 
-The crate is ready for the next stage: coordinate the simulator migration by adding local
-`scientific-workflow` and PiP 3.0.4 dependencies, replace its snapshot and
-specialized writers with named streams, supply custom decoders, update
-dispatcher completion validation, and prove save/chunk/readback/crash-resume
-behavior before deleting legacy IO.
+The crate is ready for downstream migration. Refactor GLV first with a local
+`scientific-workflow` dependency: replace its generic state, signal/space
+writers, and task metadata with one authoritative state and one writer, then
+prove numerical and output equivalence. Publish the migrated GLV before
+refactoring dispatcher, because dispatcher directly imports GLV's current
+solver and metadata APIs. Refactor simulator after the GLV pattern is proven,
+using PiP 3.0.4 payloads, and then finish dispatcher completion validation
+against the shared recording format.
+
+GLV can now commit termination reason and completed step count through
+`complete_recording_with_final_state_and_terminal_metadata`; it must not create
+a second sidecar file.
+
+## Reusable example patterns
+
+- [x] Writer completion accepts structurally separate terminal metadata and
+  returns an immutable completed-recording handle with directory and timing.
+- [x] Efficient latest-state reconstruction avoids materializing a full series.
+- [x] `ScientificProject` loads mandatory `project-root/config/state.json`.
+- [x] `ExecutionScope` creates generated/named scopes, opens existing scopes,
+  and derives absent deterministic task recording paths.
+- Do not add a generic evolution trait or JSON-driven recording-plan format
+  from the attractor example alone; reconsider after GLV and simulator provide
+  independent evidence.
+
+## Automatic operational timing
+
+- [x] Add an automatic recording timing section with immutable RFC 3339 UTC
+  `created_at_utc`, terminal `finalized_at_utc`, exact
+  `active_duration_ns`, and `continuation_count`.
+- [x] Measure active duration with a monotonic process-local clock; never derive it
+  from subtracting wall-clock timestamps.
+- [x] Preserve original creation time across continuation and accumulate only
+  durations that can be committed truthfully.
+- [x] Return timing through the completed-recording handle.
+- [x] Commit terminal timing, terminal user metadata, and terminal status in one
+  atomic metadata transition.
+- [x] Give generated execution scopes an automatic UTC timestamp plus an
+  opaque collision-resistant identifier; do not rely on timestamp text alone
+  for uniqueness.
+- [x] Keep automatic wall-clock timestamps out of state records and chunk payloads.
 
 ## Project rules
 

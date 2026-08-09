@@ -44,6 +44,7 @@ use std::path::{Component, Path};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::clock::is_utc_rfc3339;
 use crate::system_state::SimulationTime;
 
 use super::SamplingInterval;
@@ -53,7 +54,7 @@ use super::error::StorageError;
 pub(crate) const FORMAT_NAME: &str = "scientific-workflow-jsonl";
 
 /// Current metadata and record schema version.
-pub(crate) const FORMAT_VERSION: u32 = 3;
+pub(crate) const FORMAT_VERSION: u32 = 4;
 
 /// Payload encoding supported by the current storage stage.
 pub(crate) const PAYLOAD_ENCODING: &str = "json";
@@ -74,6 +75,8 @@ pub(crate) struct RecordingMetadata {
     pub(crate) version: u32,
     /// Current recording lifecycle state.
     pub(crate) status: RecordingStatus,
+    /// Automatically managed wall-clock and active-duration facts.
+    pub(crate) timing: RecordingTiming,
     /// Payload encoding and record framing declaration.
     pub(crate) records: RecordFormat,
     /// Meanings and optional units of temporal coordinates.
@@ -81,6 +84,9 @@ pub(crate) struct RecordingMetadata {
     /// Arbitrary JSON metadata supplied by the workflow or dispatcher.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub(crate) user_metadata: Map<String, Value>,
+    /// Caller-supplied values known only when the recording becomes terminal.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub(crate) terminal_metadata: Map<String, Value>,
     /// Logical output streams in deterministic declaration order.
     pub(crate) streams: Vec<StateStreamMetadata>,
 }
@@ -95,14 +101,17 @@ impl RecordingMetadata {
         time: TimeAxisMetadata,
         user_metadata: Map<String, Value>,
         streams: Vec<StateStreamMetadata>,
+        created_at_utc: String,
     ) -> Self {
         Self {
             format: FORMAT_NAME.to_owned(),
             version: FORMAT_VERSION,
             status: RecordingStatus::Running,
+            timing: RecordingTiming::started(created_at_utc),
             records: RecordFormat::json_lines(),
             time,
             user_metadata,
+            terminal_metadata: Map::new(),
             streams,
         }
     }
@@ -129,6 +138,13 @@ impl RecordingMetadata {
         self.records.validate(path)?;
         self.time.validate(path)?;
         self.status.validate(path)?;
+        self.timing.validate(path, &self.status)?;
+        if matches!(self.status, RecordingStatus::Running) && !self.terminal_metadata.is_empty() {
+            return Err(invalid_metadata(
+                path,
+                "running recording must not contain terminal_metadata",
+            ));
+        }
         if self.streams.is_empty() {
             return Err(invalid_metadata(
                 path,
@@ -170,6 +186,70 @@ impl RecordingMetadata {
     /// atomic metadata commit.
     pub(crate) fn stream_mut(&mut self, name: &str) -> Option<&mut StateStreamMetadata> {
         self.streams.iter_mut().find(|stream| stream.name == name)
+    }
+}
+
+/// Automatically managed operational timing for one recording lifecycle.
+///
+/// UTC values answer when lifecycle transitions occurred. Active duration is
+/// accumulated from monotonic writer-session clocks and therefore does not
+/// assume that subtracting host timestamps yields reliable elapsed time.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecordingTiming {
+    /// Immutable timestamp at which the recording was first created.
+    pub(crate) created_at_utc: String,
+    /// Timestamp of the successful or failed terminal transition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) finalized_at_utc: Option<String>,
+    /// Sum of truthfully committed active writer-session durations.
+    pub(crate) active_duration_ns: u64,
+    /// Number of times a running recording was reopened for continuation.
+    pub(crate) continuation_count: u64,
+}
+
+impl RecordingTiming {
+    /// Starts timing a newly created recording.
+    fn started(created_at_utc: String) -> Self {
+        Self {
+            created_at_utc,
+            finalized_at_utc: None,
+            active_duration_ns: 0,
+            continuation_count: 0,
+        }
+    }
+
+    /// Validates timestamp syntax and its relationship to lifecycle status.
+    fn validate(&self, path: &Path, status: &RecordingStatus) -> Result<(), StorageError> {
+        if !is_utc_rfc3339(&self.created_at_utc) {
+            return Err(invalid_metadata(
+                path,
+                "timing.created_at_utc must be a UTC RFC 3339 timestamp",
+            ));
+        }
+        if let Some(finalized) = self.finalized_at_utc.as_deref()
+            && !is_utc_rfc3339(finalized)
+        {
+            return Err(invalid_metadata(
+                path,
+                "timing.finalized_at_utc must be a UTC RFC 3339 timestamp",
+            ));
+        }
+        match status {
+            RecordingStatus::Running if self.finalized_at_utc.is_some() => Err(invalid_metadata(
+                path,
+                "running recording must not have timing.finalized_at_utc",
+            )),
+            RecordingStatus::Complete | RecordingStatus::Failed { .. }
+                if self.finalized_at_utc.is_none() =>
+            {
+                Err(invalid_metadata(
+                    path,
+                    "terminal recording requires timing.finalized_at_utc",
+                ))
+            }
+            _ => Ok(()),
+        }
     }
 }
 

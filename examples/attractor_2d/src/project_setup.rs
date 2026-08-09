@@ -4,11 +4,7 @@
 //! shows the normal typed configuration path without reproducing a production
 //! application's domain-validation framework.
 
-use std::fs;
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
-use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use scientific_workflow::prelude::*;
 
@@ -27,39 +23,6 @@ pub(crate) struct TaskSettings {
     pub(crate) writer_queue_bytes: NonZeroU64,
 }
 
-/// Inputs shared by the top-level application orchestrator.
-pub(crate) struct ProjectSetup {
-    pub(crate) project: ProjectConfig,
-    pub(crate) schema: SystemStateSchema,
-    pub(crate) recording_root: PathBuf,
-}
-
-/// Loads the project, state schema, and named recording path.
-pub(crate) fn load_project(project_root: &Path) -> AppResult<ProjectSetup> {
-    let project = ProjectConfig::load(project_root)?;
-    let schema =
-        SystemStateSchema::load_json_template(project.paths().resolve_path("state_template")?)?;
-    let recording_root = project.paths().resolve_path("recording_root")?;
-
-    Ok(ProjectSetup {
-        project,
-        schema,
-        recording_root,
-    })
-}
-
-/// Creates a fresh timestamped directory for one application execution.
-pub(crate) fn create_execution_directory(recording_root: &Path) -> AppResult<PathBuf> {
-    fs::create_dir_all(recording_root)?;
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("the example requires a system clock after the Unix epoch")
-        .as_nanos();
-    let directory = recording_root.join(format!("run_{timestamp}_{}", process::id()));
-    fs::create_dir(&directory)?;
-    Ok(directory)
-}
-
 /// Creates one model and its execution settings from a resolved task dictionary.
 pub(crate) fn prepare_task(
     schema: &SystemStateSchema,
@@ -68,8 +31,7 @@ pub(crate) fn prepare_task(
     let settings = TaskSettings {
         task_index: parameters.task_index(),
         step_count: parameters.decode_value("step_count")?,
-        trajectory_sampling_interval: parameters
-            .decode_value("trajectory_sampling_interval")?,
+        trajectory_sampling_interval: parameters.decode_value("trajectory_sampling_interval")?,
         radius_sampling_interval: parameters.decode_value("radius_sampling_interval")?,
         checkpoint_sampling_interval: parameters.decode_value("checkpoint_sampling_interval")?,
         maximum_chunk_bytes: parameters.decode_value("maximum_chunk_bytes")?,

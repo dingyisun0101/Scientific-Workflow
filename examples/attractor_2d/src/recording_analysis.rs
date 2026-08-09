@@ -4,9 +4,7 @@ use scientific_workflow::prelude::*;
 
 use crate::AppResult;
 use crate::hopf_model::{HopfModel, POINT_FIELD, RADIUS_FIELD};
-use crate::state_recording::{
-    CHECKPOINT_STREAM, CompletedRecording, RADIUS_STREAM, TRAJECTORY_STREAM,
-};
+use crate::state_recording::{CHECKPOINT_STREAM, RADIUS_STREAM, TRAJECTORY_STREAM};
 
 const PLOT_WIDTH: usize = 41;
 const PLOT_HEIGHT: usize = 17;
@@ -39,15 +37,16 @@ pub(crate) fn analyze_recording(
         .with_json_field::<Vec<f64>>(POINT_FIELD)?
         .with_json_field::<f64>(RADIUS_FIELD)?;
 
-    let reader = StoredStateSeriesReader::open_completed_recording(&recording.directory, decoders)?;
+    let reader =
+        StoredStateSeriesReader::open_completed_recording(recording.directory(), decoders)?;
     let trajectory = reader.read_stream_as_state_series(TRAJECTORY_STREAM)?;
     let radius = reader.read_stream_as_state_series(RADIUS_STREAM)?;
-    let checkpoint = reader.read_stream_as_state_series(CHECKPOINT_STREAM)?;
+    let checkpoint = reader.read_latest_state_from_stream(CHECKPOINT_STREAM)?;
 
     let samples = SampleCounts {
         trajectory: trajectory.len() as u64,
         radius: radius.len() as u64,
-        checkpoint: checkpoint.len() as u64,
+        checkpoint: reader.stream_record_count(CHECKPOINT_STREAM)?,
     };
     let points = trajectory
         .iter()
@@ -81,7 +80,7 @@ fn verify_final_state(
     live: &SystemState,
     trajectory: &StateSeries,
     radius: &StateSeries,
-    checkpoint: &StateSeries,
+    checkpoint_final: &SystemState,
 ) -> Result<(), StateError> {
     let trajectory_final = trajectory
         .last_state()
@@ -89,10 +88,6 @@ fn verify_final_state(
     let radius_final = radius
         .last_state()
         .expect("the radius stream contains samples");
-    let checkpoint_final = checkpoint
-        .last_state()
-        .expect("the checkpoint stream contains samples");
-
     assert_eq!(trajectory_final.simulation_time(), live.simulation_time());
     assert_eq!(radius_final.simulation_time(), live.simulation_time());
     assert_eq!(checkpoint_final.simulation_time(), live.simulation_time());

@@ -21,10 +21,13 @@ pub use crate::configuration::{
     ConfigurationError, ParameterSpace, ProjectConfig, ProjectPaths, TaskParameters,
     TaskParametersIter,
 };
+pub use crate::execution::{ExecutionScope, ExecutionScopeError};
+pub use crate::project::{ScientificProject, ScientificProjectError};
 pub use crate::storage::{
-    JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder,
-    SamplingInterval, StateStreamConfig, StorageError, StoredStateSeriesReader, SystemStateWriter,
-    SystemStateWriterBuilder, TimeAxisMetadata,
+    CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
+    JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, SamplingInterval, StateStreamConfig,
+    StorageError, StoredStateSeriesReader, SystemStateWriter, SystemStateWriterBuilder,
+    TimeAxisMetadata,
 };
 pub use crate::system_state::{
     PayloadInsertError, SimulationTime, StateError, StateFieldSchema, SystemState,

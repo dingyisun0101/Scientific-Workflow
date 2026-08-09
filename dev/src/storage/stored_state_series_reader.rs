@@ -40,6 +40,7 @@ use sha2::{Digest, Sha256};
 use crate::system_state::{SimulationTime, SystemState, SystemStateSchema};
 use crate::time_series::StateSeries;
 
+use super::RecordingTiming;
 use super::error::StorageError;
 use super::json_payload_decoder::JsonPayloadDecoderRegistry;
 use super::jsonl_format::{ChunkMetadata, RecordingMetadata, RecordingStatus, StateStreamMetadata};
@@ -58,6 +59,7 @@ pub struct StoredStateSeriesReader {
     root: PathBuf,
     metadata_path: PathBuf,
     metadata: RecordingMetadata,
+    timing: RecordingTiming,
     decoders: JsonPayloadDecoderRegistry,
 }
 
@@ -101,10 +103,12 @@ impl StoredStateSeriesReader {
                 path: metadata_path,
             });
         }
+        let timing = RecordingTiming::from_stored(&metadata.timing, &metadata_path)?;
         Ok(Self {
             root,
             metadata_path,
             metadata,
+            timing,
             decoders,
         })
     }
@@ -120,6 +124,60 @@ impl StoredStateSeriesReader {
             .streams
             .iter()
             .map(|stream| stream.name.as_str())
+    }
+
+    /// Returns the validated storage format version.
+    pub fn format_version(&self) -> u32 {
+        self.metadata.version
+    }
+
+    /// Borrows immutable metadata supplied when recording began.
+    pub fn user_metadata(&self) -> &serde_json::Map<String, serde_json::Value> {
+        &self.metadata.user_metadata
+    }
+
+    /// Borrows values committed only at successful completion.
+    pub fn terminal_metadata(&self) -> &serde_json::Map<String, serde_json::Value> {
+        &self.metadata.terminal_metadata
+    }
+
+    /// Borrows automatic operational timing for the completed recording.
+    pub fn recording_timing(&self) -> &RecordingTiming {
+        &self.timing
+    }
+
+    /// Returns the metadata-declared record count for one completed stream.
+    pub fn stream_record_count(&self, stream: &str) -> Result<u64, StorageError> {
+        let declaration =
+            self.metadata
+                .stream(stream)
+                .ok_or_else(|| StorageError::UnknownStateStream {
+                    stream: stream.to_owned(),
+                })?;
+        declaration
+            .chunks
+            .iter()
+            .try_fold(0_u64, |total, chunk| total.checked_add(chunk.records))
+            .ok_or_else(|| StorageError::ByteCountOverflow {
+                stream: declaration.name.clone(),
+            })
+    }
+
+    /// Returns the exact metadata-declared encoded bytes for one stream.
+    pub fn stream_encoded_bytes(&self, stream: &str) -> Result<u64, StorageError> {
+        let declaration =
+            self.metadata
+                .stream(stream)
+                .ok_or_else(|| StorageError::UnknownStateStream {
+                    stream: stream.to_owned(),
+                })?;
+        declaration
+            .chunks
+            .iter()
+            .try_fold(0_u64, |total, chunk| total.checked_add(chunk.bytes))
+            .ok_or_else(|| StorageError::ByteCountOverflow {
+                stream: declaration.name.clone(),
+            })
     }
 
     /// Reconstructs one named logical stream as a complete `StateSeries`.
@@ -145,12 +203,9 @@ impl StoredStateSeriesReader {
             .require(declaration.fields.iter().map(|field| field.name.as_str()))?;
 
         let spec = stream_spec(&self.metadata_path, declaration)?;
-        let capacity = declaration
-            .chunks
-            .iter()
-            .try_fold(0_u64, |total, chunk| total.checked_add(chunk.records))
-            .and_then(|total| usize::try_from(total).ok())
-            .ok_or_else(|| StorageError::ByteCountOverflow {
+        let total_records = self.stream_record_count(stream)?;
+        let capacity =
+            usize::try_from(total_records).map_err(|_| StorageError::ByteCountOverflow {
                 stream: declaration.name.clone(),
             })?;
         let mut series = StateSeries::with_capacity(spec, capacity);
@@ -178,6 +233,65 @@ impl StoredStateSeriesReader {
                     .map(|series| (stream.name.clone(), series))
             })
             .collect()
+    }
+
+    /// Reconstructs only the latest state in one completed stream.
+    ///
+    /// Earlier chunks are not opened. The newest chunk's length and checksum
+    /// are verified, then its final newline-terminated record is decoded into
+    /// the stream's partial schema. This is suitable for final-value analysis;
+    /// use checkpoint continuation when the state must cover a complete model
+    /// schema and remain appendable.
+    pub fn read_latest_state_from_stream(&self, stream: &str) -> Result<SystemState, StorageError> {
+        let declaration =
+            self.metadata
+                .stream(stream)
+                .ok_or_else(|| StorageError::UnknownStateStream {
+                    stream: stream.to_owned(),
+                })?;
+        self.decoders
+            .require(declaration.fields.iter().map(|field| field.name.as_str()))?;
+        let chunk = declaration
+            .chunks
+            .last()
+            .ok_or_else(|| StorageError::NoRecordedState {
+                stream: declaration.name.clone(),
+            })?;
+        let path = self.root.join(&declaration.directory).join(&chunk.file);
+        verify_file_size(&path, chunk.bytes)?;
+        let bytes = fs::read(&path).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                StorageError::MissingChunk { path: path.clone() }
+            } else {
+                StorageError::Io {
+                    operation: "read latest chunk",
+                    path: path.clone(),
+                    source,
+                }
+            }
+        })?;
+        verify_checksum(
+            &self.metadata_path,
+            &path,
+            &chunk.checksum,
+            Sha256::digest(&bytes),
+        )?;
+        let record = final_jsonl_record(&path, &bytes)?;
+        let spec = stream_spec(&self.metadata_path, declaration)?;
+        let state =
+            decode_state_record_with_decoders(record, &path, declaration, &spec, &self.decoders)?;
+        if state.simulation_time().iteration() != chunk.last_iteration {
+            return Err(invalid_record(
+                &path,
+                chunk.records,
+                format!(
+                    "latest record iteration {} differs from chunk descriptor {}",
+                    state.simulation_time().iteration(),
+                    chunk.last_iteration
+                ),
+            ));
+        }
+        Ok(state)
     }
 
     /// Verifies and reconstructs one immutable committed chunk.
@@ -304,6 +418,27 @@ impl StoredStateSeriesReader {
             hasher.finalize(),
         )
     }
+}
+
+/// Borrows the final nonempty newline-terminated record from one chunk image.
+fn final_jsonl_record<'a>(path: &Path, bytes: &'a [u8]) -> Result<&'a [u8], StorageError> {
+    if !bytes.ends_with(b"\n") {
+        return Err(invalid_record(
+            path,
+            1,
+            "latest chunk is not terminated by a newline",
+        ));
+    }
+    let without_final_newline = &bytes[..bytes.len() - 1];
+    let start = without_final_newline
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |position| position + 1);
+    let record = &without_final_newline[start..];
+    if record.is_empty() {
+        return Err(invalid_record(path, 1, "latest record must not be empty"));
+    }
+    Ok(record)
 }
 
 impl fmt::Debug for StoredStateSeriesReader {

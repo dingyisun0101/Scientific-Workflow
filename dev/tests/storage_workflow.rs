@@ -236,14 +236,54 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             live.advance_simulation_time(Some(0.25)).unwrap();
         }
     }
-    output
-        .complete_recording_with_final_state(&live)
+    let mut terminal_metadata = Map::new();
+    terminal_metadata.insert("completed_step_count".to_owned(), Value::from(3));
+    terminal_metadata.insert(
+        "termination_reason".to_owned(),
+        Value::from("requested_steps_completed"),
+    );
+    let completed = output
+        .complete_recording_with_final_state_and_terminal_metadata(&live, terminal_metadata)
         .expect("all writers must drain and finish");
+    assert_eq!(completed.directory(), run_path);
+    assert!(completed.timing().created_at_utc().ends_with('Z'));
+    assert!(completed.timing().finalized_at_utc().ends_with('Z'));
+    assert_eq!(completed.timing().continuation_count(), 0);
+    assert_eq!(
+        completed.terminal_metadata()["completed_step_count"],
+        Value::from(3)
+    );
+    assert_eq!(completed.stream_summaries().len(), 2);
+    let signal_summary = completed.stream_summary("signal").unwrap();
+    assert_eq!(signal_summary.name(), "signal");
+    assert_eq!(signal_summary.record_count(), 4);
+    assert!(signal_summary.chunk_count() >= 2);
+    assert!(signal_summary.encoded_bytes() > 0);
+    assert_eq!(signal_summary.first_iteration(), Some(0));
+    assert_eq!(signal_summary.last_iteration(), Some(3));
     assert_eq!(clones.load(Ordering::SeqCst), 0);
 
     let metadata_bytes = fs::read(run_path.join("metadata.json")).unwrap();
     let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
     assert_eq!(metadata["status"]["state"], "complete");
+    assert_eq!(metadata["version"], 4);
+    assert!(
+        metadata["timing"]["created_at_utc"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z')
+    );
+    assert!(
+        metadata["timing"]["finalized_at_utc"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z')
+    );
+    assert_eq!(metadata["timing"]["continuation_count"], 0);
+    assert_eq!(
+        metadata["terminal_metadata"]["termination_reason"],
+        "requested_steps_completed"
+    );
     assert_eq!(metadata["time"]["iteration_name"], "simulation_iteration");
     assert_eq!(metadata["time"]["iteration_unit"], "iteration");
     assert!(metadata["time"].get("step_name").is_none());
@@ -352,6 +392,24 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         ["signal", "space"]
     );
     assert!(format!("{reader:?}").contains("StoredStateSeriesReader"));
+    assert_eq!(reader.format_version(), 4);
+    assert_eq!(reader.user_metadata()["seed"], 42);
+    assert_eq!(
+        reader.terminal_metadata()["termination_reason"],
+        "requested_steps_completed"
+    );
+    assert_eq!(reader.recording_timing(), completed.timing());
+    assert_eq!(reader.stream_record_count("signal").unwrap(), 4);
+    assert_eq!(
+        reader.stream_encoded_bytes("signal").unwrap(),
+        signal_summary.encoded_bytes()
+    );
+    let latest_signal = reader.read_latest_state_from_stream("signal").unwrap();
+    assert_eq!(latest_signal.simulation_time().iteration(), 3);
+    assert_eq!(
+        latest_signal.payload::<Vec<f64>>("population").unwrap()[0],
+        13.0
+    );
     let signal_series = reader.read_stream_as_state_series("signal").unwrap();
     assert_eq!(signal_series.len(), 4);
     assert_eq!(
@@ -435,7 +493,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     assert_eq!(task_metadata["user_metadata"]["task_index"], 0);
     assert_eq!(task_metadata["user_metadata"]["temperature"], 280.0);
     assert_eq!(task_metadata["user_metadata"]["seed"], 7);
-    assert_eq!(task_metadata["version"], 3);
+    assert_eq!(task_metadata["version"], 4);
     assert_eq!(
         task_metadata["streams"][0]["sampling_interval"],
         serde_json::json!({"iterations": 1})

@@ -13,6 +13,10 @@
 //! project layout, deterministic Cartesian or explicit-case task expansion,
 //! immutable dict-like resolved parameters, named path resolution, and
 //! byte-exact source export.
+//! [`project`] adds the mandatory conventional `config/state.json` schema as
+//! one immutable [`project::ScientificProject`]. [`execution`] creates
+//! collision-resistant or caller-named execution scopes and deterministic task
+//! recording paths without taking ownership away from storage writers.
 //!
 //! [`system_state`] provides:
 //!
@@ -33,9 +37,10 @@
 //! serialization, chunking, or filesystem IO.
 //!
 //! [`storage`] provides named partial-state streams with writer-owned sampling
-//! sampling intervals, borrowed JSON encoding only when due, bounded asynchronous
+//! intervals, borrowed JSON encoding only when due, bounded asynchronous
 //! persistence through one worker per recording, byte-targeted chunking, atomic recording
-//! metadata, per-key payload decoders, and verified analysis reconstruction.
+//! metadata, automatic operational timing, terminal summaries, per-key payload
+//! decoders, and verified full-series or latest-state reconstruction.
 //! Import [`prelude`] when an application wants the complete supported API in
 //! scope without listing each module separately.
 //!
@@ -68,8 +73,12 @@
 //! Future dispatcher functionality will organize scoped workflow execution
 //! without changing the public state-value ownership or storage contracts.
 
+mod clock;
+
 pub mod configuration;
+pub mod execution;
 pub mod prelude;
+pub mod project;
 pub mod storage;
 pub mod system_state;
 pub mod time_series;

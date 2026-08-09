@@ -62,7 +62,7 @@ attractor_2d/
 ```
 
 The standalone crate root is also the scientific project root. The application
-will call `ProjectConfig::load` with the `attractor_2d` directory itself; no
+calls `ScientificProject::load` with the `attractor_2d` directory itself; no
 nested project wrapper is needed.
 
 For a reusable explanation of this organization, see [steps.md](steps.md).
@@ -109,11 +109,12 @@ This produces three deterministic tasks:
 [`config/paths.json`](config/paths.json) declares:
 
 ```text
-state_template -> config/state.json
 recording_root -> target/recordings
 ```
 
-Both values are resolved relative to this project root. Generated recordings
+`config/state.json` is loaded automatically by `ScientificProject`; it is
+structural configuration rather than a named runtime path. The recording path
+is resolved relative to this project root. Generated recordings
 remain beneath the ignored Cargo `target` directory and do not dirty tracked
 source files.
 
@@ -188,13 +189,16 @@ Recordings will be written beneath:
 examples/attractor_2d/target/recordings/
 ```
 
-Each execution receives a timestamp-and-process-based directory. Existing
-recordings are not deleted or deliberately reused.
+`ExecutionScope` gives each execution a UTC-readable, collision-resistant
+directory and exposes its creation timestamp. Existing recordings are not
+deleted or deliberately reused. Each task recording automatically persists its
+UTC creation/finalization timestamps and monotonic active duration.
 
 The complete run reports structured output resembling:
 
 ```text
 [project] model=supercritical_hopf_normal_form tasks=3 step_count=5000
+[execution] directory=... created_at_utc=...
 [task] index=0 mu=-0.25 omega=1.0 dt=0.01
 [simulation] task=0 trajectory=501 radius=1001 checkpoints=6 final_point=...
 [storage] task=0 recording=... streams=3 complete=true
@@ -210,7 +214,8 @@ After each writer reaches completed status, the application:
 
 - registers direct Serde JSON decoding for `Vec<f64>` under `point` and `f64`
   under `radius`;
-- reconstructs trajectory, radius, and checkpoint `StateSeries` values;
+- reconstructs trajectory and radius `StateSeries` values and only the latest
+  checkpoint state;
 - calculates coordinate and radius bounds;
 - reports the continuous model's expected asymptotic radius;
 - renders a compact terminal phase portrait; and

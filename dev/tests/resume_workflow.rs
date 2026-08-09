@@ -108,6 +108,19 @@ fn write_metadata(run: &Path, metadata: &Value) {
     fs::write(run.join("metadata.json"), bytes).unwrap();
 }
 
+/// Reproduces an interrupted lifecycle from a successfully sealed fixture.
+fn mark_manifest_running(metadata: &mut Value) {
+    metadata["status"] = serde_json::json!({"state": "running"});
+    metadata["timing"]
+        .as_object_mut()
+        .unwrap()
+        .remove("finalized_at_utc");
+    metadata
+        .as_object_mut()
+        .unwrap()
+        .remove("terminal_metadata");
+}
+
 #[test]
 fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
     let workspace = TempWorkspace::new("unprepared-resume");
@@ -117,13 +130,14 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
     let mut output = builder(&run, &spec).create_new_recording().unwrap();
     output.observe_state(&state(&spec, 0)).unwrap();
     output.observe_state(&state(&spec, 1)).unwrap();
-    output.complete_recording().unwrap();
+    let completed = output.complete_recording().unwrap();
+    assert_eq!(completed.timing().continuation_count(), 0);
 
     // Reproduce a crash before descriptor preparation: the real payload keeps
     // its open name, metadata contains no descriptor, and its final bytes end
     // in one incomplete record fragment.
     let mut manifest = metadata(&run);
-    manifest["status"] = serde_json::json!({"state": "running"});
+    mark_manifest_running(&mut manifest);
     manifest["streams"][0]
         .as_object_mut()
         .unwrap()
@@ -181,7 +195,8 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
     println!(
         "[recovery] incomplete_tail_truncated=true continued_open_chunk=true records=3 durable_barrier=true"
     );
-    output.complete_recording().unwrap();
+    let completed = output.complete_recording().unwrap();
+    assert_eq!(completed.timing().continuation_count(), 1);
 
     let reader = StoredStateSeriesReader::open_completed_recording(&run, decoders()).unwrap();
     let series = reader.read_stream_as_state_series("checkpoint").unwrap();
@@ -209,7 +224,7 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     // Reproduce the narrow crash window after metadata preparation but before
     // the lifecycle rename. The descriptor remains authoritative.
     let mut manifest = metadata(&run);
-    manifest["status"] = serde_json::json!({"state": "running"});
+    mark_manifest_running(&mut manifest);
     write_metadata(&run, &manifest);
     let sealed = run.join("checkpoint/chunk-000000.jsonl");
     let open = run.join("checkpoint/chunk-000000.jsonl.tmp");
@@ -265,7 +280,7 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
     output.observe_state(&state(&spec, 8)).unwrap();
     output.complete_recording().unwrap();
     let mut manifest = metadata(&run);
-    manifest["status"] = serde_json::json!({"state": "running"});
+    mark_manifest_running(&mut manifest);
     write_metadata(&run, &manifest);
 
     assert!(matches!(
@@ -305,7 +320,7 @@ fn several_sealed_chunks_are_trusted_before_recovering_only_the_open_tail() {
     output.complete_recording().unwrap();
 
     let mut manifest = metadata(&run);
-    manifest["status"] = serde_json::json!({"state": "running"});
+    mark_manifest_running(&mut manifest);
     let chunks = manifest["streams"][0]["chunks"].as_array_mut().unwrap();
     assert_eq!(chunks.len(), 3);
     chunks.pop();

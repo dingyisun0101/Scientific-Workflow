@@ -17,8 +17,11 @@ Current scope:
 
 Implemented and verified:
 
-- `configuration`: standard three-file project loading, deterministic task
-  expansion, dict-like resolved parameters, named paths, and exact export;
+- `configuration`: standard three-file parameter/path loading, deterministic
+  task expansion, dict-like resolved parameters, named paths, and exact export;
+- `project`: conventional four-file `ScientificProject` loading including
+  `config/state.json`;
+- `execution`: automatic generated/named execution scopes and task paths;
 - `system_state`: mutable simulation-owned heterogeneous state;
 - `time_series`: eager in-memory analysis collection;
 - storage format, borrowed encoder, bounded writer, decoder registry, two
@@ -827,6 +830,117 @@ prints only the root and parameter/task/path counts.
 shared project setup and bounded diagnostics
 ```
 
+### ScientificProject
+
+`ScientificProject` is the immutable four-file project facade. It owns a
+`ProjectConfig` and the `SystemStateSchema` loaded from mandatory
+`config/state.json`. Cloning shares all component allocations.
+
+#### ScientificProject::load
+
+Loads `fixed.json`, `sweep.json`, `paths.json`, and `state.json` from the
+conventional `config/` directory.
+
+##### Reference
+
+```text
+application startup -> ScientificProject::load(project_root)
+attractor_2d::run -> ScientificProject::load
+GLV project bootstrap -> ScientificProject::load
+```
+
+#### ScientificProject::project_root
+
+Returns the supplied project root without canonicalization.
+
+##### Reference
+
+```text
+diagnostics and execution-root resolution -> ScientificProject::project_root
+```
+
+#### ScientificProject::configuration_directory
+
+Returns the standard `config/` directory.
+
+##### Reference
+
+```text
+startup logging and configuration provenance -> ScientificProject::configuration_directory
+```
+
+#### ScientificProject::parameters
+
+Borrows the deterministic fixed-plus-sweep parameter space.
+
+##### Reference
+
+```text
+task enumeration and indexed task lookup -> ScientificProject::parameters
+```
+
+#### ScientificProject::paths
+
+Borrows the named runtime-path dictionary.
+
+##### Reference
+
+```text
+recording and input path resolution -> ScientificProject::paths
+```
+
+#### ScientificProject::state_schema
+
+Borrows the shared state schema loaded from `config/state.json`.
+
+##### Reference
+
+```text
+model assembly and writer configuration -> ScientificProject::state_schema
+```
+
+#### ScientificProject::configuration
+
+Borrows the lower-level three-file configuration facade.
+
+##### Reference
+
+```text
+exact parameter/path source export -> ScientificProject::configuration
+```
+
+#### ScientificProject::into_parts
+
+Consumes the facade and returns owned configuration and schema handles without
+cloning their shared internals.
+
+##### Reference
+
+```text
+downstream ownership separation -> ScientificProject::into_parts
+```
+
+#### ScientificProject::clone / Debug
+
+Clone shares parsed allocations. Debug reports only roots and bounded counts.
+
+##### Reference
+
+```text
+shared project ownership and startup diagnostics
+```
+
+### ScientificProjectError
+
+Wraps either `ConfigurationError` or `StateError` without discarding its source
+chain.
+
+#### Reference
+
+```text
+ScientificProject::load -> ScientificProjectError
+```
+
 ### Project export helpers
 
 Private helpers create the destination root and standard directory, write and
@@ -858,6 +972,114 @@ typed lookup from generated task dictionaries.
 crate root -> pub mod configuration
 prelude -> explicit configuration type re-exports
 downstream callers -> scientific_workflow::configuration::{...}
+```
+
+## Execution scopes
+
+`ExecutionScope` owns one project-execution directory but never creates task
+recording children. Those paths remain absent until `SystemStateWriter`
+exclusively creates them.
+
+### ExecutionScope::create_generated
+
+Creates the parent root when necessary, captures a UTC timestamp, and
+exclusively creates a readable collision-resistant execution directory using
+timestamp, process, and atomic sequence components.
+
+#### Reference
+
+```text
+ordinary application run -> ExecutionScope::create_generated(recording_root)
+attractor_2d::run -> ExecutionScope::create_generated
+```
+
+### ExecutionScope::create_named
+
+Validates one safe path component and exclusively creates that named scope.
+
+#### Reference
+
+```text
+dispatcher-owned run identity -> ExecutionScope::create_named
+reproducible reference run -> ExecutionScope::create_named
+```
+
+### ExecutionScope::open_existing
+
+Read-only opens an existing directory. It does not invent a historical
+creation timestamp or modify the scope.
+
+#### Reference
+
+```text
+task continuation orchestration -> ExecutionScope::open_existing
+```
+
+### ExecutionScope::directory
+
+Returns the scope directory.
+
+#### Reference
+
+```text
+execution logging and task-path derivation -> ExecutionScope::directory
+```
+
+### ExecutionScope::created_at_utc
+
+Returns the captured RFC 3339 UTC timestamp for a newly created scope, or
+`None` for a reopened scope without separate scope metadata.
+
+#### Reference
+
+```text
+application execution log -> ExecutionScope::created_at_utc
+```
+
+### ExecutionScope::task_recording_directory
+
+Deterministically derives `task-{index:06}` without creating it.
+
+#### Reference
+
+```text
+per-task writer setup -> ExecutionScope::task_recording_directory
+attractor_2d::record_model -> ExecutionScope::task_recording_directory
+```
+
+### ExecutionScope::clone / Debug
+
+Clone copies only small path/timestamp owners. Debug contains no task or
+scientific payload data.
+
+#### Reference
+
+```text
+shared execution orchestration and bounded diagnostics
+```
+
+### ExecutionScopeError
+
+Distinguishes invalid caller names, UTC formatting failure, contextual IO, and
+exhausted generated-identity attempts.
+
+#### Reference
+
+```text
+ExecutionScope constructors -> ExecutionScopeError
+```
+
+### Execution-scope helpers
+
+`validate_name` permits exactly one nonempty normal path component.
+`compact_timestamp` removes RFC 3339 punctuation for readable ordered directory
+names; exclusive creation, not the timestamp, remains the uniqueness authority.
+
+#### Reference
+
+```text
+ExecutionScope::create_named -> validate_name
+ExecutionScope::create_generated -> compact_timestamp
 ```
 
 ## Core invariants
@@ -1641,8 +1863,8 @@ Returns `(StateSeriesError, SystemState)` without cloning.
 
 ## Storage format
 
-Format version 3 stores the machine-readable positive
-the typed `sampling_interval` used by writer-side scheduling. Earlier format
+Format version 4 stores typed `sampling_interval` scheduling, structurally
+separate initial/terminal metadata, and automatic operational timing. Earlier format
 versions are intentionally unsupported in this clean-slate stage.
 
 ### On-disk layout
@@ -1669,7 +1891,8 @@ Complete versioned contents of the sole metadata document.
 
 #### RecordingMetadata::running
 
-Creates initial running metadata from time, run attributes, and streams.
+Creates initial running metadata from time, run attributes, streams, and the
+automatically captured creation timestamp. Terminal metadata starts empty.
 
 ##### Reference
 
@@ -1702,6 +1925,41 @@ Validates lifecycle-specific content.
 ##### Reference
 
     RecordingMetadata::validate -> RecordingStatus::validate
+
+### Stored RecordingTiming
+
+Private persisted timing representation containing creation/finalization UTC
+timestamps, accumulated active nanoseconds, and continuation count.
+
+#### RecordingTiming::started
+
+Creates timing for a new running recording with no terminal timestamp, zero
+duration, and zero continuations.
+
+##### Reference
+
+    RecordingMetadata::running -> RecordingTiming::started
+
+#### RecordingTiming::validate
+
+Requires canonical UTC RFC 3339 timestamps and enforces that running recordings
+lack finalization while terminal recordings contain it.
+
+##### Reference
+
+    RecordingMetadata::validate -> RecordingTiming::validate
+
+### Operational clock helpers
+
+`utc_now_rfc3339` formats the host UTC clock, `is_utc_rfc3339` validates the
+canonical persisted form, and `duration_nanoseconds` checked-converts monotonic
+durations to `u64` nanoseconds.
+
+#### Reference
+
+    recording creation/finalization and ExecutionScope creation -> utc_now_rfc3339
+    RecordingTiming::validate -> is_utc_rfc3339
+    SystemStateWriter::transition_terminal -> duration_nanoseconds
 
 ### RecordFormat
 
@@ -2259,6 +2517,55 @@ Iterates stream names in metadata order.
 
     analysis stream discovery
 
+#### StoredStateSeriesReader::format_version
+
+Returns the validated completed storage format version.
+
+##### Reference
+
+    dispatcher compatibility diagnostics -> StoredStateSeriesReader::format_version
+
+#### StoredStateSeriesReader::user_metadata
+
+Borrows immutable creation-time user metadata.
+
+##### Reference
+
+    task parameter and model identity validation -> StoredStateSeriesReader::user_metadata
+
+#### StoredStateSeriesReader::terminal_metadata
+
+Borrows completion-time user metadata.
+
+##### Reference
+
+    termination reason and completed iteration validation -> StoredStateSeriesReader::terminal_metadata
+
+#### StoredStateSeriesReader::recording_timing
+
+Borrows validated automatic operational timing.
+
+##### Reference
+
+    completed-run timing analysis -> StoredStateSeriesReader::recording_timing
+
+#### StoredStateSeriesReader::stream_record_count
+
+Sums metadata-declared chunk record counts without opening payload files.
+
+##### Reference
+
+    analysis sampling summary -> StoredStateSeriesReader::stream_record_count
+    attractor checkpoint count -> StoredStateSeriesReader::stream_record_count
+
+#### StoredStateSeriesReader::stream_encoded_bytes
+
+Sums exact metadata-declared chunk bytes without opening payload files.
+
+##### Reference
+
+    dispatcher storage summary -> StoredStateSeriesReader::stream_encoded_bytes
+
 #### StoredStateSeriesReader::read_stream_as_state_series
 
 Checks stream existence and decoder coverage, verifies every chunk, decodes all
@@ -2276,6 +2583,17 @@ later stream fails.
 ##### Reference
 
     whole-run eager analysis -> StoredStateSeriesReader::read_all_streams_as_state_series
+
+#### StoredStateSeriesReader::read_latest_state_from_stream
+
+Opens only the newest chunk, verifies its byte length and checksum, locates its
+final newline-terminated record, reconstructs the stream's partial state, and
+checks its iteration against the descriptor. Earlier chunks are not opened.
+
+##### Reference
+
+    final-value analysis -> StoredStateSeriesReader::read_latest_state_from_stream
+    attractor checkpoint verification -> StoredStateSeriesReader::read_latest_state_from_stream
 
 #### StoredStateSeriesReader::read_chunk
 
@@ -2586,6 +2904,142 @@ builder `SystemStateSchema`; decoder outputs populate every slot before writers 
 
     simulator restart -> SystemStateWriterBuilder::continue_recording_from_latest_checkpoint
 
+### `RecordingTiming`
+
+Immutable operational timing exposed after successful completion. It never
+represents simulation iteration or physical time.
+
+#### `RecordingTiming::created_at_utc`
+
+Returns the original canonical UTC RFC 3339 creation timestamp.
+
+##### Reference
+
+    CompletedRecording::timing -> RecordingTiming::created_at_utc -> run logging
+
+#### `RecordingTiming::finalized_at_utc`
+
+Returns the successful terminal UTC timestamp.
+
+##### Reference
+
+    CompletedRecording::timing -> RecordingTiming::finalized_at_utc -> run logging
+
+#### `RecordingTiming::active_duration_ns`
+
+Returns exact accumulated monotonic active duration in integer nanoseconds.
+
+##### Reference
+
+    dispatcher metrics and metadata verification -> RecordingTiming::active_duration_ns
+
+#### `RecordingTiming::active_duration`
+
+Returns the same exact value as `std::time::Duration`.
+
+##### Reference
+
+    human-facing duration formatting -> RecordingTiming::active_duration
+
+#### `RecordingTiming::continuation_count`
+
+Returns the number of successful continuation opens.
+
+##### Reference
+
+    resume diagnostics -> RecordingTiming::continuation_count
+
+### `CompletedRecording`
+
+Immutable durable result created only after a successful terminal commit. It
+cannot write or resume the recording.
+
+#### `CompletedRecording::directory`
+
+Returns the completed recording root.
+
+##### Reference
+
+    attractor analysis and dispatcher handoff -> CompletedRecording::directory
+
+#### `CompletedRecording::timing`
+
+Borrows automatic operational timing.
+
+##### Reference
+
+    application terminal log -> CompletedRecording::timing
+
+#### `CompletedRecording::terminal_metadata`
+
+Borrows the exact terminal metadata committed by the caller.
+
+##### Reference
+
+    GLV outcome and dispatcher validation -> CompletedRecording::terminal_metadata
+
+#### `CompletedRecording::stream_summaries`
+
+Returns declaration-ordered aggregate stream facts derived from durable chunk
+descriptors without reading payload files.
+
+##### Reference
+
+    GLV writer statistics and dispatcher completion validation -> CompletedRecording::stream_summaries
+
+#### `CompletedRecording::stream_summary`
+
+Looks up one aggregate by exact logical stream name.
+
+##### Reference
+
+    application terminal reporting -> CompletedRecording::stream_summary
+
+### `CompletedStreamSummary`
+
+Owns one stream name, chunk count, record count, exact encoded bytes, and
+optional first/final iterations.
+
+#### `CompletedStreamSummary::name`
+
+Returns the logical stream name.
+
+##### Reference
+
+    summary logging and lookup verification -> CompletedStreamSummary::name
+
+#### `CompletedStreamSummary::chunk_count`
+
+Returns the number of immutable chunk files.
+
+##### Reference
+
+    storage statistics -> CompletedStreamSummary::chunk_count
+
+#### `CompletedStreamSummary::record_count`
+
+Returns the number of persisted states.
+
+##### Reference
+
+    GLV TaskOutcome replacement -> CompletedStreamSummary::record_count
+
+#### `CompletedStreamSummary::encoded_bytes`
+
+Returns exact total framed bytes.
+
+##### Reference
+
+    storage metrics -> CompletedStreamSummary::encoded_bytes
+
+#### `CompletedStreamSummary::first_iteration` / `last_iteration`
+
+Return stream range endpoints or `None` for a stream with no records.
+
+##### Reference
+
+    dispatcher progress/completion validation -> CompletedStreamSummary iteration range
+
 ### `SystemStateWriter`
 
 Non-clone exclusive owner of one active writer handle and the sole legal
@@ -2641,22 +3095,43 @@ is durable in `metadata.json`.
 #### `SystemStateWriter::complete_recording`
 
 Consumes the coordinator, drains all streams, and atomically publishes
-`Complete`. Descriptors were committed incrementally at each seal. On writer
-failure it attempts `Failed` metadata without hiding the first writer error.
+`Complete` with automatic terminal timing. It returns `CompletedRecording`.
+Descriptors were committed incrementally at each seal. On writer failure it
+attempts `Failed` metadata without hiding the first writer error.
 
 ##### Reference
 
     successful simulation termination -> SystemStateWriter::complete_recording
 
+#### `SystemStateWriter::complete_recording_with_terminal_metadata`
+
+Completes without an extra final-state offer and atomically commits a terminal
+metadata map in its separate namespace.
+
+##### Reference
+
+    terminal facts without final state -> SystemStateWriter::complete_recording_with_terminal_metadata
+
 #### `SystemStateWriter::complete_recording_with_final_state`
 
 Offers one terminal state to every stream, skips streams that already recorded
 the same iteration, records non-aligned endpoints once, then delegates normal drain
-and completion. Cadence and endpoint policy therefore remain inside the writer.
+and completion. Sampling-interval and endpoint policy therefore remain inside the writer.
 
 ##### Reference
 
     successful model termination -> SystemStateWriter::complete_recording_with_final_state
+
+#### `SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata`
+
+Combines exactly-once final-state sampling with terminal user metadata,
+automatic finalization timestamp, monotonic active duration, and successful
+status in one lifecycle operation.
+
+##### Reference
+
+    attractor_2d::record_model -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
+    GLV termination -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
 
 #### `SystemStateWriter::mark_recording_failed`
 
@@ -2666,6 +3141,15 @@ non-empty failed reason. A concurrent writer failure takes precedence.
 ##### Reference
 
     simulation-level terminal error -> SystemStateWriter::mark_recording_failed
+
+#### `SystemStateWriter::mark_recording_failed_with_terminal_metadata`
+
+Publishes an explicit failure reason together with terminal-only facts and
+automatic timing.
+
+##### Reference
+
+    intentional early termination diagnostics -> SystemStateWriter::mark_recording_failed_with_terminal_metadata
 
 #### `SystemStateWriter::create_new_recording`
 
@@ -2682,7 +3166,8 @@ one recording-wide writer worker.
 Privately loads running metadata under the exclusive root lease, rejects
 terminal or mismatched output, removes only a known interrupted metadata
 replacement temporary, recovers stream seeds, optionally reconstructs a full
-checkpoint, and starts the append worker.
+checkpoint, preserves creation time, increments continuation count, commits
+that continuation fact, and starts the append worker.
 
 ##### Reference
 
@@ -2714,13 +3199,22 @@ the open-to-sealed rename.
 
     ActiveChunk::seal -> RecordingManifest::prepare_chunk
 
-#### `RecordingManifest::transition`
+#### `RecordingManifest::transition_terminal`
 
-Publishes the terminal complete or failed lifecycle after all writers drain.
+Publishes terminal status, finalization timestamp, accumulated active duration,
+and terminal metadata after all writers drain.
 
 ##### Reference
 
-    SystemStateWriter::complete_recording and SystemStateWriter::mark_recording_failed -> RecordingManifest::transition
+    SystemStateWriter terminal methods -> RecordingManifest::transition_terminal
+
+#### `RecordingManifest::snapshot`
+
+Clones the small durable metadata snapshot after completion.
+
+##### Reference
+
+    SystemStateWriter::completed_recording -> RecordingManifest::snapshot
 
 ### `RecordingLease`
 
@@ -2805,9 +3299,9 @@ an omitted or accidentally private supported type is detected by compilation.
 The crate-level work required for simulator state ownership, checkpoint
 recovery, and the one-state/one-writer resource model is complete. Inspection
 of simulator's hot loop, checkpoint path, and multi-system runner originally
-identified four integration gates. Gates 1, 2, and 4 are resolved. Gate 3—the
-public recording manifest and terminal summary—is deliberately deferred and is
-not required to begin simulator migration.
+identified four integration gates. Gates 1, 2, and 4 are resolved. Gate 3 is
+partially resolved: completion now returns timing and terminal metadata, while
+a complete public manifest and aggregate stream statistics remain deferred.
 
 Already compatible:
 
@@ -3149,18 +3643,18 @@ non-empty open chunk even below its byte target, and commits its descriptor.
 Simulator can call this after a resume-critical space checkpoint; ordinary
 signal samples can retain automatic byte-target chunking.
 
-### Gate 3: recording manifest and terminal summary (deferred)
+### Gate 3: public manifest and aggregate stream summary (partially deferred)
 
 Simulator and dispatcher inspect configuration, end time, activity, sample
 counts, and writer statistics without decoding payload chunks. Current run
-metadata accepts annotations only at startup, remains private behind the
-reader, and `SystemStateWriter::complete_recording` returns no summary. The public boundary needs:
+metadata now accepts structurally separate startup and terminal annotations,
+and completion returns `CompletedRecording` with directory and timing. The
+remaining public boundary needs:
 
 - a read-only recording manifest/status view, including per-stream aggregate records
   and bytes;
 - access to user recording metadata from the reader;
-- a terminal metadata update for values known only after simulation; and
-- a `RecordingSummary` returned by successful completion, or an equivalent cheap
+- aggregate stream facts on `CompletedRecording` or an equivalent cheap
   inspection API after finish.
 
 This allows dispatcher validation to depend on the scientific-workflow format
@@ -3793,7 +4287,7 @@ allocation-free, and sufficiently stable for these bounded demonstration
 parameters; the example does not introduce a generic integrator abstraction.
 
 The example crate root is also the scientific project root; there is no nested
-`project/` wrapper. `ProjectConfig::load` therefore receives the
+`project/` wrapper. `ScientificProject::load` therefore receives the
 `examples/attractor_2d` path, standard configuration lives directly under
 `config/`, including the state template.
 
@@ -3808,9 +4302,9 @@ before recording begins.
 
 The configuration set is complete. `config/sweep.json` defines the ordered
 Cartesian `mu` axis `[-0.25, 0.25, 1.0]`, producing three tasks across the Hopf
-bifurcation. `config/paths.json` resolves `state_template` to
-`config/state.json` and `recording_root` to the ignored `target/recordings` directory,
-both relative to the standalone example root.
+bifurcation. `ScientificProject` loads conventional `config/state.json`
+directly. `config/paths.json` resolves only `recording_root` to the ignored
+`target/recordings` directory relative to the standalone example root.
 
 The state/recording boundary now deliberately demonstrates heterogeneous
 payloads. A complete Hopf state is built-in `SimulationTime`,
@@ -4061,3 +4555,338 @@ Future physical-time sampling should be a separate noun-based policy such as
 `SamplingSchedule::PhysicalTimeInterval`. Domain-specific Monte Carlo sweeps
 remain model terminology and must not redefine the generic meanings of step or
 iteration.
+
+## Simulator and dispatcher migration readiness
+
+The crate is now a stable migration target for both downstream projects. A
+simulator can own one authoritative `SystemState`, mutate disjoint typed
+payloads through tuple borrowing, perform one model `step`, advance its
+`iteration`, and offer the borrowed state to a `SystemStateWriter`. The writer
+owns typed per-stream `SamplingInterval` policies, bounded backpressure,
+whole-record chunking, terminal sampling, durability barriers, and checkpoint
+continuation.
+
+Dispatcher can replace its fixed/sweep expansion with `ProjectConfig` and
+`ParameterSpace`, assign deterministic `TaskParameters`, configure one
+recording per task, and inspect completed results through the storage reader.
+Scoped execution policy and richer logging remain dispatcher-level work rather
+than prerequisites missing from this crate. Migration should preserve the new
+storage-format version 4 contract and should not introduce compatibility
+aliases for the former step-based counter or sampling names.
+
+## GLV migration audit
+
+`general-lotka-volterra-rs` should be the first downstream refactor, before
+simulator and dispatcher. Dispatcher directly imports GLV solver, task-outcome,
+metadata, and output APIs, whereas simulator does not depend on GLV. Migrating
+GLV first therefore establishes the new downstream contract and removes one
+entire legacy persistence format before dispatcher is changed. GLV is also a
+smaller real-world proving ground than simulator: it already owns one evolving
+state, uses ordinary Serde-compatible `ndarray` payloads, and produces two
+logical streams with different field selections.
+
+The current GLV boundary duplicates Scientific Workflow in four places:
+
+1. its generic `SystemState<T>` owns mode, integer time, aggregate array,
+   optional spatial array, and cached mass as public fields;
+2. solvers alternate between two complete GLV states and directly decide when
+   signal and space samples are due;
+3. `SignalWriter` and `SpaceWriter` clone arrays into estimated-size JSON
+   chunks; and
+4. `TaskOutcome` writes a second, GLV-specific `metadata.json` lifecycle that
+   dispatcher parses directly.
+
+The target GLV state uses Scientific Workflow's `SystemState` as the sole
+authoritative evolving state. Its schema should declare `state`, `mass`, and,
+for spatial models, `space`. Concrete payload types remain `Array1<f64>`,
+`f64`, and `ArrayD<f64>`; their types are retained in memory and erased only
+when storage requests borrowed serialization. `Mode`, model coefficients,
+cutoff, carrying capacity, solver settings, and termination settings are model
+configuration rather than evolving payloads and should remain outside the
+state. Separate non-spatial and spatial schemas avoid pretending that a
+missing spatial field is a loaded scientific payload.
+
+Each GLV model should expose one `step` operation. Solver scratch arrays and a
+next-array buffer may remain model-owned implementation details, but a second
+complete `SystemState` should not. After a successful numerical update, the
+model swaps or writes the resulting arrays into its authoritative state,
+refreshes `mass`, and calls `advance_simulation_time(Some(dt))`. Termination
+logic borrows the typed fields it needs. A run orchestrator offers the state to
+one `SystemStateWriter` after initialization and after every completed step;
+the writer alone evaluates `SamplingInterval` for `signal`, `space`, and
+checkpoint streams.
+
+GLV's `io` module, fixed estimated-byte chunking, `SignalRecord`,
+`SpaceRecord`, and file loaders should disappear after equivalence is proven.
+Scientific Workflow then supplies exact encoded-byte chunking, bounded
+backpressure, one authoritative metadata document, typed reconstruction, and
+checkpoint continuation. GLV configuration known before execution—requested
+step count, model identity, solver increment, and sampling intervals—can be
+recorded as writer user metadata at creation. The termination reason and
+completed step count are known only at the end. GLV may continue returning
+those values in an in-memory run outcome, but preserving them in the sole
+`metadata.json` requires the deferred terminal-metadata API. That is the one
+Scientific Workflow decision to settle before deleting GLV's metadata
+implementation; creating a second GLV sidecar is not acceptable.
+
+Migration order is:
+
+1. add a local Scientific Workflow dependency and define checked-in spatial
+   and non-spatial state schemas;
+2. introduce model owners around the authoritative state and adapt
+   sanitization, noise, termination, and numerical kernels;
+3. replace solver-owned save branches with writer observation and typed stream
+   intervals;
+4. replace GLV readers and metadata validation with Scientific Workflow
+   readers and metadata;
+5. migrate examples and add numerical/output equivalence tests before deleting
+   legacy IO; and
+6. publish GLV, then refactor dispatcher against that new API before migrating
+   simulator's more complex PiP state.
+
+The audited GLV baseline is green: all ten library tests and all five example
+test targets pass before migration. Existing tests currently live inside
+production modules; the refactor should move meaningful coverage into the
+dedicated `tests/` directory to match the repository-wide testing convention.
+
+### GLV refactor kickoff
+
+GLV development proceeds on its dedicated `sw-version` branch. Its
+repository-root `todo.md` is the
+authoritative staged migration checklist. No GLV production code was changed
+when the branch and plan were created. The first implementation gate remains
+the terminal-metadata decision followed by local dependency and schema setup;
+each subsequent production file is reviewed individually.
+
+## Example-pattern absorption audit
+
+The complete `attractor_2d` example was audited to distinguish reusable
+workflow infrastructure from application policy. The example should remain
+explicit enough to teach the ownership model, but it should not have to invent
+generic project and recording lifecycle types that every downstream project
+will repeat.
+
+### Patterns that belong in Scientific Workflow
+
+#### Conventional project definition
+
+`project_setup::load_project` always performs the same three operations: load
+`fixed.json`, `sweep.json`, and `paths.json`; locate `state.json`; and retain
+the shared `SystemStateSchema`. This is now one crate-owned
+`ScientificProject` rather than an application-specific `ProjectSetup` wrapper.
+
+The preferred clean-slate convention is a mandatory
+`project-root/config/state.json` beside the other three configuration files.
+The state template is structural project configuration, not an arbitrary data
+path, so `paths.json` no longer needs a `state_template` entry.
+`ScientificProject` owns `ProjectConfig` plus `SystemStateSchema` and exposes
+the existing parameter and path views without copying either. It describes
+immutable project inputs and does not execute tasks.
+
+#### Scoped execution directories
+
+The former `create_execution_directory` used an application-formatted timestamp
+and process identifier while each task manually derived `task_{index}`.
+`ExecutionScope` now creates generated or caller-named scopes, reopens existing
+scopes, and derives deterministic task recording paths. Exclusive directory
+creation remains the collision authority, and task paths stay absent until the
+recording writer exclusively creates them.
+
+#### Completed-recording result
+
+The example's former path-only `CompletedRecording` wrapper has been replaced
+by the crate-owned immutable `CompletedRecording`. Writer completion returns it
+with the recording directory, automatic `RecordingTiming`, and terminal user
+metadata. Per-stream byte summaries may be added later without changing its
+lifecycle role.
+
+The completed handle should be produced only after all writer work is drained
+and terminal metadata is durable. It is not a second owner of the active
+writer and cannot append records.
+
+#### Terminal metadata at completion
+
+The example knows all metadata before evolution, but GLV demonstrates that
+completed iteration count and termination reason exist only at the end. The
+completion operation now accepts an optional terminal user-metadata map that is
+committed atomically with completed status in the sole `metadata.json`.
+Initial and terminal metadata must remain structurally distinguishable so a
+terminal value cannot silently rewrite task parameters. This capability and
+the completed-recording result should be one lifecycle refactor.
+
+#### Latest-record reading
+
+`recording_analysis::verify_final_state` reconstructs three complete
+`StateSeries` values merely to inspect each final record. The storage reader
+already contains private machinery to locate the last valid record efficiently
+for checkpoint continuation. `read_latest_state_from_stream` reconstructs
+the latest state of one completed stream without scanning or retaining the
+entire series. It returns that stream's partial state schema; callers decide
+whether it is a complete checkpoint. Full-series reconstruction remains the
+analysis API.
+
+### Patterns that should remain application code
+
+- `HopfModel`, its coefficients, field-name constants, payload assembly,
+  explicit-Euler `step`, and derived-radius maintenance are scientific model
+  behavior.
+- `TaskSettings` is a useful application boundary. Automatically decoding
+  magic parameter names such as `step_count` or
+  `trajectory_sampling_interval` would make the generic crate less clear.
+- Stream names and field selections are scientific output design. The writer
+  builder already expresses them directly and should not assume `trajectory`,
+  `radius`, `signal`, `space`, or `checkpoint`.
+- The ASCII plot, bounds, expected attractor radius, and equality assertions
+  are analysis and validation policy.
+- The executable's `AppResult`, logging text, and process-exit behavior belong
+  to the application.
+
+### Patterns to defer until GLV supplies a second use case
+
+The short `observe initial -> step and observe -> complete with final state`
+loop is attractive but should not yet become a framework runner or an
+`EvolvingSystem` trait. GLV requires early termination, stochastic failure,
+progress reporting, separate solver scratch, and continuation; simulator adds
+group execution and activity-based stopping. A trait inferred only from the
+Hopf loop would either be too narrow or would prematurely make execution policy
+part of `SystemState`.
+
+Likewise, stream declarations should not yet be decoded automatically from
+magic `fixed.json` keys. If GLV repeats the same declaration structure, a
+format-independent recording-plan type may be justified. Until then,
+`StateStreamConfig` and `SystemStateWriterBuilder` are the correct explicit
+boundary.
+
+### Completed absorption order
+
+1. Terminal metadata and a completed-recording handle now share one terminal
+   lifecycle transition.
+2. Efficient latest-state reading is available for completed streams.
+3. `ScientificProject` owns the conventional `config/state.json` schema.
+4. `ExecutionScope` owns generated/named/opened execution directories and
+   deterministic task recording paths.
+5. Revisit a generic run controller only after GLV and simulator expose the
+   complete set of evolution and termination needs.
+
+## Operational timestamp and duration architecture
+
+Scientific time and operational time are distinct domains and must remain
+separate throughout the API and wire format:
+
+1. `SimulationTime::iteration` is the integer scientific coordinate.
+2. `SimulationTime::physical_time` is an optional modeled continuous
+   coordinate.
+3. A UTC timestamp identifies when a workflow event happened on the host
+   clock.
+4. A monotonic duration measures elapsed execution without being affected by
+   wall-clock adjustment.
+5. `SamplingInterval` selects scientific states and is neither a timestamp nor
+   an elapsed duration.
+
+The workflow layer should manage operational timing automatically. Applications
+should not have to call `SystemTime::now`, format directory timestamps, or
+calculate elapsed run time for ordinary project execution.
+
+### Recording timing
+
+Every recording's sole `metadata.json` contains one structural timing
+section. A newly created writer records its UTC creation/session-start
+timestamp automatically. Successful completion and explicit failure record a
+UTC terminal timestamp and monotonic active duration atomically with terminal
+status. The completed-recording handle exposes this information without
+requiring callers to parse JSON.
+
+Recommended conceptual shape:
+
+```json
+{
+  "timing": {
+    "created_at_utc": "2026-08-09T21:15:30.123456789Z",
+    "finalized_at_utc": "2026-08-09T21:17:04.987654321Z",
+    "active_duration_ns": 94864197532,
+    "continuation_count": 0
+  }
+}
+```
+
+UTC timestamps use a canonical RFC 3339 representation with a `Z` suffix and
+subsecond precision. Durations use integer nanoseconds rather than floating
+seconds, avoiding rounding ambiguity and retaining an exact machine-readable
+unit. Human-facing formatters may present a friendlier duration without
+changing persisted data.
+
+`created_at_utc` is immutable. `finalized_at_utc` is absent while status is
+running. `active_duration_ns` measures time actively owned by writer sessions,
+not the wall-clock difference between creation and completion; a paused or
+interrupted recording may therefore have a much larger wall span than active
+duration. `continuation_count` makes resumed execution explicit without adding
+another artifact.
+
+Continuation must preserve the original creation timestamp. Each active writer
+uses a process-local monotonic timer and adds its elapsed duration during a
+durable lifecycle transition. A process crash can prevent the unfinished
+session's monotonic duration from being committed; the format must not invent
+precision it cannot recover. If detailed session provenance later proves
+necessary, a session list can be added in a new format version, but it is not
+required for the first timing implementation.
+
+### Execution-scope timing and names
+
+A generated execution scope receives both an opaque collision-resistant
+identifier and an automatic UTC creation timestamp. A readable timestamp may
+appear in its directory name, but timestamp text alone is not a uniqueness
+mechanism because concurrent processes can observe the same clock value. Named
+scope creation remains available when an application or dispatcher owns the
+external identity.
+
+Scope metadata should eventually record scope creation/finalization and total
+duration independently of each task recording. That belongs to the future
+dispatcher-oriented execution-scope feature; recording-level timing can be
+implemented first.
+
+### What should not be automatic
+
+- State JSONL records should not receive wall-clock timestamps automatically.
+  They remain lean and deterministic: only iteration, optional physical time,
+  and selected scientific payloads are recorded.
+- Chunk descriptors do not initially need timestamps. Checksums, byte counts,
+  record counts, and iteration ranges already define their scientific and
+  durability contract.
+- Model phases, solver substeps, benchmark spans, or domain events should not
+  become hard-coded metadata fields. Applications may store scientifically
+  relevant values as state payloads; a later structured logging/metrics module
+  may record operational events.
+- Wall-clock subtraction must not be used as the authoritative active duration;
+  host clocks can jump.
+
+Timing, terminal metadata, and the completed-recording handle are implemented
+through the same lifecycle transition and produce one atomic terminal metadata
+commit.
+
+### Effect on application examples
+
+Automatic operational timing removes all direct wall-clock handling from
+`attractor_2d`. In particular, `project_setup::create_execution_directory`,
+its `SystemTime`/`UNIX_EPOCH` use, process-identifier suffix, and manual run-name
+formatting have disappeared. The completed
+recording handle likewise replaces the example's path-only wrapper.
+
+It deliberately does not remove scientific-time handling from the model:
+
+- configuration still supplies `step_count` because it requests a number of
+  evolution actions;
+- configuration still supplies `physical_time_increment_per_step` because it
+  is part of the explicit-Euler model;
+- `HopfModel::step` still calls `advance_simulation_time` only after committing
+  a successful state transition;
+- stream configuration still supplies `SamplingInterval` values; and
+- analysis still reads iteration and physical time from reconstructed states.
+
+The application may also continue declaring physical-time axis names and units
+because those are scientific semantics. Workflow can provide sensible
+iteration defaults, but it cannot infer whether physical time is measured in
+seconds, days, generations, or a dimensionless coordinate.
+
+Accordingly, the desired result is **no application-owned operational clock**,
+not “no time code anywhere in the application.” Scientific time remains an
+explicit part of model correctness.

@@ -4,7 +4,7 @@
 //! [`HopfModel`] remains the sole state owner before, during, and after this
 //! function.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use scientific_workflow::prelude::*;
 
@@ -21,21 +21,15 @@ pub(crate) const RADIUS_STREAM: &str = "radius";
 /// Complete stream containing restart-capable state snapshots.
 pub(crate) const CHECKPOINT_STREAM: &str = "checkpoint";
 
-/// Storage facts returned after the writer reaches completed status.
-#[derive(Debug)]
-pub(crate) struct CompletedRecording {
-    pub(crate) directory: PathBuf,
-}
-
 /// Evolves one model while recording all due samples, then seals the output.
 pub(crate) fn record_model(
     schema: &SystemStateSchema,
-    execution_root: &Path,
+    execution: &ExecutionScope,
     parameters: &TaskParameters,
     settings: &TaskSettings,
     model: &mut HopfModel,
 ) -> AppResult<CompletedRecording> {
-    let directory = execution_root.join(format!("task_{:04}", settings.task_index));
+    let directory = execution.task_recording_directory(settings.task_index);
     let mut writer = build_writer(schema, &directory, settings, parameters)?;
 
     writer.observe_state(model.state())?;
@@ -44,8 +38,21 @@ pub(crate) fn record_model(
         writer.observe_state(model.state())?;
     }
 
-    writer.complete_recording_with_final_state(model.state())?;
-    Ok(CompletedRecording { directory })
+    let mut terminal_metadata = serde_json::Map::new();
+    terminal_metadata.insert(
+        "completed_step_count".to_owned(),
+        serde_json::Value::from(settings.step_count),
+    );
+    terminal_metadata.insert(
+        "termination_reason".to_owned(),
+        serde_json::Value::from("requested_steps_completed"),
+    );
+    Ok(
+        writer.complete_recording_with_final_state_and_terminal_metadata(
+            model.state(),
+            terminal_metadata,
+        )?,
+    )
 }
 
 /// Creates the trajectory, diagnostic, and checkpoint streams.

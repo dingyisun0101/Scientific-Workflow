@@ -22,7 +22,7 @@ cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
 Recordings are written beneath the example's ignored `target/recordings`
-directory. Each execution selects a new run directory, so rerunning the
+directory. `ExecutionScope` selects a new timestamped, collision-resistant run directory, so rerunning the
 example does not overwrite prior results. The executable covers configuration,
 task expansion, state evolution, bounded recording, chunking, explicit
 recording completion, typed stream reconstruction, numerical summaries, a
@@ -44,7 +44,8 @@ than source-file-level tests.
 cargo test --test configuration_workflow -- --nocapture
 ```
 
-Loads real Cartesian and correlated-case projects, generates dict-like task
+Loads real Cartesian and correlated-case projects, the conventional state
+schema, and generated/named execution scopes; generates dict-like task
 parameters, resolves named paths, proves shared value ownership, performs an
 exact three-file export/reload, and rejects ambiguous configuration.
 
@@ -75,8 +76,8 @@ cargo test --test storage_workflow -- --nocapture
 
 Runs default decoder round trips and a multi-stream PiP tensor workflow through
 the public prelude and `SystemStateWriter`, including borrowed encoding, bounded
-writing, automatic chunking, metadata, integrity verification, and typed
-reconstruction. Successful output verifies that sealed chunks have final names
+writing, automatic chunking, operational timing, terminal metadata, integrity
+verification, and latest-state/full-series typed reconstruction. Successful output verifies that sealed chunks have final names
 and no temporary files remain after durable publication.
 
 ### Storage resilience

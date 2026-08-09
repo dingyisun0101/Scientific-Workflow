@@ -25,8 +25,9 @@
 //! stream against one shared state specification, publishes initial `running`
 //! metadata, and then starts the recording writer. Each chunk descriptor is committed
 //! incrementally before that payload receives its sealed filename.
-//! [`SystemStateWriter::complete_recording`] drains the writer and atomically transitions the
-//! manifest to complete; [`SystemStateWriter::mark_recording_failed`] records an explicit failed
+//! [`SystemStateWriter::complete_recording`] drains the writer, atomically commits
+//! completion timing and terminal metadata, and returns [`CompletedRecording`];
+//! [`SystemStateWriter::mark_recording_failed`] records an explicit failed
 //! lifecycle instead. Dropping an active recording drains its writer thread for
 //! memory and file safety but deliberately leaves metadata as `running`.
 //!
@@ -44,7 +45,7 @@
 //! and decoder coverage before reconstructing typed
 //! [`StateSeries`](crate::time_series::StateSeries) values. Decoder
 //! implementations remain per payload type and registrations remain per exact
-//! state key.
+//! state key. Latest-state reads verify and decode only the newest chunk.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -52,11 +53,13 @@ use std::io::Write;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
 use crate::configuration::TaskParameters;
 use crate::system_state::{SystemState, SystemStateSchema};
 
@@ -163,6 +166,149 @@ impl Default for TimeAxisMetadata {
     /// physical coordinate.
     fn default() -> Self {
         Self::new("iteration")
+    }
+}
+
+/// Immutable operational timing returned after successful recording completion.
+///
+/// These values describe host execution rather than scientific coordinates.
+/// Scientific iteration and physical time remain part of each recorded
+/// [`SystemState`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordingTiming {
+    created_at_utc: String,
+    finalized_at_utc: String,
+    active_duration_ns: u64,
+    continuation_count: u64,
+}
+
+impl RecordingTiming {
+    /// Converts the validated private wire representation into the public view.
+    fn from_stored(
+        timing: &jsonl_format::RecordingTiming,
+        metadata_path: &Path,
+    ) -> Result<Self, StorageError> {
+        let finalized_at_utc =
+            timing
+                .finalized_at_utc
+                .clone()
+                .ok_or_else(|| StorageError::InvalidMetadata {
+                    path: metadata_path.to_path_buf(),
+                    reason: "completed recording lacks finalized timestamp".to_owned(),
+                })?;
+        Ok(Self {
+            created_at_utc: timing.created_at_utc.clone(),
+            finalized_at_utc,
+            active_duration_ns: timing.active_duration_ns,
+            continuation_count: timing.continuation_count,
+        })
+    }
+
+    /// Returns the recording's original UTC creation timestamp in RFC 3339 form.
+    pub fn created_at_utc(&self) -> &str {
+        &self.created_at_utc
+    }
+
+    /// Returns the successful completion timestamp in UTC RFC 3339 form.
+    pub fn finalized_at_utc(&self) -> &str {
+        &self.finalized_at_utc
+    }
+
+    /// Returns the accumulated active writer duration as exact nanoseconds.
+    pub fn active_duration_ns(&self) -> u64 {
+        self.active_duration_ns
+    }
+
+    /// Returns the accumulated active writer duration as a standard duration.
+    pub fn active_duration(&self) -> Duration {
+        Duration::from_nanos(self.active_duration_ns)
+    }
+
+    /// Returns how many times this recording was reopened for continuation.
+    pub fn continuation_count(&self) -> u64 {
+        self.continuation_count
+    }
+}
+
+/// Aggregate persisted facts for one stream in a completed recording.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletedStreamSummary {
+    name: String,
+    chunk_count: u64,
+    record_count: u64,
+    encoded_bytes: u64,
+    first_iteration: Option<u64>,
+    last_iteration: Option<u64>,
+}
+
+impl CompletedStreamSummary {
+    /// Returns the logical stream name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the number of immutable chunk files.
+    pub fn chunk_count(&self) -> u64 {
+        self.chunk_count
+    }
+
+    /// Returns the total number of recorded states.
+    pub fn record_count(&self) -> u64 {
+        self.record_count
+    }
+
+    /// Returns the exact total framed bytes across all chunks.
+    pub fn encoded_bytes(&self) -> u64 {
+        self.encoded_bytes
+    }
+
+    /// Returns the first recorded iteration, or `None` for an empty stream.
+    pub fn first_iteration(&self) -> Option<u64> {
+        self.first_iteration
+    }
+
+    /// Returns the final recorded iteration, or `None` for an empty stream.
+    pub fn last_iteration(&self) -> Option<u64> {
+        self.last_iteration
+    }
+}
+
+/// Durable result of a successfully completed recording lifecycle.
+///
+/// The active writer has been consumed and all metadata and chunks are durable
+/// before this handle is created. It cannot append data.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletedRecording {
+    directory: PathBuf,
+    timing: RecordingTiming,
+    terminal_metadata: Map<String, Value>,
+    streams: Vec<CompletedStreamSummary>,
+}
+
+impl CompletedRecording {
+    /// Returns the completed recording directory.
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Returns automatically captured operational timing.
+    pub fn timing(&self) -> &RecordingTiming {
+        &self.timing
+    }
+
+    /// Returns caller-supplied terminal metadata committed with completion.
+    pub fn terminal_metadata(&self) -> &Map<String, Value> {
+        &self.terminal_metadata
+    }
+
+    /// Returns stream summaries in declaration order.
+    pub fn stream_summaries(&self) -> &[CompletedStreamSummary] {
+        &self.streams
+    }
+
+    /// Looks up one completed stream summary by exact name.
+    pub fn stream_summary(&self, name: &str) -> Option<&CompletedStreamSummary> {
+        self.streams.iter().find(|stream| stream.name == name)
     }
 }
 
@@ -444,6 +590,7 @@ pub struct SystemStateWriter {
     manifest: Arc<RecordingManifest>,
     streams: HashMap<String, ScheduledStateStream>,
     writer: Option<StateWriterWorker>,
+    session_started: Instant,
     /// Held after writers so normal field drop keeps the lease until every
     /// worker has drained and released its manifest handle.
     _lease: RecordingLease,
@@ -526,14 +673,30 @@ impl SystemStateWriter {
     /// impossible in safe Rust. If a writer fails, all remaining writers are
     /// still drained and a best-effort failed metadata transition is attempted
     /// before the originating writer error is returned.
-    pub fn complete_recording(mut self) -> Result<(), StorageError> {
+    pub fn complete_recording(self) -> Result<CompletedRecording, StorageError> {
+        self.complete_recording_with_terminal_metadata(Map::new())
+    }
+
+    /// Completes the recording and atomically commits values known only at the
+    /// terminal boundary.
+    ///
+    /// Terminal values are stored separately from immutable creation-time user
+    /// metadata and therefore cannot silently replace task parameters.
+    pub fn complete_recording_with_terminal_metadata(
+        mut self,
+        terminal_metadata: Map<String, Value>,
+    ) -> Result<CompletedRecording, StorageError> {
         if let Err(error) = self.finish_writer() {
-            let _ = self.manifest.transition(RecordingStatus::Failed {
-                message: error.to_string(),
-            });
+            let _ = self.transition_terminal(
+                RecordingStatus::Failed {
+                    message: error.to_string(),
+                },
+                Map::new(),
+            );
             return Err(error);
         }
-        self.manifest.transition(RecordingStatus::Complete)
+        self.transition_terminal(RecordingStatus::Complete, terminal_metadata)?;
+        self.completed_recording()
     }
 
     /// Records one final state to every stream exactly once, then completes.
@@ -545,9 +708,20 @@ impl SystemStateWriter {
     pub fn complete_recording_with_final_state(
         mut self,
         state: &SystemState,
-    ) -> Result<(), StorageError> {
+    ) -> Result<CompletedRecording, StorageError> {
         self.record_final_state(state)?;
         self.complete_recording()
+    }
+
+    /// Records the final state exactly once and atomically commits terminal
+    /// user metadata with successful status and operational timing.
+    pub fn complete_recording_with_final_state_and_terminal_metadata(
+        mut self,
+        state: &SystemState,
+        terminal_metadata: Map<String, Value>,
+    ) -> Result<CompletedRecording, StorageError> {
+        self.record_final_state(state)?;
+        self.complete_recording_with_terminal_metadata(terminal_metadata)
     }
 
     /// Encodes the supplied terminal state for streams that lack this iteration.
@@ -583,7 +757,16 @@ impl SystemStateWriter {
     /// If a writer also fails, its error takes precedence as the returned and
     /// persisted reason; the caller's message would no longer describe the
     /// authoritative storage termination.
-    pub fn mark_recording_failed(mut self, message: impl Into<String>) -> Result<(), StorageError> {
+    pub fn mark_recording_failed(self, message: impl Into<String>) -> Result<(), StorageError> {
+        self.mark_recording_failed_with_terminal_metadata(message, Map::new())
+    }
+
+    /// Records an intentional failure with terminal-only user metadata.
+    pub fn mark_recording_failed_with_terminal_metadata(
+        mut self,
+        message: impl Into<String>,
+        terminal_metadata: Map<String, Value>,
+    ) -> Result<(), StorageError> {
         let message = message.into();
         if message.trim().is_empty() {
             return Err(StorageError::InvalidConfiguration {
@@ -593,13 +776,15 @@ impl SystemStateWriter {
         }
 
         if let Err(error) = self.finish_writer() {
-            let _ = self.manifest.transition(RecordingStatus::Failed {
-                message: error.to_string(),
-            });
+            let _ = self.transition_terminal(
+                RecordingStatus::Failed {
+                    message: error.to_string(),
+                },
+                Map::new(),
+            );
             return Err(error);
         }
-        self.manifest
-            .transition(RecordingStatus::Failed { message })
+        self.transition_terminal(RecordingStatus::Failed { message }, terminal_metadata)
     }
 
     /// Performs complete validation before creating or mutating the run root.
@@ -628,7 +813,7 @@ impl SystemStateWriter {
         let prepared = PreparedRecording::from_builder(builder)?;
         let lease = RecordingLease::acquire(&prepared.root)?;
         remove_stale_metadata_temp(&prepared.root)?;
-        let existing = load_metadata(&prepared.metadata_path)?;
+        let mut existing = load_metadata(&prepared.metadata_path)?;
         if !matches!(existing.status, RecordingStatus::Running) {
             return Err(StorageError::RecordingNotContinuable {
                 path: prepared.metadata_path,
@@ -636,11 +821,6 @@ impl SystemStateWriter {
         }
         ensure_resume_match(&prepared.metadata_path, &prepared.metadata, &existing)?;
 
-        let manifest = Arc::new(RecordingManifest::new(
-            prepared.root.clone(),
-            prepared.metadata_path.clone(),
-            existing.clone(),
-        ));
         let mut recovered = Vec::with_capacity(prepared.streams.len());
         for stream in prepared.streams {
             let declaration = existing
@@ -672,6 +852,21 @@ impl SystemStateWriter {
         } else {
             None
         };
+
+        existing.timing.continuation_count = existing
+            .timing
+            .continuation_count
+            .checked_add(1)
+            .ok_or_else(|| StorageError::InvalidMetadata {
+                path: prepared.metadata_path.clone(),
+                reason: "timing.continuation_count overflowed".to_owned(),
+            })?;
+        commit_metadata(&prepared.root, &prepared.metadata_path, &existing)?;
+        let manifest = Arc::new(RecordingManifest::new(
+            prepared.root.clone(),
+            prepared.metadata_path.clone(),
+            existing,
+        ));
 
         let output = Self::start_resumed_prepared(prepared.root, recovered, manifest, lease)?;
         Ok((output, state))
@@ -707,6 +902,7 @@ impl SystemStateWriter {
             manifest,
             streams: scheduled,
             writer: Some(writer),
+            session_started: Instant::now(),
             _lease: lease,
         })
     }
@@ -744,6 +940,7 @@ impl SystemStateWriter {
             manifest,
             streams: scheduled,
             writer: Some(writer),
+            session_started: Instant::now(),
             _lease: lease,
         })
     }
@@ -755,6 +952,72 @@ impl SystemStateWriter {
         };
         writer.finish_recording()
     }
+
+    /// Commits one terminal status, timestamp, duration, and metadata map.
+    fn transition_terminal(
+        &self,
+        status: RecordingStatus,
+        terminal_metadata: Map<String, Value>,
+    ) -> Result<(), StorageError> {
+        let finalized_at_utc =
+            utc_now_rfc3339().map_err(|source| StorageError::OperationalTimestamp {
+                operation: "finalize recording",
+                source,
+            })?;
+        let active_duration_ns = duration_nanoseconds(self.session_started.elapsed())
+            .ok_or(StorageError::OperationalDurationOverflow)?;
+        self.manifest.transition_terminal(
+            status,
+            finalized_at_utc,
+            active_duration_ns,
+            terminal_metadata,
+        )
+    }
+
+    /// Builds the immutable public result from the durable manifest snapshot.
+    fn completed_recording(&self) -> Result<CompletedRecording, StorageError> {
+        let metadata = self.manifest.snapshot();
+        let timing = RecordingTiming::from_stored(&metadata.timing, &self.manifest.path)?;
+        let streams = metadata
+            .streams
+            .iter()
+            .map(completed_stream_summary)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CompletedRecording {
+            directory: self.root.clone(),
+            timing,
+            terminal_metadata: metadata.terminal_metadata,
+            streams,
+        })
+    }
+}
+
+/// Derives one public stream aggregate without opening any chunk file.
+fn completed_stream_summary(
+    stream: &StateStreamMetadata,
+) -> Result<CompletedStreamSummary, StorageError> {
+    let overflow = || StorageError::ByteCountOverflow {
+        stream: stream.name.clone(),
+    };
+    let chunk_count = u64::try_from(stream.chunks.len()).map_err(|_| overflow())?;
+    let record_count = stream
+        .chunks
+        .iter()
+        .try_fold(0_u64, |total, chunk| total.checked_add(chunk.records))
+        .ok_or_else(&overflow)?;
+    let encoded_bytes = stream
+        .chunks
+        .iter()
+        .try_fold(0_u64, |total, chunk| total.checked_add(chunk.bytes))
+        .ok_or_else(overflow)?;
+    Ok(CompletedStreamSummary {
+        name: stream.name.clone(),
+        chunk_count,
+        record_count,
+        encoded_bytes,
+        first_iteration: stream.chunks.first().map(|chunk| chunk.first_iteration),
+        last_iteration: stream.chunks.last().map(|chunk| chunk.last_iteration),
+    })
 }
 
 /// Fully validated builder output before any writer thread starts.
@@ -838,7 +1101,17 @@ impl PreparedRecording {
             });
         }
 
-        let metadata = RecordingMetadata::running(stored_time, builder.user_metadata, declarations);
+        let created_at_utc =
+            utc_now_rfc3339().map_err(|source| StorageError::OperationalTimestamp {
+                operation: "create recording",
+                source,
+            })?;
+        let metadata = RecordingMetadata::running(
+            stored_time,
+            builder.user_metadata,
+            declarations,
+            created_at_utc,
+        );
         metadata.validate(&metadata_path)?;
         Ok(Self {
             root: builder.root,
@@ -923,14 +1196,32 @@ impl RecordingManifest {
         Ok(())
     }
 
-    /// Atomically changes the lifecycle after every writer has drained.
-    fn transition(&self, status: RecordingStatus) -> Result<(), StorageError> {
+    /// Atomically commits terminal lifecycle, timing, and user metadata.
+    fn transition_terminal(
+        &self,
+        status: RecordingStatus,
+        finalized_at_utc: String,
+        active_duration_ns: u64,
+        terminal_metadata: Map<String, Value>,
+    ) -> Result<(), StorageError> {
         let mut current = lock_metadata(&self.metadata);
         let mut candidate = current.clone();
         candidate.status = status;
+        candidate.timing.finalized_at_utc = Some(finalized_at_utc);
+        candidate.timing.active_duration_ns = candidate
+            .timing
+            .active_duration_ns
+            .checked_add(active_duration_ns)
+            .ok_or(StorageError::OperationalDurationOverflow)?;
+        candidate.terminal_metadata = terminal_metadata;
         commit_metadata(&self.root, &self.path, &candidate)?;
         *current = candidate;
         Ok(())
+    }
+
+    /// Clones the small durable metadata snapshot for a public terminal result.
+    fn snapshot(&self) -> RecordingMetadata {
+        lock_metadata(&self.metadata).clone()
     }
 }
 
@@ -996,6 +1287,8 @@ fn ensure_resume_match(
         stream.chunks.clear();
     }
     configuration.status = RecordingStatus::Running;
+    configuration.timing = expected.timing.clone();
+    configuration.terminal_metadata.clear();
     if &configuration != expected {
         return Err(StorageError::RecordingConfigurationMismatch {
             path: path.to_path_buf(),

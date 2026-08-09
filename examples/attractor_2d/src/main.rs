@@ -14,7 +14,9 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::process;
 
-use project_setup::{ProjectSetup, create_execution_directory, load_project, prepare_task};
+use scientific_workflow::prelude::*;
+
+use project_setup::prepare_task;
 use recording_analysis::analyze_recording;
 use state_recording::record_model;
 
@@ -35,11 +37,9 @@ fn main() {
 /// Sequences the full project without implementing any individual stage.
 fn run() -> AppResult<()> {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let ProjectSetup {
-        project,
-        schema,
-        recording_root,
-    } = load_project(&project_root)?;
+    let project = ScientificProject::load(&project_root)?;
+    let schema = project.state_schema();
+    let recording_root = project.paths().resolve_path("recording_root")?;
     let task_count = project.parameters().task_count();
     let first = project.parameters().task(0)?;
     let model_name: String = first.decode_value("model_name")?;
@@ -54,9 +54,16 @@ fn run() -> AppResult<()> {
         project.configuration_directory().display()
     );
 
-    let execution_root = create_execution_directory(&recording_root)?;
+    let execution = ExecutionScope::create_generated(&recording_root)?;
+    println!(
+        "[execution] directory={} created_at_utc={}",
+        execution.directory().display(),
+        execution
+            .created_at_utc()
+            .expect("new execution scopes capture creation time")
+    );
     for parameters in project.parameters().tasks() {
-        let (mut model, settings) = prepare_task(&schema, &parameters)?;
+        let (mut model, settings) = prepare_task(schema, &parameters)?;
         println!(
             "[task] index={} mu={} omega={} physical_time_increment_per_step={}",
             settings.task_index,
@@ -65,7 +72,7 @@ fn run() -> AppResult<()> {
             model.physical_time_increment_per_step()
         );
 
-        let recording = record_model(&schema, &execution_root, &parameters, &settings, &mut model)?;
+        let recording = record_model(schema, &execution, &parameters, &settings, &mut model)?;
         let time = model.state().simulation_time();
         let point = model.point()?;
         println!(
@@ -79,9 +86,13 @@ fn run() -> AppResult<()> {
             model.radius()?
         );
         println!(
-            "[storage] task={} recording={} streams=3 complete=true",
+            "[storage] task={} recording={} streams={} complete=true created_at_utc={} finalized_at_utc={} active_duration_ns={}",
             settings.task_index,
-            recording.directory.display()
+            recording.directory().display(),
+            recording.stream_summaries().len(),
+            recording.timing().created_at_utc(),
+            recording.timing().finalized_at_utc(),
+            recording.timing().active_duration_ns()
         );
 
         let analysis = analyze_recording(&model, &recording)?;
@@ -109,7 +120,7 @@ fn run() -> AppResult<()> {
 
     println!(
         "[result] attractor_2d=complete output_root={}",
-        execution_root.display()
+        execution.directory().display()
     );
     Ok(())
 }

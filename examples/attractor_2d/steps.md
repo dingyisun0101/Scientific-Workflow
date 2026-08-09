@@ -86,7 +86,7 @@ Use `fixed.json` for constants shared by all tasks. Use `sweep.json` for either
 Cartesian axes or explicitly correlated cases. Use `paths.json` for named paths
 instead of scattering path literals through the program.
 
-Load the directory through `ProjectConfig`. Inspect the task count and several
+Load the directory through `ScientificProject`. Inspect its state schema, task count, and several
 resolved `TaskParameters` values before implementing the numerical model. This
 is where incorrect sweep dimensions, parameter names, and JSON types should be
 found.

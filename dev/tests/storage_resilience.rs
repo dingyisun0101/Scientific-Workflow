@@ -297,8 +297,13 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         StoredStateSeriesReader::open_completed_recording(running.run(), decoders()),
         Err(StorageError::RecordingNotComplete { .. })
     ));
+    let mut terminal_metadata = serde_json::Map::new();
+    terminal_metadata.insert("completed_step_count".to_owned(), Value::from(7));
     output
-        .mark_recording_failed("simulation stopped deliberately")
+        .mark_recording_failed_with_terminal_metadata(
+            "simulation stopped deliberately",
+            terminal_metadata,
+        )
         .unwrap();
     let failed_metadata: Value =
         serde_json::from_slice(&fs::read(metadata_path(&running.run())).unwrap()).unwrap();
@@ -306,6 +311,16 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     assert_eq!(
         failed_metadata["status"]["message"],
         "simulation stopped deliberately"
+    );
+    assert_eq!(
+        failed_metadata["terminal_metadata"]["completed_step_count"],
+        7
+    );
+    assert!(
+        failed_metadata["timing"]["finalized_at_utc"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z')
     );
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(running.run(), decoders()),

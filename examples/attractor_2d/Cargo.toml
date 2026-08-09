@@ -16,3 +16,4 @@ path = "src/main.rs"
 
 [dependencies]
 scientific-workflow = { version = "0.1.0", path = "../../dev" }
+serde_json = "1"

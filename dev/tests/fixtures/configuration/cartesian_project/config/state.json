@@ -1,0 +1,12 @@
+{
+  "fields": [
+    {
+      "name": "population",
+      "description": "Task population vector"
+    },
+    {
+      "name": "activity",
+      "description": "Task activity label"
+    }
+  ]
+}

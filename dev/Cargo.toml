@@ -1,6 +1,6 @@
 [package]
 name = "scientific-workflow"
-version = "0.1.1"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Dingyi Sun"]
@@ -28,6 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
 thiserror = "2"
+time = { version = "0.3.41", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 physics_in_parallel = "3.0.4"
