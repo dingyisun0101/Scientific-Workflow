@@ -173,8 +173,8 @@ impl ExecutionScope {
     ///
     /// The directory is deliberately not created: the recording writer must
     /// retain exclusive creation and overwrite protection.
-    pub fn task_recording_directory(&self, task_index: u64) -> PathBuf {
-        self.directory.join(format!("task-{task_index:06}"))
+    pub fn task_recording_directory(&self, task_ordinal: u64) -> PathBuf {
+        self.directory.join(format!("task-{task_ordinal:06}"))
     }
 }
 

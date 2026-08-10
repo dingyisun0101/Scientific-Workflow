@@ -11,6 +11,33 @@ without hiding them behind a simulation framework.
 > **Implementation status:** The full configuration-to-validation workflow is
 > implemented, verified, and runnable.
 
+## Suggested reading order
+
+Read the example from scientific inputs toward orchestration. This makes each
+library abstraction answer a question already raised by the preceding file:
+
+1. [`config/fixed.json`](config/fixed.json),
+   [`config/sweep.json`](config/sweep.json), and
+   [`config/paths.json`](config/paths.json): see which values are shared, which
+   create independent tasks, and where output belongs.
+2. [`config/state.json`](config/state.json): see the stable names of the values
+   that evolve. The template intentionally does not prescribe Rust types.
+3. [`src/project_setup.rs`](src/project_setup.rs): see resolved JSON values
+   decoded into one task's model and writer settings.
+4. [`src/hopf_model.rs`](src/hopf_model.rs): see the model directly own and
+   mutate its `SystemState`; this is the scientific core.
+5. [`src/state_recording.rs`](src/state_recording.rs): see immutable state
+   observations become independently sampled, asynchronously written streams.
+6. [`src/recording_validation.rs`](src/recording_validation.rs): see the final
+   complete checkpoint decoded back into typed payloads and compared exactly.
+7. [`src/main.rs`](src/main.rs): read the orchestrator last. Once the pieces are
+   familiar, its short load → dispatch → record → validate sequence shows how
+   they compose without hiding domain logic in `main`.
+
+Use [`steps.md`](steps.md) afterward when adapting this pattern to another
+scientific project. It explains the general construction sequence; this README
+explains this particular implementation.
+
 ## Scientific model
 
 The system is the supercritical Hopf normal form:
@@ -69,6 +96,11 @@ nested project wrapper is needed.
 cheap owned handles over shared fixed, sweep, and path data. The main loop can
 therefore pass each complete configuration through model assembly and recording
 without separately carrying `TaskParameters` and `ProjectPaths`.
+
+The iterator is connected directly to Rayon's work-stealing pool with
+`par_bridge()`. Tasks execute concurrently without first collecting the sweep,
+while each worker owns an independent model and recording writer. The schema
+and execution scope are shared immutably.
 
 For a reusable explanation of this organization, see [steps.md](steps.md).
 
@@ -159,6 +191,12 @@ Each explicit-Euler step will:
 
 No payload is cloned, extracted, or reallocated during this loop.
 
+Because this two-variable calculation would otherwise finish before a person
+could inspect the progress bars, `HopfModel::step` includes a
+500-microsecond demonstration pause. It is not part of the differential
+equation or simulation time and should be removed when adapting the example to
+real computational work.
+
 ## Recording streams
 
 One task owns one `SystemStateWriter` with three independently sampled streams:
@@ -199,10 +237,18 @@ directory and exposes its creation timestamp. Existing recordings are not
 deleted or deliberately reused. Each task recording automatically persists its
 UTC creation/finalization timestamps and monotonic active duration.
 
-The complete run prints only its minimum validation result:
+Rayon bounds simultaneous model execution by its worker-pool size. Successful
+return from the parallel operation means every task also completed typed
+checkpoint round-trip validation; an error prevents the final success line.
+
+The centralized reporter is the only human-facing terminal writer. It clears
+an interactive terminal once when reporting starts and immediately creates all
+three `mu` rows, even if Rayon has fewer than three workers. Running rows show
+elapsed execution time and ETA. In a redirected or CI run, no clearing occurs
+and the final line has this form:
 
 ```text
-[validation] tasks=3 round_trip=true output=...
+[workflow] status=completed tasks=3 completed=3 failed=0 pending=0 message=round_trip=true output=...
 ```
 
 ## Readback validation
@@ -211,9 +257,8 @@ After each writer reaches completed status, the application:
 
 - registers direct Serde JSON decoding for `Vec<f64>` under `point` and `f64`
   under `radius`;
-- reads only the latest trajectory, radius, and checkpoint records; and
-- requires exact final time and payload equality between the live state and
-  all applicable reconstructed streams.
+- reads only the latest complete checkpoint; and
+- requires exact final time and payload equality with the live state.
 
 Plotting and numerical analysis are deliberately absent. They are downstream
 consumers of valid recordings, not part of the minimum evolution workflow.

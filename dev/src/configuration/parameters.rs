@@ -182,16 +182,16 @@ impl ParameterSpace {
     ///
     /// The returned dictionary shares this space's allocation and computes
     /// selected values lazily during lookup. No parameter value is cloned.
-    pub fn task(&self, index: u64) -> Result<TaskParameters, ConfigurationError> {
-        if index >= self.task_count() {
-            return Err(ConfigurationError::TaskIndexOutOfBounds {
-                index,
+    pub fn task(&self, ordinal: u64) -> Result<TaskParameters, ConfigurationError> {
+        if ordinal >= self.task_count() {
+            return Err(ConfigurationError::TaskOrdinalOutOfBounds {
+                ordinal,
                 task_count: self.task_count(),
             });
         }
         Ok(TaskParameters {
             inner: Arc::clone(&self.inner),
-            index,
+            ordinal,
         })
     }
 
@@ -224,17 +224,17 @@ impl fmt::Debug for ParameterSpace {
 /// One immutable dict-like fixed-plus-sweep parameter selection.
 ///
 /// This type owns no JSON values. Cloning it increments one shared reference
-/// count and copies one `u64` task index.
+/// count and copies one `u64` task ordinal.
 #[derive(Clone)]
 pub struct TaskParameters {
     inner: Arc<ParameterSpaceInner>,
-    index: u64,
+    ordinal: u64,
 }
 
 impl TaskParameters {
     /// Returns this task's zero-based deterministic ordinal.
-    pub fn task_index(&self) -> u64 {
-        self.index
+    pub fn task_ordinal(&self) -> u64 {
+        self.ordinal
     }
 
     /// Borrows one fixed or selected sweep value by exact JSON key.
@@ -245,14 +245,14 @@ impl TaskParameters {
             return Some(&self.inner.fixed[position].value);
         }
         let &position = self.inner.sweep_by_name.get(key)?;
-        Some(self.inner.sweep.value(self.index, position))
+        Some(self.inner.sweep.value(self.ordinal, position))
     }
 
     /// Borrows one required value or reports its task and exact missing key.
     pub fn require_value(&self, key: &str) -> Result<&Value, ConfigurationError> {
         self.value(key)
             .ok_or_else(|| ConfigurationError::UnknownTaskParameter {
-                task_index: self.index,
+                task_ordinal: self.ordinal,
                 key: key.to_owned(),
             })
     }
@@ -268,7 +268,7 @@ impl TaskParameters {
     {
         let value = self.require_value(key)?;
         T::deserialize(value).map_err(|source| ConfigurationError::DecodeTaskParameter {
-            task_index: self.index,
+            task_ordinal: self.ordinal,
             key: key.to_owned(),
             source,
         })
@@ -319,7 +319,7 @@ impl TaskParameters {
     pub fn to_json(&self) -> Result<String, ConfigurationError> {
         serde_json::to_string(&ResolvedTaskRef { task: self }).map_err(|source| {
             ConfigurationError::SerializeTaskParameters {
-                task_index: self.index,
+                task_ordinal: self.ordinal,
                 source,
             }
         })
@@ -331,7 +331,7 @@ impl fmt::Debug for TaskParameters {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("TaskParameters")
-            .field("task_index", &self.index)
+            .field("task_ordinal", &self.ordinal)
             .field("parameters", &self.len())
             .finish_non_exhaustive()
     }
@@ -357,11 +357,11 @@ impl Iterator for TaskParametersIter {
         if self.next == self.end {
             return None;
         }
-        let index = self.next;
+        let ordinal = self.next;
         self.next += 1;
         Some(TaskParameters {
             inner: Arc::clone(&self.inner),
-            index,
+            ordinal,
         })
     }
 
@@ -451,19 +451,19 @@ impl SweepPlan {
 
     /// Borrows one selected value for an already validated task and key
     /// position.
-    fn value(&self, task_index: u64, key_position: usize) -> &Value {
+    fn value(&self, task_ordinal: u64, key_position: usize) -> &Value {
         match self {
             Self::Cartesian { axes, .. } => {
                 let axis = &axes[key_position];
                 let axis_length = u64::try_from(axis.values.len())
                     .expect("validated Cartesian axis length must fit in u64");
-                let selected = (task_index / axis.stride) % axis_length;
+                let selected = (task_ordinal / axis.stride) % axis_length;
                 &axis.values[usize::try_from(selected)
                     .expect("selected Cartesian index originated from a usize length")]
             }
             Self::Cases { cases, .. } => {
-                &cases[usize::try_from(task_index)
-                    .expect("validated explicit task index originated from a usize count")]
+                &cases[usize::try_from(task_ordinal)
+                    .expect("validated explicit task ordinal originated from a usize count")]
                     [key_position]
             }
         }

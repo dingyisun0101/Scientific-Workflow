@@ -44,6 +44,51 @@ making them suitable for large arrays and tensors.
 - Automatic UTC lifecycle timestamps and monotonic active durations.
 - Collision-resistant generated or caller-named execution scopes.
 - Structurally separate terminal metadata and immutable completed-recording handles.
+- Parameter-identified, parallel-safe centralized progress reporting.
+- One exclusive terminal renderer with interactive, CI, and hidden modes.
+
+## Parallel Progress Reporting
+
+`ProgressReporter` derives human-facing identity from task parameters and uses
+the automatically assigned task ordinal only for stable ordering. With no
+explicit identity selection, all sweep keys form the identity. Applications may
+choose any smaller parameter combination that remains unique:
+
+```rust,no_run
+use scientific_workflow::prelude::*;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let project = ScientificProject::load("project-root")?;
+let reporter = ProgressReporter::for_project(&project)
+    .identify_tasks_by(["temperature", "seed"])
+    .start()?;
+
+for task in project.task_configs() {
+    let progress = reporter.start_task(&task, 0, Some(1_000))?;
+    // After each successful scientific transition:
+    progress.set_iteration(1_000)?;
+    progress.complete()?;
+}
+
+let summary = reporter.complete("all scientific tasks completed")?;
+assert!(summary.is_success());
+# Ok(())
+# }
+```
+
+Iteration updates are atomic and allocation-free. One renderer thread polls all
+tasks at a bounded frequency and is the only component permitted to write
+human-facing terminal output during the session. Interactive stderr is cleared
+once at renderer startup and then receives one row for every configured task,
+including tasks still waiting for a worker. Known-target rows show elapsed task
+execution time and ETA; redirected stderr receives line-oriented lifecycle
+events without being cleared. Dropping an unfinished `TaskProgress` marks that
+task failed.
+
+Progress is not scientific state. Callers set it from the authoritative
+`SystemState::simulation_time()` after a successful transition. Known targets
+use absolute iterations, while `None` supports convergence-driven or otherwise
+open-ended work.
 
 ## Mandatory Chunk Integrity
 
@@ -82,7 +127,9 @@ The source repository includes `examples/attractor_2d`, a standalone
 downstream application that exercises configuration loading, Cartesian task
 expansion, directly owned mutable states, tuple payload borrowing, independent
 sample streams, bounded asynchronous recording, automatic chunking, and
-explicit completion. It then reads each stream's latest state with typed payload
+explicit completion. Its lazy `TaskConfig` iterator feeds Rayon's bounded
+work-stealing pool, while stable task indices keep recording paths deterministic
+regardless of completion order. It then reads the complete checkpoint's latest state with typed payload
 decoders and verifies the final live-to-stored round trip exactly. From the
 repository root, run:
 
@@ -165,7 +212,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let output_root = task.resolve_path("output_root")?;
         println!(
             "task={} dt={physical_time_increment} temperature={temperature} seed={seed} output={}",
-            task.task_index(),
+            task.task_ordinal(),
             output_root.display()
         );
     }
@@ -174,7 +221,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `task_configs()` lazily emits the complete Cartesian product—or exactly the
-declared correlated cases—in stable task-index order. Each item is a cheap
+declared correlated cases—in stable task-ordinal order. Each item is a cheap
 owned handle over shared fixed, sweep, and path storage, so it can move into a
 worker queue without cloning merged JSON dictionaries:
 
@@ -479,7 +526,7 @@ From the package directory:
 cargo test --all-targets --no-fail-fast --locked
 ```
 
-The permanent suite contains six logged integration workflows. Run each with
+The permanent suite contains seven logged integration workflows. Run each with
 `--nocapture` to display its stable semantic report.
 
 Project configuration and task expansion:

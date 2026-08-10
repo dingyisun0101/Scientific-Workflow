@@ -34,6 +34,13 @@ canonical order. Each handle shares the parsed fixed values, selected sweep
 storage, and project paths, so the same type can later move directly into a
 dispatcher mission without a merged configuration allocation.
 
+The example connects this lazy iterator to Rayon through `par_bridge`. Rayon
+pulls tasks into its bounded work-stealing pool without an intermediate
+`Vec<TaskConfig>`. Every concurrent closure owns its `TaskConfig`, `HopfModel`,
+and `SystemStateWriter`; only the immutable schema and execution scope are
+shared. The application error boundary is `Send + Sync` so failures can cross
+worker-thread boundaries.
+
 ## Project configuration
 
 The standalone crate root is the scientific project root. `ScientificProject`
@@ -74,6 +81,11 @@ The step uses one coordinated tuple borrow for `point` and `radius`. This gives
 safe simultaneous mutable access to distinct slots without cloning or moving
 either payload allocation.
 
+The numerical kernel is intentionally too small to keep a progress display
+visible, so the example sleeps for 500 microseconds inside each step. This is
+presentation scaffolding only: it does not advance physical time, alter the
+state transition, or belong in a real scientific model.
+
 ## Recording
 
 Each task owns one `SystemStateWriter` with three streams:
@@ -103,7 +115,7 @@ Validation is intentionally narrower than analysis. For each completed task it:
 
 1. registers JSON payload decoders for `point: Vec<f64>` and `radius: f64`;
 2. opens the completed recording;
-3. reads only the latest record from each stream; and
+3. reads only the latest complete checkpoint; and
 4. asserts exact time and payload equality against the live final state.
 
 `read_latest_state_from_stream` avoids reconstructing complete series merely to
@@ -111,10 +123,14 @@ inspect endpoints. Serde JSON's finite-float round-trip behavior preserves the
 original `f64` bit patterns. Any mismatch becomes an application error before a
 success result is printed.
 
-The only normal terminal output is:
+The reporter owns all normal terminal output and clears an interactive terminal
+once before drawing its first bars. All three parameter tasks receive rows at
+startup, including pending tasks not yet assigned to a Rayon worker. Each
+running row reports elapsed execution time and ETA. Its final non-interactive
+line is:
 
 ```text
-[validation] tasks=3 round_trip=true output=...
+[workflow] status=completed tasks=3 completed=3 failed=0 pending=0 message=round_trip=true output=...
 ```
 
 Reaching this line proves that configuration loading, sweep expansion, state
@@ -137,9 +153,10 @@ src/
 
 ```text
 load project
-  -> create execution scope
-  -> for each TaskConfig: assemble -> evolve/record -> validate
-  -> print one result
+  -> create execution scope and reporter
+  -> Rayon par_bridge over TaskConfig values
+       -> assemble -> evolve/record -> validate checkpoint
+  -> reporter prints one result
 ```
 
 No module duplicates the live state. `project_setup` moves initial payloads into
@@ -175,7 +192,7 @@ task.
 ```text
 prepare_task -> HopfModel::new
 record_model -> HopfModel::state, HopfModel::step
-run -> HopfModel::state
+run validation closure -> HopfModel::state
 ```
 
 ### `HopfModel::new`
@@ -213,7 +230,7 @@ record_model evolution loop -> HopfModel::step
 ### `TaskSettings`
 
 Holds the decoded evolution count, three sampling intervals, and two storage
-byte limits for one task. It contains no duplicate task index or model state.
+byte limits for one task. It contains no duplicate task ordinal or model state.
 
 #### Reference
 
@@ -230,18 +247,19 @@ settings.
 #### Reference
 
 ```text
-run task loop -> prepare_task
+run Rayon task closure -> prepare_task
 ```
 
 ### `record_model`
 
 Builds one task writer, offers the initial state, performs and observes every
-step, and completes storage with the final state.
+step, synchronizes `TaskProgress` from authoritative state time, and completes
+storage with the final state.
 
 #### Reference
 
 ```text
-run task loop -> record_model
+run Rayon task closure -> record_model(model, progress)
 ```
 
 ### `build_writer`
@@ -256,24 +274,25 @@ record_model -> build_writer
 
 ### `validate_recording`
 
-Decodes the latest state in each stream and asserts exact equality with the
-live completed state.
+Decodes the latest complete checkpoint and asserts exact equality with the live
+completed state. Partial streams remain demonstrations of independent sampling;
+rechecking their shared fields would add repetition rather than a new API.
 
 #### Reference
 
 ```text
-run task loop -> validate_recording
+run Rayon task closure -> validate_recording
 ```
 
-### `run`
+### `main`
 
-Sequences project loading, scope creation, per-task work, and the single
-success report.
+Sequences project loading, scope creation, reporter startup, lazy Rayon task
+dispatch, and reporter-owned finalization after all task closures validate.
 
 #### Reference
 
 ```text
-main success path -> run
+process entry -> main
 ```
 
 ## Independent numerical reference

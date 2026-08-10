@@ -17,6 +17,8 @@
 //! one immutable [`project::ScientificProject`]. [`execution`] creates
 //! collision-resistant or caller-named execution scopes and deterministic task
 //! recording paths without taking ownership away from storage writers.
+//! [`reporting`] provides parameter-identified parallel progress tracking and
+//! one process-wide human-facing terminal owner.
 //!
 //! [`system_state`] provides:
 //!
@@ -79,6 +81,7 @@ pub mod configuration;
 pub mod execution;
 pub mod prelude;
 pub mod project;
+pub mod reporting;
 pub mod storage;
 pub mod system_state;
 pub mod time_series;

@@ -23,6 +23,8 @@ Implemented and verified:
 - `project`: conventional four-file `ScientificProject` loading including
   `config/state.json`;
 - `execution`: automatic generated/named execution scopes and task paths;
+- `reporting`: parameter-identified atomic progress tracking and exclusive
+  centralized terminal rendering for parallel tasks;
 - `system_state`: mutable simulation-owned heterogeneous state;
 - `time_series`: eager in-memory analysis collection;
 - storage format, borrowed encoder, bounded writer, decoder registry, two
@@ -193,7 +195,7 @@ space.task_count()
 space.task(index)
 space.tasks()
 
-task.task_index()
+task.task_ordinal()
 task.value(key) -> Option<&serde_json::Value>
 task.require_value(key) -> Result<&serde_json::Value, ConfigurationError>
 task.decode_value<T>(key) -> Result<T, ConfigurationError>
@@ -218,7 +220,7 @@ decodes an owned value or serializes the resolved task.
 `TaskConfig` adds only a cheap `ProjectPaths` shared handle. It is owned rather
 than lifetime-borrowed so dispatchers can move it through ordinary thread and
 work queues while the parsed JSON and path allocations remain shared. It
-delegates task index and typed parameter lookup and adds direct named-path
+delegates task ordinal and typed parameter lookup and adds direct named-path
 resolution. It does not allocate a merged parameter/path dictionary.
 
 ### JSON names and Rust access
@@ -274,7 +276,7 @@ boundary. It contains:
   filesystem or Serde sources;
 - semantic document rejection and exact duplicate-key context;
 - fixed/sweep key collisions and checked Cartesian task-count overflow;
-- task-index bounds, missing task parameters, and typed decode failures;
+- task-ordinal bounds, missing task parameters, and typed decode failures;
 - unknown sweep selectors, selector encoding failures, no-match selection, and
   ambiguous unique selection; and
 - missing named project paths.
@@ -296,7 +298,7 @@ ParameterSpace validation and expansion
                             DuplicateConfigurationKey,
                             FixedSweepKeyConflict,
                             TaskCountOverflow,
-                            TaskIndexOutOfBounds}
+                            TaskOrdinalOutOfBounds}
 
 TaskParameters lookup and conversion
     -> ConfigurationError::{UnknownTaskParameter,
@@ -470,7 +472,7 @@ shared dispatcher ownership and bounded diagnostics
 One immutable dict-like logical union of all fixed values and one sweep
 selection. It stores only the shared space and `u64` task ordinal.
 
-#### TaskParameters::task_index
+#### TaskParameters::task_ordinal
 
 Returns the stable zero-based ordinal under the loaded sweep definition.
 
@@ -859,7 +861,7 @@ ScientificProject::task_config -> ProjectConfig::task_config
 #### ProjectConfig::task_configs
 
 Returns an owning lazy iterator over the full Cartesian product or explicit
-case list in canonical task-index order.
+case list in canonical task-ordinal order.
 
 ##### Reference
 
@@ -939,15 +941,15 @@ Owned complete task handle containing one `TaskParameters` handle and one
 `ProjectPaths` handle. Both fields are `Arc`-backed; cloning or moving the task
 does not clone JSON values, create a merged map, or duplicate the path table.
 
-#### TaskConfig::task_index
+#### TaskConfig::task_ordinal
 
 Delegates the stable deterministic ordinal.
 
 ##### Reference
 
 ```text
-dispatcher mission identity and output naming -> TaskConfig::task_index
-attractor_2d recording directory -> TaskConfig::task_index
+dispatcher mission ordering and output naming -> TaskConfig::task_ordinal
+attractor_2d recording directory -> TaskConfig::task_ordinal
 ```
 
 #### TaskConfig::parameters
@@ -1018,6 +1020,7 @@ Preserves canonical ordinal order and the lower-level iterator's count bounds.
 ```text
 ProjectConfig::task_configs -> TaskConfigIter
 all-task dispatcher loop -> TaskConfigIter::next
+attractor_2d Rayon par_bridge -> TaskConfigIter::next
 ```
 
 #### TaskConfigIter::clone / Debug
@@ -1074,7 +1077,7 @@ conventional `config/` directory.
 
 ```text
 application startup -> ScientificProject::load(project_root)
-attractor_2d::run -> ScientificProject::load
+attractor_2d::main -> ScientificProject::load
 GLV project bootstrap -> ScientificProject::load
 ```
 
@@ -1238,6 +1241,377 @@ prelude -> explicit configuration type re-exports
 downstream callers -> scientific_workflow::configuration::{...}
 ```
 
+## Centralized progress reporting
+
+The `reporting` module is the sole human-facing terminal owner during parallel
+scientific execution. It is operational observation, not scientific state:
+`SystemState::simulation_time()` remains authoritative and callers explicitly
+synchronize its absolute iteration into a task-local atomic counter after a
+successful model transition.
+
+The vocabulary is intentionally distinct:
+
+- **task ordinal** is assigned automatically by deterministic configuration
+  expansion and is used only for stable ordering and path organization;
+- **task identity** is an exact caller-selected combination of parameter
+  key/value pairs; and
+- **task label** is the deterministic compact JSON rendering of that identity
+  for terminal output.
+
+Default identity contains all sweep keys in declaration order. Applications may
+select any fixed/swept parameter combination, but it must uniquely distinguish
+every generated task. Paths cannot be identity fields. Duplicate or unknown
+keys and colliding identities fail before any renderer or worker starts.
+
+One `ProgressReporter` owns a registry of per-task slots and one renderer
+thread. Workers update only per-slot atomics for iteration and status; the
+renderer polls at a bounded interval. Infrequent phase strings and messages use
+locks or a channel outside the numerical counter path. Interactive stderr uses
+Indicatif 0.18.6 as a private rendering backend. After the exclusive lease
+reaches the renderer thread and before any bar is created, terminal mode clears
+stderr's terminal exactly once through `console::Term`; redirected stderr
+receives stable line-oriented transitions and is never cleared. Hidden mode
+retains lifecycle validation for tests or embedding without rendering.
+
+Every configured task receives a bar immediately, including tasks that remain
+pending because the worker pool is smaller than the parameter space. The
+renderer forces each initial bar state once to prevent Indicatif's global draw
+throttle from starving later rows during synchronized initialization. A task's
+elapsed clock resets on its `Pending -> Running` transition, excluding queue
+wait from execution time. Known targets render precise elapsed time and ETA;
+unknown targets retain elapsed time but label ETA as unknown.
+
+A pseudo-terminal validation of `attractor_2d` captures all three identities
+(`mu=-0.25`, `mu=0.25`, and `mu=1.0`) simultaneously, with each completed row
+showing `elapsed` and `ETA`. This specifically guards the observed failure mode
+where global draw throttling materialized only the earlier rows.
+
+Only one reporting session may exist in a process at a time. A static lease is
+acquired after identity validation and released only after renderer shutdown.
+Workers, models, writers, and application orchestration must not call terminal
+printing APIs while the lease is active; all messages flow through the
+reporter. `ProgressReporter::report_error` is the post-session/startup error
+boundary used by a binary's `main`.
+
+### ProgressReporterBuilder
+
+Owns a cheap cloned `ProjectConfig`, optional identity keys, and output policy
+until validation and renderer startup.
+
+#### ProgressReporterBuilder::identify_tasks_by
+
+Replaces default all-sweep identity with an ordered parameter-key combination.
+Uniqueness is validated across the complete task space at `start`.
+
+##### Reference
+
+```text
+attractor_2d identity policy -> identify_tasks_by(["mu"])
+multi-axis projects -> identify_tasks_by(["temperature", "seed"])
+```
+
+#### ProgressReporterBuilder::terminal / plain / hidden
+
+Override automatic stderr detection. Terminal selects cursor-controlled bars,
+plain selects stable lifecycle lines, and hidden suppresses output without
+disabling counters or lifecycle validation.
+
+##### Reference
+
+```text
+interactive application override -> terminal
+CI/log capture -> plain
+reporting_workflow and embedding -> hidden
+```
+
+#### ProgressReporterBuilder::start
+
+Validates identity keys and uniqueness, allocates one slot per automatically
+ordered task, acquires the process-wide lease, and starts one renderer thread.
+No task is started and no scientific model is constructed by this method.
+
+##### Reference
+
+```text
+application reporting startup -> ProgressReporterBuilder::start
+```
+
+### ProgressReporter
+
+Non-clone owner of one reporting session, renderer thread, and complete task
+registry. Its shared inner registry is borrowed by parallel `start_task` calls;
+the session itself retains exclusive finalization authority.
+
+#### ProgressReporter::for_project
+
+Creates the normal builder from `ScientificProject` and delegates its lower
+configuration handle.
+
+##### Reference
+
+```text
+attractor_2d and conventional applications -> ProgressReporter::for_project
+```
+
+#### ProgressReporter::for_configuration
+
+Creates a builder for parameter/path-only workflows without requiring a state
+schema.
+
+##### Reference
+
+```text
+dispatcher planning and fixed-only reporting tests -> for_configuration
+```
+
+#### ProgressReporter::start_task
+
+Derives ordinal and identity from `TaskConfig`, verifies membership, atomically
+transitions the slot from pending to running, and installs absolute initial and
+optional target iterations. Callers never provide an ordinal or label.
+
+##### Reference
+
+```text
+parallel task closure startup -> ProgressReporter::start_task
+```
+
+#### ProgressReporter::report
+
+Routes one application-wide human message through the sole renderer.
+
+##### Reference
+
+```text
+infrequent execution announcements -> ProgressReporter::report
+```
+
+#### ProgressReporter::summary
+
+Returns a non-blocking aggregate snapshot of pending, running, completed, and
+failed slot counts without stopping reporting.
+
+##### Reference
+
+```text
+monitoring and reporting_workflow assertions -> ProgressReporter::summary
+```
+
+#### ProgressReporter::complete
+
+Requires every registered task to be completed, emits the final success message
+and summary, joins the renderer, and releases terminal ownership. Pending,
+running, or failed tasks make successful completion an error after orderly
+renderer shutdown.
+
+##### Reference
+
+```text
+successful application termination -> ProgressReporter::complete
+```
+
+#### ProgressReporter::fail
+
+Emits an unsuccessful final summary while preserving each task's observed
+status, then joins the renderer and releases terminal ownership.
+
+##### Reference
+
+```text
+parallel execution error boundary -> ProgressReporter::fail
+```
+
+#### ProgressReporter::report_error
+
+Writes a single standardized error after no live reporter owns the terminal,
+covering startup failure and the binary process boundary.
+
+##### Reference
+
+```text
+binary error boundaries and reporting_workflow -> ProgressReporter::report_error
+```
+
+#### ProgressReporter::Debug / Drop
+
+Debug exposes only identity keys and aggregate counts. Dropping an unfinished
+reporter asks the renderer to publish failure, joins it, and releases the lease.
+
+##### Reference
+
+```text
+bounded diagnostics and panic/early-return cleanup
+```
+
+### TaskProgress
+
+Non-clone worker-local handle to one task slot. Its hot-path iteration update is
+an atomic maximum operation. Dropping an active handle marks the task failed,
+so ordinary `?` propagation cannot leave it permanently running.
+
+#### TaskProgress::identity
+
+Borrows the exact parameter-derived identity without cloning JSON values.
+
+##### Reference
+
+```text
+task-local messages and diagnostics -> TaskProgress::identity
+```
+
+#### TaskProgress::current_iteration / target_iteration / status
+
+Read atomic task progress and lifecycle state. Targets are optional and support
+open-ended or convergence-driven scientific work.
+
+##### Reference
+
+```text
+monitoring, tests, and custom non-terminal presentation
+```
+
+#### TaskProgress::set_iteration
+
+Synchronizes to an authoritative absolute simulation iteration without locking
+or allocation. Regressions and movement beyond a known target are rejected
+without changing the counter.
+
+##### Reference
+
+```text
+successful model transition -> SystemState::simulation_time -> set_iteration
+attractor_2d::record_model -> TaskProgress::set_iteration
+```
+
+#### TaskProgress::set_phase
+
+Updates an infrequent human-readable phase such as `evolving`, `finalizing
+storage`, or `validating recording`. It is not intended for hot-loop metrics.
+
+##### Reference
+
+```text
+application workflow boundary changes -> TaskProgress::set_phase
+```
+
+#### TaskProgress::report
+
+Routes one identity-prefixed task message through the sole renderer.
+
+##### Reference
+
+```text
+infrequent task events -> TaskProgress::report
+```
+
+#### TaskProgress::complete / fail
+
+Consume the task handle and commit one terminal status. Completion means the
+caller-defined complete workflow—including persistence and validation when
+applicable—succeeded, not merely that numerical iteration ended. When a target
+is known, completion also requires the current absolute iteration to equal it;
+open-ended successful work uses no target.
+
+##### Reference
+
+```text
+task closure success -> TaskProgress::complete
+handled task failure -> TaskProgress::fail
+unhandled early return -> TaskProgress::Drop -> failed
+```
+
+#### TaskProgress::Debug / Drop
+
+Debug exposes bounded identity/progress facts. Drop marks an active handle
+failed with phase `interrupted`.
+
+##### Reference
+
+```text
+parallel worker diagnostics and failure-safe cleanup
+```
+
+### TaskIdentity
+
+Cheap clone retaining a `TaskConfig`, shared identity-key list, and rendered
+label. It never clones parameter JSON values.
+
+#### TaskIdentity::label / len / is_empty / value / iter
+
+Expose deterministic display text and clone-free inspection of the exact
+parameter combination in configured key order.
+
+##### Reference
+
+```text
+renderer labels, task messages, tests, and custom presentation
+```
+
+### TaskStatus
+
+Public non-exhaustive lifecycle enumeration: `Pending`, `Running`, `Completed`,
+and `Failed`. Ordinal ordering is deliberately not encoded as identity.
+
+##### Reference
+
+```text
+TaskProgress::status, ProgressSummary aggregation, renderer output
+```
+
+### ProgressSummary
+
+Immutable aggregate captured during or after reporting.
+
+#### ProgressSummary::total / pending / running / completed / failed
+
+Return exact task lifecycle counts.
+
+##### Reference
+
+```text
+ProgressReporter::summary/complete/fail and dispatcher run summaries
+```
+
+#### ProgressSummary::is_success
+
+Returns true only when every registered task completed and every other count is
+zero.
+
+##### Reference
+
+```text
+successful finalization validation and reporting_workflow
+```
+
+### ReportingError
+
+Non-exhaustive contextual failures cover configuration propagation, identity
+keys and uniqueness, task membership and duplicate starts, iteration bounds,
+exclusive session ownership, renderer startup/liveness/panic, and incomplete
+success finalization.
+
+##### Reference
+
+```text
+ProgressReporterBuilder and ProgressReporter/TaskProgress fallible methods
+reporting_workflow reachable failure families
+```
+
+### Private reporting infrastructure
+
+`ReporterInner`, `ProgressSlot`, `RenderEvent`, `TerminalLease`, and
+`TerminalDisplay` remain private. They implement shared atomics, the infrequent
+message channel, process lease, one-time interactive terminal clearing,
+complete initial-row materialization, task-relative elapsed/ETA tracking,
+Indicatif rendering, plain transitions, and failure-safe shutdown without
+becoming extension points.
+
+##### Reference
+
+```text
+public reporting facade -> private centralized renderer implementation
+```
+
 ## Execution scopes
 
 `ExecutionScope` owns one project-execution directory but never creates task
@@ -1254,7 +1628,7 @@ timestamp, process, and atomic sequence components.
 
 ```text
 ordinary application run -> ExecutionScope::create_generated(recording_root)
-attractor_2d::run -> ExecutionScope::create_generated
+attractor_2d::main -> ExecutionScope::create_generated
 ```
 
 ### ExecutionScope::create_named
@@ -1302,7 +1676,8 @@ application execution log -> ExecutionScope::created_at_utc
 
 ### ExecutionScope::task_recording_directory
 
-Deterministically derives `task-{index:06}` without creating it.
+Deterministically derives `task-{ordinal:06}` without creating it. The ordinal
+is automatic ordering, not scientific identity.
 
 #### Reference
 
@@ -1385,6 +1760,10 @@ ExecutionScope::create_generated -> compact_timestamp
         │   ├── lib.rs            crate documentation and public module exports
         │   ├── main.rs           excluded non-package development placeholder
         │   ├── prelude.rs        explicit complete end-user API re-exports
+        │   ├── reporting.rs      centralized progress-reporting facade
+        │   ├── reporting/
+        │   │   ├── error.rs  reporting lifecycle and identity errors
+        │   │   └── progress.rs task identities, counters, renderer, and handles
         │   ├── configuration.rs  standard project-configuration facade
         │   ├── configuration/
         │   │   ├── error.rs      configuration error vocabulary
@@ -1424,10 +1803,11 @@ ExecutionScope::create_generated -> compact_timestamp
             ├── analysis_workflow.rs
             ├── storage_workflow.rs
             ├── storage_resilience.rs
-            └── resume_workflow.rs
+            ├── resume_workflow.rs
+            └── reporting_workflow.rs
 
 Rust 2024 split-module layout is used. There are no `mod.rs` files. `lib.rs`
-exports all four functional modules and the explicit prelude. All implementation
+exports all five functional modules and the explicit prelude. All implementation
 submodules remain private behind their documented facade files.
 
 ## System state
@@ -3128,7 +3508,7 @@ separate from scientific payload records.
 #### `SystemStateWriterBuilder::with_task_parameters`
 
 Copies one resolved task's small JSON values into recording metadata and adds
-its authoritative task index. A same-named input value is replaced by the
+its authoritative task ordinal. A same-named input value is replaced by the
 actual index.
 
 ##### Reference
@@ -3562,6 +3942,12 @@ The configuration portion includes:
 - `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`,
   `TaskConfig`, `TaskConfigIter`, and `MatchingTaskConfigIter`;
 - `ProjectPaths` and `ConfigurationError`.
+
+The reporting portion includes:
+
+- `ProgressReporter`, `ProgressReporterBuilder`, `TaskProgress`, and
+  `TaskIdentity`;
+- `TaskStatus`, `ProgressSummary`, and `ReportingError`.
 
 The storage portion includes:
 
@@ -4313,11 +4699,12 @@ Required method allocation:
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
 | `resume_workflow` | explicit `continue_existing_recording`/`continue_recording_from_latest_checkpoint`, full-state schema enforcement, typed checkpoint reconstruction, prepared and unprepared crash windows, multi-sealed-plus-open recovery without sealed-content inspection, continuation rejection boundaries, append seeding, `flush`, and exclusive root leasing |
 | `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `TaskConfig`, `TaskConfigIter`, `MatchingTaskConfigIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, complete task generation, exact filtering, unique selection, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
+| `reporting_workflow` | `ProgressReporterBuilder`, `ProgressReporter`, `TaskProgress`, `TaskIdentity`, `TaskStatus`, `ProgressSummary`, and `ReportingError`; identity validation, automatic ordering, parallel atomic updates, output modes, exclusive session ownership, lifecycle finalization, and failure-on-drop |
 
-The finished source reads as six coherent workflows rather than an API census.
+The finished source reads as seven coherent workflows rather than an API census.
 The old aggregators and focused subdirectories have been removed.
 
-Current test architecture: six logged integration files plus production
+Current test architecture: seven logged integration files plus production
 doctests. Each workflow passes independently and the consolidated all-target
 suite passes. Formatting and Clippy across all targets pass with warnings
 denied. Archive preparation also succeeds. The manifest declares the published
@@ -4347,7 +4734,11 @@ examples/
     │   ├── paths.json
     │   └── state.json
     └── src/
-        └── main.rs
+        ├── main.rs
+        ├── project_setup.rs
+        ├── hopf_model.rs
+        ├── state_recording.rs
+        └── recording_validation.rs
 ```
 
 From the repository root, Cargo runs it with:
@@ -4389,9 +4780,10 @@ The example demonstrates one coherent full-stack happy path:
 4. borrow and encode the current state at each stream's sampling interval, allowing the
    writer to apply byte-bounded backpressure and whole-record chunking;
 5. finish each recording, register direct Serde JSON decoding for `Vec<f64>`
-   and `f64`, and read only each stream's latest state with
+   and `f64`, and read only the complete checkpoint stream's latest state with
    `StoredStateSeriesReader`;
-6. verify that reconstructed final samples match the live final state exactly;
+6. verify that the reconstructed checkpoint matches the live final state
+   exactly;
    and
 7. leave the generated recording directory under the example's ignored
    `target/recordings` area for inspection beneath a timestamp-and-process-based
@@ -4407,7 +4799,7 @@ legible while all crate interaction goes through the public prelude.
 Normal output is deliberately one validation line:
 
 ```text
-[validation] tasks=3 round_trip=true output=...
+[workflow] status=completed tasks=3 completed=3 failed=0 pending=0 message=round_trip=true output=...
 ```
 
 The source project is self-contained and never depends on test fixtures. It is
@@ -4630,16 +5022,20 @@ inputs, state ownership, explicit Euler evolution, stream sampling intervals
 and counts, minimal output policy, typed verification, and the runnable command.
 
 The standalone example manifest is complete: `attractor-2d` is an unpublished
-Rust 2024 binary with a Rust 1.85 floor, an explicit `src/main.rs` target, and
-only `scientific-workflow = { version = "0.1.0", path = "../../dev" }` as its
-dependency. Its application `Cargo.lock` is retained for reproducibility.
+Rust 2024 binary with a Rust 1.85 floor and an explicit `src/main.rs` target. It
+uses the local `scientific-workflow` crate plus Rayon 1.12 for bounded
+task-level parallelism. Its application `Cargo.lock` is retained for
+reproducibility.
 
 The minimal modular executable and `Cargo.lock` are implemented. `main.rs`
-orchestrates dedicated project, simulation, recording, and validation modules. The program
-preflights configuration, moves `Vec<f64>` into each state without cloning,
+orchestrates dedicated project, simulation, recording, and validation modules.
+It feeds the lazy `TaskConfigIter` into Rayon's bounded work-stealing pool with
+`par_bridge`, avoiding an eager task list while moving owned handles safely
+between workers. The program
+loads configuration, moves `Vec<f64>` into each state without cloning,
 updates heterogeneous payloads through tuple mutation, samples three streams,
-explicitly closes every writer lifecycle, reads each stream's latest state, and
-verifies final values exactly. `HopfModel` is the sole owner of each live state;
+explicitly closes every writer lifecycle, reads the complete checkpoint's
+latest state, and verifies final values exactly. `HopfModel` is the sole owner of each live state;
 recording and validation borrow the same instance immutably. The successful full
 trial completes all three tasks, each with 501 trajectory,
 1001 radius, and 6 checkpoint records. Example and library formatting, tests,
@@ -4653,6 +5049,18 @@ payload verification, the crate now enables Serde JSON's `float_roundtrip`
 feature alongside `raw_value`. The rerun reconstructs every final time and
 payload with exact equality; the example does not hide the issue behind a
 numerical tolerance.
+
+The example now exercises only the minimum reporting surface: parameter-based
+identity, task start, absolute iteration updates, task completion, and reporter
+completion. It omits custom progress phases, checked-arithmetic scaffolding,
+and explicit parallel success/failure branching. Readback validates only the
+complete checkpoint because repeating the same endpoint assertions for partial
+streams teaches no additional storage API. Its README directs readers from
+configuration through the model and storage modules to `main.rs`, making the
+orchestrator the conclusion rather than the entry point for understanding.
+`HopfModel::step` includes a demonstration-only 500-microsecond pause so the
+interactive reporter remains visible during this otherwise tiny calculation;
+real models must omit that artificial delay.
 
 An independent one-file reference at
 `examples/attractor_2d/validation/naive_hopf.rs` now validates the scientific
@@ -4673,7 +5081,7 @@ observation loop while simplifying common setup. The completed changes are:
    remain available for asymmetric workloads, and byte budgets remain explicit
    rather than silently hard-coded.
 2. `SystemStateWriterBuilder::with_task_parameters(&TaskParameters)`
-   copies the small resolved JSON values and task index into user metadata
+   copies the small resolved JSON values and task ordinal into user metadata
    internally, removing application knowledge of `serde_json::Map` without
    coupling the writer to `fixed.json` loading.
 3. Generic JSON decoder registration through

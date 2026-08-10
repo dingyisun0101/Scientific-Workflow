@@ -11,8 +11,8 @@ mod state_recording;
 
 use std::error::Error;
 use std::path::PathBuf;
-use std::process;
 
+use rayon::prelude::*;
 use scientific_workflow::prelude::*;
 
 use project_setup::prepare_task;
@@ -23,18 +23,10 @@ use state_recording::record_model;
 ///
 /// Library and model-specific errors retain their concrete source chains while
 /// the executable remains independent of an application error dependency.
-pub(crate) type AppResult<T> = Result<T, Box<dyn Error>>;
-
-/// Reports one terminal failure and selects an unsuccessful process status.
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("[error] {error}");
-        process::exit(1);
-    }
-}
+pub(crate) type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 /// Runs every configured task and reports one minimal validation result.
-fn run() -> AppResult<()> {
+fn main() -> AppResult<()> {
     // By convention the standalone crate root is also the scientific project
     // root, and ScientificProject loads all four files under `config/`.
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -46,24 +38,33 @@ fn run() -> AppResult<()> {
     let recording_root = project.resolve_path("recording_root")?;
     let execution = ExecutionScope::create_generated(&recording_root)?;
 
-    let mut validated_tasks = 0_u64;
-    for task in project.task_configs() {
-        // Each resolved sweep task receives an independent state owner and an
-        // independent bounded writer rooted under the shared execution scope.
-        let (mut model, settings) = prepare_task(schema, &task)?;
-        let recording = record_model(schema, &execution, &task, &settings, &mut model)?;
+    let reporter = ProgressReporter::for_project(&project)
+        .identify_tasks_by(["mu"])
+        .start()?;
 
-        validate_recording(model.state(), &recording)?;
-        validated_tasks += 1;
-    }
+    // TaskConfig is an owned Send + Sync handle over shared immutable source
+    // data. par_bridge therefore feeds the lazy Cartesian iterator directly to
+    // Rayon's work-stealing pool without first collecting or cloning configs.
+    project
+        .task_configs()
+        .par_bridge()
+        .try_for_each(|task| -> AppResult<()> {
+            // Every worker creates an independent model and recording writer;
+            // only immutable schema and execution-scope handles are shared.
+            let (mut model, settings) = prepare_task(schema, &task)?;
+            let initial_iteration = model.state().simulation_time().iteration();
+            let target_iteration = initial_iteration + settings.step_count;
+            let progress = reporter.start_task(&task, initial_iteration, Some(target_iteration))?;
+            let recording =
+                record_model(schema, &execution, &task, &settings, &mut model, &progress)?;
+            validate_recording(model.state(), &recording)?;
+            progress.complete()?;
+            Ok(())
+        })?;
 
-    // This is the only normal output: reaching it proves that configuration,
-    // evolution, recording, decoding, and exact final-state comparison passed
-    // for every task. Any failure instead exits through main's error boundary.
-    println!(
-        "[validation] tasks={} round_trip=true output={}",
-        validated_tasks,
+    reporter.complete(format!(
+        "round_trip=true output={}",
         execution.directory().display()
-    );
+    ))?;
     Ok(())
 }

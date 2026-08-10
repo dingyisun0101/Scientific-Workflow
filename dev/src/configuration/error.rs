@@ -11,7 +11,7 @@
 //!
 //! Filesystem and JSON mechanics preserve their original errors through
 //! [`std::error::Error::source`]. Semantic failures—such as a fixed/sweep key
-//! collision or an out-of-range task index—carry their complete context
+//! collision or an out-of-range task ordinal—carry their complete context
 //! directly because no lower-level error produced them.
 //!
 //! Configuration errors never contain a resolved task dictionary or scientific
@@ -112,11 +112,11 @@ pub enum ConfigurationError {
 
     /// Indexed task lookup addressed an ordinal outside the generated space.
     #[error(
-        "task index {index} is out of bounds for a parameter space containing {task_count} tasks"
+        "task ordinal {ordinal} is out of bounds for a parameter space containing {task_count} tasks"
     )]
-    TaskIndexOutOfBounds {
+    TaskOrdinalOutOfBounds {
         /// Requested zero-based task ordinal.
-        index: u64,
+        ordinal: u64,
         /// Total number of deterministic task combinations.
         task_count: u64,
     },
@@ -153,20 +153,20 @@ pub enum ConfigurationError {
     },
 
     /// A resolved task dictionary does not contain the requested exact key.
-    #[error("task {task_index} does not contain parameter `{key}`")]
+    #[error("task ordinal {task_ordinal} does not contain parameter `{key}`")]
     UnknownTaskParameter {
         /// Resolved task from which the parameter was requested.
-        task_index: u64,
+        task_ordinal: u64,
         /// Exact, case-sensitive lookup key supplied by the caller.
         key: String,
     },
 
     /// A present JSON value could not be decoded into the caller's requested
     /// Rust type.
-    #[error("failed to decode parameter `{key}` from task {task_index}")]
+    #[error("failed to decode parameter `{key}` from task ordinal {task_ordinal}")]
     DecodeTaskParameter {
         /// Resolved task containing the source value.
-        task_index: u64,
+        task_ordinal: u64,
         /// Exact parameter key whose value was decoded.
         key: String,
         /// Underlying Serde JSON type or data-model failure.
@@ -175,10 +175,10 @@ pub enum ConfigurationError {
     },
 
     /// A resolved task dictionary could not be serialized as JSON.
-    #[error("failed to serialize resolved parameters for task {task_index}")]
+    #[error("failed to serialize resolved parameters for task ordinal {task_ordinal}")]
     SerializeTaskParameters {
         /// Resolved task whose logical fixed/sweep union was being serialized.
-        task_index: u64,
+        task_ordinal: u64,
         /// Underlying JSON serialization failure.
         #[source]
         source: serde_json::Error,

@@ -48,9 +48,8 @@ retains the development sequence as a concise record of completed scope.
 
 ## Readback validation
 
-- [x] Reconstruct all three streams with vector and scalar decoders after each
-  writer reaches completed status.
-- [x] Reduce readback to exact latest-state round-trip validation.
+- [x] Reduce readback to exact latest-checkpoint round-trip validation; partial
+  streams demonstrate sampling without redundant endpoint assertions.
 - [x] Explicitly verify the storage round trip and return an error on mismatch.
 - [x] Enable exact finite-float round trips in the library's JSON dependency
   after the first trial exposed a one-ULP decode discrepancy.
@@ -60,6 +59,14 @@ retains the development sequence as a concise record of completed scope.
   `state_recording`, and `recording_validation`.
 - [x] Remove nonessential model accessors, analysis metrics, and visualization.
 - [x] Reduce normal terminal output to one validation result.
+- [x] Feed all lazy `TaskConfig` values through bounded Rayon task-level
+  parallelism while retaining one independently owned model and writer per
+  active task.
+- [x] Remove example-only progress phases, overflow scaffolding, and explicit
+  parallel success/failure branching; retain only the APIs needed to show the
+  workflow.
+- [x] Add a documented 500-microsecond demonstration pause per model step so
+  readers can observe centralized progress rendering.
 - [x] Add a one-file standard-library Hopf reference and confirm bit-identical
   final iteration, physical time, point, and radius for all three tasks.
 - [x] Move periodic and final-state sampling decisions into

@@ -36,7 +36,7 @@
 //!     let output_root = task.resolve_path("output_root")?;
 //!     println!(
 //!         "task={} temperature={temperature} seed={seed} output={}",
-//!         task.task_index(),
+//!         task.task_ordinal(),
 //!         output_root.display()
 //!     );
 //! }

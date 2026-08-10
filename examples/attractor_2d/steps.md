@@ -186,14 +186,14 @@ Create the writer before the first evolution step. Configure it with:
 - the task's unique recording directory;
 - the shared state schema;
 - time-axis names and units;
-- the resolved task index and parameters as user metadata; and
+- the resolved task ordinal and parameters as user metadata; and
 - all stream definitions.
 
 Starting the writer publishes the recording metadata before sample data is
 accepted. Never let two tasks share one recording directory.
 
 The application should refuse accidental overwrite. Generate task directories
-from a collision-free execution identifier and stable task index rather than
+from a collision-free execution identifier and stable task ordinal rather than
 deleting an existing recording automatically.
 
 **Ready when:** a new recording starts with complete metadata and every stream
@@ -281,9 +281,15 @@ For each task, create a separate:
 - writer and recording directory; and
 - success or failure result.
 
-Begin with sequential execution. Add task-level parallelism only when it is
-useful and measured. Parallel tasks still retain independent writers so their
-queues, storage rates, and failures remain isolated.
+Begin with sequential execution. Once that path is validated, task-level
+parallelism can consume the same owned `TaskConfig` handles. The attractor
+example uses Rayon's `par_bridge()` to feed the lazy configuration iterator
+without collecting it first. Parallel tasks still retain independent models
+and writers, so their queues, storage rates, and failures remain isolated.
+
+Rayon limits active simulations to its worker-pool size; “execute all tasks in
+parallel” means all tasks are submitted to the parallel schedule, not that an
+unbounded number of operating-system threads is created.
 
 **Ready when:** task identity maps unambiguously to parameters, metadata,
 recording directory, and final result.

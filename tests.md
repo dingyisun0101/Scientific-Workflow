@@ -35,10 +35,11 @@ replace many narrow tests.
     ├── analysis_workflow.rs
     ├── storage_workflow.rs
     ├── storage_resilience.rs
-    └── resume_workflow.rs
+    ├── resume_workflow.rs
+    └── reporting_workflow.rs
 
 The former `tests/system_state/`, `tests/time_series/`, and `tests/storage/`
-subdirectories and their aggregator files have been removed. All six
+subdirectories and their aggregator files have been removed. All seven
 replacement targets pass independently with the logs specified below.
 
 Doctests remain in production documentation and are not replaced by this
@@ -493,6 +494,47 @@ the copy, and reject meaningful ambiguous or invalid inputs.
     [validation] fixed_only=true nested_duplicate=true overlap=true inconsistent_cases=true invalid_path=true
     [result] configuration_workflow=passed
 
+## Test 7: reporting_workflow.rs
+
+### Scenario
+
+Load the real six-task Cartesian project, derive identities from its sweep
+parameters, and update all task counters concurrently through scoped worker
+threads. Rendering is hidden so the test validates state and lifecycle without
+controlling the test harness terminal.
+
+### Required behavior
+
+- Default identity uses every sweep key and is unique for every task.
+- A caller-selected non-unique key combination is rejected before rendering.
+- Duplicate and unknown identity keys are rejected contextually.
+- Task ordinals come only from `TaskConfig` and are never caller-supplied.
+- One process-wide reporting session excludes a second reporter.
+- Parallel iteration updates are atomic, monotonic, and target-bounded.
+- Known-target completion requires exact target attainment.
+- Known and unknown absolute targets are supported.
+- Dropping an incomplete task handle marks it failed.
+- Successful completion requires every registered task to complete.
+- Summary counts are stable and exact.
+
+### Structures and methods
+
+- `ProgressReporter::{for_project,for_configuration,start_task,report,summary,
+  complete,fail,report_error}`;
+- `ProgressReporterBuilder::{identify_tasks_by,terminal,plain,hidden,start}`;
+- every public `TaskProgress`, `TaskIdentity`, and `ProgressSummary` method;
+- `TaskStatus` lifecycle values and reachable `ReportingError` families;
+- exclusive terminal leasing, renderer polling, identity construction, and
+  failure-on-drop indirectly.
+
+### Log contract
+
+    [identity-validation] exact-combination=true duplicate-key=true unknown-key=true ambiguity=true
+    [parallel-progress] tasks=6 completed=6 atomic_iterations=true terminal_exclusive=true
+    [failure-lifecycle] duplicate-start=true regression=true target-bound=true drop-fails=true
+    [completion-validation] initial-bound=true target-required=true explicit-fail=true incomplete-success-rejected=true
+    [result] reporting_workflow=passed
+
 ## Logging rules
 
 - Use stable category prefixes shown above.
@@ -515,12 +557,13 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 5. `resume_workflow.rs` implemented for crash recovery and append.
 6. `configuration_workflow.rs` implemented for project configuration and task
    expansion.
-7. Meaningful ownership, invariant, storage, decoder, integrity, recovery, and
-   configuration assertions mapped into the six scenarios.
-8. Old aggregators and test subdirectories removed after replacements passed.
-9. README and architecture documentation updated to the consolidated layout.
-10. Storage and configuration tests use only the public prelude.
-11. Full formatting, all-target, doctest, and Clippy verification is the final
+7. `reporting_workflow.rs` implemented for centralized parallel progress.
+8. Meaningful ownership, invariant, storage, decoder, integrity, recovery,
+   configuration, and reporting assertions mapped into the seven scenarios.
+9. Old aggregators and test subdirectories removed after replacements passed.
+10. README and architecture documentation updated to the consolidated layout.
+11. Storage, configuration, and reporting tests use only the public prelude.
+12. Full formatting, all-target, doctest, and Clippy verification is the final
    closeout gate for every later change.
 
 The migration preserved old tests until the replacement workflows compiled and
@@ -537,6 +580,7 @@ cargo test --test storage_workflow -- --nocapture
 cargo test --test storage_resilience -- --nocapture
 cargo test --test resume_workflow -- --nocapture
 cargo test --test configuration_workflow -- --nocapture
+cargo test --test reporting_workflow -- --nocapture
 cargo test --all-targets --no-fail-fast --locked
 cargo test --doc --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -546,10 +590,10 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 
 The cleanup is complete only when:
 
-- the final tree contains the fixtures and six integration files;
+- the final tree contains the fixtures and seven integration files;
 - every implemented public structure and method is checked off above;
 - every high-risk private subsystem has observable behavioral coverage;
-- all six targets emit their documented bounded logs;
+- all seven targets emit their documented bounded logs;
 - no test depends on execution order or retained generated data;
 - the complete verification command set passes.
 

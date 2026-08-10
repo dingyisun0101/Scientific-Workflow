@@ -108,9 +108,9 @@ impl ProjectConfig {
     ///
     /// The returned handle shares all parsed fixed, sweep, and path storage.
     /// No merged parameter map or path table is allocated.
-    pub fn task_config(&self, index: u64) -> Result<TaskConfig, ConfigurationError> {
+    pub fn task_config(&self, ordinal: u64) -> Result<TaskConfig, ConfigurationError> {
         Ok(TaskConfig {
-            parameters: self.parameters.task(index)?,
+            parameters: self.parameters.task(ordinal)?,
             paths: self.paths.clone(),
         })
     }
@@ -248,8 +248,8 @@ pub struct TaskConfig {
 
 impl TaskConfig {
     /// Returns the stable zero-based task ordinal.
-    pub fn task_index(&self) -> u64 {
-        self.parameters.task_index()
+    pub fn task_ordinal(&self) -> u64 {
+        self.parameters.task_ordinal()
     }
 
     /// Borrows the fixed-plus-selected-sweep dictionary.
@@ -291,7 +291,7 @@ impl fmt::Debug for TaskConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("TaskConfig")
-            .field("task_index", &self.task_index())
+            .field("task_ordinal", &self.task_ordinal())
             .field("parameters", &self.parameters.len())
             .field("paths", &self.paths.len())
             .finish_non_exhaustive()

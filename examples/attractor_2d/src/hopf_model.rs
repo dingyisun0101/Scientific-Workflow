@@ -7,6 +7,8 @@
 //! unambiguous and avoids cloning scientific payloads at sampling boundaries.
 
 use scientific_workflow::prelude::*;
+use std::thread;
+use std::time::Duration;
 
 use crate::AppResult;
 
@@ -66,6 +68,11 @@ impl HopfModel {
     /// are then committed within one coordinated mutable borrow, after which
     /// simulation and physical time advance transactionally.
     pub(crate) fn step(&mut self) -> Result<(), StateError> {
+        // This demonstration-only pause makes the centralized progress display
+        // observable. Real scientific models should spend this time computing
+        // and should not add an artificial delay.
+        thread::sleep(Duration::from_micros(500));
+
         {
             // A tuple borrow gives simultaneous mutable access to two
             // distinct slots while preserving SystemState's aliasing rules.

@@ -98,7 +98,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_eq!(scientific_project.parameters().task_count(), 6);
     assert_eq!(scientific_project.task_count(), 6);
     assert_eq!(scientific_project.task_configs().count(), 6);
-    assert_eq!(scientific_project.task_config(5).unwrap().task_index(), 5);
+    assert_eq!(scientific_project.task_config(5).unwrap().task_ordinal(), 5);
     assert_eq!(
         scientific_project
             .task_configs_matching("temperature", 300.0)
@@ -167,7 +167,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         .tasks()
         .map(|task| {
             (
-                task.task_index(),
+                task.task_ordinal(),
                 task.decode_value::<f64>("temperature").unwrap(),
                 task.decode_value::<u64>("seed").unwrap(),
             )
@@ -189,7 +189,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         .task_configs()
         .map(|task| {
             (
-                task.task_index(),
+                task.task_ordinal(),
                 task.decode_value::<f64>("temperature").unwrap(),
                 task.decode_value::<u64>("seed").unwrap(),
                 task.resolve_path("output_root").unwrap(),
@@ -239,8 +239,8 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
 
     let complete = project.task_config(4).unwrap();
     let complete_clone = complete.clone();
-    assert_eq!(complete.task_index(), 4);
-    assert_eq!(complete.parameters().task_index(), 4);
+    assert_eq!(complete.task_ordinal(), 4);
+    assert_eq!(complete.parameters().task_ordinal(), 4);
     assert_eq!(complete.paths().len(), 3);
     assert_eq!(complete.require_value("temperature").unwrap(), 300.0);
     assert!(std::ptr::eq(
@@ -251,11 +251,11 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         complete.paths().path("output_root").unwrap(),
         complete_clone.paths().path("output_root").unwrap()
     ));
-    assert!(format!("{complete:?}").contains("task_index"));
+    assert!(format!("{complete:?}").contains("task_ordinal"));
     let detached_tasks = project.clone().task_configs();
     assert_eq!(detached_tasks.size_hint(), (6, Some(6)));
     let mut copied_tasks = detached_tasks.clone();
-    assert_eq!(copied_tasks.next().unwrap().task_index(), 0);
+    assert_eq!(copied_tasks.next().unwrap().task_ordinal(), 0);
     assert_eq!(detached_tasks.count(), 6);
     assert!(format!("{copied_tasks:?}").contains("parameters"));
     assert!(
@@ -282,7 +282,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     let first = parameters.task(0).unwrap();
     let second = parameters.task(1).unwrap();
     let copied = first.clone();
-    assert_eq!(first.task_index(), 0);
+    assert_eq!(first.task_ordinal(), 0);
     assert_eq!(first.len(), 5);
     assert!(!first.is_empty());
     assert!(first.contains("solver"));
@@ -332,7 +332,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     ];
     assert!(key_positions.windows(2).all(|pair| pair[0] < pair[1]));
     assert!(format!("{parameters:?}").contains("task_count"));
-    assert!(format!("{first:?}").contains("task_index"));
+    assert!(format!("{first:?}").contains("task_ordinal"));
     println!(
         "[ownership] fixed_shared=true selected_shared=true task_clone_shared=true merged_map_allocated=false"
     );
@@ -340,8 +340,8 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     let mut owning_iter = parameters.tasks();
     assert_eq!(owning_iter.size_hint(), (6, Some(6)));
     let mut copied_iter = owning_iter.clone();
-    assert_eq!(owning_iter.next().unwrap().task_index(), 0);
-    assert_eq!(copied_iter.next().unwrap().task_index(), 0);
+    assert_eq!(owning_iter.next().unwrap().task_ordinal(), 0);
+    assert_eq!(copied_iter.next().unwrap().task_ordinal(), 0);
     assert!(format!("{owning_iter:?}").contains("next"));
     let independent_iter = project.parameters().tasks();
     let project_clone = project.clone();
@@ -441,20 +441,20 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     let bounds = separated_parameters.task(6).unwrap_err();
     assert!(matches!(
         bounds,
-        ConfigurationError::TaskIndexOutOfBounds {
-            index: 6,
+        ConfigurationError::TaskOrdinalOutOfBounds {
+            ordinal: 6,
             task_count: 6
         }
     ));
     assert!(matches!(
         first.require_value("unknown"),
-        Err(ConfigurationError::UnknownTaskParameter { task_index: 0, key })
+        Err(ConfigurationError::UnknownTaskParameter { task_ordinal: 0, key })
             if key == "unknown"
     ));
     let decode = first.decode_value::<String>("temperature").unwrap_err();
     assert!(matches!(
         decode,
-        ConfigurationError::DecodeTaskParameter { task_index: 0, ref key, .. }
+        ConfigurationError::DecodeTaskParameter { task_ordinal: 0, ref key, .. }
             if key == "temperature"
     ));
     assert!(decode.source().unwrap().is::<serde_json::Error>());
@@ -485,7 +485,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     let unique = cases
         .unique_task_config_matching("temperature", 290.0)
         .unwrap();
-    assert_eq!(unique.task_index(), 1);
+    assert_eq!(unique.task_ordinal(), 1);
     assert_eq!(
         unique
             .decode_value::<f64>("physical_time_increment")

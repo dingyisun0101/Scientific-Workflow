@@ -12,7 +12,7 @@ cd dev
 application built against the local crate. It loads project-root
 `config/{fixed,sweep,paths,state}.json` inputs, expands a parameter sweep,
 iterates complete shared `TaskConfig` handles, evolves one directly owned
-`SystemState` per task with explicit Euler, and
+`SystemState` per task concurrently through Rayon, and
 offers every evolved state to one writer that owns the independent trajectory,
 radius, and checkpoint sampling intervals.
 
@@ -52,9 +52,25 @@ Checksums detect accidental alteration and storage corruption. They do not by
 themselves prove model correctness, authorship, or cryptographic authenticity;
 those are separate provenance concerns.
 
+## Centralized progress reporting
+
+`ProgressReporter` is the sole human-facing terminal owner while parallel work
+is active. It derives task identities from any caller-selected unique parameter
+combination, orders display rows by the automatically assigned task ordinal,
+and polls per-task atomic iteration counters from one renderer thread. Models,
+writers, and Rayon workers do not print or draw terminal elements directly.
+
+Interactive sessions clear the terminal once after the reporter acquires its
+exclusive lease, then receive one persistent row per configured task. Known
+targets display elapsed execution time and estimated remaining time; pending and
+open-ended tasks report that ETA is unknown. Redirected stderr receives stable
+status lines and is never cleared. Task progress is observational: models
+continue to own scientific iteration through `SystemState`, and workers
+synchronize the reporter with `TaskProgress::set_iteration`.
+
 ## Integration tests
 
-The permanent suite contains six logged, behavior-oriented workflows rather
+The permanent suite contains seven logged, behavior-oriented workflows rather
 than source-file-level tests.
 
 ### Project configuration
@@ -119,6 +135,16 @@ Exercises both open-chunk crash windows, complete typed checkpoint
 reconstruction, multiple-sealed-plus-open recovery without inspecting sealed
 content, continued append ordering, continuation rejection boundaries,
 explicit durability barriers, and artifact-free exclusive writer ownership.
+
+### Parallel progress reporting
+
+```bash
+cargo test --test reporting_workflow -- --nocapture
+```
+
+Validates parameter-combination identity, automatic ordinal ordering,
+parallel-safe atomic updates, exclusive terminal ownership, known and unknown
+targets, lifecycle summaries, and failure-on-drop behavior.
 
 ## Complete verification
 

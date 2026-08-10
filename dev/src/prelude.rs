@@ -23,6 +23,10 @@ pub use crate::configuration::{
 };
 pub use crate::execution::{ExecutionScope, ExecutionScopeError};
 pub use crate::project::{ScientificProject, ScientificProjectError};
+pub use crate::reporting::{
+    ProgressReporter, ProgressReporterBuilder, ProgressSummary, ReportingError, TaskIdentity,
+    TaskProgress, TaskStatus,
+};
 pub use crate::storage::{
     CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
     JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, SamplingInterval, StateStreamConfig,

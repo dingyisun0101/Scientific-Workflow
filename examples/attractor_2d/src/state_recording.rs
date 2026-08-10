@@ -28,16 +28,21 @@ pub(crate) fn record_model(
     task: &TaskConfig,
     settings: &TaskSettings,
     model: &mut HopfModel,
+    progress: &TaskProgress,
 ) -> AppResult<CompletedRecording> {
     // The scope derives a stable task path but does not create it. Exclusive
     // directory creation belongs to the writer, preventing accidental reuse.
-    let directory = execution.task_recording_directory(task.task_index());
+    let directory = execution.task_recording_directory(task.task_ordinal());
     let mut writer = build_writer(schema, &directory, settings, task)?;
 
     // The initial condition is a legitimate sample at iteration zero.
     writer.observe_state(model.state())?;
     for _ in 0..settings.step_count {
         model.step()?;
+
+        // Progress observes the model's authoritative absolute iteration. It
+        // never owns or independently increments scientific time.
+        progress.set_iteration(model.state().simulation_time().iteration())?;
 
         // Observation is intentionally unconditional. The writer owns every
         // stream's cadence and immediately returns when no sample is due.

@@ -101,8 +101,8 @@ impl ScientificProject {
     }
 
     /// Resolves one complete task configuration by deterministic ordinal.
-    pub fn task_config(&self, index: u64) -> Result<TaskConfig, ConfigurationError> {
-        self.configuration.task_config(index)
+    pub fn task_config(&self, ordinal: u64) -> Result<TaskConfig, ConfigurationError> {
+        self.configuration.task_config(ordinal)
     }
 
     /// Lazily iterates every complete fixed/sweep/path task configuration.

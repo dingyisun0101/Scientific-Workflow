@@ -488,7 +488,7 @@ impl SystemStateWriterBuilder {
     /// Records one resolved task dictionary as the recording's user metadata.
     ///
     /// Fixed and swept values retain their resolved JSON representation.
-    /// The synthetic `task_index` entry is always set from the task itself and
+    /// The synthetic `task_ordinal` entry is always set from the task itself and
     /// therefore replaces any same-named input entry.
     #[must_use]
     pub fn with_task_parameters(mut self, parameters: &TaskParameters) -> Self {
@@ -497,8 +497,8 @@ impl SystemStateWriterBuilder {
             .map(|(key, value)| (key.to_owned(), value.clone()))
             .collect();
         self.user_metadata.insert(
-            "task_index".to_owned(),
-            Value::from(parameters.task_index()),
+            "task_ordinal".to_owned(),
+            Value::from(parameters.task_ordinal()),
         );
         self
     }

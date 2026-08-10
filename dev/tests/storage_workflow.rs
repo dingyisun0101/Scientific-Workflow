@@ -490,7 +490,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let task_metadata: Value =
         serde_json::from_slice(&fs::read(task_metadata_run.join("metadata.json")).unwrap())
             .unwrap();
-    assert_eq!(task_metadata["user_metadata"]["task_index"], 0);
+    assert_eq!(task_metadata["user_metadata"]["task_ordinal"], 0);
     assert_eq!(task_metadata["user_metadata"]["temperature"], 280.0);
     assert_eq!(task_metadata["user_metadata"]["seed"], 7);
     assert_eq!(task_metadata["version"], 4);
@@ -498,7 +498,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         task_metadata["streams"][0]["sampling_interval"],
         serde_json::json!({"iterations": 1})
     );
-    println!("[task-metadata] task_index=0 temperature=280 seed=7");
+    println!("[task-metadata] task_ordinal=0 temperature=280 seed=7");
     println!("[result] storage_workflow=passed");
 }
 

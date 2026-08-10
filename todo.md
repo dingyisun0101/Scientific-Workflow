@@ -99,6 +99,9 @@ a second sidecar file.
 
 ## Reusable example patterns
 
+- [x] Centralized `ProgressReporter` derives unique parameter identities,
+  observes parallel tasks through atomic counters, and exclusively owns
+  human-facing terminal rendering for its session.
 - [x] `ProjectConfig` and `ScientificProject` lazily generate cheap owned
   `TaskConfig` handles for the full Cartesian product or explicit cases, with
   exact sweep filtering and ambiguity-safe unique selection.
