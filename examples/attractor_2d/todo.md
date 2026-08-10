@@ -33,7 +33,7 @@ retains the development sequence as a concise record of completed scope.
   on `../../dev`.
 - [x] Create `src/main.rs` using only `scientific_workflow::prelude::*` and the
   standard library.
-- [x] Split project loading, live simulation, recording, and analysis into
+- [x] Split project loading, live simulation, recording, and validation into
   dedicated modules while retaining `main.rs` as the orchestrator.
 - [x] Implement concise configuration loading and typed task extraction.
 - [x] Implement schema loading and per-task state assembly.
@@ -46,18 +46,20 @@ retains the development sequence as a concise record of completed scope.
 - [x] Generate and retain `Cargo.lock`, as is conventional for an executable
   application.
 
-## Readback and analysis
+## Readback validation
 
 - [x] Reconstruct all three streams with vector and scalar decoders after each
   writer reaches completed status.
-- [x] Analyze the reconstructed series and render the terminal ASCII plot.
+- [x] Reduce readback to exact latest-state round-trip validation.
 - [x] Explicitly verify the storage round trip and return an error on mismatch.
 - [x] Enable exact finite-float round trips in the library's JSON dependency
   after the first trial exposed a one-ULP decode discrepancy.
 - [x] Remove the duplicate `FinalState`, retain `HopfModel` as the sole live
   state owner, and reduce validation/error scaffolding to demo essentials.
 - [x] Normalize module names to `project_setup`, `hopf_model`,
-  `state_recording`, and `recording_analysis`.
+  `state_recording`, and `recording_validation`.
+- [x] Remove nonessential model accessors, analysis metrics, and visualization.
+- [x] Reduce normal terminal output to one validation result.
 - [x] Add a one-file standard-library Hopf reference and confirm bit-identical
   final iteration, physical time, point, and radius for all three tasks.
 - [x] Move periodic and final-state sampling decisions into

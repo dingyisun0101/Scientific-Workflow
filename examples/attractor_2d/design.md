@@ -1,551 +1,282 @@
-# `attractor_2d` example design
+# `attractor_2d` design
 
-## Status
+## Purpose
 
-The approved repository-level home is `examples/attractor_2d`. Configuration,
-state assembly, evolution, sampling, recording completion, typed readback,
-analysis, and round-trip verification are implemented.
+This example is the minimum complete evolution workflow for
+`scientific-workflow`. It demonstrates conventional project configuration, a
+parameter sweep, direct ownership and mutation of `SystemState`, independently
+sampled output streams, bounded asynchronous writing, and exact typed readback.
 
-The local library baseline is ready for this work: formatting, 11 integration
-tests, 6 doctests, warnings-denied Clippy and rustdoc, documentation generation,
-and isolated package verification all pass. Example implementation can
-therefore treat a later failure as a change-specific regression rather than an
-unknown pre-existing crate failure.
+It deliberately excludes visualization and scientific analysis. Those are
+downstream uses of a recording and would obscure the core runtime pattern this
+example is intended to teach.
 
 ## Scientific model
 
-The finalized model is the supercritical Hopf normal form, also called the
-Stuart–Landau oscillator in its equivalent complex representation:
+The model is the supercritical Hopf normal form:
 
 ```text
 dx/dt = mu * x - omega * y - (x^2 + y^2) * x
 dy/dt = omega * x + mu * y - (x^2 + y^2) * y
 ```
 
-In polar coordinates its behavior is transparent:
+One fixed-step explicit-Euler call advances the model exactly once. Both
+derivatives are evaluated from the old coordinates, both state payloads are
+updated, and only then are iteration and physical time advanced. The selected
+`dt = 0.01` is stable enough for this bounded demonstration.
+
+The Cartesian sweep uses `mu = [-0.25, 0.25, 1.0]`, producing three independent
+tasks. The richer dynamics justify recording a trajectory, but the application
+does not analyze or render it during evolution.
+
+## Project configuration
+
+The standalone crate root is the scientific project root. `ScientificProject`
+loads the conventional files directly from `config/`:
 
 ```text
-dr/dt     = mu * r - r^3
-dtheta/dt = omega
+config/
+├── fixed.json   shared model, evolution, sampling, and storage settings
+├── sweep.json   Cartesian `mu` parameter axis
+├── paths.json   project-relative recording root
+└── state.json   stable state keys and natural-language descriptions
 ```
 
-For `mu < 0`, trajectories converge to the stable origin. For `mu > 0`, the
-origin is unstable and trajectories converge to a stable circular limit cycle
-of radius `sqrt(mu)`. Sweeping `mu` across zero therefore demonstrates a real
-bifurcation with dynamics that remain easy to understand and verify.
+The schema is language-neutral. Rust payload types are established when the
+application first inserts values into each state slot.
 
-The evolution method is fixed-step explicit Euler. Each step copies the old
-`x` and `y` scalars from the state-owned point, evaluates both derivatives from
-that same old time point, writes `x + dt * dx` and `y + dt * dy` back in place,
-and advances the state's integer and physical time. No numerical dependency or
-intermediate state allocation is required.
+## State ownership
 
-The planned demonstration values are `omega = 1.0`, `dt = 0.01`, initial point
-`[0.25, 0.0]`, and a `mu` sweep of `[-0.25, 0.25, 1.0]`. These values keep
-explicit Euler well behaved while producing one decaying trajectory and two
-stable limit cycles with different radii.
+`HopfModel` is the sole owner of the live `SystemState`. No `FinalState`, copied
+domain snapshot, or second authoritative structure exists.
 
-## Purpose
+The state contains:
 
-`attractor_2d` will be the first full-stack example for `scientific-workflow`.
-It must read like a small scientific project rather than an API catalogue. One
-execution will demonstrate configuration loading, parameter-sweep expansion,
-directly owned mutable system state, asynchronous chunked recording, typed
-readback, and time-series analysis.
+- `point: Vec<f64>` for the mutable `[x, y]` coordinates;
+- `radius: f64` for the synchronized radial diagnostic; and
+- built-in `SimulationTime` for iteration and physical time.
 
-The example will use only the crate's public prelude and the Rust standard
-library. Test fixtures and crate-private implementation details are outside its
-boundary.
+`HopfModel` exposes only two operations:
 
-## Directory layout
+- `state()` lends an immutable state view to recording and validation; and
+- `step()` performs one scientific transition.
+
+Coefficient and payload accessors are intentionally absent. Model coefficients
+are implementation details of `step`, while downstream code can use the
+ordinary typed `SystemState` API when it genuinely needs a payload.
+
+The step uses one coordinated tuple borrow for `point` and `radius`. This gives
+safe simultaneous mutable access to distinct slots without cloning or moving
+either payload allocation.
+
+## Recording
+
+Each task owns one `SystemStateWriter` with three streams:
+
+| Stream | Fields | Sampling interval | Expected records |
+|---|---|---:|---:|
+| `trajectory` | `point` | 10 iterations | 501 |
+| `radius` | `radius` | 5 iterations | 1001 |
+| `checkpoint` | `point`, `radius` | 1000 iterations | 6 |
+
+The model offers its state initially and after every step. The writer owns the
+sampling intervals, so the simulation contains no cadence branches. A non-due
+observation returns before payload encoding; a due observation borrows selected
+payloads only long enough to produce an owned record.
+
+The configured byte-bounded queue applies backpressure if storage falls behind.
+The target chunk size controls rollover, and a state record is never split
+between chunks. Completion offers the final state once more, drains the queue,
+seals the recording, and returns `CompletedRecording`.
+
+Operational UTC timing and active duration are writer responsibilities. The
+example manages only scientific iteration and physical time.
+
+## Validation boundary
+
+Validation is intentionally narrower than analysis. For each completed task it:
+
+1. registers JSON payload decoders for `point: Vec<f64>` and `radius: f64`;
+2. opens the completed recording;
+3. reads only the latest record from each stream; and
+4. asserts exact time and payload equality against the live final state.
+
+`read_latest_state_from_stream` avoids reconstructing complete series merely to
+inspect endpoints. Serde JSON's finite-float round-trip behavior preserves the
+original `f64` bit patterns. Any mismatch becomes an application error before a
+success result is printed.
+
+The only normal terminal output is:
 
 ```text
-<repository>/examples/attractor_2d/
-├── Cargo.toml
-├── Cargo.lock
-├── README.md
-├── design.md
-├── todo.md
-├── config/
-│   ├── fixed.json
-│   ├── sweep.json
-│   ├── paths.json
-│   └── state.json
-└── src/
-    └── main.rs
+[validation] tasks=3 round_trip=true output=...
 ```
 
-The example is a standalone downstream crate. From the repository root it will
-run with:
-
-```bash
-cargo run --manifest-path examples/attractor_2d/Cargo.toml
-```
-
-Its manifest will declare
-`scientific-workflow = { version = "0.1.0", path = "../../dev" }`, preserving a
-meaningful compatibility constraint while using the local library during joint
-development. It will not be a member of a new root workspace unless a later
-repository-wide design explicitly adopts one.
-As an executable application, the example will commit its generated
-`Cargo.lock` for reproducible builds.
-
-The standalone manifest is now implemented with package name `attractor-2d`,
-Rust 2024, minimum Rust 1.85, publication disabled, automatic binary discovery
-disabled, and one explicit `src/main.rs` binary target. The only application
-dependency is the versioned local path to `scientific-workflow`; neither
-`ndarray` nor PiP is required by this two-scalar model.
-
-## Configuration contract
-
-`config/fixed.json` contains common scientific and operational
-values:
-
-- model name;
-- initial two-coordinate point;
-- iteration count;
-- explicit-Euler timestep;
-- fixed angular frequency `omega`;
-- trajectory sampling interval;
-- radius sampling interval;
-- checkpoint sampling interval;
-- maximum chunk bytes; and
-- bounded writer queue bytes.
-
-The finalized fixed values are:
-
-| Key | Value | Role |
-|---|---:|---|
-| `model_name` | `"supercritical_hopf_normal_form"` | Stable model identity for logs and recording metadata |
-| `initial_point` | `[0.25, 0.0]` | Nonzero initial condition shared by every task |
-| `angular_frequency` | `1.0` | Fixed angular velocity `omega` |
-| `physical_time_increment_per_step` | `0.01` | Physical-time increment applied by one Euler step |
-| `step_count` | `5000` | Performs 5000 model-evolution actions and reaches physical time `50.0` |
-| `trajectory_sampling_interval` | `{"iterations":10}` | Samples the point at a 10-iteration interval (`0.1` physical-time units) |
-| `radius_sampling_interval` | `{"iterations":5}` | Samples the scalar diagnostic at a 5-iteration interval (`0.05` physical-time units) |
-| `checkpoint_sampling_interval` | `{"iterations":1000}` | Samples restart state at a 1000-iteration interval (`10.0` physical-time units) |
-| `maximum_chunk_bytes` | `8192` | Small rollover target that visibly exercises trajectory chunking |
-| `writer_queue_bytes` | `65536` | Finite asynchronous queue budget comfortably larger than one record |
-
-These values are operational defaults for the example, not universal
-recommendations. Model-specific validation in the executable will require a
-two-element finite initial point, finite positive timestep, positive step count and
-sampling intervals, and nonzero storage byte limits.
-
-`config/sweep.json` uses Cartesian mode with one `mu` axis containing
-`[-0.25, 0.25, 1.0]` in that order. It therefore resolves exactly three tasks:
-a stable-origin regime followed by limit cycles with expected radii `0.5` and
-`1.0`. Task order is the deterministic source order produced by
-`ParameterSpace`.
-
-`config/state.json` is the conventional schema loaded by `ScientificProject`.
-`config/paths.json` names only `recording_root` as `target/recordings`. The
-standalone crate root is also the project root supplied to
-`ScientificProject::load`; there is no redundant nested `project/` directory.
-Configured paths are resolved relative to this root. The
-generated root will be beneath the standalone project's ignored
-`target/recordings` area so running the example does not dirty tracked source.
-
-The example loads the complete definition through `ScientificProject`, retrieves values
-through `TaskParameters`, and resolve named paths through `ProjectPaths`.
-
-## System-state contract
-
-`config/state.json` declares two fields in canonical order:
-
-1. `point`: the evolving two-coordinate phase-space value;
-2. `radius`: the synchronized radial-amplitude diagnostic.
-
-The template remains language-neutral and records no Rust type names. State
-assembly binds `point` to `Vec<f64>` and `radius` to `f64` on first insertion.
-
-Its location alongside the other declarative project inputs does not merge
-module responsibilities: `ScientificProject` coordinates loading while
-`SystemStateSchema` validates its content.
-One current limitation remains explicit: `ProjectConfig::write_source_config`
-round-trips only the three standard configuration files and does not copy the
-state template. Extending that export contract, if desired, is separate crate
-work and is not required for loading or running this example.
-
-Every sweep task will create a new empty state from one shared
-`SystemStateSchema`, move the initial point payload into it, and retain direct
-ownership of that state for the simulation lifetime. The immutable model name
-remains in fixed configuration and recording user metadata. The simulation
-will mutate `point` in place and increment both the iteration and physical
-time after each Euler step.
-
-### State-content decision
-
-The complete runnable state contains exactly:
-
-- built-in `SimulationTime`, holding the authoritative iteration and
-  physical time; and
-- `point: Vec<f64>`, containing the evolving coordinates `[x, y]`; and
-- `radius: f64`, containing the current radial amplitude
-  `sqrt(x * x + y * y)`.
-
-`radius` is intentionally retained even though it is derivable from `point`.
-For the Hopf normal form it is the primary scientific diagnostic: it decays to
-zero for `mu < 0` and approaches `sqrt(mu)` for `mu > 0`. Retaining one scalar
-allows an inexpensive frequently sampled diagnostic stream, demonstrates
-heterogeneous state payloads, and provides an invariant that can be checked
-against `point` after every update and during later readback.
-
-No other value belongs in the state. `mu`, `omega`, and `physical_time_increment_per_step`
-are immutable task parameters; model identity, sampling intervals, and storage budgets are
-configuration; task identity belongs in recording metadata; derivatives are
-temporary locals; and explicit Euler has no hidden integrator history. A
-restart combines the recorded payloads and time with the task parameters
-identified by metadata.
-
-Keeping `[x, y]` in one payload is deliberate. The coordinates form one coupled
-numerical value, are always mutated together, and are both required to
-interpret the phase trajectory. `point` and `radius` will be borrowed together
-through the tuple-mutation API for one coordinated Euler update: derivatives
-are evaluated from the old point, the new point is assigned, and radius is
-recomputed from that new point before simulation time advances.
-
-### Recording-content decision
-
-Three streams now have distinct scientific and operational roles:
-
-- `trajectory` records only `point` at a 10-iteration interval for phase-space output;
-- `radius` records only the scalar `radius` at a 5-iteration interval for a lean,
-  more frequently sampled convergence diagnostic; and
-- `checkpoint` records both `point` and `radius` at a 1000-iteration interval, forming the
-  complete state required for direct restart.
-
-All streams include iterations 0 and 5000. The resulting expected counts are 501
-trajectory records, 1001 radius records, and 6 checkpoint records per task.
-Neither partial stream alone is a complete `SystemState`; the checkpoint is.
-
-The approved configuration uses `checkpoint_sampling_interval = {"iterations":1000}`,
-`trajectory_sampling_interval = {"iterations":10}`, and
-`radius_sampling_interval = {"iterations":5}`.
-
-## Recording contract
-
-Every parameter task owns one independent `SystemStateWriter` and output
-directory. The directory name will include the task index and a per-execution
-identifier, preventing accidental overwrite on repeated runs.
-
-The writer exposes the three streams defined above: partial `trajectory` and
-`radius` streams at independent sampling intervals, plus the complete `checkpoint`
-stream.
-
-Each stream stores a typed nonzero simulation-step interval decoded from `fixed.json`. The
-model loop offers its state after every step; the writer checks time and returns
-without payload access for non-due streams. Due streams serialize borrowed
-payloads, block when the finite byte queue is full, and keep records whole
-across chunk boundaries. Completion receives the final state and records it
-only for streams that did not already accept that iteration. Time-axis metadata
-identifies the simulation-step index and physical time, while
-`sampling_interval` persists the machine-readable coordinate and interval once per
-stream.
-
-## Readback and analysis contract
-
-After a task recording is complete, the example creates a
-`JsonPayloadDecoderRegistry` and fluently registers direct Serde JSON decoding
-for:
-
-- `Vec<f64>` under `point`; and
-- `f64` under `radius`.
-
-Specialized payloads would instead use the registry's custom decoder contract.
-
-`StoredStateSeriesReader` reconstructs all three streams. Analysis uses owned
-`StateSeries` values to report:
-
-- sample count;
-- first and last simulation coordinates;
-- minimum and maximum `x` and `y` values;
-- final sampled point; and
-- a compact terminal ASCII scatter plot of the reconstructed trajectory.
-
-The example explicitly compares each reconstructed final sample with the
-corresponding sample observed by the live simulation. Final times and payloads
-must be bitwise equal or the application returns an error. The library enables
-Serde JSON's `float_roundtrip` feature because the first trial demonstrated
-that the default fast float parser could differ by one ULP even when the
-stored decimal uniquely represented the original `f64`.
-
-## Console-output contract
-
-Output will be concise, deterministic apart from the generated recording path,
-and grouped by stable labels:
-
-```text
-[project] model=... tasks=... iterations=...
-[task] index=... mu=... omega=... dt=...
-[simulation] task=... samples=... final_point=...
-[storage] task=... recording=... streams=... complete=true
-[analysis] task=... samples=... bounds=... final_point=...
-[plot] task=... legend=S:start,E:end,*:sample
-[verify] task=... round_trip=true
-[result] attractor_2d=complete output_root=...
-```
-
-## Coverage boundary
-
-The example covers the primary successful workflow of every major public
-submodule: configuration, system state, storage, and time series. It will not
-manufacture every error variant or call accessors solely to claim method-level
-coverage. Exhaustive behavior and failure coverage remain the responsibility
-of integration tests.
-
-The example will not add plotting dependencies, Python code, a simulator
-framework, custom payload decoders, or compatibility layers. Its ASCII plot is
-derived from the reconstructed Rust time series. The project is retained in
-the Git repository but is not included in the library crate's published
-archive; its build, lint, test, and run checks must target its own manifest.
-
-## Reusable implementation sequence
-
-This example is also the reference procedure for adopting the crate in a
-general scientific project:
-
-1. specify the evolution equation, independent-task boundary, evolving values,
-   parameters, observations, and restart state;
-2. encode fixed values, sweep dimensions, and named paths in the three project
-   configuration files and inspect the resolved task set;
-3. declare stable state-field names in the JSON template and select their Rust
-   payload types in state-assembly code;
-4. implement one function that validates a resolved task and returns a complete
-   owned `SystemState`;
-5. implement and verify the deterministic evolution kernel against one state,
-   before connecting storage or executing multiple tasks;
-6. define observation and checkpoint streams by selected fields and sampling interval;
-7. create the task writer with complete metadata and bounded storage settings
-   before the first evolution step;
-8. evolve the state, submit borrowed samples when due, and advance simulation
-   and physical time;
-9. explicitly complete successful recordings or mark failures;
-10. register field-specific payload decoders, reconstruct `StateSeries` values,
-    and analyze them through borrowed views;
-11. verify a live sampled value against its reconstructed counterpart;
-12. expand the proven single-task path to all sweep tasks, retaining one state,
-    writer, and output directory per task; and
-13. add restart as a separate entry path through a complete checkpoint stream,
-    then reuse the same evolution loop.
-
-The example itself will be implemented in that order. This prevents storage
-and task orchestration from obscuring errors in the scientific kernel.
-
-The end-user tutorial for this procedure is maintained in `steps.md`. This
-design document remains the example's architectural contract, while `steps.md`
-explains the sequence, rationale, expected artifacts, and readiness criteria in
-a form intended for users learning the crate.
-
-## Evolution-phase capability audit
-
-No crate capability blocks implementation through state evolution and sample
-submission. The current public API supports the complete required path:
-
-```text
-load ScientificProject -> decode one TaskParameters selection
--> borrow shared SystemStateSchema -> move initial payload into SystemState
--> mutate payload in place -> increment iteration and advance physical time
--> borrow state for stream encoding -> queue owned bytes with backpressure
--> explicitly complete or fail the recording
-```
-
-The checked-in example inputs already satisfy model-specific relationships.
-The minimal application therefore demonstrates typed decoding and lets the
-crate APIs enforce their own contracts instead of adding a second validation
-framework. Production projects may add domain validation and richer output
-allocation policies without changing the core ownership flow.
-
-Writer user metadata accepts a JSON map rather than `TaskParameters` directly.
-The example can collect the task's iterator into that map by cloning only small
-configuration `Value` objects. A future convenience conversion may reduce
-boilerplate, but it is not needed for correct or efficient evolution.
-
-### Finalized state boundary
-
-The state has two payloads: `point: Vec<f64>` and `radius: f64`. The model name
-remains fixed configuration and recording metadata. The checkpoint stream is
-complete only when it records both payloads. `JsonStringDecoder` is deliberately
-absent because no scientifically meaningful string payload evolves.
-
-### Payload representation
-
-`point` uses the standard `Vec<f64>` representation for this example:
-
-- two coordinates do not benefit from tensor rank or backend machinery;
-- JSON remains the lean array `[x, y]` rather than repeating a tensor kind and
-  shape in every record;
-- the crate already supplies `JsonVecF64Decoder` for deferred readback; and
-- a new user needs no numerical-container dependency to understand the first
-  workflow.
-
-An `ndarray::Array1<f64>` would add a dependency and require Serde feature
-configuration without improving this two-element kernel. A PiP dense tensor is
-fully compatible and is the preferred representation when shape, rank,
-high-dimensional operations, or other PiP algorithms are scientifically
-meaningful. PiP is deliberately reserved for a later tensor-scale example
-rather than used ornamentally here.
-
-The payload decision is final for this example. The complete input set has also
-been exercised through the crate's public loaders: 10 fixed parameters, one
-swept parameter, three ordered tasks, two resolved paths, and two canonical
-state fields all load and decode consistently.
-
-The root `README.md` is the end-user entry point. It documents the model,
-configuration, payload ownership, Euler update, three streams, run command
-and output, typed analysis, and verification boundary.
-
-## Implemented full workflow
-
-The application uses only the public crate prelude and standard library. It
-decodes all three tasks, moves each initial point into an owned state, updates
-`point` and `radius` through one tuple borrow, advances physical time, and
-samples endpoint-inclusive intervals. One writer per task owns all three streams
-and is explicitly completed with terminal metadata. After completion,
-trajectory and radius series plus the latest checkpoint state are reconstructed
-and analyzed through typed decoders.
-
-Two real executions pass. Every task completes with exactly 501 trajectory,
-1001 radius, and 6 checkpoint records; authoritative metadata confirms all
-counts and terminal status. The second execution creates a distinct run
-directory, proving non-overwrite behavior. Formatting, warnings-denied Clippy,
-and the standalone Cargo test target pass.
-
-Repository/package separation is also verified. The library's crates.io
-package listing contains 44 crate-owned files and excludes this standalone
-project, its executable lockfile, and all generated recordings. The repository
-and crate READMEs now direct users to the standalone manifest without implying
-that it is a Cargo example embedded in the published library.
-
-## Executable source boundaries
-
-`main.rs` is a process boundary, not the implementation container. Its only
-responsibilities are to declare the application's modules, sequence their
-top-level operations, print bounded phase results, report one terminal error,
-and select the process exit status. Scientific rules, configuration decoding,
-state mutation, persistence, and analysis implementations do not belong in
-`main.rs`.
-
-The normalized source layout is:
+Reaching this line proves that configuration loading, sweep expansion, state
+evolution, sampling, persistence, decoding, and endpoint comparison succeeded
+for every task. Generated data remains available beneath the reported ignored
+`target/recordings` path.
+
+## Source boundaries
 
 ```text
 src/
-├── main.rs               # end-to-end orchestration and terminal errors
-├── project_setup.rs      # configuration loading and typed task setup
-├── hopf_model.rs         # sole state owner and Hopf evolution kernel
-├── state_recording.rs    # sample streams, writer setup, and recording
-└── recording_analysis.rs # typed readback, metrics, plot, and verification
+├── main.rs                  orchestration and process error boundary
+├── project_setup.rs         typed per-task parameter decoding and assembly
+├── hopf_model.rs            sole state owner and Euler evolution kernel
+├── state_recording.rs       streams, writer construction, and lifecycle
+└── recording_validation.rs  minimal typed endpoint round-trip check
 ```
 
-Application modules follow one naming convention: a descriptive snake-case
-noun or compound noun naming the responsibility or primary domain object.
-Generic process labels and ambiguous repository terms are avoided. Compound
-names are preferred when they prevent confusion with similarly named library
-modules; for example, `state_recording` is the application sampling layer,
-while the library owns the general `storage` module.
-
-`main.rs` retains Rust's conventional binary entry-point name. File names do
-not repeat `attractor_2d`, because the crate already supplies that namespace.
-
-`main.rs` is the application orchestrator. It composes the other modules
-without absorbing their implementation details: load the project, create an
-automatic `ExecutionScope`, simulate and record
-each task, analyze the completed recording, verify the round trip, and print
-the bounded result summary. It contains no scientific kernel, decoder,
-configuration parser, writer-construction details, or reusable data model.
-
-The modules exchange small application-level values with explicit ownership.
-`project_setup.rs` prepares each task on demand; `hopf_model.rs` owns and
-mutates each live `SystemState`;
-`state_recording.rs` borrows that state only long
-enough to encode due samples; and `recording_analysis.rs` receives the
-completed recording path plus an immutable borrow of the same completed model.
-None of these boundaries clones scientific payload allocations or creates a
-second authoritative representation merely to cross a module boundary.
-
-`HopfModel` is the only application structure that owns the live
-`SystemState`. A separate `FinalState` snapshot is forbidden even when it
-contains only copied scalars: it duplicates scientific truth, can drift from
-the state, and makes verification appear to compare against a second model
-rather than the simulation's actual final state. Recording returns only
-storage facts such as admitted sample counts and the recording directory.
-After completion, logging and analysis borrow the unchanged state directly
-from `HopfModel`; they never extract, clone, or mirror its payloads into a
-second result structure.
-
-The name deliberately omits `Task`: task identity and recording settings
-remain outside the model, while `HopfModel` owns the immutable coefficients
-required by its own evolution. It represents the scientific system itself and
-avoids the generic `AttractorModel`, which would hide
-the exact equation family demonstrated by this project. In another scientific
-project, the corresponding state-owning type should use that project's domain
-name rather than inherit a framework-level `TaskSimulation` abstraction.
-
-This is deliberately a minimal happy-path example. It retains natural `?`
-propagation from crate operations and explicit assertions for the demonstrated
-round trip, but omits redundant schema checks, finite-value checks, expected
-sample-count arithmetic, collision retry loops, and layered error rewriting.
-Those concerns belong in production applications or the library's dedicated
-failure-oriented integration tests, not in the shortest path that teaches
-configuration, ownership, evolution, recording, and readback.
-
-The modular refactor and typed analysis are complete. Formatting,
-warnings-denied Clippy, tests, and a real three-task execution all pass. Every
-task reconstructs 501 trajectory, 1001 radius, and 6 checkpoint states and
-reports exact round-trip verification.
-
-The first complete trial initially stopped at task 1 because the built-in
-vector decoder recovered one negative coordinate one ULP away from its live
-value. Inspection proved the emitted decimal represented the original bits;
-the discrepancy came from Serde JSON's default fast float parser. Enabling the
-library dependency's `float_roundtrip` feature corrected the decoding path.
-The rerun completed tasks `mu = -0.25`, `0.25`, and `1.0`, reported final radii
-approximately `0.0000010521`, `0.50497537`, and `1.00249695`, rendered all
-three phase portraits, and returned `round_trip=true` for every task. The
-library integration suite now retains the sensitive coordinate as an exact-bit
-regression case.
-
-## Naive scientific reference
-
-`validation/naive_hopf.rs` is the independent numerical reference. It is a
-single standard-library Rust file with hard-coded constants, one `[f64; 2]`, a
-plain Euler loop, and final-value printing. It does not load configuration or
-use any `scientific-workflow` type, serialization, storage, decoder, or
-analysis interface. Compiling it directly with `rustc` keeps the comparison
-outside the example application's dependency graph.
-
-Validation compares the workflow and reference by task index. The final iteration
-is compared as an integer; physical time, both coordinates, and radius are
-parsed from each program's shortest round-trippable decimal output and compared
-as IEEE-754 bit patterns. Tasks `mu = -0.25`, `0.25`, and `1.0` all match in
-every compared field. This validates that the workflow abstractions preserve
-the naive kernel's final numerical result; it does not attempt to duplicate or
-validate the workflow's storage behavior.
-
-## Implemented concise API
-
-The example retains explicit state ownership and evolution while removing
-repeated writer limits, manual metadata-map assembly, and ordinary decoder
-boilerplate. Its common-path writer shape is:
+`main.rs` performs only the reusable top-level sequence:
 
 ```text
-SystemStateWriter::builder(directory, schema)
-    .with_task_parameters(task)
-    .with_shared_stream_limits(chunk_bytes, queue_bytes)
-    .add_sampled_state_stream("trajectory", ["point"], trajectory_sampling_interval)
-    .add_sampled_state_stream("radius", ["radius"], radius_sampling_interval)
-    .add_sampled_state_stream(
-        "checkpoint",
-        ["point", "radius"],
-        checkpoint_sampling_interval,
-    )
-    .create_new_recording()
+load project
+  -> create execution scope
+  -> for each task: assemble -> evolve/record -> validate
+  -> print one result
 ```
 
-Readback uses a fluent registry with generic Serde JSON decoding for ordinary
-payloads and explicit custom decoders only for domain types. Tasks are
-generated lazily rather than collected into a redundant task-plan vector,
-`NonZeroU64` settings decode directly, and `HopfModel` owns `mu`, `omega`, and
-its time step so callers simply invoke `advance()`. The existing `observe_state` and
-`complete_recording_with_final_state` calls are already the desired runtime
-API and should not be collapsed further.
+No module duplicates the live state. `project_setup` moves initial payloads into
+the model, `state_recording` temporarily borrows it, and
+`recording_validation` compares decoded states with an immutable final borrow.
+
+## Annotation policy
+
+Comments concentrate on decisions that matter when adapting the example:
+
+- who owns scientific data;
+- why tuple borrowing is safe and allocation-free;
+- when simulation time becomes authoritative;
+- why observation is unconditional in the evolution loop;
+- how queue and chunk byte limits differ;
+- why the writer, rather than the model, owns sampling and operational timing;
+- how payload types are rebound during decoding; and
+- why latest-record reading is sufficient for validation.
+
+Routine Rust syntax is left uncommented. This keeps annotation thorough at the
+workflow boundary without turning the example into a line-by-line language
+tutorial.
+
+## Application API reference
+
+### `HopfModel`
+
+Owns immutable equation coefficients and the sole mutable `SystemState` for one
+task.
+
+#### Reference
+
+```text
+prepare_task -> HopfModel::new
+record_model -> HopfModel::state, HopfModel::step
+run -> HopfModel::state
+```
+
+### `HopfModel::new`
+
+Creates simulation time zero, moves the point and derived radius into typed
+state slots, and returns the sole state-owning model.
+
+#### Reference
+
+```text
+prepare_task -> HopfModel::new
+```
+
+### `HopfModel::state`
+
+Returns an immutable view without cloning or transferring payload ownership.
+
+#### Reference
+
+```text
+record_model observation/completion -> HopfModel::state
+run final validation -> HopfModel::state
+```
+
+### `HopfModel::step`
+
+Mutates both payloads in place and advances simulation time exactly once.
+
+#### Reference
+
+```text
+record_model evolution loop -> HopfModel::step
+```
+
+### `TaskSettings`
+
+Holds the decoded evolution count, three sampling intervals, and two storage
+byte limits for one task. It contains no duplicate task index or model state.
+
+#### Reference
+
+```text
+prepare_task -> TaskSettings construction
+record_model/build_writer -> TaskSettings consumption by immutable borrow
+```
+
+### `prepare_task`
+
+Decodes one resolved parameter dictionary and assembles its model and runtime
+settings.
+
+#### Reference
+
+```text
+run task loop -> prepare_task
+```
+
+### `record_model`
+
+Builds one task writer, offers the initial state, performs and observes every
+step, and completes storage with the final state.
+
+#### Reference
+
+```text
+run task loop -> record_model
+```
+
+### `build_writer`
+
+Maps application stream policy and byte limits onto `SystemStateWriterBuilder`.
+
+#### Reference
+
+```text
+record_model -> build_writer
+```
+
+### `validate_recording`
+
+Decodes the latest state in each stream and asserts exact equality with the
+live completed state.
+
+#### Reference
+
+```text
+run task loop -> validate_recording
+```
+
+### `run`
+
+Sequences project loading, scope creation, per-task work, and the single
+success report.
+
+#### Reference
+
+```text
+main success path -> run
+```
+
+## Independent numerical reference
+
+`validation/naive_hopf.rs` contains the same Euler kernel as a single
+standard-library program with hard-coded inputs and no workflow facilities.
+Its final iteration, physical time, coordinates, and radius have been compared
+bit-for-bit with the workflow implementation for all three `mu` values. This
+validates that workflow ownership and recording do not alter the numerical
+kernel; storage behavior is validated by the typed round trip above and by the
+library integration suite.

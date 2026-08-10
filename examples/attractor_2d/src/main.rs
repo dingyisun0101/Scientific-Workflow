@@ -1,13 +1,12 @@
-//! Orchestrates the complete two-dimensional attractor workflow.
+//! Minimal orchestration for a complete two-dimensional attractor workflow.
 //!
-//! The executable deliberately keeps implementation details in stage-specific
-//! modules. This entry point sequences validated configuration, live state
-//! evolution, bounded persistent recording, typed reconstruction, numerical
-//! analysis, and explicit round-trip verification.
+//! Scientific evolution, storage configuration, and typed validation live in
+//! small focused modules. This entry point demonstrates only the application
+//! sequence that users repeat in a workflow-backed project.
 
 mod hopf_model;
 mod project_setup;
-mod recording_analysis;
+mod recording_validation;
 mod state_recording;
 
 use std::error::Error;
@@ -17,7 +16,7 @@ use std::process;
 use scientific_workflow::prelude::*;
 
 use project_setup::prepare_task;
-use recording_analysis::analyze_recording;
+use recording_validation::validate_recording;
 use state_recording::record_model;
 
 /// Error boundary shared by the example's application modules.
@@ -34,92 +33,36 @@ fn main() {
     }
 }
 
-/// Sequences the full project without implementing any individual stage.
+/// Runs every configured task and reports one minimal validation result.
 fn run() -> AppResult<()> {
+    // By convention the standalone crate root is also the scientific project
+    // root, and ScientificProject loads all four files under `config/`.
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let project = ScientificProject::load(&project_root)?;
     let schema = project.state_schema();
+
+    // ExecutionScope owns collision-safe run-directory organization. The
+    // application supplies only the configured parent directory.
     let recording_root = project.paths().resolve_path("recording_root")?;
-    let task_count = project.parameters().task_count();
-    let first = project.parameters().task(0)?;
-    let model_name: String = first.decode_value("model_name")?;
-    let step_count: u64 = first.decode_value("step_count")?;
-
-    println!(
-        "[project] model={} tasks={} step_count={} fields={} config={}",
-        model_name,
-        task_count,
-        step_count,
-        schema.len(),
-        project.configuration_directory().display()
-    );
-
     let execution = ExecutionScope::create_generated(&recording_root)?;
-    println!(
-        "[execution] directory={} created_at_utc={}",
-        execution.directory().display(),
-        execution
-            .created_at_utc()
-            .expect("new execution scopes capture creation time")
-    );
+
+    let mut validated_tasks = 0_u64;
     for parameters in project.parameters().tasks() {
+        // Each resolved sweep task receives an independent state owner and an
+        // independent bounded writer rooted under the shared execution scope.
         let (mut model, settings) = prepare_task(schema, &parameters)?;
-        println!(
-            "[task] index={} mu={} omega={} physical_time_increment_per_step={}",
-            settings.task_index,
-            model.mu(),
-            model.omega(),
-            model.physical_time_increment_per_step()
-        );
-
         let recording = record_model(schema, &execution, &parameters, &settings, &mut model)?;
-        let time = model.state().simulation_time();
-        let point = model.point()?;
-        println!(
-            "[simulation] task={} final_iteration={} final_physical_time={} final_point=[{}, {}] final_radius={}",
-            settings.task_index,
-            time.iteration(),
-            time.physical_time()
-                .expect("the model tracks physical time"),
-            point[0],
-            point[1],
-            model.radius()?
-        );
-        println!(
-            "[storage] task={} recording={} streams={} complete=true created_at_utc={} finalized_at_utc={} active_duration_ns={}",
-            settings.task_index,
-            recording.directory().display(),
-            recording.stream_summaries().len(),
-            recording.timing().created_at_utc(),
-            recording.timing().finalized_at_utc(),
-            recording.timing().active_duration_ns()
-        );
 
-        let analysis = analyze_recording(&model, &recording)?;
-        println!(
-            "[analysis] task={} trajectory={} radius={} checkpoints={} x=[{}, {}] y=[{}, {}] radius=[{}, {}] final_radius={} expected_radius={}",
-            settings.task_index,
-            analysis.samples.trajectory,
-            analysis.samples.radius,
-            analysis.samples.checkpoint,
-            analysis.x_bounds[0],
-            analysis.x_bounds[1],
-            analysis.y_bounds[0],
-            analysis.y_bounds[1],
-            analysis.radius_bounds[0],
-            analysis.radius_bounds[1],
-            analysis.final_radius,
-            analysis.expected_attractor_radius
-        );
-        println!(
-            "[plot] task={} legend=S:start,E:end,*:sample\n{}",
-            settings.task_index, analysis.phase_portrait
-        );
-        println!("[verify] task={} round_trip=true", settings.task_index);
+        validate_recording(model.state(), &recording)?;
+        validated_tasks += 1;
     }
 
+    // This is the only normal output: reaching it proves that configuration,
+    // evolution, recording, decoding, and exact final-state comparison passed
+    // for every task. Any failure instead exits through main's error boundary.
     println!(
-        "[result] attractor_2d=complete output_root={}",
+        "[validation] tasks={} round_trip=true output={}",
+        validated_tasks,
         execution.directory().display()
     );
     Ok(())

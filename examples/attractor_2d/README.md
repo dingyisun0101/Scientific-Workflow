@@ -5,10 +5,10 @@ state-evolving parameter study with `scientific-workflow`.
 
 The example uses a two-variable ordinary differential equation and explicit
 Euler integration. Its purpose is to make configuration, state ownership,
-sampling, bounded asynchronous writing, typed reconstruction, and analysis
-visible without hiding them behind a simulation framework.
+sampling, bounded asynchronous writing, and typed round-trip validation visible
+without hiding them behind a simulation framework.
 
-> **Implementation status:** The full configuration-to-analysis workflow is
+> **Implementation status:** The full configuration-to-validation workflow is
 > implemented, verified, and runnable.
 
 ## Scientific model
@@ -33,8 +33,8 @@ The swept parameter `mu` controls the long-term attractor:
 - `mu > 0`: the origin is unstable and the trajectory approaches a stable
   limit cycle of radius `sqrt(mu)`.
 
-The example therefore has a simple analytic expectation that is compared with
-the reconstructed output.
+The example therefore has rich but easy-to-understand dynamics without needing
+visualization in the minimum runtime demonstration.
 
 ## Project layout
 
@@ -58,7 +58,7 @@ attractor_2d/
     ├── project_setup.rs       # Configuration and task decoding
     ├── hopf_model.rs          # Sole state owner and Euler kernel
     ├── state_recording.rs     # Streams, sampling, and writer lifecycle
-    └── recording_analysis.rs  # Typed readback, metrics, and verification
+    └── recording_validation.rs # Minimal typed round-trip verification
 ```
 
 The standalone crate root is also the scientific project root. The application
@@ -194,33 +194,24 @@ directory and exposes its creation timestamp. Existing recordings are not
 deleted or deliberately reused. Each task recording automatically persists its
 UTC creation/finalization timestamps and monotonic active duration.
 
-The complete run reports structured output resembling:
+The complete run prints only its minimum validation result:
 
 ```text
-[project] model=supercritical_hopf_normal_form tasks=3 step_count=5000
-[execution] directory=... created_at_utc=...
-[task] index=0 mu=-0.25 omega=1.0 dt=0.01
-[simulation] task=0 trajectory=501 radius=1001 checkpoints=6 final_point=...
-[storage] task=0 recording=... streams=3 complete=true
-[analysis] task=0 trajectory=501 radius=1001 checkpoints=6 x=... y=... radius=...
-[plot] task=0 legend=S:start,E:end,*:sample
-[verify] task=0 round_trip=true
-[result] attractor_2d=complete output_root=...
+[validation] tasks=3 round_trip=true output=...
 ```
 
-## Readback and analysis
+## Readback validation
 
 After each writer reaches completed status, the application:
 
 - registers direct Serde JSON decoding for `Vec<f64>` under `point` and `f64`
   under `radius`;
-- reconstructs trajectory and radius `StateSeries` values and only the latest
-  checkpoint state;
-- calculates coordinate and radius bounds;
-- reports the continuous model's expected asymptotic radius;
-- renders a compact terminal phase portrait; and
-- requires exact final time and payload equality between the live sampled
-  state and all applicable reconstructed streams.
+- reads only the latest trajectory, radius, and checkpoint records; and
+- requires exact final time and payload equality between the live state and
+  all applicable reconstructed streams.
+
+Plotting and numerical analysis are deliberately absent. They are downstream
+consumers of valid recordings, not part of the minimum evolution workflow.
 
 The library enables Serde JSON's `float_roundtrip` behavior so finite `f64`
 payloads recover their original binary values when decoded from the emitted
@@ -232,7 +223,7 @@ printing a failed informational flag.
 [`validation/naive_hopf.rs`](validation/naive_hopf.rs) contains the same Euler
 calculation in one file using only hard-coded constants, `[f64; 2]`, and the
 standard library. It deliberately contains no `scientific-workflow`, JSON,
-state container, storage, or analysis code.
+state container, storage, or validation code.
 
 From the example directory, compile and run it directly:
 

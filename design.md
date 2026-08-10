@@ -3130,7 +3130,7 @@ status in one lifecycle operation.
 
 ##### Reference
 
-    attractor_2d::record_model -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
+    applications with terminal facts -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
     GLV termination -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
 
 #### `SystemStateWriter::mark_recording_failed`
@@ -4087,7 +4087,7 @@ names the state template and output root. The schema declares the evolving
 `point` payload (`Vec<f64>`) and retained scalar `radius` diagnostic. The immutable model settings remain in fixed
 configuration and are recorded once in task metadata.
 
-The example should demonstrate one coherent full-stack happy path:
+The example demonstrates one coherent full-stack happy path:
 
 1. load the project configuration, resolve paths, inspect declared parameters,
    and enumerate deterministic parameter-sweep tasks;
@@ -4100,34 +4100,25 @@ The example should demonstrate one coherent full-stack happy path:
 4. borrow and encode the current state at each stream's sampling interval, allowing the
    writer to apply byte-bounded backpressure and whole-record chunking;
 5. finish each recording, register direct Serde JSON decoding for `Vec<f64>`
-   and `f64`, and reconstruct the completed streams with
+   and `f64`, and read only each stream's latest state with
    `StoredStateSeriesReader`;
-6. analyze the reconstructed `StateSeries` through owned-series and borrowed-view
-   APIs, reporting sample count, time range, coordinate bounds, and final point;
-7. verify that reconstructed final samples match the points observed during
-   simulation; and
-8. leave the generated recording directory under the example's ignored
+6. verify that reconstructed final samples match the live final state exactly;
+   and
+7. leave the generated recording directory under the example's ignored
    `target/recordings` area for inspection beneath a timestamp-and-process-based
    execution directory.
 
-The example covers every primary end-user workflow across configuration,
-system state, recording storage, decoding, and time-series analysis. It should
+The example covers the primary evolution workflow across configuration, system
+state, recording storage, and decoding. It should
 not mechanically call every accessor or manufacture every error variant;
 dedicated integration tests remain responsible for exhaustive API and failure
-coverage. Small helper functions keep simulation, writer construction, and
-analysis legible while all crate interaction goes through the public prelude.
+coverage. Small modules keep simulation, writer construction, and validation
+legible while all crate interaction goes through the public prelude.
 
-Proposed bounded output categories are:
+Normal output is deliberately one validation line:
 
 ```text
-[project] model=... tasks=... iterations=...
-[task] index=... mu=... omega=... dt=...
-[simulation] task=... samples=... final_point=...
-[storage] task=... recording=... streams=... complete=true
-[analysis] task=... samples=... bounds=... final_point=...
-[plot] task=... legend=S:start,E:end,*:sample
-[verify] task=... round_trip=true
-[result] attractor_2d=complete output_root=...
+[validation] tasks=3 round_trip=true output=...
 ```
 
 The source project is self-contained and never depends on test fixtures. It is
@@ -4136,7 +4127,7 @@ crates.io archive. The example writes only beneath its ignored `target`
 directory, so generated recordings are neither source assets nor publishable
 artifacts. CI and release checks must invoke the standalone manifest explicitly.
 This repository-level placement is approved. The configuration and state
-template, manifest, modular executable, typed analysis, and verification now
+template, manifest, modular executable, and typed verification now
 live under `examples/attractor_2d`.
 
 The package boundary has been verified with
@@ -4236,10 +4227,10 @@ belongs in task metadata, not in the evolving state or every checkpoint
 record. The attractor schema contains the evolving `point` plus the retained
 scientific diagnostic `radius`; a complete checkpoint records both.
 
-The first full trial now covers state evolution, sampled record submission,
-explicit recording completion, decoder registration, time-series
-reconstruction, numerical analysis, terminal plotting, and exact final-state
-verification.
+The minimal example covers state evolution, sampled record submission, explicit
+recording completion, decoder registration, latest-record reconstruction, and
+exact final-state verification. Visualization and numerical analysis remain
+separate downstream concerns.
 
 The example's post-run ownership boundary has one authority: its domain-named
 `HopfModel` remains the only application structure that owns the live
@@ -4259,7 +4250,7 @@ and failure coverage.
 
 Example source modules use descriptive snake-case nouns consistently:
 `project_setup.rs`, `hopf_model.rs`, `state_recording.rs`, and
-`recording_analysis.rs`. These names identify either the primary domain object
+`recording_validation.rs`. These names identify either the primary domain object
 or the module's exact application responsibility and avoid ambiguous generic
 labels such as `project`, `simulation`, or `storage`. `main.rs` remains the
 conventional orchestrator entry point.
@@ -4345,24 +4336,22 @@ The four JSON inputs pass an end-to-end public-API audit: `ProjectConfig` loads
 returns the expected values, both named paths resolve relative to the example
 root, and `SystemStateSchema` loads the canonical `point`/`radius` field order.
 
-The example README gives end users
-one coherent introduction to the ODE, exact inputs, state ownership, explicit
-Euler evolution, stream sampling intervals and counts, output policy, typed analysis,
-verification, and the runnable command.
+The example README gives end users one coherent introduction to the ODE, exact
+inputs, state ownership, explicit Euler evolution, stream sampling intervals
+and counts, minimal output policy, typed verification, and the runnable command.
 
 The standalone example manifest is complete: `attractor-2d` is an unpublished
 Rust 2024 binary with a Rust 1.85 floor, an explicit `src/main.rs` target, and
 only `scientific-workflow = { version = "0.1.0", path = "../../dev" }` as its
 dependency. Its application `Cargo.lock` is retained for reproducibility.
 
-The minimal modular executable and `Cargo.lock` are implemented. `main.rs` orchestrates
-dedicated project, simulation, recording, and analysis modules. The program
+The minimal modular executable and `Cargo.lock` are implemented. `main.rs`
+orchestrates dedicated project, simulation, recording, and validation modules. The program
 preflights configuration, moves `Vec<f64>` into each state without cloning,
 updates heterogeneous payloads through tuple mutation, samples three streams,
-explicitly closes every writer lifecycle, reconstructs all streams, calculates
-bounds, renders an ASCII phase portrait, and verifies final values exactly.
-`HopfModel` is the sole owner of each live state; recording mutably borrows it
-and analysis later immutably borrows the same instance. The successful full
+explicitly closes every writer lifecycle, reads each stream's latest state, and
+verifies final values exactly. `HopfModel` is the sole owner of each live state;
+recording and validation borrow the same instance immutably. The successful full
 trial completes all three tasks, each with 501 trajectory,
 1001 radius, and 6 checkpoint records. Example and library formatting, tests,
 doctests, and warnings-denied Clippy pass.
@@ -4716,10 +4705,8 @@ the completed-recording result should be one lifecycle refactor.
 
 #### Latest-record reading
 
-`recording_analysis::verify_final_state` reconstructs three complete
-`StateSeries` values merely to inspect each final record. The storage reader
-already contains private machinery to locate the last valid record efficiently
-for checkpoint continuation. `read_latest_state_from_stream` reconstructs
+`recording_validation::validate_recording` uses
+`read_latest_state_from_stream` to reconstruct
 the latest state of one completed stream without scanning or retaining the
 entire series. It returns that stream's partial state schema; callers decide
 whether it is a complete checkpoint. Full-series reconstruction remains the
@@ -4736,8 +4723,8 @@ analysis API.
 - Stream names and field selections are scientific output design. The writer
   builder already expresses them directly and should not assume `trajectory`,
   `radius`, `signal`, `space`, or `checkpoint`.
-- The ASCII plot, bounds, expected attractor radius, and equality assertions
-  are analysis and validation policy.
+- Exact final-state equality is example validation policy. Plotting, bounds,
+  and scientific interpretation are intentionally absent from the runtime demo.
 - The executable's `AppResult`, logging text, and process-exit behavior belong
   to the application.
 
@@ -4880,7 +4867,7 @@ It deliberately does not remove scientific-time handling from the model:
 - `HopfModel::step` still calls `advance_simulation_time` only after committing
   a successful state transition;
 - stream configuration still supplies `SamplingInterval` values; and
-- analysis still reads iteration and physical time from reconstructed states.
+- validation still compares iteration and physical time from reconstructed states.
 
 The application may also continue declaring physical-time axis names and units
 because those are scientific semantics. Workflow can provide sensible

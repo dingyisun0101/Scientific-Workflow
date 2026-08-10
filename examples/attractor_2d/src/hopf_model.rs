@@ -2,7 +2,7 @@
 //!
 //! [`HopfModel`] directly owns the sole continuously evolving
 //! [`SystemState`] for one task. Persistence receives only temporary immutable
-//! borrows of that state; analysis reconstructs separate states after the
+//! borrows of that state; validation reconstructs separate states after the
 //! recording is complete. This separation keeps the simulation's ownership
 //! unambiguous and avoids cloning scientific payloads at sampling boundaries.
 
@@ -26,6 +26,10 @@ pub(crate) struct HopfModel {
 
 impl HopfModel {
     /// Creates the initial complete state and transfers both payload owners.
+    ///
+    /// `point` and `radius` become typed state slots when their first values
+    /// are inserted. The model subsequently mutates those allocations in
+    /// place; it never keeps a second domain-state structure in sync.
     pub(crate) fn new(
         schema: &SystemStateSchema,
         initial_point: Vec<f64>,
@@ -48,21 +52,28 @@ impl HopfModel {
         })
     }
 
-    /// Borrows the current complete state for zero-copy sample encoding.
+    /// Borrows the current complete state for zero-copy observation.
+    ///
+    /// The writer and final validator need an immutable view, but ownership
+    /// remains here for the model's entire lifetime.
     pub(crate) fn state(&self) -> &SystemState {
         &self.state
     }
 
-    /// Advances the Hopf normal form by one explicit-Euler transition.
+    /// Advances the Hopf normal form by exactly one explicit-Euler step.
     ///
     /// Both derivatives use the same old point. The point and derived radius
     /// are then committed within one coordinated mutable borrow, after which
     /// simulation and physical time advance transactionally.
     pub(crate) fn step(&mut self) -> Result<(), StateError> {
         {
+            // A tuple borrow gives simultaneous mutable access to two
+            // distinct slots while preserving SystemState's aliasing rules.
             let (point, radius) = self
                 .state
                 .borrow_payloads_mut::<(Vec<f64>, f64)>((POINT_FIELD, RADIUS_FIELD))?;
+
+            // Both derivatives must use the same pre-step coordinates.
             let x = point[0];
             let y = point[1];
             let radius_squared = x * x + y * y;
@@ -75,35 +86,11 @@ impl HopfModel {
             point[1] = next_y;
             *radius = next_x.hypot(next_y);
         }
+
+        // Time advances only after every scientific payload was updated
+        // successfully, so the timestamp always describes the stored state.
         self.state
             .advance_simulation_time(Some(self.physical_time_increment_per_step))?;
         Ok(())
-    }
-
-    /// Returns the linear radial-growth coefficient.
-    pub(crate) fn mu(&self) -> f64 {
-        self.mu
-    }
-
-    /// Returns the angular-frequency coefficient.
-    pub(crate) fn omega(&self) -> f64 {
-        self.omega
-    }
-
-    /// Returns the physical-time increment applied by one model step.
-    pub(crate) fn physical_time_increment_per_step(&self) -> f64 {
-        self.physical_time_increment_per_step
-    }
-
-    /// Borrows the model's current point without copying its vector.
-    pub(crate) fn point(&self) -> Result<&[f64], StateError> {
-        self.state
-            .payload::<Vec<f64>>(POINT_FIELD)
-            .map(Vec::as_slice)
-    }
-
-    /// Returns the model's current scalar radius.
-    pub(crate) fn radius(&self) -> Result<f64, StateError> {
-        self.state.payload::<f64>(RADIUS_FIELD).copied()
     }
 }

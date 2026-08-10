@@ -29,30 +29,25 @@ pub(crate) fn record_model(
     settings: &TaskSettings,
     model: &mut HopfModel,
 ) -> AppResult<CompletedRecording> {
-    let directory = execution.task_recording_directory(settings.task_index);
+    // The scope derives a stable task path but does not create it. Exclusive
+    // directory creation belongs to the writer, preventing accidental reuse.
+    let directory = execution.task_recording_directory(parameters.task_index());
     let mut writer = build_writer(schema, &directory, settings, parameters)?;
 
+    // The initial condition is a legitimate sample at iteration zero.
     writer.observe_state(model.state())?;
     for _ in 0..settings.step_count {
         model.step()?;
+
+        // Observation is intentionally unconditional. The writer owns every
+        // stream's cadence and immediately returns when no sample is due.
         writer.observe_state(model.state())?;
     }
 
-    let mut terminal_metadata = serde_json::Map::new();
-    terminal_metadata.insert(
-        "completed_step_count".to_owned(),
-        serde_json::Value::from(settings.step_count),
-    );
-    terminal_metadata.insert(
-        "termination_reason".to_owned(),
-        serde_json::Value::from("requested_steps_completed"),
-    );
-    Ok(
-        writer.complete_recording_with_final_state_and_terminal_metadata(
-            model.state(),
-            terminal_metadata,
-        )?,
-    )
+    // Completion offers the endpoint once more, ensuring a final record even
+    // when the requested step count misses a configured sampling interval.
+    // It then drains the bounded queue and atomically seals the recording.
+    Ok(writer.complete_recording_with_final_state(model.state())?)
 }
 
 /// Creates the trajectory, diagnostic, and checkpoint streams.
@@ -62,13 +57,19 @@ fn build_writer(
     settings: &TaskSettings,
     parameters: &TaskParameters,
 ) -> Result<SystemStateWriter, StorageError> {
+    // Iteration and physical time belong to the scientific record. Operational
+    // UTC timestamps and active duration are added by the writer itself.
     let time_axis = TimeAxisMetadata::new("iteration")
         .with_iteration_unit("iteration")
         .with_physical_axis("physical_time", "dimensionless_model_time");
 
     SystemStateWriter::builder(directory, schema)
         .with_time_axis_metadata(time_axis)
+        // Persisting resolved parameters makes each task output independently
+        // interpretable without duplicating them in every state record.
         .with_task_parameters(parameters)
+        // Queue bytes bound memory and apply backpressure; chunk bytes govern
+        // file rollover without ever splitting one encoded state record.
         .with_shared_stream_limits(settings.maximum_chunk_bytes, settings.writer_queue_bytes)
         .add_sampled_state_stream(
             TRAJECTORY_STREAM,
