@@ -12,16 +12,21 @@
 //!     └── state.json
 //! ```
 //!
-//! It combines immutable task/path configuration with the shared state schema.
+//! It combines immutable task/path configuration with the shared state schema
+//! and delegates complete lazy task generation through [`ScientificProject::task_configs`].
 //! It does not create execution directories, construct model payloads, run
 //! tasks, or configure output streams.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use thiserror::Error;
 
-use crate::configuration::{ConfigurationError, ParameterSpace, ProjectConfig, ProjectPaths};
+use crate::configuration::{
+    ConfigurationError, MatchingTaskConfigIter, ParameterSpace, ProjectConfig, ProjectPaths,
+    TaskConfig, TaskConfigIter,
+};
 use crate::system_state::{StateError, SystemStateSchema};
 
 /// Standard filename of the system-state schema beneath `config/`.
@@ -85,6 +90,50 @@ impl ScientificProject {
         self.configuration.paths()
     }
 
+    /// Resolves one named project path against the project root.
+    pub fn resolve_path(&self, key: &str) -> Result<PathBuf, ConfigurationError> {
+        self.configuration.paths().resolve_path(key)
+    }
+
+    /// Returns the checked number of complete task configurations.
+    pub fn task_count(&self) -> u64 {
+        self.configuration.task_count()
+    }
+
+    /// Resolves one complete task configuration by deterministic ordinal.
+    pub fn task_config(&self, index: u64) -> Result<TaskConfig, ConfigurationError> {
+        self.configuration.task_config(index)
+    }
+
+    /// Lazily iterates every complete fixed/sweep/path task configuration.
+    pub fn task_configs(&self) -> TaskConfigIter {
+        self.configuration.task_configs()
+    }
+
+    /// Lazily iterates every task matching one exact sweep key/value pair.
+    pub fn task_configs_matching<V>(
+        &self,
+        key: impl Into<String>,
+        value: V,
+    ) -> Result<MatchingTaskConfigIter, ConfigurationError>
+    where
+        V: Serialize,
+    {
+        self.configuration.task_configs_matching(key, value)
+    }
+
+    /// Returns the unique task matching one exact sweep key/value pair.
+    pub fn unique_task_config_matching<V>(
+        &self,
+        key: impl Into<String>,
+        value: V,
+    ) -> Result<TaskConfig, ConfigurationError>
+    where
+        V: Serialize,
+    {
+        self.configuration.unique_task_config_matching(key, value)
+    }
+
     /// Borrows the shared system-state schema loaded from `config/state.json`.
     pub fn state_schema(&self) -> &SystemStateSchema {
         &self.state_schema
@@ -108,7 +157,7 @@ impl fmt::Debug for ScientificProject {
             .debug_struct("ScientificProject")
             .field("project_root", &self.project_root())
             .field("parameters", &self.parameters().parameter_count())
-            .field("tasks", &self.parameters().task_count())
+            .field("tasks", &self.task_count())
             .field("paths", &self.paths().len())
             .field("state_fields", &self.state_schema().len())
             .finish()

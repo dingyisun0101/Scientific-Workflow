@@ -11,8 +11,9 @@
 //! ```
 //!
 //! Loading delegates scientific parameter expansion to [`ParameterSpace`] and
-//! path semantics to [`ProjectPaths`]. Exact export writes the original
-//! validated source bytes, not a reserialized representation.
+//! path semantics to [`ProjectPaths`]. The facade then combines their shared
+//! handles into complete [`TaskConfig`] values for task execution. Exact export
+//! writes the original validated source bytes, not a reserialized representation.
 //!
 //! # Export publication
 //!
@@ -26,10 +27,15 @@
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::iter::FusedIterator;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+
 use super::error::ConfigurationError;
-use super::parameters::ParameterSpace;
+use super::parameters::{ParameterSpace, TaskParameters, TaskParametersIter};
 use super::paths::ProjectPaths;
 
 const CONFIGURATION_DIRECTORY: &str = "config";
@@ -39,8 +45,8 @@ const PATHS_FILE: &str = "paths.json";
 
 /// Complete validated configuration for one scientific project.
 ///
-/// This facade keeps fixed/sweep expansion and path resolution distinct while
-/// guaranteeing that both were loaded from the same standard project root.
+/// This facade keeps fixed/sweep expansion and path storage internally distinct
+/// while exposing complete task handles loaded from the same standard root.
 /// Cloning it is lightweight because the component values share their parsed
 /// allocations through [`std::sync::Arc`].
 #[derive(Clone)]
@@ -93,6 +99,96 @@ impl ProjectConfig {
         &self.paths
     }
 
+    /// Returns the checked number of complete task configurations.
+    pub fn task_count(&self) -> u64 {
+        self.parameters.task_count()
+    }
+
+    /// Resolves one complete task configuration by deterministic ordinal.
+    ///
+    /// The returned handle shares all parsed fixed, sweep, and path storage.
+    /// No merged parameter map or path table is allocated.
+    pub fn task_config(&self, index: u64) -> Result<TaskConfig, ConfigurationError> {
+        Ok(TaskConfig {
+            parameters: self.parameters.task(index)?,
+            paths: self.paths.clone(),
+        })
+    }
+
+    /// Lazily iterates every complete task configuration.
+    ///
+    /// Cartesian sweeps yield their full product in canonical task order, with
+    /// the final axis changing fastest. Explicit-case sweeps yield exactly the
+    /// declared cases. Iterator items are cheap owned handles suitable for
+    /// moving into scoped work or dispatcher queues.
+    pub fn task_configs(&self) -> TaskConfigIter {
+        TaskConfigIter {
+            parameters: self.parameters.tasks(),
+            paths: self.paths.clone(),
+        }
+    }
+
+    /// Lazily yields every task whose selected sweep value exactly matches
+    /// `value`.
+    ///
+    /// Other sweep dimensions remain unconstrained, so a Cartesian project can
+    /// yield several configurations. Selection is restricted to sweep keys;
+    /// fixed constants and paths do not define task identity. `value` is
+    /// converted to JSON once and compared with exact JSON equality.
+    pub fn task_configs_matching<V>(
+        &self,
+        key: impl Into<String>,
+        value: V,
+    ) -> Result<MatchingTaskConfigIter, ConfigurationError>
+    where
+        V: Serialize,
+    {
+        let key = key.into();
+        if !self
+            .parameters
+            .sweep_keys()
+            .any(|candidate| candidate == key)
+        {
+            return Err(ConfigurationError::UnknownSweepParameter { key });
+        }
+        let value = serde_json::to_value(value).map_err(|source| {
+            ConfigurationError::EncodeTaskSelection {
+                key: key.clone(),
+                source,
+            }
+        })?;
+        Ok(MatchingTaskConfigIter {
+            tasks: self.task_configs(),
+            key: key.into_boxed_str(),
+            value,
+        })
+    }
+
+    /// Returns the only task matching one exact sweep key/value pair.
+    ///
+    /// No match and multiple matches are distinct errors. In a multidimensional
+    /// Cartesian sweep, callers should normally use
+    /// [`ProjectConfig::task_configs_matching`] unless the selected key is
+    /// known to identify one task uniquely.
+    pub fn unique_task_config_matching<V>(
+        &self,
+        key: impl Into<String>,
+        value: V,
+    ) -> Result<TaskConfig, ConfigurationError>
+    where
+        V: Serialize,
+    {
+        let key = key.into();
+        let mut matches = self.task_configs_matching(key.clone(), value)?;
+        let task = matches
+            .next()
+            .ok_or_else(|| ConfigurationError::NoMatchingTaskConfiguration { key: key.clone() })?;
+        if matches.next().is_some() {
+            return Err(ConfigurationError::AmbiguousTaskConfiguration { key });
+        }
+        Ok(task)
+    }
+
     /// Consumes the facade and returns its parameter and path components.
     ///
     /// Both returned handles retain their shared source allocations. No source
@@ -134,6 +230,139 @@ impl ProjectConfig {
         write_source_file(&destination.join(PATHS_FILE), self.paths.source_json())?;
         sync_directory(&destination)?;
         sync_directory(destination_project_root)
+    }
+}
+
+/// One complete immutable task configuration.
+///
+/// This is an owned handle rather than an owned copy of configuration data.
+/// [`TaskParameters`] shares fixed/sweep storage and [`ProjectPaths`] shares
+/// path storage through independent [`std::sync::Arc`] allocations, making a
+/// `TaskConfig` cheap to move into worker queues and safe to retain after the
+/// originating [`ProjectConfig`] is dropped.
+#[derive(Clone)]
+pub struct TaskConfig {
+    parameters: TaskParameters,
+    paths: ProjectPaths,
+}
+
+impl TaskConfig {
+    /// Returns the stable zero-based task ordinal.
+    pub fn task_index(&self) -> u64 {
+        self.parameters.task_index()
+    }
+
+    /// Borrows the fixed-plus-selected-sweep dictionary.
+    pub fn parameters(&self) -> &TaskParameters {
+        &self.parameters
+    }
+
+    /// Borrows the shared project path dictionary.
+    pub fn paths(&self) -> &ProjectPaths {
+        &self.paths
+    }
+
+    /// Borrows one fixed or selected sweep value by exact key.
+    pub fn value(&self, key: &str) -> Option<&Value> {
+        self.parameters.value(key)
+    }
+
+    /// Borrows one required fixed or selected sweep value.
+    pub fn require_value(&self, key: &str) -> Result<&Value, ConfigurationError> {
+        self.parameters.require_value(key)
+    }
+
+    /// Decodes one required parameter into the requested concrete Rust type.
+    pub fn decode_value<T>(&self, key: &str) -> Result<T, ConfigurationError>
+    where
+        T: DeserializeOwned,
+    {
+        self.parameters.decode_value(key)
+    }
+
+    /// Resolves one named path lexically against the project root.
+    pub fn resolve_path(&self, key: &str) -> Result<PathBuf, ConfigurationError> {
+        self.paths.resolve_path(key)
+    }
+}
+
+impl fmt::Debug for TaskConfig {
+    /// Formats task identity and bounded dictionary counts without values.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TaskConfig")
+            .field("task_index", &self.task_index())
+            .field("parameters", &self.parameters.len())
+            .field("paths", &self.paths.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Owning lazy iterator over every complete task configuration.
+#[derive(Clone)]
+pub struct TaskConfigIter {
+    parameters: TaskParametersIter,
+    paths: ProjectPaths,
+}
+
+impl Iterator for TaskConfigIter {
+    type Item = TaskConfig;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.parameters.next().map(|parameters| TaskConfig {
+            parameters,
+            paths: self.paths.clone(),
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.parameters.size_hint()
+    }
+}
+
+impl FusedIterator for TaskConfigIter {}
+
+impl fmt::Debug for TaskConfigIter {
+    /// Formats only the underlying ordinal range and shared path count.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TaskConfigIter")
+            .field("parameters", &self.parameters)
+            .field("paths", &self.paths.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Lazy exact-JSON filter over complete task configurations.
+pub struct MatchingTaskConfigIter {
+    tasks: TaskConfigIter,
+    key: Box<str>,
+    value: Value,
+}
+
+impl Iterator for MatchingTaskConfigIter {
+    type Item = TaskConfig;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.tasks
+            .find(|task| task.value(&self.key) == Some(&self.value))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, self.tasks.size_hint().1)
+    }
+}
+
+impl FusedIterator for MatchingTaskConfigIter {}
+
+impl fmt::Debug for MatchingTaskConfigIter {
+    /// Formats the selector key without exposing its potentially large value.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MatchingTaskConfigIter")
+            .field("key", &self.key)
+            .field("tasks", &self.tasks)
+            .finish_non_exhaustive()
     }
 }
 

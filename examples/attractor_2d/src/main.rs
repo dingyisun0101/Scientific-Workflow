@@ -43,15 +43,15 @@ fn run() -> AppResult<()> {
 
     // ExecutionScope owns collision-safe run-directory organization. The
     // application supplies only the configured parent directory.
-    let recording_root = project.paths().resolve_path("recording_root")?;
+    let recording_root = project.resolve_path("recording_root")?;
     let execution = ExecutionScope::create_generated(&recording_root)?;
 
     let mut validated_tasks = 0_u64;
-    for parameters in project.parameters().tasks() {
+    for task in project.task_configs() {
         // Each resolved sweep task receives an independent state owner and an
         // independent bounded writer rooted under the shared execution scope.
-        let (mut model, settings) = prepare_task(schema, &parameters)?;
-        let recording = record_model(schema, &execution, &parameters, &settings, &mut model)?;
+        let (mut model, settings) = prepare_task(schema, &task)?;
+        let recording = record_model(schema, &execution, &task, &settings, &mut model)?;
 
         validate_recording(model.state(), &recording)?;
         validated_tasks += 1;

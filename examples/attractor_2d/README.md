@@ -65,6 +65,11 @@ The standalone crate root is also the scientific project root. The application
 calls `ScientificProject::load` with the `attractor_2d` directory itself; no
 nested project wrapper is needed.
 
+`ScientificProject::task_configs()` lazily generates all three swept tasks as
+cheap owned handles over shared fixed, sweep, and path data. The main loop can
+therefore pass each complete configuration through model assembly and recording
+without separately carrying `TaskParameters` and `ProjectPaths`.
+
 For a reusable explanation of this organization, see [steps.md](steps.md).
 
 ## Configuration

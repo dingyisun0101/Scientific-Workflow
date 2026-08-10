@@ -11,8 +11,8 @@
 //!
 //! [`configuration`] provides the standard `config/{fixed,sweep,paths}.json`
 //! project layout, deterministic Cartesian or explicit-case task expansion,
-//! immutable dict-like resolved parameters, named path resolution, and
-//! byte-exact source export.
+//! complete cheap task-configuration handles, exact sweep-value selection,
+//! named path resolution, and byte-exact source export.
 //! [`project`] adds the mandatory conventional `config/state.json` schema as
 //! one immutable [`project::ScientificProject`]. [`execution`] creates
 //! collision-resistant or caller-named execution scopes and deterministic task

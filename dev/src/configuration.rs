@@ -17,11 +17,11 @@
 //! - `sweep.json` is a tagged Cartesian-axis or explicit-case definition.
 //! - `paths.json` is an object of named project-wide path strings.
 //!
-//! [`ProjectConfig`] loads all three files. [`ParameterSpace`] performs the
-//! central fixed-plus-sweep expansion and returns cheap, immutable,
-//! dictionary-like [`TaskParameters`] values. [`ProjectPaths`] resolves named
-//! relative paths against the project root without canonicalization or
-//! existence checks.
+//! [`ProjectConfig`] loads all three files and lazily produces cheap owned
+//! [`TaskConfig`] handles that combine one fixed-plus-sweep selection with the
+//! shared path table. [`ParameterSpace`] and [`TaskParameters`] remain the
+//! lower-level parameter-only API. [`ProjectPaths`] resolves named relative
+//! paths against the project root without canonicalization or existence checks.
 //!
 //! # Basic workflow
 //!
@@ -30,11 +30,10 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let project = ProjectConfig::load("scientific-project")?;
-//! let output_root = project.paths().resolve_path("output_root")?;
-//!
-//! for task in project.parameters().tasks() {
+//! for task in project.task_configs() {
 //!     let temperature = task.decode_value::<f64>("temperature")?;
 //!     let seed = task.decode_value::<u64>("seed")?;
+//!     let output_root = task.resolve_path("output_root")?;
 //!     println!(
 //!         "task={} temperature={temperature} seed={seed} output={}",
 //!         task.task_index(),
@@ -48,10 +47,10 @@
 //! # Ownership and round trips
 //!
 //! Configuration is immutable after loading. `ParameterSpace`,
-//! `TaskParameters`, their iterator, and `ProjectPaths` retain shared parsed
-//! allocations; task generation does not clone JSON values or allocate merged
-//! maps. Typed decoding is the explicit point at which an application creates
-//! an owned Rust value.
+//! `TaskParameters`, `TaskConfig`, their iterators, and `ProjectPaths` retain
+//! shared parsed allocations; task generation does not clone JSON values or
+//! allocate merged maps. Typed decoding is the explicit point at which an
+//! application creates an owned Rust value.
 //!
 //! The three original validated source byte sequences are retained unchanged.
 //! [`ProjectConfig::write_source_config`] can therefore reproduce the complete
@@ -74,4 +73,4 @@ mod project;
 pub use error::ConfigurationError;
 pub use parameters::{ParameterSpace, TaskParameters, TaskParametersIter};
 pub use paths::ProjectPaths;
-pub use project::ProjectConfig;
+pub use project::{MatchingTaskConfigIter, ProjectConfig, TaskConfig, TaskConfigIter};

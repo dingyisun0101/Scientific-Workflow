@@ -18,8 +18,8 @@
 //! responsibility of the application that uses them.
 
 pub use crate::configuration::{
-    ConfigurationError, ParameterSpace, ProjectConfig, ProjectPaths, TaskParameters,
-    TaskParametersIter,
+    ConfigurationError, MatchingTaskConfigIter, ParameterSpace, ProjectConfig, ProjectPaths,
+    TaskConfig, TaskConfigIter, TaskParameters, TaskParametersIter,
 };
 pub use crate::execution::{ExecutionScope, ExecutionScopeError};
 pub use crate::project::{ScientificProject, ScientificProjectError};

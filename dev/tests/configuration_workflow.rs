@@ -13,9 +13,22 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use scientific_workflow::prelude::*;
+use serde::Serialize;
+use serde::ser::Error as _;
 use serde_json::Value;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct UnencodableSelector;
+
+impl Serialize for UnencodableSelector {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(S::Error::custom("intentional selector encoding failure"))
+    }
+}
 
 struct TempWorkspace {
     root: PathBuf,
@@ -66,6 +79,9 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_send_sync::<ParameterSpace>();
     assert_send_sync::<TaskParameters>();
     assert_send_sync::<TaskParametersIter>();
+    assert_send_sync::<TaskConfig>();
+    assert_send_sync::<TaskConfigIter>();
+    assert_send_sync::<MatchingTaskConfigIter>();
     assert_send_sync::<ProjectPaths>();
     assert_send_sync::<ProjectConfig>();
     assert_send_sync::<ScientificProject>();
@@ -80,8 +96,28 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             .contains_field("population")
     );
     assert_eq!(scientific_project.parameters().task_count(), 6);
+    assert_eq!(scientific_project.task_count(), 6);
+    assert_eq!(scientific_project.task_configs().count(), 6);
+    assert_eq!(scientific_project.task_config(5).unwrap().task_index(), 5);
+    assert_eq!(
+        scientific_project
+            .task_configs_matching("temperature", 300.0)
+            .unwrap()
+            .count(),
+        3
+    );
+    assert!(matches!(
+        scientific_project.unique_task_config_matching("temperature", 300.0),
+        Err(ConfigurationError::AmbiguousTaskConfiguration { key })
+            if key == "temperature"
+    ));
+    assert_eq!(
+        scientific_project.resolve_path("output_root").unwrap(),
+        cartesian_root.join("results")
+    );
     assert!(format!("{scientific_project:?}").contains("state_fields"));
     let project = ProjectConfig::load(&cartesian_root).unwrap();
+    assert_eq!(project.task_count(), 6);
     assert_eq!(project.project_root(), cartesian_root);
     assert_eq!(
         project.configuration_directory(),
@@ -147,6 +183,92 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             (4, 300.0, 11),
             (5, 300.0, 13),
         ]
+    );
+
+    let complete_configs = project
+        .task_configs()
+        .map(|task| {
+            (
+                task.task_index(),
+                task.decode_value::<f64>("temperature").unwrap(),
+                task.decode_value::<u64>("seed").unwrap(),
+                task.resolve_path("output_root").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(complete_configs.len(), 6);
+    assert_eq!(complete_configs[0].0, 0);
+    assert_eq!(complete_configs[5].0, 5);
+    assert_eq!(complete_configs[0].1, 280.0);
+    assert_eq!(complete_configs[5].2, 13);
+    assert!(
+        complete_configs
+            .iter()
+            .all(|task| task.3 == cartesian_root.join("results"))
+    );
+
+    let matching = project.task_configs_matching("temperature", 280.0).unwrap();
+    assert_eq!(matching.size_hint(), (0, Some(6)));
+    let selected = matching
+        .map(|task| task.decode_value::<u64>("seed").unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(selected, [7, 11, 13]);
+    assert!(matches!(
+        project.unique_task_config_matching("temperature", 280.0),
+        Err(ConfigurationError::AmbiguousTaskConfiguration { key })
+            if key == "temperature"
+    ));
+    assert!(matches!(
+        project.unique_task_config_matching("temperature", 999.0),
+        Err(ConfigurationError::NoMatchingTaskConfiguration { key })
+            if key == "temperature"
+    ));
+    assert!(matches!(
+        project.task_configs_matching("solver", "euler"),
+        Err(ConfigurationError::UnknownSweepParameter { key }) if key == "solver"
+    ));
+    let selector_error = project
+        .task_configs_matching("temperature", UnencodableSelector)
+        .unwrap_err();
+    assert!(matches!(
+        selector_error,
+        ConfigurationError::EncodeTaskSelection { ref key, .. }
+            if key == "temperature"
+    ));
+    assert!(selector_error.source().unwrap().is::<serde_json::Error>());
+
+    let complete = project.task_config(4).unwrap();
+    let complete_clone = complete.clone();
+    assert_eq!(complete.task_index(), 4);
+    assert_eq!(complete.parameters().task_index(), 4);
+    assert_eq!(complete.paths().len(), 3);
+    assert_eq!(complete.require_value("temperature").unwrap(), 300.0);
+    assert!(std::ptr::eq(
+        complete.value("solver").unwrap(),
+        complete_clone.value("solver").unwrap()
+    ));
+    assert!(std::ptr::eq(
+        complete.paths().path("output_root").unwrap(),
+        complete_clone.paths().path("output_root").unwrap()
+    ));
+    assert!(format!("{complete:?}").contains("task_index"));
+    let detached_tasks = project.clone().task_configs();
+    assert_eq!(detached_tasks.size_hint(), (6, Some(6)));
+    let mut copied_tasks = detached_tasks.clone();
+    assert_eq!(copied_tasks.next().unwrap().task_index(), 0);
+    assert_eq!(detached_tasks.count(), 6);
+    assert!(format!("{copied_tasks:?}").contains("parameters"));
+    assert!(
+        format!(
+            "{:?}",
+            project.task_configs_matching("temperature", 300.0).unwrap()
+        )
+        .contains("temperature")
+    );
+    println!(
+        "[task-config] all={} selected={} shared_paths=true exact_match=true ambiguity_rejected=true",
+        complete_configs.len(),
+        selected.len()
     );
     println!(
         "[cartesian] tasks={} last_axis_fastest=true first=({}, {}) last=({}, {})",
@@ -360,6 +482,16 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         })
         .collect::<Vec<_>>();
     assert_eq!(correlated, [(275.0, 0.2), (290.0, 0.1), (310.0, 0.05)]);
+    let unique = cases
+        .unique_task_config_matching("temperature", 290.0)
+        .unwrap();
+    assert_eq!(unique.task_index(), 1);
+    assert_eq!(
+        unique
+            .decode_value::<f64>("physical_time_increment")
+            .unwrap(),
+        0.1
+    );
     assert_eq!(
         cases
             .parameters()

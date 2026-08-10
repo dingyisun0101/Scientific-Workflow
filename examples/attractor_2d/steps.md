@@ -86,8 +86,8 @@ Use `fixed.json` for constants shared by all tasks. Use `sweep.json` for either
 Cartesian axes or explicitly correlated cases. Use `paths.json` for named paths
 instead of scattering path literals through the program.
 
-Load the directory through `ScientificProject`. Inspect its state schema, task count, and several
-resolved `TaskParameters` values before implementing the numerical model. This
+Load the directory through `ScientificProject`. Inspect its state schema, task
+count, and several complete `TaskConfig` handles before implementing the numerical model. This
 is where incorrect sweep dimensions, parameter names, and JSON types should be
 found.
 
@@ -97,6 +97,13 @@ configuration when users are expected to tune them between runs.
 **Ready when:** the program can load the project, enumerate tasks in the
 expected deterministic order, decode every required parameter, and resolve all
 named paths.
+
+`task_configs()` lazily yields the complete Cartesian product or the declared
+explicit cases. Each item owns only shared handles to parameter and path data,
+so it can be moved into a dispatcher queue without constructing a merged map.
+Use `task_configs_matching(key, value)` to retain all combinations of the other
+axes, and use `unique_task_config_matching` only when one key/value pair is
+known to identify exactly one task.
 
 ## Step 3: Define the state schema
 

@@ -449,6 +449,9 @@ the copy, and reject meaningful ambiguous or invalid inputs.
   from the first case, normalizing lookup/output order without changing values.
 - Prove fixed values, repeated selected candidates, and cloned task handles
   refer to shared JSON values without allocating merged maps.
+- Generate complete fixed/sweep/path `TaskConfig` handles for the full
+  Cartesian product, filter one sweep value while retaining other-axis
+  combinations, and reject missing or ambiguous unique selection.
 - Exercise raw, required, and typed parameter lookup; resolved task iteration;
   deterministic task JSON; cheap cloning; owning iterator independence; and
   `Send + Sync` boundaries.
@@ -465,10 +468,13 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 ### Structures and methods
 
 - `ProjectConfig::{load,project_root,configuration_directory,parameters,paths,
-  into_parts,write_source_config,clone}`;
+  task_count,task_config,task_configs,task_configs_matching,
+  unique_task_config_matching,into_parts,write_source_config,clone}`;
 - every public `ScientificProject` and `ExecutionScope` method;
 - all public `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, and
   `ProjectPaths` methods;
+- all public `TaskConfig`, `TaskConfigIter`, and `MatchingTaskConfigIter`
+  methods;
 - reachable configuration error families with source preservation;
 - strict parser, mixed-radix selection, explicit-case normalization, borrowed
   serialization, and exclusive exact export indirectly.
@@ -476,6 +482,7 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 ### Log contract
 
     [load] fixed=... swept=... parameters=... tasks=... paths=...
+    [task-config] all=... selected=... shared_paths=true exact_match=true ambiguity_rejected=true
     [execution-scope] generated=... named=... task_path=... timestamp_managed=true
     [cartesian] tasks=... last_axis_fastest=true first=(...) last=(...)
     [ownership] fixed_shared=true selected_shared=true task_clone_shared=true merged_map_allocated=false

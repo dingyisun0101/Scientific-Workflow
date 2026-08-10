@@ -25,14 +25,14 @@ pub(crate) const CHECKPOINT_STREAM: &str = "checkpoint";
 pub(crate) fn record_model(
     schema: &SystemStateSchema,
     execution: &ExecutionScope,
-    parameters: &TaskParameters,
+    task: &TaskConfig,
     settings: &TaskSettings,
     model: &mut HopfModel,
 ) -> AppResult<CompletedRecording> {
     // The scope derives a stable task path but does not create it. Exclusive
     // directory creation belongs to the writer, preventing accidental reuse.
-    let directory = execution.task_recording_directory(parameters.task_index());
-    let mut writer = build_writer(schema, &directory, settings, parameters)?;
+    let directory = execution.task_recording_directory(task.task_index());
+    let mut writer = build_writer(schema, &directory, settings, task)?;
 
     // The initial condition is a legitimate sample at iteration zero.
     writer.observe_state(model.state())?;
@@ -55,7 +55,7 @@ fn build_writer(
     schema: &SystemStateSchema,
     directory: &Path,
     settings: &TaskSettings,
-    parameters: &TaskParameters,
+    task: &TaskConfig,
 ) -> Result<SystemStateWriter, StorageError> {
     // Iteration and physical time belong to the scientific record. Operational
     // UTC timestamps and active duration are added by the writer itself.
@@ -67,7 +67,7 @@ fn build_writer(
         .with_time_axis_metadata(time_axis)
         // Persisting resolved parameters makes each task output independently
         // interpretable without duplicating them in every state record.
-        .with_task_parameters(parameters)
+        .with_task_parameters(task.parameters())
         // Queue bytes bound memory and apply backpressure; chunk bytes govern
         // file rollover without ever splitting one encoded state record.
         .with_shared_stream_limits(settings.maximum_chunk_bytes, settings.writer_queue_bytes)

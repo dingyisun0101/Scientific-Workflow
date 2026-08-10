@@ -18,7 +18,8 @@ Current scope:
 Implemented and verified:
 
 - `configuration`: standard three-file parameter/path loading, deterministic
-  task expansion, dict-like resolved parameters, named paths, and exact export;
+  task expansion, complete shared task handles, exact sweep selection, named
+  paths, and exact export;
 - `project`: conventional four-file `ScientificProject` loading including
   `config/state.json`;
 - `execution`: automatic generated/named execution scopes and task paths;
@@ -53,7 +54,7 @@ together with every supported crate API through `scientific_workflow::prelude`.
 `StateSeries` is an analysis result, not a runtime writer buffer. The persisted
 stream is the authoritative sampled history.
 
-## Parameter configuration stage (under discussion)
+## Parameter configuration
 
 The next proposed module reads two conventional JSON files: `fixed.json`
 declares values shared by every task, while `sweep.json` declares values that
@@ -74,7 +75,9 @@ model distinguishes:
 - `TaskParameters`: one resolved task's immutable union of all fixed values and
   one selected value from every sweep axis; and
 - `ProjectPaths`: the immutable named path table resolved relative to the
-  project root.
+  project root; and
+- `TaskConfig`: a cheap owned full-task handle combining `TaskParameters` with
+  shared `ProjectPaths` for direct movement into worker queues.
 
 The public namespace is therefore:
 
@@ -82,6 +85,9 @@ The public namespace is therefore:
 scientific_workflow::configuration::{
     ProjectConfig,
     ParameterSpace,
+    TaskConfig,
+    TaskConfigIter,
+    MatchingTaskConfigIter,
     TaskParameters,
     ProjectPaths,
     ConfigurationError,
@@ -107,6 +113,24 @@ project-root/
 the resulting `ParameterSpace` and `ProjectPaths`. The lower-level types remain
 independently useful, but callers should not normally assemble standard paths
 manually.
+
+The primary task API lives on `ProjectConfig`:
+
+```rust
+for task in project.task_configs() {
+    submit(task)?;
+}
+
+for task in project.task_configs_matching("temperature", 300.0)? {
+    submit(task)?;
+}
+```
+
+`task_configs()` lazily emits the full Cartesian product or the exact explicit
+case list. Filtering one sweep key retains every combination of all other axes.
+`unique_task_config_matching` succeeds only when that one selector identifies
+exactly one task; zero and multiple matches are separate errors. Fixed constants
+and paths are deliberately invalid selection keys.
 
 `fixed.json` remains a plain object:
 
@@ -158,8 +182,10 @@ the target to exist. The original string remains authoritative for JSON
 round-trip. Environment-variable and tilde expansion are initially out of
 scope because they make resolution and reproducibility host-dependent.
 
-The central output is a dict-like resolved task, not an application-defined
-Rust configuration structure. The API is:
+The lower-level parameter output is a dict-like resolved task rather than an
+application-defined Rust configuration structure. The normal project-level
+output is `TaskConfig`, which pairs that parameter view with shared paths. The
+API is:
 
 ```text
 space = ParameterSpace::load(directory)
@@ -188,6 +214,12 @@ merged map or clone JSON values. Cartesian selection is calculated from
 precomputed axis lengths and strides. Explicit-case selection refers directly
 to the chosen shared case. Materialization occurs only when a caller explicitly
 decodes an owned value or serializes the resolved task.
+
+`TaskConfig` adds only a cheap `ProjectPaths` shared handle. It is owned rather
+than lifetime-borrowed so dispatchers can move it through ordinary thread and
+work queues while the parsed JSON and path allocations remain shared. It
+delegates task index and typed parameter lookup and adds direct named-path
+resolution. It does not allocate a merged parameter/path dictionary.
 
 ### JSON names and Rust access
 
@@ -242,7 +274,9 @@ boundary. It contains:
   filesystem or Serde sources;
 - semantic document rejection and exact duplicate-key context;
 - fixed/sweep key collisions and checked Cartesian task-count overflow;
-- task-index bounds, missing task parameters, and typed decode failures; and
+- task-index bounds, missing task parameters, and typed decode failures;
+- unknown sweep selectors, selector encoding failures, no-match selection, and
+  ambiguous unique selection; and
 - missing named project paths.
 
 It never owns a resolved task map or JSON payload. Paths, keys, and task indices
@@ -268,6 +302,12 @@ TaskParameters lookup and conversion
     -> ConfigurationError::{UnknownTaskParameter,
                             DecodeTaskParameter,
                             SerializeTaskParameters}
+
+ProjectConfig task selection
+    -> ConfigurationError::{UnknownSweepParameter,
+                            EncodeTaskSelection,
+                            NoMatchingTaskConfiguration,
+                            AmbiguousTaskConfiguration}
 
 ProjectPaths lookup
     -> ConfigurationError::UnknownProjectPath
@@ -793,6 +833,69 @@ Borrows the validated project-path dictionary.
 dispatcher and simulation resource-path access
 ```
 
+#### ProjectConfig::task_count
+
+Returns the validated number of complete task configurations.
+
+##### Reference
+
+```text
+dispatcher mission planning -> ProjectConfig::task_count
+ScientificProject::task_count -> ProjectConfig::task_count
+```
+
+#### ProjectConfig::task_config
+
+Returns one complete cheap task handle by stable ordinal, sharing both parsed
+parameter and path storage.
+
+##### Reference
+
+```text
+indexed mission selection -> ProjectConfig::task_config
+ScientificProject::task_config -> ProjectConfig::task_config
+```
+
+#### ProjectConfig::task_configs
+
+Returns an owning lazy iterator over the full Cartesian product or explicit
+case list in canonical task-index order.
+
+##### Reference
+
+```text
+all-mission construction -> ProjectConfig::task_configs
+ScientificProject::task_configs -> ProjectConfig::task_configs
+attractor_2d main loop -> ScientificProject::task_configs
+```
+
+#### ProjectConfig::task_configs_matching
+
+Converts one caller value to JSON once, requires an exact sweep key, and lazily
+retains every task with that exact selected value. Other axes remain
+unconstrained.
+
+##### Reference
+
+```text
+parameter-subset dispatch -> ProjectConfig::task_configs_matching
+ScientificProject::task_configs_matching -> ProjectConfig::task_configs_matching
+configuration_workflow exact filtering
+```
+
+#### ProjectConfig::unique_task_config_matching
+
+Returns exactly one matching task or distinguishes no match from an ambiguous
+multi-task match. It never silently selects the first result.
+
+##### Reference
+
+```text
+single-mission lookup -> ProjectConfig::unique_task_config_matching
+ScientificProject::unique_task_config_matching -> ProjectConfig::unique_task_config_matching
+configuration_workflow unique/no-match/ambiguity cases
+```
+
 #### ProjectConfig::into_parts
 
 Consumes only the facade and moves out both cheap shared component handles. No
@@ -828,6 +931,132 @@ prints only the root and parameter/task/path counts.
 
 ```text
 shared project setup and bounded diagnostics
+```
+
+### TaskConfig
+
+Owned complete task handle containing one `TaskParameters` handle and one
+`ProjectPaths` handle. Both fields are `Arc`-backed; cloning or moving the task
+does not clone JSON values, create a merged map, or duplicate the path table.
+
+#### TaskConfig::task_index
+
+Delegates the stable deterministic ordinal.
+
+##### Reference
+
+```text
+dispatcher mission identity and output naming -> TaskConfig::task_index
+attractor_2d recording directory -> TaskConfig::task_index
+```
+
+#### TaskConfig::parameters
+
+Borrows the underlying parameter-only view for APIs such as writer metadata.
+
+##### Reference
+
+```text
+SystemStateWriterBuilder::with_task_parameters -> TaskConfig::parameters
+```
+
+#### TaskConfig::paths
+
+Borrows the shared complete path dictionary for lower-level path inspection.
+
+##### Reference
+
+```text
+advanced multi-path task setup -> TaskConfig::paths
+```
+
+#### TaskConfig::value / require_value / decode_value
+
+Delegate clone-free raw lookup and explicit typed decoding to
+`TaskParameters`.
+
+##### Reference
+
+```text
+application task assembly -> TaskConfig::decode_value
+generic task inspection -> TaskConfig::value / require_value
+```
+
+#### TaskConfig::resolve_path
+
+Delegates named lexical path resolution to the shared `ProjectPaths` handle.
+
+##### Reference
+
+```text
+task resource and output setup -> TaskConfig::resolve_path
+```
+
+#### TaskConfig::clone / Debug
+
+Clone increments two shared owners and copies one task ordinal. Debug exposes
+only identity and bounded counts.
+
+##### Reference
+
+```text
+dispatcher work-queue ownership -> TaskConfig::clone/move
+bounded diagnostics -> TaskConfig::Debug
+```
+
+### TaskConfigIter
+
+Owning lazy adapter over `TaskParametersIter` that attaches a shared path handle
+to each yielded task.
+
+#### TaskConfigIter::next / size_hint
+
+Preserves canonical ordinal order and the lower-level iterator's count bounds.
+
+##### Reference
+
+```text
+ProjectConfig::task_configs -> TaskConfigIter
+all-task dispatcher loop -> TaskConfigIter::next
+```
+
+#### TaskConfigIter::clone / Debug
+
+Clone preserves an independent cursor over shared sources. Debug contains no
+configuration values.
+
+##### Reference
+
+```text
+independent mission enumeration and diagnostics
+```
+
+### MatchingTaskConfigIter
+
+Owns one encoded exact JSON selector and lazily filters complete tasks without
+materializing a result list.
+
+#### MatchingTaskConfigIter::next / size_hint
+
+Yields canonical-order matches; the lower bound is zero because future matches
+cannot be known without testing task selections.
+
+##### Reference
+
+```text
+ProjectConfig::task_configs_matching -> MatchingTaskConfigIter
+ProjectConfig::unique_task_config_matching -> MatchingTaskConfigIter::next
+```
+
+#### MatchingTaskConfigIter::Debug
+
+Reports the key and source iterator but deliberately omits the possibly large
+selector value.
+
+##### Reference
+
+```text
+bounded configuration diagnostics
 ```
 
 ### ScientificProject
@@ -887,6 +1116,40 @@ Borrows the named runtime-path dictionary.
 
 ```text
 recording and input path resolution -> ScientificProject::paths
+```
+
+#### ScientificProject::resolve_path
+
+Convenience delegation for one project-wide named path.
+
+##### Reference
+
+```text
+attractor execution-root setup -> ScientificProject::resolve_path
+```
+
+#### ScientificProject::task_count / task_config / task_configs
+
+Delegate complete task planning to the lower-level `ProjectConfig` without
+requiring callers to traverse component accessors.
+
+##### Reference
+
+```text
+normal project task enumeration -> ScientificProject::task_configs
+indexed project task lookup -> ScientificProject::task_config
+dispatcher capacity planning -> ScientificProject::task_count
+```
+
+#### ScientificProject::task_configs_matching / unique_task_config_matching
+
+Delegate exact sweep selection while retaining the project's state-schema
+facade.
+
+##### Reference
+
+```text
+filtered scientific-project dispatch and unique mission lookup
 ```
 
 #### ScientificProject::state_schema
@@ -962,9 +1225,10 @@ ProjectConfig::write_source_config -> create_destination_root
 
 `src/configuration.rs` is the documented public boundary. It keeps the four
 implementation files private and re-exports only `ConfigurationError`,
-`ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `ProjectPaths`, and
-`ProjectConfig`. Its crate-level example demonstrates named path resolution and
-typed lookup from generated task dictionaries.
+`ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `ProjectPaths`,
+`ProjectConfig`, `TaskConfig`, `TaskConfigIter`, and
+`MatchingTaskConfigIter`. Its crate-level example demonstrates complete lazy
+task generation, named path resolution, and typed lookup.
 
 #### Reference
 
@@ -2015,6 +2279,30 @@ Rejects empty names and empty present descriptions.
 
 Immutable ordinal, filename, record/byte counts, checksum, and iteration range.
 
+#### Compulsory integrity contract
+
+The descriptor's SHA-256 checksum is not optional metadata. Any operation that
+claims to validate a sealed chunk or uses that chunk to reconstruct scientific
+state must verify both its exact byte count and checksum before exposing decoded
+payloads. There is no public unchecked reader, checksum toggle, Cargo feature,
+or performance mode that weakens this rule. A mismatch invalidates the read
+transaction; previously decoded states remain internal and are discarded.
+
+An operation may avoid opening chunks it does not consume—for example, a
+latest-state read does not scan older history. Such chunks are explicitly
+unexamined, not implicitly valid or checksum-verified. This distinction keeps
+targeted reads efficient without making a false integrity claim.
+
+SHA-256 establishes accidental-corruption detection relative to the committed
+descriptor. It does not establish provenance, authenticity, or numerical model
+correctness; those require separate mechanisms.
+
+##### Reference
+
+    full-series reconstruction -> verify every consumed chunk checksum
+    latest-state reconstruction -> verify the selected newest chunk checksum
+    storage resilience tests -> reject byte-count and checksum corruption
+
 #### ChunkMetadata::validate
 
 Validates deterministic naming, non-empty facts, range order, and checksum
@@ -2610,15 +2898,15 @@ state assembly, and descriptor-fact validation.
 used by the writer facade. It validates that the selected stream exactly matches
 the full `SystemStateSchema`, requires decoder coverage, prefers the last complete line
 already recovered from the open chunk, and otherwise seeks directly to the
-final line of the highest sealed chunk. It does not integrity-scan sealed
-history.
+final line of the highest sealed chunk after verifying that selected chunk's
+byte count and checksum. It does not open or validate earlier sealed history.
 
 ##### Reference
 
     SystemStateWriter::continue_recording with checkpoint request -> decode_resume_state
 
-`read_last_sealed_record` scans backward in fixed-size blocks to locate only the
-last JSONL boundary, avoiding an eager pass over a potentially large chunk.
+`read_last_sealed_record` verifies the selected chunk and then locates its last
+JSONL boundary. Earlier chunks remain outside the operation.
 
 ##### Reference
 
@@ -3271,8 +3559,8 @@ The state and analysis portion includes:
 
 The configuration portion includes:
 
-- `ProjectConfig`, `ParameterSpace`, `TaskParameters`, and
-  `TaskParametersIter`;
+- `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`,
+  `TaskConfig`, `TaskConfigIter`, and `MatchingTaskConfigIter`;
 - `ProjectPaths` and `ConfigurationError`.
 
 The storage portion includes:
@@ -3548,9 +3836,10 @@ Each chunk payload has exactly two possible names:
 
 These are two names for the same payload inode at different lifecycle stages,
 not two payload copies. A final `.jsonl` name is the authoritative seal marker.
-Recovery assumes every sealed chunk is valid and never opens, hashes, parses,
-or decodes it. It may inspect directory names to enforce consecutive ordinals,
-but content validation is intentionally outside the resume hot path.
+Append-position recovery does not open, hash, parse, or decode older sealed
+chunks merely to find the next ordinal. It may inspect directory names to
+enforce consecutive ordinals. Those chunks are unexamined, not newly validated;
+any later operation that consumes them must verify their checksums.
 
 To make that rule compatible with the single `metadata.json` inventory, sealing
 uses a prepare-then-rename transaction:
@@ -3574,7 +3863,7 @@ descriptor and completes the rename. Otherwise it parses complete JSONL
 records, truncates an incomplete trailing record if present, rebuilds the
 incremental checksum/counters, and continues appending to the same chunk (or
 seals it immediately when it already meets the byte target). Older sealed
-chunks are trusted without revalidation.
+chunks remain unopened during this positional recovery.
 
 `SystemStateWriterBuilder::continue_existing_recording` is explicit rather
 than making `create_new_recording` silently reuse a directory. It accepts only
@@ -3607,9 +3896,9 @@ chunk. A final non-newline-terminated fragment is ignored and truncated as a
 crash remnant. Every earlier newline-terminated record must be structurally
 valid; recovery never skips corruption in the middle and calls a later record
 "valid." If the open chunk contains no complete record, lookup falls back to
-the last record of the highest sealed chunk. That sealed chunk is not integrity
-scanned: the reader seeks to its final complete line and trusts the filename
-seal contract.
+the last record of the highest sealed chunk. Because that payload becomes the
+resumed scientific state, the selected sealed chunk must first pass exact
+byte-count and checksum verification. Earlier sealed chunks remain unopened.
 
 The returned `SystemState` is complete, not a partially populated full-state
 shell. Therefore the selected checkpoint stream must declare every field in
@@ -4023,7 +4312,7 @@ Required method allocation:
 | `storage_workflow` | `TimeAxisMetadata`, `StateStreamConfig`, `SystemStateWriterBuilder`, `SystemStateWriter`, `JsonPayloadDecoder`, `JsonPayloadDecoderRegistry`, both default decoders, and `StoredStateSeriesReader`; every public success-path method including `read_all`, with private encoding/writing/format behavior verified through files and readback |
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
 | `resume_workflow` | explicit `continue_existing_recording`/`continue_recording_from_latest_checkpoint`, full-state schema enforcement, typed checkpoint reconstruction, prepared and unprepared crash windows, multi-sealed-plus-open recovery without sealed-content inspection, continuation rejection boundaries, append seeding, `flush`, and exclusive root leasing |
-| `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, generation, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
+| `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `TaskConfig`, `TaskConfigIter`, `MatchingTaskConfigIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, complete task generation, exact filtering, unique selection, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
 
 The finished source reads as six coherent workflows rather than an API census.
 The old aggregators and focused subdirectories have been removed.
@@ -4152,7 +4441,7 @@ built on `scientific-workflow`:
 3. **Define state shape.** Declare stable field names and descriptions in the
    state template. Choose the concrete Rust payload type for each field in the
    state-assembly code; the JSON template does not pretend to encode Rust types.
-4. **Implement state assembly.** Convert one `TaskParameters` value into one
+4. **Implement state assembly.** Convert one complete `TaskConfig` handle into one
    complete, directly owned `SystemState`. Reject invalid parameter types and
    dimensions before starting a recording.
 5. **Implement the evolution kernel.** Evolve only the owned state and explicit
@@ -4555,9 +4844,11 @@ owns typed per-stream `SamplingInterval` policies, bounded backpressure,
 whole-record chunking, terminal sampling, durability barriers, and checkpoint
 continuation.
 
-Dispatcher can replace its fixed/sweep expansion with `ProjectConfig` and
-`ParameterSpace`, assign deterministic `TaskParameters`, configure one
-recording per task, and inspect completed results through the storage reader.
+Dispatcher can replace its fixed/sweep expansion with
+`ProjectConfig::task_configs`, move deterministic complete `TaskConfig` handles
+directly into mission queues, configure one recording per task, and inspect
+completed results through the storage reader. Exact matching can select a
+subset while retaining the Cartesian product of every unconstrained axis.
 Scoped execution policy and richer logging remain dispatcher-level work rather
 than prerequisites missing from this crate. Migration should preserve the new
 storage-format version 4 contract and should not introduce compatibility

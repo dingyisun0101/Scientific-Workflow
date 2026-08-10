@@ -12,6 +12,8 @@ making them suitable for large arrays and tensors.
 
 - Standard `config/{fixed,sweep,paths,state}.json` scientific-project definition.
 - Deterministic Cartesian and correlated explicit-case task expansion.
+- Lazy complete `TaskConfig` handles combining parameters and shared paths.
+- Exact sweep-value filtering and ambiguity-safe unique task selection.
 - Clone-free dict-like resolved task views over shared JSON values.
 - Named project-root-relative path resolution and byte-exact source export.
 - JSON-defined state fields with deterministic order and optional descriptions.
@@ -43,6 +45,21 @@ making them suitable for large arrays and tensors.
 - Collision-resistant generated or caller-named execution scopes.
 - Structurally separate terminal metadata and immutable completed-recording handles.
 
+## Mandatory Chunk Integrity
+
+Every sealed JSONL chunk is described by an exact byte count and SHA-256 digest
+in `metadata.json`. Verification is mandatory whenever a chunk is validated or
+reconstructed. The public reader has no unchecked mode, checksum opt-out,
+feature switch, or performance flag: corruption produces `StorageError` rather
+than partially trusted scientific data.
+
+Parsing alone is not validation. Skipping a chunk because an operation does not
+need its contents is permitted, but that chunk is then unexamined—not verified.
+Any chunk actually used to reconstruct scientific state must cross the checksum
+boundary first. This integrity guarantee detects accidental corruption; it is
+not a substitute for provenance, signatures, or validation of the scientific
+model itself.
+
 The public `SystemStateWriter` facade owns multi-stream metadata, one bounded
 queue and worker, and the recording's completion or failure lifecycle.
 Workflow dispatch remains a later
@@ -65,10 +82,9 @@ The source repository includes `examples/attractor_2d`, a standalone
 downstream application that exercises configuration loading, Cartesian task
 expansion, directly owned mutable states, tuple payload borrowing, independent
 sample streams, bounded asynchronous recording, automatic chunking, and
-explicit completion. It then reconstructs all streams with typed payload
-decoders, calculates numerical summaries, renders a terminal phase portrait,
-and verifies the final live-to-stored round trip exactly. From the repository
-root, run:
+explicit completion. It then reads each stream's latest state with typed payload
+decoders and verifies the final live-to-stored round trip exactly. From the
+repository root, run:
 
 ```bash
 cargo run --manifest-path examples/attractor_2d/Cargo.toml
@@ -141,13 +157,12 @@ use scientific_workflow::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project = ScientificProject::load("project-root")?;
-    let output_root = project.paths().resolve_path("output_root")?;
-
-    for task in project.parameters().tasks() {
+    for task in project.task_configs() {
         let physical_time_increment =
             task.decode_value::<f64>("physical_time_increment")?;
         let temperature = task.decode_value::<f64>("temperature")?;
         let seed = task.decode_value::<u64>("seed")?;
+        let output_root = task.resolve_path("output_root")?;
         println!(
             "task={} dt={physical_time_increment} temperature={temperature} seed={seed} output={}",
             task.task_index(),
@@ -158,7 +173,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Task handles share the parsed source allocation and do not clone values or
+`task_configs()` lazily emits the complete Cartesian product—or exactly the
+declared correlated cases—in stable task-index order. Each item is a cheap
+owned handle over shared fixed, sweep, and path storage, so it can move into a
+worker queue without cloning merged JSON dictionaries:
+
+```rust,no_run
+# use scientific_workflow::prelude::*;
+# fn submit(_: TaskConfig) -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let project = ScientificProject::load("project-root")?;
+
+for task in project.task_configs_matching("temperature", 300.0)? {
+    submit(task)?;
+}
+# Ok(())
+# }
+```
+
+Matching constrains only the named sweep dimension; every combination of the
+remaining axes is retained. Unique selection returns an error when no task or
+more than one task matches, rather than silently choosing the first. Fixed keys
+and path keys cannot be used as sweep selectors. Use
+`unique_task_config_matching(key, value)` only when that one sweep dimension is
+known to identify exactly one task, as is common for an explicit case ID.
+
+Task handles share the parsed source allocations and do not clone values or
 construct merged maps. `value` and `require_value` borrow raw JSON;
 `decode_value` explicitly constructs one requested Rust value. The final sweep
 axis changes fastest. Fixed and swept names must be disjoint.

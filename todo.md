@@ -10,6 +10,15 @@ implemented architecture and per-method references live in `design.md`.
   and large selected-field counts; functional tests already verify ownership,
   encoded output, and error semantics.
 
+## Mandatory chunk integrity
+
+- Make `continue_recording_from_latest_checkpoint` verify the exact byte count
+  and SHA-256 checksum of the newest sealed checkpoint chunk before decoding
+  its final record. Append-position recovery may continue to leave unrelated
+  sealed history unopened, but any chunk used to reconstruct scientific state
+  must satisfy the compulsory integrity contract documented in the READMEs and
+  `design.md`.
+
 ## Deferred specialized decoders
 
 Ordinary Serde JSON payloads now use
@@ -90,6 +99,9 @@ a second sidecar file.
 
 ## Reusable example patterns
 
+- [x] `ProjectConfig` and `ScientificProject` lazily generate cheap owned
+  `TaskConfig` handles for the full Cartesian product or explicit cases, with
+  exact sweep filtering and ambiguity-safe unique selection.
 - [x] Writer completion accepts structurally separate terminal metadata and
   returns an immutable completed-recording handle with directory and timing.
 - [x] Efficient latest-state reconstruction avoids materializing a full series.

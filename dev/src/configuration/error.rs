@@ -121,6 +121,37 @@ pub enum ConfigurationError {
         task_count: u64,
     },
 
+    /// Task selection named a fixed or absent key instead of a sweep key.
+    #[error("task selection key `{key}` is not declared by sweep.json")]
+    UnknownSweepParameter {
+        /// Exact, case-sensitive selection key supplied by the caller.
+        key: String,
+    },
+
+    /// A caller-provided typed selector could not be represented as JSON.
+    #[error("failed to encode task selection value for sweep parameter `{key}`")]
+    EncodeTaskSelection {
+        /// Exact sweep key whose target value was being encoded.
+        key: String,
+        /// Underlying Serde JSON conversion failure.
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// No generated task has the requested exact sweep value.
+    #[error("no task configuration matches sweep parameter `{key}`")]
+    NoMatchingTaskConfiguration {
+        /// Exact sweep key used for selection.
+        key: String,
+    },
+
+    /// One key/value selector matched more than one generated task.
+    #[error("more than one task configuration matches sweep parameter `{key}`")]
+    AmbiguousTaskConfiguration {
+        /// Exact sweep key that was insufficient to identify one task.
+        key: String,
+    },
+
     /// A resolved task dictionary does not contain the requested exact key.
     #[error("task {task_index} does not contain parameter `{key}`")]
     UnknownTaskParameter {

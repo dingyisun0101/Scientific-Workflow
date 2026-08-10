@@ -11,7 +11,8 @@ cd dev
 [`examples/attractor_2d`](examples/attractor_2d) is a complete downstream
 application built against the local crate. It loads project-root
 `config/{fixed,sweep,paths,state}.json` inputs, expands a parameter sweep,
-evolves one directly owned `SystemState` per task with explicit Euler, and
+iterates complete shared `TaskConfig` handles, evolves one directly owned
+`SystemState` per task with explicit Euler, and
 offers every evolved state to one writer that owns the independent trajectory,
 radius, and checkpoint sampling intervals.
 
@@ -25,13 +26,31 @@ Recordings are written beneath the example's ignored `target/recordings`
 directory. `ExecutionScope` selects a new timestamped, collision-resistant run directory, so rerunning the
 example does not overwrite prior results. The executable covers configuration,
 task expansion, state evolution, bounded recording, chunking, explicit
-recording completion, typed stream reconstruction, numerical summaries, a
-terminal phase portrait, and exact live-to-stored verification.
+recording completion, latest-state reconstruction, and exact live-to-stored
+verification. It prints only one minimal validation result.
 
 The example is maintained as a repository-level project and is not included
 in the library crate's crates.io archive. Its
 [`steps.md`](examples/attractor_2d/steps.md) explains the reusable development
 sequence for a general scientific project.
+
+## Mandatory chunk integrity
+
+Every sealed chunk carries a SHA-256 checksum in the recording's sole metadata
+file. Checksum verification is a compulsory part of chunk validation: public
+completed-recording read paths do not provide a flag, feature, or alternate API
+that disables it. A missing chunk, byte-count mismatch, unsupported checksum,
+or digest mismatch is a hard error, and a failed multi-chunk read exposes no
+partial series as if it were valid scientific output.
+
+Valid JSON is not sufficient evidence of an intact scientific record. A code
+path that deliberately does not open an older sealed chunk has not validated
+that chunk and must not describe it as verified. Any chunk selected for
+scientific reconstruction must pass its checksum boundary.
+
+Checksums detect accidental alteration and storage corruption. They do not by
+themselves prove model correctness, authorship, or cryptographic authenticity;
+those are separate provenance concerns.
 
 ## Integration tests
 
@@ -46,8 +65,9 @@ cargo test --test configuration_workflow -- --nocapture
 
 Loads real Cartesian and correlated-case projects, the conventional state
 schema, and generated/named execution scopes; generates dict-like task
-parameters, resolves named paths, proves shared value ownership, performs an
-exact three-file export/reload, and rejects ambiguous configuration.
+configurations, filters exact sweep values, rejects ambiguous unique selection,
+resolves named paths, proves shared value ownership, performs an exact
+three-file export/reload, and rejects ambiguous configuration.
 
 ### Simulation state
 

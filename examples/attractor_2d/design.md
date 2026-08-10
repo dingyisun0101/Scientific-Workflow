@@ -29,6 +29,11 @@ The Cartesian sweep uses `mu = [-0.25, 0.25, 1.0]`, producing three independent
 tasks. The richer dynamics justify recording a trajectory, but the application
 does not analyze or render it during evolution.
 
+`ScientificProject::task_configs()` emits those three complete task handles in
+canonical order. Each handle shares the parsed fixed values, selected sweep
+storage, and project paths, so the same type can later move directly into a
+dispatcher mission without a merged configuration allocation.
+
 ## Project configuration
 
 The standalone crate root is the scientific project root. `ScientificProject`
@@ -133,7 +138,7 @@ src/
 ```text
 load project
   -> create execution scope
-  -> for each task: assemble -> evolve/record -> validate
+  -> for each TaskConfig: assemble -> evolve/record -> validate
   -> print one result
 ```
 
@@ -219,7 +224,7 @@ record_model/build_writer -> TaskSettings consumption by immutable borrow
 
 ### `prepare_task`
 
-Decodes one resolved parameter dictionary and assembles its model and runtime
+Decodes one complete shared `TaskConfig` and assembles its model and runtime
 settings.
 
 #### Reference

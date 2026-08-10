@@ -25,17 +25,17 @@ pub(crate) struct TaskSettings {
 /// Creates one model and its execution settings from a resolved task dictionary.
 pub(crate) fn prepare_task(
     schema: &SystemStateSchema,
-    parameters: &TaskParameters,
+    task: &TaskConfig,
 ) -> AppResult<(HopfModel, TaskSettings)> {
-    // TaskParameters is the merged dictionary for one Cartesian sweep point:
-    // fixed values and the selected `mu` are decoded through the same API.
+    // TaskConfig is a cheap owned handle combining fixed values, the selected
+    // Cartesian sweep point, and shared paths without allocating a merged map.
     let settings = TaskSettings {
-        step_count: parameters.decode_value("step_count")?,
-        trajectory_sampling_interval: parameters.decode_value("trajectory_sampling_interval")?,
-        radius_sampling_interval: parameters.decode_value("radius_sampling_interval")?,
-        checkpoint_sampling_interval: parameters.decode_value("checkpoint_sampling_interval")?,
-        maximum_chunk_bytes: parameters.decode_value("maximum_chunk_bytes")?,
-        writer_queue_bytes: parameters.decode_value("writer_queue_bytes")?,
+        step_count: task.decode_value("step_count")?,
+        trajectory_sampling_interval: task.decode_value("trajectory_sampling_interval")?,
+        radius_sampling_interval: task.decode_value("radius_sampling_interval")?,
+        checkpoint_sampling_interval: task.decode_value("checkpoint_sampling_interval")?,
+        maximum_chunk_bytes: task.decode_value("maximum_chunk_bytes")?,
+        writer_queue_bytes: task.decode_value("writer_queue_bytes")?,
     };
 
     // Large scientific payloads should be constructed here and moved into the
@@ -43,10 +43,10 @@ pub(crate) fn prepare_task(
     // pattern expected for tensors and other expensive payloads.
     let model = HopfModel::new(
         schema,
-        parameters.decode_value("initial_point")?,
-        parameters.decode_value("mu")?,
-        parameters.decode_value("angular_frequency")?,
-        parameters.decode_value("physical_time_increment_per_step")?,
+        task.decode_value("initial_point")?,
+        task.decode_value("mu")?,
+        task.decode_value("angular_frequency")?,
+        task.decode_value("physical_time_increment_per_step")?,
     )?;
     Ok((model, settings))
 }
