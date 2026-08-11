@@ -45,6 +45,8 @@ making them suitable for large arrays and tensors.
 - Efficient latest-state reconstruction without loading earlier chunks.
 - Automatic UTC lifecycle timestamps and monotonic active durations.
 - Collision-resistant generated or caller-named execution scopes.
+- Atomic content-addressed input artifacts with verified execution-relative
+  loading.
 - Structurally separate terminal metadata and immutable completed-recording handles.
 - Parameter-identified, parallel-safe centralized progress reporting.
 - One exclusive terminal renderer with interactive, CI, and hidden modes.
@@ -167,6 +169,32 @@ let record = RngRecord::new(
 Workflow deliberately does not depend on PiP, interpret `RngConfig`, or expose
 a second RNG configuration API. The application chooses a stable namespace and
 copies the upstream generator's resolved identity into `RngRecord`.
+
+## Immutable Input Artifacts
+
+Workflow owns the generic mechanics for persisting immutable bytes inside an
+execution scope. Scientific crates keep ownership of their formats and domain
+metadata: they serialize their document, call `persist_artifact`, and embed the
+returned descriptor in each recording that consumed it.
+
+```rust,no_run
+use scientific_workflow::prelude::*;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let scope = ExecutionScope::create_named("recordings", "example")?;
+let persisted = persist_artifact(&scope, "initial-space", "json", br#"{"sites":[0,1]}"#)?;
+let verified = load_verified_artifact(scope.directory(), persisted.descriptor())?;
+
+assert_eq!(verified.bytes(), br#"{"sites":[0,1]}"#);
+assert_eq!(persisted.descriptor().sha256().len(), 64);
+# Ok(())
+# }
+```
+
+The filename is derived from SHA-256, publication is atomic, and identical
+bytes in one scope are reused. Loading rejects malformed or escaping relative
+paths and verifies the digest before returning bytes. Workflow deliberately
+does not interpret JSON, matrices, lattices, or other scientific encodings.
 
 ## Mandatory Chunk Integrity
 

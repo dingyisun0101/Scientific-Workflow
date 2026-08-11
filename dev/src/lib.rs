@@ -17,6 +17,8 @@
 //! one immutable [`project::ScientificProject`]. [`execution`] creates
 //! collision-resistant or caller-named execution scopes and deterministic task
 //! recording paths without taking ownership away from storage writers.
+//! [`artifact`] atomically publishes and verifies content-addressed immutable
+//! bytes while leaving their scientific representation to downstream crates.
 //! [`reporting`] provides parameter-identified parallel progress tracking and
 //! one process-wide human-facing terminal owner. [`rng_record`] provides only
 //! validated, persisted RNG provenance records; random generation remains an
@@ -79,6 +81,7 @@
 
 mod clock;
 
+pub mod artifact;
 pub mod configuration;
 pub mod execution;
 pub mod prelude;

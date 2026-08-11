@@ -17,6 +17,10 @@
 //! modules. General-purpose external traits, including Serde traits, remain the
 //! responsibility of the application that uses them.
 
+pub use crate::artifact::{
+    ArtifactDescriptor, ArtifactDisposition, ArtifactError, ArtifactLoadError, PersistedArtifact,
+    VerifiedArtifact, load_verified_artifact, persist_artifact,
+};
 pub use crate::configuration::{
     ConfigurationError, MatchingTaskConfigIter, ParameterSpace, ProjectConfig, ProjectPaths,
     TaskConfig, TaskConfigIter, TaskParameters, TaskParametersIter,
