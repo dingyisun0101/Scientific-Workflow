@@ -17,7 +17,9 @@ pub const RNG_RECORDS_METADATA_KEY: &str = "rng_records";
 /// Keys are persisted as plain text and therefore must be reproducibility
 /// material rather than secrets. `method` and `version` should identify every
 /// implementation detail that affects the produced sequence, including a
-/// distribution transform when relevant.
+/// distribution transform when relevant. When an upstream scientific API
+/// accepts optional RNG settings, copy its resolved method and seed here rather
+/// than recording the unresolved request.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RngRecord {

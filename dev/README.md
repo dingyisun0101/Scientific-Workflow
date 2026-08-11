@@ -138,6 +138,36 @@ Because recording continuation already requires exact user-metadata equality,
 a changed RNG method, version, or key prevents continuation. Keys are persisted
 as plain text reproducibility material and must not contain secrets.
 
+When a scientific crate resolves optional RNG settings, record the resolved
+values—not the original request. For example, PiP 3.2 exposes one `RngConfig`
+input across all stochastic APIs and returns or retains its resolved form. The
+mapping into Workflow remains explicit and lightweight:
+
+```rust,ignore
+use physics_in_parallel::prelude::*;
+use scientific_workflow::prelude::*;
+use serde_json::{Map, json};
+
+let resolved = generator.rng_config();
+let method = resolved.method().expect("a PiP component resolves its method");
+let parameters = resolved.parallel_streams().map(|streams| {
+    Map::from_iter([("parallel_streams".to_owned(), json!(streams.get()))])
+});
+
+let record = RngRecord::new(
+    "simulation.noise",
+    method.name(),
+    method.version(),
+    method.seed_encoding(),
+    resolved.encode_seed().expect("a PiP component resolves its seed"),
+    parameters,
+)?;
+```
+
+Workflow deliberately does not depend on PiP, interpret `RngConfig`, or expose
+a second RNG configuration API. The application chooses a stable namespace and
+copies the upstream generator's resolved identity into `RngRecord`.
+
 ## Mandatory Chunk Integrity
 
 Every sealed JSONL chunk is described by an exact byte count and SHA-256 digest
@@ -164,10 +194,10 @@ Add the crate to a Rust project:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.1"
+scientific-workflow = "0.2"
 ```
 
-The crate uses Rust edition 2024 and requires Rust 1.85 or newer.
+The crate uses Rust edition 2024 and requires Rust 1.97 or newer.
 
 ## Complete Project Example
 

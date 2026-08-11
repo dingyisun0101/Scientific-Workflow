@@ -52,6 +52,16 @@ Checksums detect accidental alteration and storage corruption. They do not by
 themselves prove model correctness, authorship, or cryptographic authenticity;
 those are separate provenance concerns.
 
+## RNG provenance
+
+Workflow's `RngRecord` stores a resolved method, sequence-affecting version,
+key encoding, key, and optional parameters beneath a caller-owned namespace.
+It never generates random values or defines a competing RNG configuration.
+Applications should pass one upstream configuration—such as PiP's
+`RngConfig`—to the scientific component, then copy that component's resolved
+seed and method identity into `RngRecord`. The complete mapping and example are
+documented in [`dev/README.md`](dev/README.md#rng-records).
+
 ## Centralized progress reporting
 
 `ProgressReporter` is the sole human-facing terminal owner while parallel work
