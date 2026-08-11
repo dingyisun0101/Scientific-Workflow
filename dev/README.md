@@ -32,6 +32,7 @@ making them suitable for large arrays and tensors.
 - Lightweight copyable series views and field-level analysis mutation.
 - Borrowed JSON encoding without payload cloning.
 - Writer-owned typed sampling intervals with no payload access for skipped states.
+- Human-friendly numeric sampling-interval decoding with tagged-format compatibility.
 - Automatic exactly-once final-state sampling across sampling-interval boundaries.
 - Exact finite-`f64` JSON reconstruction through Serde JSON's round-trip parser.
 - Finite byte- and record-bounded asynchronous writers.

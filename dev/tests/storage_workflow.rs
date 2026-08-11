@@ -151,10 +151,15 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         serde_json::from_value::<SamplingInterval>(serde_json::json!({"iterations": 2})).unwrap(),
         interval
     );
+    assert_eq!(
+        serde_json::from_value::<SamplingInterval>(serde_json::json!(2)).unwrap(),
+        interval
+    );
     assert!(SamplingInterval::iterations(0).is_none());
     assert!(
         serde_json::from_value::<SamplingInterval>(serde_json::json!({"iterations": 0})).is_err()
     );
+    assert!(serde_json::from_value::<SamplingInterval>(serde_json::json!(0)).is_err());
     println!("[sampling-interval] coordinate=iterations interval=2 zero_rejected=true");
 
     let workspace = TempWorkspace::new();
