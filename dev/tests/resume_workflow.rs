@@ -262,6 +262,56 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
 }
 
 #[test]
+fn sealed_checkpoint_integrity_is_mandatory_before_continuation() {
+    let size_workspace = TempWorkspace::new("resume-size-integrity");
+    let size_run = size_workspace.run();
+    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let mut output = builder(&size_run, &spec).create_new_recording().unwrap();
+    output.observe_state(&state(&spec, 1)).unwrap();
+    output.complete_recording().unwrap();
+    let mut manifest = metadata(&size_run);
+    mark_manifest_running(&mut manifest);
+    write_metadata(&size_run, &manifest);
+    let size_chunk = size_run.join("checkpoint/chunk-000000.jsonl");
+    OpenOptions::new()
+        .append(true)
+        .open(&size_chunk)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+
+    assert!(matches!(
+        builder(&size_run, &spec)
+            .continue_recording_from_latest_checkpoint("checkpoint", decoders()),
+        Err(StorageError::ChunkSizeMismatch { path, .. }) if path == size_chunk
+    ));
+    assert_eq!(metadata(&size_run)["timing"]["continuation_count"], 0);
+
+    let checksum_workspace = TempWorkspace::new("resume-checksum-integrity");
+    let checksum_run = checksum_workspace.run();
+    let mut output = builder(&checksum_run, &spec)
+        .create_new_recording()
+        .unwrap();
+    output.observe_state(&state(&spec, 2)).unwrap();
+    output.complete_recording().unwrap();
+    let mut manifest = metadata(&checksum_run);
+    mark_manifest_running(&mut manifest);
+    write_metadata(&checksum_run, &manifest);
+    let checksum_chunk = checksum_run.join("checkpoint/chunk-000000.jsonl");
+    let mut bytes = fs::read(&checksum_chunk).unwrap();
+    bytes[0] ^= 1;
+    fs::write(&checksum_chunk, bytes).unwrap();
+
+    assert!(matches!(
+        builder(&checksum_run, &spec)
+            .continue_recording_from_latest_checkpoint("checkpoint", decoders()),
+        Err(StorageError::ChecksumMismatch { path, .. }) if path == checksum_chunk
+    ));
+    assert_eq!(metadata(&checksum_run)["timing"]["continuation_count"], 0);
+    println!("[resume-integrity] byte_count=true checksum=true writer_not_exposed=true");
+}
+
+#[test]
 fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
     let workspace = TempWorkspace::new("partial-resume");
     let run = workspace.run();
@@ -307,7 +357,7 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
 }
 
 #[test]
-fn several_sealed_chunks_are_trusted_before_recovering_only_the_open_tail() {
+fn earlier_sealed_chunks_are_not_scanned_when_resuming_from_an_open_tail() {
     let workspace = TempWorkspace::new("multi-chunk-resume");
     let run = workspace.run();
     let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
@@ -335,7 +385,7 @@ fn several_sealed_chunks_are_trusted_before_recovering_only_the_open_tail() {
 
     let (mut output, resumed) = recording_builder()
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
-        .expect("resume must trust sealed history and decode only the open tail");
+        .expect("resume must decode the recovery-validated open tail");
     assert_eq!(resumed.simulation_time().iteration(), 2);
     assert_eq!(
         resumed.payload::<String>("activity").unwrap(),

@@ -34,9 +34,10 @@
 //! [`SystemStateWriterBuilder::continue_existing_recording`] explicitly validates and appends an
 //! existing running run. [`SystemStateWriterBuilder::continue_recording_from_latest_checkpoint`]
 //! additionally reconstructs a complete owned checkpoint state through
-//! caller-supplied payload decoders.
-//! Resume trusts every sealed filename and examines only the highest unsealed
-//! chunk per stream.
+//! caller-supplied payload decoders. Recovery examines only the highest
+//! unsealed chunk per stream. Checkpoint-aware continuation also verifies the
+//! selected latest sealed checkpoint chunk's exact byte count and SHA-256
+//! checksum before decoding it or returning an append-capable writer.
 //!
 //! # Reading
 //!
@@ -337,7 +338,7 @@ impl SamplingInterval {
     /// Reports whether this interval selects `iteration`.
     const fn includes(self, iteration: u64) -> bool {
         match self {
-            Self::Iterations(interval) => iteration % interval.get() == 0,
+            Self::Iterations(interval) => iteration.is_multiple_of(interval.get()),
         }
     }
 }
@@ -553,8 +554,10 @@ impl SystemStateWriterBuilder {
     /// Continues append writing in an existing running recording directory.
     ///
     /// The complete builder configuration is compared with authoritative
-    /// metadata before any chunk is recovered. Sealed chunks are trusted by
-    /// filename; only the highest open chunk in each stream may be examined.
+    /// metadata before any chunk is recovered. Only the highest open chunk in
+    /// each stream may be examined. This append-only entry point does not
+    /// reconstruct scientific state; callers requiring a verified checkpoint
+    /// must use [`Self::continue_recording_from_latest_checkpoint`].
     pub fn continue_existing_recording(self) -> Result<SystemStateWriter, StorageError> {
         SystemStateWriter::continue_recording(self, None).map(|(writer, _)| writer)
     }
@@ -563,7 +566,9 @@ impl SystemStateWriterBuilder {
     ///
     /// `stream` must cover the builder's complete state specification, and
     /// `decoders` must cover every field. The returned state owns all decoded
-    /// payloads. Writer threads begin only after reconstruction succeeds.
+    /// payloads. When reconstruction selects a sealed chunk, its exact byte
+    /// count and SHA-256 checksum are verified before its final record is
+    /// decoded. Writer threads begin only after reconstruction succeeds.
     pub fn continue_recording_from_latest_checkpoint(
         self,
         stream: &str,

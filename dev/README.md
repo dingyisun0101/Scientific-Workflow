@@ -39,6 +39,7 @@ making them suitable for large arrays and tensors.
 - Durable chunk publication through open-file sync, incremental descriptor
   preparation, atomic lifecycle rename, and stream-directory sync.
 - Explicit interrupted-run append and complete typed checkpoint recovery.
+- RNG-agnostic method, version, key-encoding, key, and parameter provenance.
 - SHA-256-verified eager reconstruction through per-key payload decoders.
 - Efficient latest-state reconstruction without loading earlier chunks.
 - Automatic UTC lifecycle timestamps and monotonic active durations.
@@ -89,6 +90,41 @@ Progress is not scientific state. Callers set it from the authoritative
 `SystemState::simulation_time()` after a successful transition. Known targets
 use absolute iterations, while `None` supports convergence-driven or otherwise
 open-ended work.
+
+## RNG Records
+
+`RngRecord` persists application-owned RNG identity without providing
+any RNG behavior. Workflow does not generate keys, derive streams, choose
+algorithms or distributions, sample values, or maintain cursors.
+
+```rust
+use scientific_workflow::prelude::*;
+use serde_json::Map;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let record = RngRecord::new(
+    "simulation.noise",
+    "chacha12+standard_normal",
+    "rand_chacha-0.10+rand_distr-0.6",
+    "u64_be_hex",
+    "000000000000002a",
+)?;
+let mut user_metadata = Map::new();
+record.insert_into_metadata(&mut user_metadata)?;
+
+assert_eq!(
+    RngRecord::from_metadata(&user_metadata, "simulation.noise")?,
+    Some(record),
+);
+# Ok(())
+# }
+```
+
+Records are indexed by namespace beneath the reserved `rng_records`
+user-metadata key. Duplicate namespaces and malformed records are rejected.
+Because recording continuation already requires exact user-metadata equality,
+a changed RNG method, version, or key prevents continuation. Keys are persisted
+as plain text reproducibility material and must not contain secrets.
 
 ## Mandatory Chunk Integrity
 
@@ -476,7 +512,11 @@ a stream-directory sync. `flush_stream_to_storage(stream)` exposes this as an
 ordered durability barrier. `continue_existing_recording` recovers append
 position without reconstructing state, while
 `continue_recording_from_latest_checkpoint` also returns a complete typed
-checkpoint through registered decoders.
+checkpoint through registered decoders. When the selected checkpoint is in a
+sealed chunk, Workflow verifies that chunk's declared byte count and SHA-256
+checksum before decoding the final record or returning an append-capable
+writer. A recovery-selected open tail is decoded only after the recovery scan
+has validated its complete JSONL prefix.
 
 ### Custom Payload Decoders
 

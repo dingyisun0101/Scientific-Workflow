@@ -18,7 +18,9 @@
 //! collision-resistant or caller-named execution scopes and deterministic task
 //! recording paths without taking ownership away from storage writers.
 //! [`reporting`] provides parameter-identified parallel progress tracking and
-//! one process-wide human-facing terminal owner.
+//! one process-wide human-facing terminal owner. [`rng_record`] provides only
+//! validated, persisted RNG provenance records; random generation remains an
+//! application responsibility.
 //!
 //! [`system_state`] provides:
 //!
@@ -82,6 +84,7 @@ pub mod execution;
 pub mod prelude;
 pub mod project;
 pub mod reporting;
+pub mod rng_record;
 pub mod storage;
 pub mod system_state;
 pub mod time_series;

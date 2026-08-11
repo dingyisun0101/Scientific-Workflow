@@ -258,24 +258,7 @@ impl StoredStateSeriesReader {
                 stream: declaration.name.clone(),
             })?;
         let path = self.root.join(&declaration.directory).join(&chunk.file);
-        verify_file_size(&path, chunk.bytes)?;
-        let bytes = fs::read(&path).map_err(|source| {
-            if source.kind() == std::io::ErrorKind::NotFound {
-                StorageError::MissingChunk { path: path.clone() }
-            } else {
-                StorageError::Io {
-                    operation: "read latest chunk",
-                    path: path.clone(),
-                    source,
-                }
-            }
-        })?;
-        verify_checksum(
-            &self.metadata_path,
-            &path,
-            &chunk.checksum,
-            Sha256::digest(&bytes),
-        )?;
+        let bytes = read_verified_chunk(&self.metadata_path, &path, chunk)?;
         let record = final_jsonl_record(&path, &bytes)?;
         let spec = stream_spec(&self.metadata_path, declaration)?;
         let state =
@@ -457,11 +440,11 @@ impl fmt::Debug for StoredStateSeriesReader {
 ///
 /// `open_record` is the final complete JSONL object already obtained while the
 /// progress checker examined the sole unsealed chunk. When absent, this helper
-/// seeks directly to the last record of the newest sealed chunk. It does not
-/// scan, hash, size-check, or decode any earlier sealed record.
+/// verifies the newest sealed chunk's declared byte count and SHA-256 checksum,
+/// then decodes its final record. Earlier sealed chunks are not opened.
 pub(crate) fn decode_resume_state(
     root: &Path,
-    _metadata_path: &Path,
+    metadata_path: &Path,
     stream: &StateStreamMetadata,
     full_spec: &SystemStateSchema,
     decoders: &JsonPayloadDecoderRegistry,
@@ -488,13 +471,21 @@ pub(crate) fn decode_resume_state(
             stream: stream.name.clone(),
         })?;
     let path = root.join(&stream.directory).join(&chunk.file);
-    let record = read_last_sealed_record(&path)?;
-    if record.is_empty() {
-        return Err(StorageError::NoCheckpointState {
-            stream: stream.name.clone(),
-        });
+    let bytes = read_verified_chunk(metadata_path, &path, chunk)?;
+    let record = final_jsonl_record(&path, &bytes)?;
+    let state = decode_state_record_with_decoders(record, &path, stream, full_spec, decoders)?;
+    if state.simulation_time().iteration() != chunk.last_iteration {
+        return Err(invalid_record(
+            &path,
+            chunk.records,
+            format!(
+                "latest record iteration {} differs from chunk descriptor {}",
+                state.simulation_time().iteration(),
+                chunk.last_iteration
+            ),
+        ));
     }
-    decode_state_record_with_decoders(&record, &path, stream, full_spec, decoders)
+    Ok(state)
 }
 
 /// Reads one recovery-selected open record without rescanning its chunk.
@@ -582,95 +573,6 @@ fn decode_state_record_with_decoders(
     let mut state = full_spec.create_empty_state(time);
     decode_values(decoders, stream, path, 1, record.values, &mut state)?;
     Ok(state)
-}
-
-/// Reads only the final newline-terminated JSONL record using backward blocks.
-fn read_last_sealed_record(path: &Path) -> Result<Vec<u8>, StorageError> {
-    const BLOCK: u64 = 8 * 1024;
-    let mut file = File::open(path).map_err(|source| {
-        if source.kind() == std::io::ErrorKind::NotFound {
-            StorageError::MissingChunk {
-                path: path.to_path_buf(),
-            }
-        } else {
-            StorageError::Io {
-                operation: "open latest sealed checkpoint",
-                path: path.to_path_buf(),
-                source,
-            }
-        }
-    })?;
-    let length = file
-        .metadata()
-        .map_err(|source| StorageError::Io {
-            operation: "inspect latest sealed checkpoint",
-            path: path.to_path_buf(),
-            source,
-        })?
-        .len();
-    if length == 0 {
-        return Ok(Vec::new());
-    }
-
-    file.seek(SeekFrom::Start(length - 1))
-        .map_err(|source| StorageError::Io {
-            operation: "seek latest sealed checkpoint",
-            path: path.to_path_buf(),
-            source,
-        })?;
-    let mut final_byte = [0_u8; 1];
-    file.read_exact(&mut final_byte)
-        .map_err(|source| StorageError::Io {
-            operation: "read latest sealed checkpoint",
-            path: path.to_path_buf(),
-            source,
-        })?;
-    if final_byte[0] != b'\n' {
-        return Err(invalid_record(
-            path,
-            1,
-            "sealed chunk does not end with a record newline",
-        ));
-    }
-
-    let record_end = length - 1;
-    let mut cursor = record_end;
-    let mut record_start = 0_u64;
-    while cursor > 0 {
-        let block_start = cursor.saturating_sub(BLOCK);
-        let block_len =
-            usize::try_from(cursor - block_start).map_err(|_| StorageError::ByteCountOverflow {
-                stream: path.display().to_string(),
-            })?;
-        let mut block = vec![0_u8; block_len];
-        file.seek(SeekFrom::Start(block_start))
-            .and_then(|_| file.read_exact(&mut block))
-            .map_err(|source| StorageError::Io {
-                operation: "scan latest sealed record boundary",
-                path: path.to_path_buf(),
-                source,
-            })?;
-        if let Some(position) = block.iter().rposition(|byte| *byte == b'\n') {
-            record_start = block_start + position as u64 + 1;
-            break;
-        }
-        cursor = block_start;
-    }
-
-    let record_len = usize::try_from(record_end - record_start).map_err(|_| {
-        StorageError::ByteCountOverflow {
-            stream: path.display().to_string(),
-        }
-    })?;
-    let mut record = vec![0_u8; record_len];
-    file.seek(SeekFrom::Start(record_start))
-        .and_then(|_| file.read_exact(&mut record))
-        .map_err(|source| StorageError::Io {
-            operation: "read latest sealed record",
-            path: path.to_path_buf(),
-            source,
-        })?;
-    Ok(record)
 }
 
 /// Borrowed JSONL record whose payload values point into one line buffer.
@@ -790,6 +692,30 @@ fn verify_file_size(path: &Path, expected: u64) -> Result<(), StorageError> {
         });
     }
     Ok(())
+}
+
+/// Reads one immutable chunk only after enforcing its authoritative descriptor.
+fn read_verified_chunk(
+    metadata_path: &Path,
+    path: &Path,
+    chunk: &ChunkMetadata,
+) -> Result<Vec<u8>, StorageError> {
+    verify_file_size(path, chunk.bytes)?;
+    let bytes = fs::read(path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            StorageError::MissingChunk {
+                path: path.to_path_buf(),
+            }
+        } else {
+            StorageError::Io {
+                operation: "read verified chunk",
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })?;
+    verify_checksum(metadata_path, path, &chunk.checksum, Sha256::digest(&bytes))?;
+    Ok(bytes)
 }
 
 /// Enforces strict iteration order across chunk boundaries.

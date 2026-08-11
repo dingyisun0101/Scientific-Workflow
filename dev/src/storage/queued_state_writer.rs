@@ -740,10 +740,7 @@ fn write_records(
             stream.flush(manifest)?;
         }
     }
-    loop {
-        let Some(work) = next_work(shared) else {
-            break;
-        };
+    while let Some(work) = next_work(shared) {
         match work {
             Work::Record {
                 stream,

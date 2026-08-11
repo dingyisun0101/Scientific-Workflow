@@ -1,7 +1,7 @@
 //! Fixed-layout, heterogeneous state values at one scientific time point.
 //!
 //! [`SystemState`] is the public typed access boundary over the private
-//! [`StateValue`](super::value::StateValue) erasure layer. Every state owns its
+//! [`StateValue`] erasure layer. Every state owns its
 //! payloads, while all states derived from one [`SystemStateSchema`] share immutable
 //! field metadata and name lookup tables.
 //!
@@ -39,7 +39,7 @@
 //!
 //! # Type safety
 //!
-//! Typed access uses Rust's exact runtime [`TypeId`](std::any::TypeId). A type
+//! Typed access uses Rust's exact runtime [`TypeId`]. A type
 //! mismatch reports both type names. `take` validates the retained slot type
 //! before removing its owner, so an incorrect request cannot temporarily empty
 //! or discard scientific data.

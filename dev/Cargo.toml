@@ -1,8 +1,8 @@
 [package]
 name = "scientific-workflow"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 authors = ["Dingyi Sun"]
 description = "Typed scientific states, time series, and chunked workflow storage"
 license = "MIT"

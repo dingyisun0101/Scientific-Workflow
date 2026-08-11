@@ -271,13 +271,13 @@ pub(crate) enum RecordingStatus {
 impl RecordingStatus {
     /// Validates lifecycle-specific metadata fields.
     fn validate(&self, path: &Path) -> Result<(), StorageError> {
-        if let Self::Failed { message } = self {
-            if message.trim().is_empty() {
-                return Err(invalid_metadata(
-                    path,
-                    "failed run status requires a non-empty message",
-                ));
-            }
+        if let Self::Failed { message } = self
+            && message.trim().is_empty()
+        {
+            return Err(invalid_metadata(
+                path,
+                "failed run status requires a non-empty message",
+            ));
         }
         Ok(())
     }
@@ -438,16 +438,16 @@ impl StateStreamMetadata {
         let mut previous_last = None;
         for (expected_ordinal, chunk) in self.chunks.iter().enumerate() {
             chunk.validate(path, &self.name, expected_ordinal as u64)?;
-            if let Some(previous) = previous_last {
-                if chunk.first_iteration <= previous {
-                    return Err(invalid_metadata(
-                        path,
-                        format!(
-                            "stream `{}` chunk {} begins at iteration {}, not after {}",
-                            self.name, chunk.ordinal, chunk.first_iteration, previous
-                        ),
-                    ));
-                }
+            if let Some(previous) = previous_last
+                && chunk.first_iteration <= previous
+            {
+                return Err(invalid_metadata(
+                    path,
+                    format!(
+                        "stream `{}` chunk {} begins at iteration {}, not after {}",
+                        self.name, chunk.ordinal, chunk.first_iteration, previous
+                    ),
+                ));
             }
             previous_last = Some(chunk.last_iteration);
         }

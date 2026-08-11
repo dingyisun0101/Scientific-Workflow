@@ -27,6 +27,7 @@ pub use crate::reporting::{
     ProgressReporter, ProgressReporterBuilder, ProgressSummary, ReportingError, TaskIdentity,
     TaskProgress, TaskStatus,
 };
+pub use crate::rng_record::{RNG_RECORDS_METADATA_KEY, RngRecord, RngRecordError};
 pub use crate::storage::{
     CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
     JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, SamplingInterval, StateStreamConfig,

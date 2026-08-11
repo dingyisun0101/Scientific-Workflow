@@ -4,8 +4,7 @@
 //! versioned metadata, record encoding and decoding, output directories,
 //! immutable chunk files, bounded writer queues, and worker lifecycle. It does
 //! not redefine errors that belong to the in-memory data model. Instead,
-//! [`StorageError`] wraps [`StateError`](crate::system_state::StateError) or
-//! [`StateSeriesError`](crate::time_series::StateSeriesError) when storage adds stream,
+//! [`StorageError`] wraps [`StateError`] or [`StateSeriesError`] when storage adds stream,
 //! record, or filesystem context to one of those failures.
 //!
 //! # Context ownership
