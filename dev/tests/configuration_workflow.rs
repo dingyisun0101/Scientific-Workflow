@@ -75,6 +75,37 @@ fn write_project(root: &Path, fixed: &[u8], sweep: &[u8], paths: &[u8]) {
 fn assert_send_sync<T: Send + Sync>() {}
 
 #[test]
+fn model_owned_schema_removes_the_project_state_file() {
+    let workspace = TempWorkspace::new();
+    let root = workspace.project("model-owned-schema");
+    write_project(
+        &root,
+        br#"{"iterations":10}"#,
+        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{"recordings":"recordings"}"#,
+    );
+    let schema_path = fixture_project("cartesian_project").join("config/state.json");
+    let schema = SystemStateSchema::load_json_template(&schema_path).unwrap();
+
+    assert!(matches!(
+        ScientificProject::load(&root),
+        Err(ScientificProjectError::State(
+            StateError::TemplateRead { .. }
+        ))
+    ));
+
+    let project = ScientificProject::load_with_state_schema(&root, schema).unwrap();
+    assert_eq!(project.task_count(), 1);
+    assert_eq!(project.state_schema().template_path(), schema_path);
+    assert!(project.state_schema().contains_field("population"));
+    assert_eq!(
+        project.resolve_path("recordings").unwrap(),
+        root.join("recordings")
+    );
+    assert!(!root.join("config/state.json").exists());
+}
+
+#[test]
 fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_send_sync::<ParameterSpace>();
     assert_send_sync::<TaskParameters>();

@@ -10,7 +10,8 @@ making them suitable for large arrays and tensors.
 
 ## Features
 
-- Standard `config/{fixed,sweep,paths,state}.json` scientific-project definition.
+- Standard `config/{fixed,sweep,paths}.json` task definition with either a
+  project-owned or model-owned state schema.
 - Deterministic Cartesian and correlated explicit-case task expansion.
 - Lazy complete `TaskConfig` handles combining parameters and shared paths.
 - Exact sweep-value filtering and ambiguity-safe unique task selection.
@@ -141,8 +142,8 @@ a changed RNG method, version, or key prevents continuation. Keys are persisted
 as plain text reproducibility material and must not contain secrets.
 
 When a scientific crate resolves optional RNG settings, record the resolved
-values—not the original request. For example, PiP 3.2 exposes one `RngConfig`
-input across all stochastic APIs and returns or retains its resolved form. The
+values—not the original request. For example, PiP exposes one `RngConfig`
+input across its stochastic APIs and returns or retains its resolved form. The
 mapping into Workflow remains explicit and lightweight:
 
 ```rust,ignore
@@ -249,7 +250,7 @@ ignored `target/recordings` directory.
 
 ## Project Configuration
 
-A standard scientific project keeps four files together:
+A project with a project-owned state contract keeps four files together:
 
 ```text
 project-root/
@@ -361,8 +362,27 @@ parameter/path files byte for byte beneath a new destination project. It never o
 existing `config/` directory. `TaskParameters::to_json` instead serializes one
 deterministic derived fixed-plus-sweep dictionary.
 
-`ScientificProject::load` additionally requires `config/state.json` and exposes
-its shared schema through `state_schema()`. The lower-level `ProjectConfig`
+`ScientificProject::load` requires `config/state.json` and exposes its shared
+schema through `state_schema()`. This is appropriate when the project itself
+defines its state contract.
+
+A fixed-model crate should instead load its one canonical schema and pass it to
+`ScientificProject::load_with_state_schema`:
+
+```rust,no_run
+use scientific_workflow::prelude::*;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let schema = SystemStateSchema::load_json_template("model/schemas/state.json")?;
+let project = ScientificProject::load_with_state_schema("project-root", schema)?;
+assert!(!project.state_schema().is_empty());
+# Ok(())
+}
+```
+
+Such projects contain only `fixed.json`, `sweep.json`, and `paths.json`; the
+model dependency supplies the schema. Workflow does not choose a fallback
+schema or mutate the configuration directory. The lower-level `ProjectConfig`
 remains available when an application intentionally needs only parameter and
 path configuration.
 

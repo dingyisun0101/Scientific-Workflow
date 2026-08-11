@@ -1,7 +1,7 @@
 //! Conventional immutable definition of one scientific project.
 //!
-//! [`ScientificProject`] is the normal entry point for the complete standard
-//! project layout:
+//! [`ScientificProject`] combines the standard three-file task configuration
+//! with one state schema. The schema may belong to the project:
 //!
 //! ```text
 //! project-root/
@@ -15,7 +15,9 @@
 //! It combines immutable task/path configuration with the shared state schema
 //! and delegates complete lazy task generation through [`ScientificProject::task_configs`].
 //! It does not create execution directories, construct model payloads, run
-//! tasks, or configure output streams.
+//! tasks, or configure output streams. Fixed-model crates instead call
+//! [`ScientificProject::load_with_state_schema`] and supply their canonical
+//! schema, so each individual project needs only the other three files.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -39,7 +41,7 @@ pub enum ScientificProjectError {
     /// Fixed, sweep, or path configuration was invalid.
     #[error(transparent)]
     Configuration(#[from] ConfigurationError),
-    /// The mandatory state schema could not be loaded or validated.
+    /// A project-owned state schema could not be loaded or validated.
     #[error(transparent)]
     State(#[from] StateError),
 }
@@ -64,6 +66,25 @@ impl ScientificProject {
                 .configuration_directory()
                 .join(STATE_SCHEMA_FILE),
         )?;
+        Ok(Self {
+            configuration,
+            state_schema,
+        })
+    }
+
+    /// Loads task and path configuration with a model-owned state schema.
+    ///
+    /// This form reads only `config/fixed.json`, `config/sweep.json`, and
+    /// `config/paths.json`. It is intended for scientific crates whose public
+    /// model fixes one canonical state contract and therefore rejects
+    /// project-specific schema changes. The supplied schema is already
+    /// validated by its type and is retained without reparsing or cloning its
+    /// field allocation.
+    pub fn load_with_state_schema(
+        project_root: impl Into<PathBuf>,
+        state_schema: SystemStateSchema,
+    ) -> Result<Self, ScientificProjectError> {
+        let configuration = ProjectConfig::load(project_root.into())?;
         Ok(Self {
             configuration,
             state_schema,
@@ -134,7 +155,7 @@ impl ScientificProject {
         self.configuration.unique_task_config_matching(key, value)
     }
 
-    /// Borrows the shared system-state schema loaded from `config/state.json`.
+    /// Borrows the shared project-owned or model-owned system-state schema.
     pub fn state_schema(&self) -> &SystemStateSchema {
         &self.state_schema
     }

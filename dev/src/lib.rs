@@ -13,8 +13,9 @@
 //! project layout, deterministic Cartesian or explicit-case task expansion,
 //! complete cheap task-configuration handles, exact sweep-value selection,
 //! named path resolution, and byte-exact source export.
-//! [`project`] adds the mandatory conventional `config/state.json` schema as
-//! one immutable [`project::ScientificProject`]. [`execution`] creates
+//! [`project`] combines task configuration with either a project-owned
+//! `config/state.json` schema or a canonical schema supplied by a fixed-model
+//! crate as one immutable [`project::ScientificProject`]. [`execution`] creates
 //! collision-resistant or caller-named execution scopes and deterministic task
 //! recording paths without taking ownership away from storage writers.
 //! [`artifact`] atomically publishes and verifies content-addressed immutable
