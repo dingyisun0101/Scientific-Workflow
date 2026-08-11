@@ -102,6 +102,40 @@ impl SimulationTime {
     pub const fn physical_time(self) -> Option<f64> {
         self.physical_time
     }
+
+    /// Computes the next scientific time without mutating a state.
+    ///
+    /// `None` advances only the iteration and preserves the optional physical
+    /// coordinate. `Some(delta)` also advances an existing physical coordinate.
+    /// All overflow and finiteness checks are identical to
+    /// [`SystemState::advance_simulation_time`].
+    pub fn checked_advance(self, physical_time_increment: Option<f64>) -> Result<Self, StateError> {
+        let iteration = self
+            .iteration
+            .checked_add(1)
+            .ok_or(StateError::IterationOverflow {
+                iteration: self.iteration,
+            })?;
+        let physical_time = match (self.physical_time, physical_time_increment) {
+            (physical_time, None) => physical_time,
+            (None, Some(_)) => {
+                return Err(StateError::MissingPhysicalTime {
+                    iteration: self.iteration,
+                });
+            }
+            (Some(current), Some(delta)) => {
+                let next = current + delta;
+                if !delta.is_finite() || !next.is_finite() {
+                    return Err(StateError::InvalidPhysicalAdvance { current, delta });
+                }
+                Some(next)
+            }
+        };
+        Ok(Self {
+            iteration,
+            physical_time,
+        })
+    }
 }
 
 /// A heterogeneous collection of payloads describing one system time point.
@@ -252,34 +286,7 @@ impl SystemState {
         &mut self,
         physical_time_increment: Option<f64>,
     ) -> Result<SimulationTime, StateError> {
-        let next_iteration =
-            self.time
-                .iteration
-                .checked_add(1)
-                .ok_or(StateError::IterationOverflow {
-                    iteration: self.time.iteration,
-                })?;
-
-        let next_physical_time = match (self.time.physical_time, physical_time_increment) {
-            (physical_time, None) => physical_time,
-            (None, Some(_)) => {
-                return Err(StateError::MissingPhysicalTime {
-                    iteration: self.time.iteration,
-                });
-            }
-            (Some(current), Some(delta)) => {
-                let next = current + delta;
-                if !delta.is_finite() || !next.is_finite() {
-                    return Err(StateError::InvalidPhysicalAdvance { current, delta });
-                }
-                Some(next)
-            }
-        };
-
-        let next = SimulationTime {
-            iteration: next_iteration,
-            physical_time: next_physical_time,
-        };
+        let next = self.time.checked_advance(physical_time_increment)?;
         self.time = next;
         Ok(next)
     }

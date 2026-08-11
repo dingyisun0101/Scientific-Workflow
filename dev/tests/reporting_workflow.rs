@@ -83,13 +83,15 @@ fn reporter_identifies_parallel_tasks_and_owns_their_lifecycle() {
                 assert!(progress.identity().label().contains("temperature="));
                 assert_eq!(progress.current_iteration(), 0);
                 assert_eq!(progress.target_iteration(), Some(4));
+                assert!(progress.should_continue(0).unwrap());
                 assert!(format!("{progress:?}").contains("current_iteration"));
                 progress.set_phase("evolving");
                 for iteration in 1..=4 {
                     progress.set_iteration(iteration).unwrap();
                 }
+                assert!(!progress.should_continue(4).unwrap());
                 progress.report("task validation passed").unwrap();
-                progress.complete().unwrap();
+                progress.complete(None).unwrap();
             }));
         }
         for worker in workers {
@@ -166,7 +168,7 @@ fn reporter_identifies_parallel_tasks_and_owns_their_lifecycle() {
     ));
     let progress = reporter.start_task(&task, 2, Some(4)).unwrap();
     assert!(matches!(
-        progress.complete(),
+        progress.complete(None),
         Err(ReportingError::TargetIterationNotReached {
             current: 2,
             target: 4,
@@ -174,6 +176,21 @@ fn reporter_identifies_parallel_tasks_and_owns_their_lifecycle() {
         })
     ));
     reporter.fail("target validation complete").unwrap();
+
+    let reporter = ProgressReporter::for_project(&project)
+        .hidden()
+        .start()
+        .unwrap();
+    let progress = reporter
+        .start_task(&project.task_config(0).unwrap(), 2, Some(4))
+        .unwrap();
+    progress
+        .complete(Some("scientific equilibrium".to_owned()))
+        .unwrap();
+    assert_eq!(reporter.summary().completed(), 1);
+    reporter
+        .fail("early-completion validation complete")
+        .unwrap();
 
     let reporter = ProgressReporter::for_project(&project)
         .hidden()
@@ -223,7 +240,7 @@ fn reporter_identifies_parallel_tasks_and_owns_their_lifecycle() {
     let progress = reporter.start_task(&task, 8, None).unwrap();
     assert_eq!(progress.identity().label(), "task");
     assert_eq!(progress.target_iteration(), None);
-    progress.complete().unwrap();
+    progress.complete(None).unwrap();
     assert!(
         reporter
             .complete("fixed-only task passed")

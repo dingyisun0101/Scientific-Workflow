@@ -64,11 +64,12 @@ fn builder_with_chunk_limit(
             NonZeroU64::new(max_chunk_bytes).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
         )
-        .add_sampled_state_stream(
+        .add_state_stream(StateStreamConfig::new(
             "checkpoint",
             ["population", "space", "activity"],
             SamplingInterval::iterations(1).unwrap(),
-        )
+            None,
+        ))
 }
 
 fn decoders() -> JsonPayloadDecoderRegistry {
@@ -321,8 +322,10 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
             "signal",
             ["population"],
             SamplingInterval::iterations(1).unwrap(),
-            NonZeroU64::new(1_000_000).unwrap(),
-            NonZeroU64::new(1_000_000).unwrap(),
+            Some((
+                NonZeroU64::new(1_000_000).unwrap(),
+                NonZeroU64::new(1_000_000).unwrap(),
+            )),
         ))
     };
 

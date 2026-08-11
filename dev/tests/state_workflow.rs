@@ -190,9 +190,14 @@ fn tensor_state_round_trip_integrates_public_modules() {
         state.replace_simulation_time(initial_time),
         replacement_time
     );
+    let preview = state
+        .simulation_time()
+        .checked_advance(Some(0.25))
+        .expect("finite physical time must preflight");
     let advanced = state
         .advance_simulation_time(Some(0.25))
         .expect("finite physical time must advance");
+    assert_eq!(advanced, preview);
     assert_eq!(advanced.iteration(), 1);
     assert_eq!(advanced.physical_time(), Some(0.5));
     let before_failed_advance = state.simulation_time();

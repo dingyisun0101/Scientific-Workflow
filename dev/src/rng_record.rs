@@ -38,6 +38,7 @@ impl RngRecord {
         version: impl Into<String>,
         key_encoding: impl Into<String>,
         key: impl Into<String>,
+        parameters: Option<Map<String, Value>>,
     ) -> Result<Self, RngRecordError> {
         let record = Self {
             namespace: namespace.into(),
@@ -45,17 +46,10 @@ impl RngRecord {
             version: version.into(),
             key_encoding: key_encoding.into(),
             key: key.into(),
-            parameters: Map::new(),
+            parameters: parameters.unwrap_or_default(),
         };
         record.validate()?;
         Ok(record)
-    }
-
-    /// Adds application-defined JSON parameters without assigning them RNG semantics.
-    #[must_use]
-    pub fn with_parameters(mut self, parameters: Map<String, Value>) -> Self {
-        self.parameters = parameters;
-        self
     }
 
     /// Returns the collision domain used inside recording metadata.

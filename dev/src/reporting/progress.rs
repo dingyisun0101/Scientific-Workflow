@@ -501,6 +501,19 @@ impl TaskProgress {
         Ok(())
     }
 
+    /// Synchronizes the authoritative iteration and applies the configured
+    /// continuation target.
+    ///
+    /// An indeterminate task returns `true`. A task with a target returns
+    /// `true` below it and `false` exactly at it. Movement beyond the target or
+    /// backwards is rejected through the same validation as [`Self::set_iteration`].
+    pub fn should_continue(&self, iteration: u64) -> Result<bool, ReportingError> {
+        self.set_iteration(iteration)?;
+        Ok(self
+            .target_iteration()
+            .is_none_or(|target| iteration < target))
+    }
+
     /// Updates one infrequent human-readable phase such as `evolving` or
     /// `validating`. Phase updates may lock; iteration updates do not.
     pub fn set_phase(&self, phase: impl Into<String>) {
@@ -518,8 +531,14 @@ impl TaskProgress {
     }
 
     /// Marks the complete task workflow successful and consumes this handle.
-    pub fn complete(mut self) -> Result<(), ReportingError> {
-        if let Some(target) = self.target_iteration() {
+    ///
+    /// `reason == None` means the configured target must have been reached.
+    /// `Some(reason)` records an intentional scientific early-completion reason
+    /// and permits completion before that generic target.
+    pub fn complete(mut self, reason: Option<String>) -> Result<(), ReportingError> {
+        if reason.is_none()
+            && let Some(target) = self.target_iteration()
+        {
             let current = self.current_iteration();
             if current != target {
                 *lock(&self.slot.phase) = "target not reached".into();
@@ -534,7 +553,9 @@ impl TaskProgress {
                 });
             }
         }
-        *lock(&self.slot.phase) = "completed".into();
+        *lock(&self.slot.phase) = reason
+            .unwrap_or_else(|| "completed".to_owned())
+            .into_boxed_str();
         self.slot
             .status
             .store(TaskStatus::Completed.encode(), Ordering::Release);

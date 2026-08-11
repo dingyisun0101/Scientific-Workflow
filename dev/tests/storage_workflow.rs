@@ -172,16 +172,35 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         "signal",
         ["activity", "population"],
         SamplingInterval::iterations(1).unwrap(),
-        NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
-        NonZeroU64::new(QUEUE_BYTES).unwrap(),
+        Some((
+            NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
+            NonZeroU64::new(QUEUE_BYTES).unwrap(),
+        )),
     )
     .with_relative_directory("streams/signals");
+    let signal_json = serde_json::to_value(&signal).unwrap();
+    let signal_roundtrip: StateStreamConfig = serde_json::from_value(signal_json).unwrap();
+    assert_eq!(signal_roundtrip, signal);
+    assert_eq!(signal.name(), "signal");
+    assert_eq!(signal.relative_directory(), "streams/signals");
+    assert_eq!(signal.fields(), ["activity", "population"]);
+    assert!(signal.storage_limits().is_some());
+    let concise: StateStreamConfig = serde_json::from_value(serde_json::json!({
+        "name": "checkpoint",
+        "sampling_interval": 5,
+        "fields": ["population", "space", "activity"]
+    }))
+    .unwrap();
+    assert_eq!(concise.relative_directory(), "checkpoint");
+    assert_eq!(concise.storage_limits(), None);
     let space = StateStreamConfig::new(
         "space",
         ["space"],
         SamplingInterval::iterations(2).unwrap(),
-        NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
-        NonZeroU64::new(QUEUE_BYTES).unwrap(),
+        Some((
+            NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
+            NonZeroU64::new(QUEUE_BYTES).unwrap(),
+        )),
     );
 
     let mut annotations = Map::new();
@@ -478,16 +497,21 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let task = project.parameters().task(0).unwrap();
     let task_metadata_run = workspace.root.join("task-metadata-run");
     SystemStateWriter::builder(&task_metadata_run, &spec)
+        .with_user_metadata(Map::from_iter([(
+            "experiment".to_owned(),
+            Value::from("metadata-merge"),
+        )]))
         .with_task_parameters(&task)
         .with_shared_stream_limits(
             NonZeroU64::new(4_096).unwrap(),
             NonZeroU64::new(16_384).unwrap(),
         )
-        .add_sampled_state_stream(
+        .add_state_stream(StateStreamConfig::new(
             "checkpoint",
             ["population", "space", "activity"],
             SamplingInterval::iterations(1).unwrap(),
-        )
+            None,
+        ))
         .create_new_recording()
         .unwrap()
         .complete_recording()
@@ -498,6 +522,10 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     assert_eq!(task_metadata["user_metadata"]["task_ordinal"], 0);
     assert_eq!(task_metadata["user_metadata"]["temperature"], 280.0);
     assert_eq!(task_metadata["user_metadata"]["seed"], 7);
+    assert_eq!(
+        task_metadata["user_metadata"]["experiment"],
+        "metadata-merge"
+    );
     assert_eq!(task_metadata["version"], 4);
     assert_eq!(
         task_metadata["streams"][0]["sampling_interval"],
@@ -535,11 +563,12 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
             NonZeroU64::new(16_384).unwrap(),
             NonZeroU64::new(65_536).unwrap(),
         )
-        .add_sampled_state_stream(
+        .add_state_stream(StateStreamConfig::new(
             "checkpoint",
             ["particles"],
             SamplingInterval::iterations(1).unwrap(),
-        )
+            None,
+        ))
         .create_new_recording()
         .unwrap();
     writer.complete_recording_with_final_state(&state).unwrap();

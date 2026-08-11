@@ -46,9 +46,9 @@ fn record(key: &str) -> RngRecord {
         "rand_chacha-0.10+rand_distr-0.6",
         "u64_be_hex",
         key,
+        Some(Map::from_iter([("lanes".to_owned(), json!(2))])),
     )
     .unwrap()
-    .with_parameters(Map::from_iter([("lanes".to_owned(), json!(2))]))
 }
 
 fn metadata(key: &str) -> Map<String, Value> {
@@ -68,11 +68,12 @@ fn writer_builder(
             NonZeroU64::new(1_024).unwrap(),
             NonZeroU64::new(4_096).unwrap(),
         )
-        .add_sampled_state_stream(
+        .add_state_stream(StateStreamConfig::new(
             "signal",
             ["population"],
             SamplingInterval::iterations(1).unwrap(),
-        )
+            None,
+        ))
 }
 
 #[test]
@@ -91,7 +92,7 @@ fn rng_records_validate_insert_and_round_trip_without_rng_behavior() {
             if namespace == "simulation.noise"
     ));
     assert!(matches!(
-        RngRecord::new(" ", "method", "1", "hex", "00"),
+        RngRecord::new(" ", "method", "1", "hex", "00", None),
         Err(RngRecordError::EmptyField { field: "namespace" })
     ));
     assert!(

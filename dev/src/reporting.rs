@@ -25,9 +25,9 @@
 //! # let task = project.task_config(0)?;
 //! let progress = reporter.start_task(&task, 0, Some(1_000))?;
 //! progress.set_iteration(1_000)?;
-//! progress.complete()?;
+//! progress.complete(None)?;
 //! # for task in project.task_configs().skip(1) {
-//! #     reporter.start_task(&task, 0, Some(0))?.complete()?;
+//! #     reporter.start_task(&task, 0, Some(0))?.complete(None)?;
 //! # }
 //! let summary = reporter.complete("scientific work completed")?;
 //! assert!(summary.is_success());

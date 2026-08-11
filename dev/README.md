@@ -49,6 +49,16 @@ making them suitable for large arrays and tensors.
 - Parameter-identified, parallel-safe centralized progress reporting.
 - One exclusive terminal renderer with interactive, CI, and hidden modes.
 
+## API Design Rules
+
+- Add a public type or trait only when an existing Workflow owner cannot
+  express the behavior.
+- Extend the existing API instead of creating a parallel replacement whenever
+  the concepts are the same.
+- Optional behavior uses one interface with explicit defaults. This applies to
+  stream limits, continuation reasons, and RNG-record parameters.
+- Workflow records RNG provenance but never implements scientific randomness.
+
 ## Parallel Progress Reporting
 
 `ProgressReporter` derives human-facing identity from task parameters and uses
@@ -67,9 +77,9 @@ let reporter = ProgressReporter::for_project(&project)
 
 for task in project.task_configs() {
     let progress = reporter.start_task(&task, 0, Some(1_000))?;
-    // After each successful scientific transition:
-    progress.set_iteration(1_000)?;
-    progress.complete()?;
+    // Workflow owns the generic target decision.
+    assert!(!progress.should_continue(1_000)?);
+    progress.complete(None)?;
 }
 
 let summary = reporter.complete("all scientific tasks completed")?;
@@ -100,7 +110,7 @@ algorithms or distributions, sample values, or maintain cursors.
 
 ```rust
 use scientific_workflow::prelude::*;
-use serde_json::Map;
+use serde_json::{Map, json};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let record = RngRecord::new(
@@ -109,6 +119,7 @@ let record = RngRecord::new(
     "rand_chacha-0.10+rand_distr-0.6",
     "u64_be_hex",
     "000000000000002a",
+    Some(Map::from_iter([("lanes".to_owned(), json!(2))])),
 )?;
 let mut user_metadata = Map::new();
 record.insert_into_metadata(&mut user_metadata)?;
@@ -478,11 +489,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             NonZeroU64::new(64 * 1024 * 1024).unwrap(),
             NonZeroU64::new(256 * 1024 * 1024).unwrap(),
         )
-        .add_sampled_state_stream(
+        .add_state_stream(StateStreamConfig::new(
             "signal",
             ["population"],
             SamplingInterval::iterations(1).unwrap(),
-        )
+            None,
+        ))
         .create_new_recording()?;
 
     let mut state = spec.create_empty_state(

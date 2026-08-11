@@ -378,12 +378,15 @@ impl SamplingInterval {
 /// intact in its own oversized chunk. The queue byte limit is strict; a record
 /// larger than the complete queue budget is rejected because it can never be
 /// admitted.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StateStreamConfig {
     name: String,
-    directory: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    directory: Option<String>,
     sampling_interval: SamplingInterval,
     fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     storage_limits: Option<(NonZeroU64, NonZeroU64)>,
 }
 
@@ -391,16 +394,15 @@ impl StateStreamConfig {
     /// Creates a stream whose relative output directory initially equals its
     /// logical name.
     ///
-    /// Non-zero types make the sampling interval and both storage limits valid by
-    /// construction. Names, paths, duplicate fields, and state-key membership
-    /// are validated together by
+    /// `storage_limits == None` inherits writer-wide limits. Non-zero types
+    /// make explicit limits valid by construction. Names, paths, duplicate
+    /// fields, and state-key membership are validated together by
     /// [`SystemStateWriterBuilder::create_new_recording`].
     pub fn new<I, K>(
         name: impl Into<String>,
         fields: I,
         sampling_interval: SamplingInterval,
-        max_chunk_bytes: NonZeroU64,
-        queue_bytes: NonZeroU64,
+        storage_limits: Option<(NonZeroU64, NonZeroU64)>,
     ) -> Self
     where
         I: IntoIterator<Item = K>,
@@ -408,31 +410,11 @@ impl StateStreamConfig {
     {
         let name = name.into();
         Self {
-            directory: name.clone(),
+            directory: None,
             name,
             sampling_interval,
             fields: fields.into_iter().map(Into::into).collect(),
-            storage_limits: Some((max_chunk_bytes, queue_bytes)),
-        }
-    }
-
-    /// Creates a sampled stream that inherits writer-wide storage limits.
-    fn sampled<I, K>(
-        name: impl Into<String>,
-        fields: I,
-        sampling_interval: SamplingInterval,
-    ) -> Self
-    where
-        I: IntoIterator<Item = K>,
-        K: Into<String>,
-    {
-        let name = name.into();
-        Self {
-            directory: name.clone(),
-            name,
-            sampling_interval,
-            fields: fields.into_iter().map(Into::into).collect(),
-            storage_limits: None,
+            storage_limits,
         }
     }
 
@@ -442,8 +424,33 @@ impl StateStreamConfig {
     /// start. Distinct streams must use distinct directories.
     #[must_use]
     pub fn with_relative_directory(mut self, directory: impl Into<String>) -> Self {
-        self.directory = directory.into();
+        self.directory = Some(directory.into());
         self
+    }
+
+    /// Returns the logical stream name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the relative directory beneath the recording root.
+    pub fn relative_directory(&self) -> &str {
+        self.directory.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Returns the sampling policy.
+    pub const fn sampling_interval(&self) -> SamplingInterval {
+        self.sampling_interval
+    }
+
+    /// Returns selected state fields in declaration order.
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
+
+    /// Returns stream-specific limits, or `None` when writer limits apply.
+    pub const fn storage_limits(&self) -> Option<(NonZeroU64, NonZeroU64)> {
+        self.storage_limits
     }
 }
 
@@ -486,23 +493,22 @@ impl SystemStateWriterBuilder {
         self
     }
 
-    /// Replaces caller-owned metadata persisted under `user_metadata`.
+    /// Merges caller-owned metadata persisted under `user_metadata`.
     ///
     /// Values must already be JSON-compatible. This metadata is structurally
     /// separate from scientific payloads and is written only to
     /// `metadata.json`.
     #[must_use]
     pub fn with_user_metadata(mut self, metadata: Map<String, Value>) -> Self {
-        self.user_metadata = metadata;
+        self.user_metadata.extend(metadata);
         self
     }
 
     /// Uses one chunk target and one bounded-queue budget for concise stream declarations.
     ///
     /// Limits supplied directly through [`StateStreamConfig::new`] remain
-    /// stream-specific and take precedence. Streams added through
-    /// [`SystemStateWriterBuilder::add_sampled_state_stream`] require these
-    /// shared limits.
+    /// stream-specific and take precedence. Streams constructed with
+    /// `storage_limits == None` require these shared limits.
     #[must_use]
     pub fn with_shared_stream_limits(
         mut self,
@@ -513,17 +519,20 @@ impl SystemStateWriterBuilder {
         self
     }
 
-    /// Records one resolved task dictionary as the recording's user metadata.
+    /// Merges one resolved task dictionary into the recording's user metadata.
     ///
     /// Fixed and swept values retain their resolved JSON representation.
     /// The synthetic `task_ordinal` entry is always set from the task itself and
-    /// therefore replaces any same-named input entry.
+    /// therefore replaces any same-named input entry. Task values also replace
+    /// same-named caller metadata, while unrelated metadata and RNG records are
+    /// preserved. On a key collision, the most recently supplied source wins.
     #[must_use]
     pub fn with_task_parameters(mut self, parameters: &TaskParameters) -> Self {
-        self.user_metadata = parameters
-            .iter()
-            .map(|(key, value)| (key.to_owned(), value.clone()))
-            .collect();
+        self.user_metadata.extend(
+            parameters
+                .iter()
+                .map(|(key, value)| (key.to_owned(), value.clone())),
+        );
         self.user_metadata.insert(
             "task_ordinal".to_owned(),
             Value::from(parameters.task_ordinal()),
@@ -538,28 +547,6 @@ impl SystemStateWriterBuilder {
     #[must_use]
     pub fn add_state_stream(mut self, stream: StateStreamConfig) -> Self {
         self.streams.push(stream);
-        self
-    }
-
-    /// Adds a sampled stream using writer-wide storage limits.
-    ///
-    /// The logical name is also its relative output directory. Applications
-    /// needing a different directory or per-stream limits can use
-    /// [`SystemStateWriterBuilder::add_state_stream`] with an explicit
-    /// [`StateStreamConfig`].
-    #[must_use]
-    pub fn add_sampled_state_stream<I, K>(
-        mut self,
-        name: impl Into<String>,
-        fields: I,
-        sampling_interval: SamplingInterval,
-    ) -> Self
-    where
-        I: IntoIterator<Item = K>,
-        K: Into<String>,
-    {
-        self.streams
-            .push(StateStreamConfig::sampled(name, fields, sampling_interval));
         self
     }
 
@@ -1077,13 +1064,11 @@ impl PreparedRecording {
                     stream: config.name,
                 });
             }
-            if !directories.insert(config.directory.clone()) {
+            let directory = config.relative_directory().to_owned();
+            if !directories.insert(directory.clone()) {
                 return Err(StorageError::InvalidConfiguration {
                     setting: "stream.directory",
-                    reason: format!(
-                        "multiple streams use relative directory `{}`",
-                        config.directory
-                    ),
+                    reason: format!("multiple streams use relative directory `{}`", directory),
                 });
             }
 
@@ -1113,7 +1098,7 @@ impl PreparedRecording {
                 .collect::<Vec<_>>();
             declarations.push(StateStreamMetadata {
                 name: config.name.clone(),
-                directory: config.directory.clone(),
+                directory: directory.clone(),
                 sampling_interval: config.sampling_interval,
                 fields,
                 max_chunk_bytes: max_chunk_bytes.get(),
@@ -1126,7 +1111,7 @@ impl PreparedRecording {
                 sampling_interval: config.sampling_interval,
                 writer: StateStreamStorageConfig::new(
                     &config.name,
-                    builder.root.join(&config.directory),
+                    builder.root.join(&directory),
                     max_chunk_bytes,
                     queue_bytes,
                 )?,
