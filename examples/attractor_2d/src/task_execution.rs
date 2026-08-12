@@ -67,22 +67,49 @@ pub(crate) fn run_task(
         &progress,
     )?;
 
-    validation::validate_recording(
+    if let Err(error) = validation::validate_recording(
         model.state(),
         &recording,
         POINT_FIELD,
         RADIUS_FIELD,
-    )?;
+    ) {
+        return Err(format!(
+            "task {} validation failed: {}",
+            task.task_ordinal(),
+            error
+        )
+        .into());
+    }
+
+    println!(
+        "task {} validation result: passed (recording {})",
+        task.task_ordinal(),
+        recording.directory().display()
+    );
 
     if std::env::var("ATTRACTOR2D_CROSS_CHECK").is_ok() {
-        cross_check::assert_matches_reference(
+        if let Err(error) = cross_check::assert_matches_reference(
             model.state(),
             cross_check_initial_point,
             mu,
             angular_frequency,
             physical_time_increment_per_step,
             step_count,
-        )?;
+        ) {
+            return Err(format!(
+                "task {} cross-check failed: {}",
+                task.task_ordinal(),
+                error
+            )
+            .into());
+        }
+
+        println!("task {} cross-check result: passed", task.task_ordinal());
+    } else {
+        println!(
+            "task {} cross-check result: skipped (set ATTRACTOR2D_CROSS_CHECK=1)",
+            task.task_ordinal()
+        );
     }
 
     progress.complete(None)?;
