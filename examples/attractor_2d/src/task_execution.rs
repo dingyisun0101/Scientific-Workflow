@@ -1,6 +1,12 @@
 use std::num::NonZeroU64;
 
-use crate::{cross_check, recording, validation, AppResult, hopf_model::HopfModel};
+use crate::{
+    AppResult,
+    cross_check,
+    hopf_model::{HopfModel, POINT_FIELD, RADIUS_FIELD},
+    recording,
+    validation,
+};
 use scientific_workflow::prelude::*;
 
 pub(crate) fn run_task(
@@ -64,8 +70,8 @@ pub(crate) fn run_task(
     validation::validate_recording(
         model.state(),
         &recording,
-        hopf_model::POINT_FIELD,
-        hopf_model::RADIUS_FIELD,
+        POINT_FIELD,
+        RADIUS_FIELD,
     )?;
 
     if std::env::var("ATTRACTOR2D_CROSS_CHECK").is_ok() {

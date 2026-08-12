@@ -45,12 +45,16 @@ pub(crate) fn assert_matches_reference(
         );
     }
 
-    if (live_time.physical_time() - expected_state.1).abs() > CROSS_CHECK_TOLERANCE {
+    let live_physical_time = live_time
+        .physical_time()
+        .ok_or_else(|| "cross-check requires physical_time on simulation state")?;
+
+    if (live_physical_time - expected_state.1).abs() > CROSS_CHECK_TOLERANCE {
         return Err(
             format!(
                 "cross-check physical-time mismatch: expected {}, got {}",
                 expected_state.1,
-                live_time.physical_time()
+                live_physical_time
             )
             .into(),
         );
