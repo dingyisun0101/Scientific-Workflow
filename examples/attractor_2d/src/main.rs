@@ -5,8 +5,10 @@
 //! 2. [`task_execution.rs`] for per-task orchestration.
 //! 3. [`recording.rs`] for writer creation and sample cadence.
 //! 4. [`validation.rs`] for round-trip validation strategy.
-//! 5. [`hopf_model.rs`] for the scientific model implementation.
+//! 5. [`cross_check.rs`] for an optional, demo-only numerical correctness check.
+//! 6. [`hopf_model.rs`] for the scientific model implementation.
 
+mod cross_check;
 mod hopf_model;
 mod recording;
 mod task_execution;

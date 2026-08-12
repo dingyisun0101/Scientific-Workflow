@@ -29,7 +29,9 @@ library abstraction answer a question already raised by the preceding file:
 5. [`src/recording.rs`](src/recording.rs): inspect cadence, stream, and
    writer setup.
 6. [`src/validation.rs`](src/validation.rs): inspect checkpoint round-trip checks.
-7. [`src/hopf_model.rs`](src/hopf_model.rs): see the scientific core that
+7. [`src/cross_check.rs`](src/cross_check.rs): optional, demo-only numerical
+   correctness check.
+8. [`src/hopf_model.rs`](src/hopf_model.rs): see the scientific core that
    owns the evolving `SystemState` directly.
 
 Use [`steps.md`](steps.md) afterward when adapting this pattern to another
@@ -71,8 +73,6 @@ attractor_2d/
 ├── design.md              # Example-specific architecture
 ├── steps.md               # General scientific-project tutorial
 ├── todo.md                 # Ordered implementation work
-├── validation/
-│   └── naive_hopf.rs       # One-file standard-library reference
 ├── config/
 │   ├── fixed.json          # Values shared by every task
 │   ├── sweep.json          # Parameter-space definition
@@ -83,6 +83,7 @@ attractor_2d/
     ├── task_execution.rs      # per-task model execution and task lifecycle
     ├── recording.rs           # writer config, sampling intervals, and output
     ├── validation.rs          # typed checkpoint replay and equality checks
+    ├── cross_check.rs         # optional demo-only reference sanity check
     └── hopf_model.rs          # scientific core and state ownership
 ```
 
@@ -260,19 +261,22 @@ payloads recover their original binary values when decoded from the emitted
 decimal representation. A mismatch terminates the example instead of merely
 printing a failed informational flag.
 
-## Naive reference validation
+## Optional demo-only cross-check
 
-[`validation/naive_hopf.rs`](validation/naive_hopf.rs) contains the same Euler
-calculation in one file using only hard-coded constants, `[f64; 2]`, and the
-standard library. It deliberately contains no `scientific-workflow`, JSON,
-state container, storage, or validation code.
+The cross-check in [`src/cross_check.rs`](src/cross_check.rs) is intentionally
+present for demonstration only and is **not** part of the required workflow
+pattern.
 
-From the example directory, compile and run it directly:
+It runs only when `ATTRACTOR2D_CROSS_CHECK` is set:
 
 ```bash
-rustc --edition=2024 validation/naive_hopf.rs -o target/naive_hopf
-target/naive_hopf
+ATTRACTOR2D_CROSS_CHECK=1 cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
+
+[`src/cross_check.rs`](src/cross_check.rs) contains the same Euler calculation
+in one file using only hard-coded constants, `[f64; 2]`, and the standard
+library. It deliberately contains no `scientific-workflow`, JSON, state
+container, storage, or recording APIs.
 
 The workflow and naive implementation have been compared for every swept
 `mu`. Their final iteration, accumulated physical time, both point coordinates, and

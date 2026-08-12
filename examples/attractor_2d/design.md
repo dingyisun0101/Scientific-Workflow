@@ -8,7 +8,7 @@ parameter sweep, direct ownership and mutation of `SystemState`, independently
 sampled output streams, bounded asynchronous writing, and exact typed readback.
 
 It deliberately excludes visualization and scientific analysis. Those are
-downstream uses of a recording and would obscure the core runtime pattern this
+consumer uses of a recording and would obscure the core runtime pattern this
 example is intended to teach.
 
 ## Scientific model
@@ -32,7 +32,7 @@ does not analyze or render it during evolution.
 `ScientificProject::task_configs()` emits those three complete task handles in
 canonical order. Each handle shares the parsed fixed values, selected sweep
 storage, and project paths, so the same type can later move directly into a
-dispatcher mission without a merged configuration allocation.
+orchestration mission without a merged configuration allocation.
 
 The example connects this lazy iterator to Rayon through `par_bridge`. Rayon
 pulls tasks into its bounded work-stealing pool without an intermediate
@@ -74,17 +74,12 @@ The state contains:
 - `step()` performs one scientific transition.
 
 Coefficient and payload accessors are intentionally absent. Model coefficients
-are implementation details of `step`, while downstream code can use the
+are implementation details of `step`, while consumer code can use the
 ordinary typed `SystemState` API when it genuinely needs a payload.
 
 The step uses one coordinated tuple borrow for `point` and `radius`. This gives
 safe simultaneous mutable access to distinct slots without cloning or moving
 either payload allocation.
-
-The numerical kernel is intentionally too small to keep a progress display
-visible, so the example sleeps for 500 microseconds inside each step. This is
-presentation scaffolding only: it does not advance physical time, alter the
-state transition, or belong in a real scientific model.
 
 ## Recording
 
@@ -142,11 +137,8 @@ for every task. Generated data remains available beneath the reported ignored
 
 ```text
 src/
-├── main.rs                  orchestration and process error boundary
-├── project_setup.rs         typed per-task parameter decoding and assembly
-├── hopf_model.rs            sole state owner and Euler evolution kernel
-├── state_recording.rs       streams, writer construction, and lifecycle
-└── recording_validation.rs  minimal typed endpoint round-trip check
+├── main.rs                  end-to-end flow: prepare, run, record, validate
+└── hopf_model.rs            sole state owner and Euler evolution kernel
 ```
 
 `main.rs` performs only the reusable top-level sequence:
@@ -159,9 +151,8 @@ load project
   -> reporter prints one result
 ```
 
-No module duplicates the live state. `project_setup` moves initial payloads into
-the model, `state_recording` temporarily borrows it, and
-`recording_validation` compares decoded states with an immutable final borrow.
+No module duplicates the live state. `main.rs` owns the complete task
+orchestration flow and keeps `HopfModel` as the sole mutable state owner.
 
 ## Annotation policy
 
@@ -287,7 +278,7 @@ run Rayon task closure -> validate_recording
 ### `main`
 
 Sequences project loading, scope creation, reporter startup, lazy Rayon task
-dispatch, and reporter-owned finalization after all task closures validate.
+execution flow, and reporter-owned finalization after all task closures validate.
 
 #### Reference
 
@@ -297,10 +288,11 @@ process entry -> main
 
 ## Independent numerical reference
 
-`validation/naive_hopf.rs` contains the same Euler kernel as a single
+`src/cross_check.rs` contains the same Euler kernel as a single
 standard-library program with hard-coded inputs and no workflow facilities.
 Its final iteration, physical time, coordinates, and radius have been compared
 bit-for-bit with the workflow implementation for all three `mu` values. This
 validates that workflow ownership and recording do not alter the numerical
 kernel; storage behavior is validated by the typed round trip above and by the
-library integration suite.
+library integration suite. It is marked as an optional demo-only check rather
+than a required component of the core workflow.

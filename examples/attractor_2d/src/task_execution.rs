@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::{recording, validation, AppResult, hopf_model::HopfModel};
+use crate::{cross_check, recording, validation, AppResult, hopf_model::HopfModel};
 use scientific_workflow::prelude::*;
 
 pub(crate) fn run_task(
@@ -9,12 +9,28 @@ pub(crate) fn run_task(
     task: TaskConfig,
     reporter: &ProgressReporter,
 ) -> AppResult<()> {
+    let initial_point: Vec<f64> = task.decode_value("initial_point")?;
+    let mu: f64 = task.decode_value("mu")?;
+    let angular_frequency: f64 = task.decode_value("angular_frequency")?;
+    let physical_time_increment_per_step: f64 =
+        task.decode_value("physical_time_increment_per_step")?;
+
+    if initial_point.len() != 2 {
+        return Err(format!(
+            "initial_point must contain exactly two values, got {}",
+            initial_point.len()
+        )
+        .into());
+    }
+
+    let cross_check_initial_point = [initial_point[0], initial_point[1]];
+
     let mut model = HopfModel::new(
         schema,
-        task.decode_value("initial_point")?,
-        task.decode_value("mu")?,
-        task.decode_value("angular_frequency")?,
-        task.decode_value("physical_time_increment_per_step")?,
+        initial_point,
+        mu,
+        angular_frequency,
+        physical_time_increment_per_step,
     )?;
 
     let step_count: u64 = task.decode_value("step_count")?;
@@ -51,6 +67,17 @@ pub(crate) fn run_task(
         hopf_model::POINT_FIELD,
         hopf_model::RADIUS_FIELD,
     )?;
+
+    if std::env::var("ATTRACTOR2D_CROSS_CHECK").is_ok() {
+        cross_check::assert_matches_reference(
+            model.state(),
+            cross_check_initial_point,
+            mu,
+            angular_frequency,
+            physical_time_increment_per_step,
+            step_count,
+        )?;
+    }
 
     progress.complete(None)?;
     Ok(())
