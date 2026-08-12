@@ -81,7 +81,7 @@ pub(crate) struct RecordingMetadata {
     pub(crate) records: RecordFormat,
     /// Meanings and optional units of temporal coordinates.
     pub(crate) time: TimeAxisMetadata,
-    /// Arbitrary JSON metadata supplied by the workflow or dispatcher.
+    /// Arbitrary JSON metadata supplied by the application.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub(crate) user_metadata: Map<String, Value>,
     /// Caller-supplied values known only when the recording becomes terminal.

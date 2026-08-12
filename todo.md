@@ -40,7 +40,7 @@ migration work remains.
 
 ## Deferred project stages
 
-- dispatcher accepting `fixed.json` and `sweep.json`;
+- orchestration layer accepting `fixed.json` and `sweep.json`;
 - scoped execution, logging, and run organization;
 - Python API and Rust/Python bridge;
 - optional out-of-core reader method on `StoredStateSeriesReader` if analysis workloads
@@ -48,9 +48,9 @@ migration work remains.
 - alternate encodings only after JSON workflow stability; protobuf remains out
   of current scope.
 
-## Simulator integration gate
+## Runtime model integration gate
 
-Simulator must own and mutate a `SystemState` directly. That state replaces both
+Runtime model must own and mutate a `SystemState` directly. That state replaces both
 its dedicated live-state field layout and its old IO snapshot struct; sampling
 borrows this authoritative state and must never clone the PiP lattice.
 
@@ -84,16 +84,16 @@ Failure lifecycle is resolved: unexpected early returns deliberately leave a
 recoverable `Running` recording; only intentional terminal decisions call
 `mark_recording_failed`.
 
-The crate is ready for downstream migration. Refactor GLV first with a local
+The crate is ready for consumer migration. Refactor dependent-model crate first with a local
 `scientific-workflow` dependency: replace its generic state, signal/space
 writers, and task metadata with one authoritative state and one writer, then
-prove numerical and output equivalence. Publish the migrated GLV before
-refactoring dispatcher, because dispatcher directly imports GLV's current
-solver and metadata APIs. Refactor simulator after the GLV pattern is proven,
-using PiP 3.0.4 payloads, and then finish dispatcher completion validation
+prove numerical and output equivalence. Publish the migrated dependent-model crate before
+refactoring orchestration layer, because orchestration layer directly imports dependent-model crate's current
+solver and metadata APIs. Refactor runtime model after the dependent-model crate pattern is proven,
+using PiP 3.0.4 payloads, and then finish orchestration layer completion validation
 against the shared recording format.
 
-GLV can now commit termination reason and completed step count through
+dependent-model crate can now commit termination reason and completed step count through
 `complete_recording_with_final_state_and_terminal_metadata`; it must not create
 a second sidecar file.
 
@@ -112,7 +112,7 @@ a second sidecar file.
 - [x] `ExecutionScope` creates generated/named scopes, opens existing scopes,
   and derives absent deterministic task recording paths.
 - Do not add a generic evolution trait or JSON-driven recording-plan format
-  from the attractor example alone; reconsider after GLV and simulator provide
+  from the attractor example alone; reconsider after dependent-model crate and runtime model provide
   independent evidence.
 
 ## Automatic operational timing

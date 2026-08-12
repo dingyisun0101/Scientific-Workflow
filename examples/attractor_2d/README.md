@@ -83,7 +83,7 @@ attractor_2d/
     ├── task_execution.rs      # per-task model execution and task lifecycle
     ├── recording.rs           # writer config, sampling intervals, and output
     ├── validation.rs          # typed checkpoint replay and equality checks
-    ├── cross_check.rs         # optional demo-only reference sanity check
+    ├── cross_check.rs         # compulsory numerical correctness check
     └── hopf_model.rs          # scientific core and state ownership
 ```
 

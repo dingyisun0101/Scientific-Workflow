@@ -67,7 +67,7 @@ or manage threads.
 The agreed public module name is `configuration`. It covers the complete
 three-file project configuration while leaving execution and persistence to
 later layers. `parameters` would exclude `paths.json`, `constants` would
-misdescribe swept values, and `dispatcher` would imply task execution that this
+misdescribe swept values, and `orchestration layer` would imply task execution that this
 module deliberately does not perform. A swept value is constant during one
 task but is scientifically a parameter across the complete study. The public
 model distinguishes:
@@ -178,7 +178,7 @@ and key context.
 
 `paths.json` is a separate plain object whose values are path strings. It
 contains shared named input roots, data locations, and output roots; it does not
-contain per-task output paths derived later by dispatcher. Relative paths are
+contain per-task output paths derived later by orchestration layer. Relative paths are
 resolved against `project_root` on access, without canonicalizing or requiring
 the target to exist. The original string remains authoritative for JSON
 round-trip. Environment-variable and tilde expansion are initially out of
@@ -207,7 +207,7 @@ task.to_json() -> Result<String, ConfigurationError>
 selected sweep entries for one task. The application uses the exact JSON names
 as lookup keys and decodes each required value to its concrete type once before
 entering a hot loop. Resolved JSON output is useful for provenance and later
-dispatcher metadata, but this module remains independent of storage
+orchestration layer metadata, but this module remains independent of storage
 recordings.
 
 `TaskParameters` should be cheap to produce and clone. It stores an `Arc` to the
@@ -218,7 +218,7 @@ to the chosen shared case. Materialization occurs only when a caller explicitly
 decodes an owned value or serializes the resolved task.
 
 `TaskConfig` adds only a cheap `ProjectPaths` shared handle. It is owned rather
-than lifetime-borrowed so dispatchers can move it through ordinary thread and
+than lifetime-borrowed so task schedulers can move it through ordinary thread and
 work queues while the parsed JSON and path allocations remain shared. It
 delegates task ordinal and typed parameter lookup and adds direct named-path
 resolution. It does not allocate a merged parameter/path dictionary.
@@ -393,7 +393,7 @@ Returns the fixed-plus-swept dictionary size for every resolved task.
 ##### Reference
 
 ```text
-dispatcher validation and task-shape reporting
+orchestration layer validation and task-shape reporting
 ```
 
 #### ParameterSpace::task_count
@@ -403,7 +403,7 @@ Returns the checked Cartesian product or explicit-case count as `u64`.
 ##### Reference
 
 ```text
-dispatcher task allocation, task bounds validation, tasks(), and Debug
+orchestration layer task allocation, task bounds validation, tasks(), and Debug
 ```
 
 #### ParameterSpace::contains_parameter
@@ -413,7 +413,7 @@ Checks both disjoint key indexes without resolving a task.
 ##### Reference
 
 ```text
-dispatcher preflight and configuration inspection
+orchestration layer preflight and configuration inspection
 ```
 
 #### ParameterSpace::fixed_keys
@@ -444,7 +444,7 @@ space. It never clones JSON values or materializes a merged map.
 ##### Reference
 
 ```text
-dispatcher indexed task assignment and restart lookup
+orchestration layer indexed task assignment and restart lookup
 ```
 
 #### ParameterSpace::tasks
@@ -454,7 +454,7 @@ Returns an owning iterator over increasing deterministic task ordinals.
 ##### Reference
 
 ```text
-sequential or parallel dispatcher task enumeration
+sequential or parallel orchestration layer task enumeration
 ```
 
 #### ParameterSpace::clone / Debug
@@ -464,7 +464,7 @@ Clone increments one `Arc`; Debug prints only directory and counts.
 ##### Reference
 
 ```text
-shared dispatcher ownership and bounded diagnostics
+shared orchestration layer ownership and bounded diagnostics
 ```
 
 ### TaskParameters
@@ -479,7 +479,7 @@ Returns the stable zero-based ordinal under the loaded sweep definition.
 ##### Reference
 
 ```text
-dispatcher identity, output naming, errors, and provenance
+orchestration layer identity, output naming, errors, and provenance
 ```
 
 #### TaskParameters::value
@@ -522,7 +522,7 @@ Checks both fixed and sweep indexes for an exact key.
 ##### Reference
 
 ```text
-optional application parameters and dispatcher preflight
+optional application parameters and orchestration layer preflight
 ```
 
 #### TaskParameters::len / is_empty
@@ -564,7 +564,7 @@ object without first allocating a merged `serde_json::Map`.
 ##### Reference
 
 ```text
-dispatcher provenance, task manifests, and semantic round-trip tests
+orchestration layer provenance, task manifests, and semantic round-trip tests
 ```
 
 #### TaskParameters::clone / Debug
@@ -575,7 +575,7 @@ prints parameter values.
 ##### Reference
 
 ```text
-task handoff between dispatcher threads and bounded diagnostics
+task handoff between orchestration layer threads and bounded diagnostics
 ```
 
 ### TaskParametersIter
@@ -592,7 +592,7 @@ bound with no upper bound.
 ##### Reference
 
 ```text
-ParameterSpace::tasks -> dispatcher task enumeration
+ParameterSpace::tasks -> orchestration layer task enumeration
 ```
 
 #### TaskParametersIter::clone / Debug
@@ -697,7 +697,7 @@ Checks the exact case-sensitive name index.
 ##### Reference
 
 ```text
-optional project resources and dispatcher preflight
+optional project resources and orchestration layer preflight
 ```
 
 #### ProjectPaths::path
@@ -730,7 +730,7 @@ open, or require the result to exist.
 ##### Reference
 
 ```text
-dispatcher input/output root setup and application resource lookup
+orchestration layer input/output root setup and application resource lookup
 ```
 
 #### ProjectPaths::keys
@@ -792,7 +792,7 @@ returns a partial facade.
 ##### Reference
 
 ```text
-application and dispatcher startup -> ProjectConfig::load(project_root)
+application and orchestration layer startup -> ProjectConfig::load(project_root)
 ```
 
 #### ProjectConfig::project_root
@@ -802,7 +802,7 @@ Returns the root exactly as supplied without canonicalization.
 ##### Reference
 
 ```text
-dispatcher project identity, path setup, and Debug
+orchestration layer project identity, path setup, and Debug
 ```
 
 #### ProjectConfig::configuration_directory
@@ -822,7 +822,7 @@ Borrows the validated parameter-space handle.
 ##### Reference
 
 ```text
-dispatcher task_count/task/tasks access
+orchestration layer task_count/task/tasks access
 ```
 
 #### ProjectConfig::paths
@@ -832,7 +832,7 @@ Borrows the validated project-path dictionary.
 ##### Reference
 
 ```text
-dispatcher and simulation resource-path access
+orchestration layer and simulation resource-path access
 ```
 
 #### ProjectConfig::task_count
@@ -842,7 +842,7 @@ Returns the validated number of complete task configurations.
 ##### Reference
 
 ```text
-dispatcher mission planning -> ProjectConfig::task_count
+orchestration layer mission planning -> ProjectConfig::task_count
 ScientificProject::task_count -> ProjectConfig::task_count
 ```
 
@@ -880,7 +880,7 @@ unconstrained.
 ##### Reference
 
 ```text
-parameter-subset dispatch -> ProjectConfig::task_configs_matching
+parameter-subset orchestrating -> ProjectConfig::task_configs_matching
 ScientificProject::task_configs_matching -> ProjectConfig::task_configs_matching
 configuration_workflow exact filtering
 ```
@@ -948,7 +948,7 @@ Delegates the stable deterministic ordinal.
 ##### Reference
 
 ```text
-dispatcher mission ordering and output naming -> TaskConfig::task_ordinal
+orchestration layer mission ordering and output naming -> TaskConfig::task_ordinal
 attractor_2d recording directory -> TaskConfig::task_ordinal
 ```
 
@@ -1002,7 +1002,7 @@ only identity and bounded counts.
 ##### Reference
 
 ```text
-dispatcher work-queue ownership -> TaskConfig::clone/move
+orchestration layer work-queue ownership -> TaskConfig::clone/move
 bounded diagnostics -> TaskConfig::Debug
 ```
 
@@ -1019,7 +1019,7 @@ Preserves canonical ordinal order and the lower-level iterator's count bounds.
 
 ```text
 ProjectConfig::task_configs -> TaskConfigIter
-all-task dispatcher loop -> TaskConfigIter::next
+all-task orchestration layer loop -> TaskConfigIter::next
 attractor_2d Rayon par_bridge -> TaskConfigIter::next
 ```
 
@@ -1078,7 +1078,7 @@ conventional `config/` directory.
 ```text
 application startup -> ScientificProject::load(project_root)
 attractor_2d::main -> ScientificProject::load
-GLV project bootstrap -> ScientificProject::load
+dependent-model crate project bootstrap -> ScientificProject::load
 ```
 
 #### ScientificProject::project_root
@@ -1141,7 +1141,7 @@ requiring callers to traverse component accessors.
 ```text
 normal project task enumeration -> ScientificProject::task_configs
 indexed project task lookup -> ScientificProject::task_config
-dispatcher capacity planning -> ScientificProject::task_count
+orchestration layer capacity planning -> ScientificProject::task_count
 ```
 
 #### ScientificProject::task_configs_matching / unique_task_config_matching
@@ -1152,7 +1152,7 @@ facade.
 ##### Reference
 
 ```text
-filtered scientific-project dispatch and unique mission lookup
+filtered scientific-project orchestrating and unique mission lookup
 ```
 
 #### ScientificProject::state_schema
@@ -1183,7 +1183,7 @@ cloning their shared internals.
 ##### Reference
 
 ```text
-downstream ownership separation -> ScientificProject::into_parts
+consumer ownership separation -> ScientificProject::into_parts
 ```
 
 #### ScientificProject::clone / Debug
@@ -1238,7 +1238,7 @@ task generation, named path resolution, and typed lookup.
 ```text
 crate root -> pub mod configuration
 prelude -> explicit configuration type re-exports
-downstream callers -> scientific_workflow::configuration::{...}
+consumer callers -> scientific_workflow::configuration::{...}
 ```
 
 ## Centralized progress reporting
@@ -1361,7 +1361,7 @@ schema.
 ##### Reference
 
 ```text
-dispatcher planning and fixed-only reporting tests -> for_configuration
+orchestration layer planning and fixed-only reporting tests -> for_configuration
 ```
 
 #### ProgressReporter::start_task
@@ -1569,7 +1569,7 @@ Return exact task lifecycle counts.
 ##### Reference
 
 ```text
-ProgressReporter::summary/complete/fail and dispatcher run summaries
+ProgressReporter::summary/complete/fail and orchestration layer run summaries
 ```
 
 #### ProgressSummary::is_success
@@ -1638,7 +1638,7 @@ Validates one safe path component and exclusively creates that named scope.
 #### Reference
 
 ```text
-dispatcher-owned run identity -> ExecutionScope::create_named
+orchestration layer-owned run identity -> ExecutionScope::create_named
 reproducible reference run -> ExecutionScope::create_named
 ```
 
@@ -1753,7 +1753,7 @@ ExecutionScope::create_generated -> compact_timestamp
     ├── tests.md                  integration-test architecture and coverage
     ├── todo.md                   next-stage and deferred work only
     ├── README.md                 repository test entry points
-    └── dev/
+    └── rust/
         ├── Cargo.toml            publishable Rust package manifest
         ├── README.md             crate-facing usage and test documentation
         ├── src/
@@ -2005,7 +2005,7 @@ payloads plus one mutable `SimulationTime`.
 Crate-private allocation from a validated specification and time point. It is
 the single structural invariant-establishing mechanism: it allocates exactly
 one empty, initially type-unbound slot per declared field and is not part of the
-downstream API.
+consumer API.
 
 ##### Reference
 
@@ -2163,7 +2163,7 @@ surround an entire coupled kernel or simulation sweep.
 
 ##### Reference
 
-    simulator EcoSystem sweep -> SystemState::borrow_payloads_mut<(SquareLattice, TaxonTable)>
+    runtime model EcoSystem sweep -> SystemState::borrow_payloads_mut<(SquareLattice, TaxonTable)>
     coupled scientific integrators and solvers
 
 ### PayloadTuple
@@ -2171,7 +2171,7 @@ surround an entire coupled kernel or simulation sweep.
 Doc-hidden, sealed public trait required only as the generic mapping behind
 `SystemState::borrow_payloads` and `SystemState::borrow_payloads_mut`. A private declarative macro
 implements it for heterogeneous tuples of arity two through eight. It is not
-re-exported by the prelude and cannot be implemented by downstream crates.
+re-exported by the prelude and cannot be implemented by consumer crates.
 
 #### PayloadTuple::borrow
 
@@ -2446,7 +2446,7 @@ Consumes the series and returns its vector allocation.
 
 ##### Reference
 
-    downstream ownership transfer
+    consumer ownership transfer
 
 #### StateSeries::clone
 
@@ -2526,7 +2526,7 @@ One compact record:
     {"iteration":12,"physical_time":0.25,"values":{"values":[1.0,2.0],"label":"sample"}}
 
 `physical_time` is omitted when absent. Field keys remain for readability and exact
-decoder dispatch. Metadata stores schemas, run facts, byte limits, lifecycle,
+decoder orchestrating. Metadata stores schemas, run facts, byte limits, lifecycle,
 and chunk descriptors once; no sidecar metadata exists.
 
 ### RecordingMetadata
@@ -3191,7 +3191,7 @@ Returns the validated completed storage format version.
 
 ##### Reference
 
-    dispatcher compatibility diagnostics -> StoredStateSeriesReader::format_version
+    orchestration layer compatibility diagnostics -> StoredStateSeriesReader::format_version
 
 #### StoredStateSeriesReader::user_metadata
 
@@ -3232,7 +3232,7 @@ Sums exact metadata-declared chunk bytes without opening payload files.
 
 ##### Reference
 
-    dispatcher storage summary -> StoredStateSeriesReader::stream_encoded_bytes
+    orchestration layer storage summary -> StoredStateSeriesReader::stream_encoded_bytes
 
 #### StoredStateSeriesReader::read_stream_as_state_series
 
@@ -3334,7 +3334,7 @@ errors preserve their source chains. No variant owns scientific payload data.
 
 ## Run-level storage facade
 
-`src/storage.rs` is the only intended downstream entry point for persistence.
+`src/storage.rs` is the only intended consumer entry point for persistence.
 Its child modules remain private and it re-exports only reader, decoder, and
 error types that form part of the supported public workflow. Low-level
 encoding, framing, queue, writer, checksum, and raw metadata types remain
@@ -3354,7 +3354,7 @@ run startup so fluent configuration remains infallible.
 ##### Reference
 
     SystemStateWriterBuilder::default time -> TimeAxisMetadata::default -> TimeAxisMetadata::new
-    downstream run configuration -> TimeAxisMetadata::new
+    consumer run configuration -> TimeAxisMetadata::new
 
 #### `TimeAxisMetadata::with_iteration_unit`
 
@@ -3362,7 +3362,7 @@ Fluently declares the optional iteration unit.
 
 ##### Reference
 
-    downstream run configuration -> TimeAxisMetadata::with_iteration_unit
+    consumer run configuration -> TimeAxisMetadata::with_iteration_unit
 
 #### `TimeAxisMetadata::with_physical_time_name`
 
@@ -3370,7 +3370,7 @@ Fluently declares the optional physical-coordinate name.
 
 ##### Reference
 
-    downstream run configuration -> TimeAxisMetadata::with_physical_time_name
+    consumer run configuration -> TimeAxisMetadata::with_physical_time_name
 
 #### `TimeAxisMetadata::with_physical_time_unit`
 
@@ -3378,7 +3378,7 @@ Fluently declares the physical unit; startup requires a physical name.
 
 ##### Reference
 
-    downstream run configuration -> TimeAxisMetadata::with_physical_time_unit
+    consumer run configuration -> TimeAxisMetadata::with_physical_time_unit
 
 #### `TimeAxisMetadata::with_physical_axis`
 
@@ -3386,7 +3386,7 @@ Declares the physical-coordinate name and unit together for the common case.
 
 ##### Reference
 
-    downstream run configuration -> TimeAxisMetadata::with_physical_axis
+    consumer run configuration -> TimeAxisMetadata::with_physical_axis
 
 #### `TimeAxisMetadata::default`
 
@@ -3427,7 +3427,7 @@ constructing an invalid policy.
 
 ##### Reference
 
-    hard-coded downstream stream setup -> SamplingInterval::iterations
+    hard-coded consumer stream setup -> SamplingInterval::iterations
 
 #### `SamplingInterval::includes`
 
@@ -3453,7 +3453,7 @@ stores the sampling interval used by writer-side observation.
 
 ##### Reference
 
-    downstream run construction -> StateStreamConfig::new
+    consumer run construction -> StateStreamConfig::new
 
 #### `StateStreamConfig::sampled`
 
@@ -3471,7 +3471,7 @@ directory collisions.
 
 ##### Reference
 
-    downstream stream path customization -> StateStreamConfig::with_relative_directory
+    consumer stream path customization -> StateStreamConfig::with_relative_directory
 
 ### `SystemStateWriterBuilder`
 
@@ -3485,7 +3485,7 @@ streams.
 ##### Reference
 
     SystemStateWriter::builder -> SystemStateWriterBuilder::new
-    direct downstream construction -> SystemStateWriterBuilder::new
+    direct consumer construction -> SystemStateWriterBuilder::new
 
 #### `SystemStateWriterBuilder::with_time_axis_metadata`
 
@@ -3493,7 +3493,7 @@ Replaces temporal-coordinate documentation.
 
 ##### Reference
 
-    downstream run configuration -> SystemStateWriterBuilder::with_time_axis_metadata
+    consumer run configuration -> SystemStateWriterBuilder::with_time_axis_metadata
 
 #### `SystemStateWriterBuilder::with_user_metadata`
 
@@ -3502,7 +3502,7 @@ separate from scientific payload records.
 
 ##### Reference
 
-    dispatcher fixed/sweep provenance -> SystemStateWriterBuilder::with_user_metadata
+    orchestration layer fixed/sweep provenance -> SystemStateWriterBuilder::with_user_metadata
     simulation run annotations -> SystemStateWriterBuilder::with_user_metadata
 
 #### `SystemStateWriterBuilder::with_task_parameters`
@@ -3532,7 +3532,7 @@ validated together at startup.
 
 ##### Reference
 
-    downstream run configuration -> SystemStateWriterBuilder::add_state_stream
+    consumer run configuration -> SystemStateWriterBuilder::add_state_stream
 
 #### `SystemStateWriterBuilder::add_sampled_state_stream`
 
@@ -3570,7 +3570,7 @@ builder `SystemStateSchema`; decoder outputs populate every slot before writers 
 
 ##### Reference
 
-    simulator restart -> SystemStateWriterBuilder::continue_recording_from_latest_checkpoint
+    runtime model restart -> SystemStateWriterBuilder::continue_recording_from_latest_checkpoint
 
 ### `RecordingTiming`
 
@@ -3599,7 +3599,7 @@ Returns exact accumulated monotonic active duration in integer nanoseconds.
 
 ##### Reference
 
-    dispatcher metrics and metadata verification -> RecordingTiming::active_duration_ns
+    orchestration layer metrics and metadata verification -> RecordingTiming::active_duration_ns
 
 #### `RecordingTiming::active_duration`
 
@@ -3628,7 +3628,7 @@ Returns the completed recording root.
 
 ##### Reference
 
-    attractor analysis and dispatcher handoff -> CompletedRecording::directory
+    attractor analysis and orchestration layer handoff -> CompletedRecording::directory
 
 #### `CompletedRecording::timing`
 
@@ -3644,7 +3644,7 @@ Borrows the exact terminal metadata committed by the caller.
 
 ##### Reference
 
-    GLV outcome and dispatcher validation -> CompletedRecording::terminal_metadata
+    dependent-model crate outcome and orchestration layer validation -> CompletedRecording::terminal_metadata
 
 #### `CompletedRecording::stream_summaries`
 
@@ -3653,7 +3653,7 @@ descriptors without reading payload files.
 
 ##### Reference
 
-    GLV writer statistics and dispatcher completion validation -> CompletedRecording::stream_summaries
+    dependent-model crate writer statistics and orchestration layer completion validation -> CompletedRecording::stream_summaries
 
 #### `CompletedRecording::stream_summary`
 
@@ -3690,7 +3690,7 @@ Returns the number of persisted states.
 
 ##### Reference
 
-    GLV TaskOutcome replacement -> CompletedStreamSummary::record_count
+    dependent-model crate TaskOutcome replacement -> CompletedStreamSummary::record_count
 
 #### `CompletedStreamSummary::encoded_bytes`
 
@@ -3706,7 +3706,7 @@ Return stream range endpoints or `None` for a stream with no records.
 
 ##### Reference
 
-    dispatcher progress/completion validation -> CompletedStreamSummary iteration range
+    orchestration layer progress/completion validation -> CompletedStreamSummary iteration range
 
 ### `SystemStateWriter`
 
@@ -3719,7 +3719,7 @@ Provides the concise public construction entry point.
 
 ##### Reference
 
-    downstream simulation setup -> SystemStateWriter::builder
+    consumer simulation setup -> SystemStateWriter::builder
 
 #### `SystemStateWriter::recording_directory`
 
@@ -3799,7 +3799,7 @@ status in one lifecycle operation.
 ##### Reference
 
     applications with terminal facts -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
-    GLV termination -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
+    dependent-model crate termination -> SystemStateWriter::complete_recording_with_final_state_and_terminal_metadata
 
 #### `SystemStateWriter::mark_recording_failed`
 
@@ -3919,7 +3919,7 @@ previous complete metadata document or the next complete document.
 
 ## Public API and prelude
 
-The crate provides `scientific_workflow::prelude`, allowing downstream code to
+The crate provides `scientific_workflow::prelude`, allowing consumer code to
 import the complete intended end-user API with:
 
 ```rust
@@ -3964,15 +3964,15 @@ an omitted or accidentally private supported type is detected by compilation.
 
 ##### Reference
 
-    downstream simulation and analysis modules -> use scientific_workflow::prelude::*
+    consumer simulation and analysis modules -> use scientific_workflow::prelude::*
     public API integration tests -> use scientific_workflow::prelude::*
     crate root -> pub mod prelude
 
-## Simulator integration audit
+## Runtime model integration audit
 
-The crate-level work required for simulator state ownership, checkpoint
+The crate-level work required for runtime model state ownership, checkpoint
 recovery, and the one-state/one-writer resource model is complete. Inspection
-of simulator's hot loop, checkpoint path, and multi-system runner originally
+of runtime model's hot loop, checkpoint path, and multi-system runner originally
 identified four integration gates. Gates 1, 2, and 4 are resolved. Gate 3 is
 partially resolved: completion now returns timing and terminal metadata, while
 a complete public manifest and aggregate stream statistics remain deferred.
@@ -3983,7 +3983,7 @@ Already compatible:
   intervals and output identities;
 - PiP's local `SquareLattice` serializer borrows its dense storage, so
   `SystemStateWriter::observe_state` can encode a due lattice without first cloning it;
-- exact encoded-byte chunking is a stricter implementation of simulator's
+- exact encoded-byte chunking is a stricter implementation of runtime model's
   desired maximum-file-size policy than its current estimated record sizing;
 - bounded stream queues provide deterministic per-stream backpressure;
 - generic Serde decoders can reconstruct `Vec<usize>`, PiP tensors, lattices,
@@ -3997,11 +3997,11 @@ Already compatible:
 `EcoSystem` evolves `SquareLattice` and `TaxonTable` through simultaneous
 mutable borrows on every event. This boundary is now supported by
 `SystemState::borrow_payloads_mut`, which returns distinct heterogeneous payload
-references after complete validation. Exporting simulator's old snapshot is no
+references after complete validation. Exporting runtime model's old snapshot is no
 longer needed and would remain unacceptable because it clones the full lattice
 for every space sample.
 
-The integration contract is now fixed: simulator must own and mutate one
+The integration contract is now fixed: runtime model must own and mutate one
 `SystemState` directly, replacing its dedicated runtime state fields and old IO
 snapshot struct. Storage will continue sampling that same state by borrow; an
 external keyed-field sampling abstraction is not the chosen architecture.
@@ -4014,9 +4014,9 @@ fail before references are returned; and safe stack-only slot separation adds
 no payload copy, ownership transfer, heap allocation, lock, or unsafe code.
 Integrated PiP tensor tests cover the complete public boundary.
 
-#### Simulator mutation dependency
+#### Runtime model mutation dependency
 
-Simulator does not literally write the lattice and taxon table simultaneously.
+Runtime model does not literally write the lattice and taxon table simultaneously.
 For one event, `Decider` reads source and target taxa from the lattice, may read
 the current table to sample an effective target, decides whether replacement
 occurs, writes the lattice target, and then adjusts two table counts. Those
@@ -4039,7 +4039,7 @@ borrowing is not required for mathematical expressiveness; it is required to
 retain the current efficient sweep shape, in which both payload references are
 resolved once and reused across all events.
 
-Accordingly, coordinated tuple borrowing is required to retain simulator's
+Accordingly, coordinated tuple borrowing is required to retain runtime model's
 efficient sweep shape. The intended use is one borrow before the inner event
 loop, not one lookup per event:
 
@@ -4060,7 +4060,7 @@ Coordinated mutation of multiple state components is a common scientific
 computing requirement. Representative cases include position/velocity/force
 arrays in particle models, density/momentum/energy fields in fluid solvers,
 coupled species in reaction systems, primal/dual or parameter/momentum arrays
-in optimization, field values and auxiliary caches, and simulator's lattice
+in optimization, field values and auxiliary caches, and runtime model's lattice
 plus population table. Even when an algorithm stages its numerical writes, it
 often needs several mutable component references for the duration of one
 kernel, integrator step, or sweep.
@@ -4204,7 +4204,7 @@ appropriate implementation for this general state.
 
 ### Gate 2: interrupted-run resume and append (implemented)
 
-Simulator can continue an incomplete task in its existing directory, load only
+Runtime model can continue an incomplete task in its existing directory, load only
 the newest full-state checkpoint, and append later chunks.
 `create_new_recording` remains strictly new-directory-only; explicit
 `continue_existing_recording` and
@@ -4265,7 +4265,7 @@ The writer facade provides the convenience path needed by simulations:
     let (writer, state) = builder.continue_recording_from_latest_checkpoint("space", decoders)?;
 
 `continue_recording_from_latest_checkpoint` is deliberately not a `SystemState` constructor.
-Directory layout, JSONL recovery, stream selection, and decoder dispatch belong to
+Directory layout, JSONL recovery, stream selection, and decoder orchestrating belong to
 storage; keeping them out of `system_state` preserves the core state's format-
 and IO-independence. The operation performs one coordinated transaction:
 
@@ -4315,12 +4315,12 @@ an internal file-open mode.
 The writer provides a per-stream durability barrier. `flush_stream_to_storage(stream)` blocks
 until all records accepted before the call are written, prepares and seals a
 non-empty open chunk even below its byte target, and commits its descriptor.
-Simulator can call this after a resume-critical space checkpoint; ordinary
+Runtime model can call this after a resume-critical space checkpoint; ordinary
 signal samples can retain automatic byte-target chunking.
 
 ### Gate 3: public manifest and aggregate stream summary (partially deferred)
 
-Simulator and dispatcher inspect configuration, end time, activity, sample
+Runtime model and orchestration layer inspect configuration, end time, activity, sample
 counts, and writer statistics without decoding payload chunks. Current run
 metadata now accepts structurally separate startup and terminal annotations,
 and completion returns `CompletedRecording` with directory and timing. The
@@ -4332,8 +4332,8 @@ remaining public boundary needs:
 - aggregate stream facts on `CompletedRecording` or an equivalent cheap
   inspection API after finish.
 
-This allows dispatcher validation to depend on the scientific-workflow format
-instead of simulator-private metadata.
+This allows orchestration layer validation to depend on the scientific-workflow format
+instead of runtime model-private metadata.
 
 Gate 2 is a sufficient foundation for this work: chunk descriptors now enter
 the shared manifest incrementally, lifecycle transitions are serialized, and
@@ -4375,9 +4375,9 @@ Startup provenance must not be overwritten by terminal measurements. Empty
 result metadata is omitted from JSON. `SystemStateWriter::complete_recording` and `SystemStateWriter::mark_recording_failed` are convenience
 forms of their `_with` counterparts using an empty result map.
 
-This API lets a dispatcher determine whether a task completed, validate run
+This API lets a orchestration layer determine whether a task completed, validate run
 identity, list its output streams, report sample/byte counts, and inspect final
-measurements without knowing payload types. A simulator can inspect current
+measurements without knowing payload types. A runtime model can inspect current
 committed progress while running and receives the authoritative terminal
 manifest directly from its consuming lifecycle call.
 
@@ -4392,7 +4392,7 @@ and worker thread. A full encoded record is allocated before admission and must
 individually fit its configured stream budget. Independent simulations remain
 independent resource and failure domains.
 
-Simulator error propagation currently uses early `?` returns. Dropping
+Runtime model error propagation currently uses early `?` returns. Dropping
 `SystemStateWriter` drains its writer but cannot infer a simulation failure,
 leaving a running manifest. Integration must either explicitly call `SystemStateWriter::mark_recording_failed` on
 all terminal paths or introduce a run guard/coordinator whose failure policy is
@@ -4462,13 +4462,13 @@ The sole `StateWriterWorker` owns one recording-wide FIFO queue. Private
 positions. Per-stream byte budgets and the recording-wide hard-coded record
 limit apply backpressure before queue admission.
 
-### Simulator migration
+### Runtime model migration
 
 Migration can now begin. It consists of adding local scientific-workflow and
-PiP dependencies, declaring simulator keys and streams, using checked
+PiP dependencies, declaring runtime model keys and streams, using checked
 `usize`/`u64` time conversion, registering application decoders, replacing
-sampling-interval writes, and updating dispatcher completion validation. Those are
-downstream adaptation tasks rather than missing state or storage features.
+sampling-interval writes, and updating orchestration layer completion validation. Those are
+consumer adaptation tasks rather than missing state or storage features.
 
 ## Verification gate
 
@@ -4713,7 +4713,7 @@ crates.io without a local path override.
 
 ## Example architecture
 
-Full-stack examples are repository-level downstream applications, not Cargo
+Full-stack examples are repository-level consumer applications, not Cargo
 example targets embedded in the publishable library crate. This keeps the
 library package focused while allowing each scientific project to own its
 manifest, source tree, input assets, documentation, and output policy. The
@@ -4748,7 +4748,7 @@ cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
 The standalone manifest depends on the local library through
-`scientific-workflow = { version = "0.1.0", path = "../../dev" }`. The version
+`scientific-workflow = { version = "0.1.0", path = "../../rust" }`. The version
 constraint documents compatibility while the path keeps repository development
 joint and offline. A root Cargo workspace is not required for the first
 example; adding one should be a separate repository-wide decision if multiple
@@ -4812,7 +4812,7 @@ template, manifest, modular executable, and typed verification now
 live under `examples/attractor_2d`.
 
 The package boundary has been verified with
-`cargo package --allow-dirty --no-verify --list` from `dev/`. The resulting
+`cargo package --allow-dirty --no-verify --list` from `rust/`. The resulting
 44-file manifest contains the library sources, crate documentation, license,
 and integration-test fixtures only. It contains neither the repository-level
 `examples/attractor_2d` project nor any generated `target/recordings` data.
@@ -4911,7 +4911,7 @@ scientific diagnostic `radius`; a complete checkpoint records both.
 The minimal example covers state evolution, sampled record submission, explicit
 recording completion, decoder registration, latest-record reconstruction, and
 exact final-state verification. Visualization and numerical analysis remain
-separate downstream concerns.
+separate consumer concerns.
 
 The example's post-run ownership boundary has one authority: its domain-named
 `HopfModel` remains the only application structure that owns the live
@@ -4969,7 +4969,7 @@ trajectory sampling interval of 10 iterations, radius interval of 5 iterations,
 checkpoint interval of 1000 iterations, an 8192-byte chunk target, and a
 65536-byte writer queue.
 Together with `dt = 0.01`, one task evolves to physical time `50.0`. These are
-example-local defaults and will be validated by the downstream application
+example-local defaults and will be validated by the consumer application
 before recording begins.
 
 The configuration set is complete. `config/sweep.json` defines the ordered
@@ -5134,7 +5134,7 @@ The coordinated PiP serialization refactor is implemented:
    `PhysObj` now satisfies the Scientific Workflow payload contract and has an
    end-to-end writer/reader integration test using `with_json_field::<PhysObj>`.
 3. PiP independently enables `float_roundtrip`. Exact-bit regression coverage
-   retains the previously sensitive `f64` value without relying on downstream
+   retains the previously sensitive `f64` value without relying on consumer
    Cargo feature unification.
 4. Every current PiP payload schema is version 1 and includes a stable scalar
    identifier. Serialization rejects non-finite real or complex scalar values
@@ -5242,49 +5242,49 @@ Future physical-time sampling should be a separate noun-based policy such as
 remain model terminology and must not redefine the generic meanings of step or
 iteration.
 
-## Simulator and dispatcher migration readiness
+## Runtime model and orchestration layer migration readiness
 
-The crate is now a stable migration target for both downstream projects. A
-simulator can own one authoritative `SystemState`, mutate disjoint typed
+The crate is now a stable migration target for both consumer projects. A
+runtime model can own one authoritative `SystemState`, mutate disjoint typed
 payloads through tuple borrowing, perform one model `step`, advance its
 `iteration`, and offer the borrowed state to a `SystemStateWriter`. The writer
 owns typed per-stream `SamplingInterval` policies, bounded backpressure,
 whole-record chunking, terminal sampling, durability barriers, and checkpoint
 continuation.
 
-Dispatcher can replace its fixed/sweep expansion with
+Orchestration layer can replace its fixed/sweep expansion with
 `ProjectConfig::task_configs`, move deterministic complete `TaskConfig` handles
 directly into mission queues, configure one recording per task, and inspect
 completed results through the storage reader. Exact matching can select a
 subset while retaining the Cartesian product of every unconstrained axis.
-Scoped execution policy and richer logging remain dispatcher-level work rather
+Scoped execution policy and richer logging remain orchestration layer-level work rather
 than prerequisites missing from this crate. Migration should preserve the new
 storage-format version 4 contract and should not introduce compatibility
 aliases for the former step-based counter or sampling names.
 
-## GLV migration audit
+## dependent-model crate migration audit
 
-`general-lotka-volterra-rs` should be the first downstream refactor, before
-simulator and dispatcher. Dispatcher directly imports GLV solver, task-outcome,
-metadata, and output APIs, whereas simulator does not depend on GLV. Migrating
-GLV first therefore establishes the new downstream contract and removes one
-entire legacy persistence format before dispatcher is changed. GLV is also a
-smaller real-world proving ground than simulator: it already owns one evolving
+`the dependent model crate` should be the first consumer refactor, before
+runtime model and orchestration layer. Orchestration layer directly imports dependent-model crate solver, task-outcome,
+metadata, and output APIs, whereas runtime model does not depend on dependent-model crate. Migrating
+dependent-model crate first therefore establishes the new consumer contract and removes one
+entire legacy persistence format before orchestration layer is changed. dependent-model crate is also a
+smaller real-world proving ground than runtime model: it already owns one evolving
 state, uses ordinary Serde-compatible `ndarray` payloads, and produces two
 logical streams with different field selections.
 
-The current GLV boundary duplicates Scientific Workflow in four places:
+The current dependent-model crate boundary duplicates Scientific Workflow in four places:
 
 1. its generic `SystemState<T>` owns mode, integer time, aggregate array,
    optional spatial array, and cached mass as public fields;
-2. solvers alternate between two complete GLV states and directly decide when
+2. solvers alternate between two complete dependent-model crate states and directly decide when
    signal and space samples are due;
 3. `SignalWriter` and `SpaceWriter` clone arrays into estimated-size JSON
    chunks; and
-4. `TaskOutcome` writes a second, GLV-specific `metadata.json` lifecycle that
-   dispatcher parses directly.
+4. `TaskOutcome` writes a second, dependent-model crate-specific `metadata.json` lifecycle that
+   orchestration layer parses directly.
 
-The target GLV state uses Scientific Workflow's `SystemState` as the sole
+The target dependent-model crate state uses Scientific Workflow's `SystemState` as the sole
 authoritative evolving state. Its schema should declare `state`, `mass`, and,
 for spatial models, `space`. Concrete payload types remain `Array1<f64>`,
 `f64`, and `ArrayD<f64>`; their types are retained in memory and erased only
@@ -5294,7 +5294,7 @@ configuration rather than evolving payloads and should remain outside the
 state. Separate non-spatial and spatial schemas avoid pretending that a
 missing spatial field is a loaded scientific payload.
 
-Each GLV model should expose one `step` operation. Solver scratch arrays and a
+Each dependent-model crate model should expose one `step` operation. Solver scratch arrays and a
 next-array buffer may remain model-owned implementation details, but a second
 complete `SystemState` should not. After a successful numerical update, the
 model swaps or writes the resulting arrays into its authoritative state,
@@ -5304,18 +5304,18 @@ one `SystemStateWriter` after initialization and after every completed step;
 the writer alone evaluates `SamplingInterval` for `signal`, `space`, and
 checkpoint streams.
 
-GLV's `io` module, fixed estimated-byte chunking, `SignalRecord`,
+dependent-model crate's `io` module, fixed estimated-byte chunking, `SignalRecord`,
 `SpaceRecord`, and file loaders should disappear after equivalence is proven.
 Scientific Workflow then supplies exact encoded-byte chunking, bounded
 backpressure, one authoritative metadata document, typed reconstruction, and
-checkpoint continuation. GLV configuration known before execution—requested
+checkpoint continuation. dependent-model crate configuration known before execution—requested
 step count, model identity, solver increment, and sampling intervals—can be
 recorded as writer user metadata at creation. The termination reason and
-completed step count are known only at the end. GLV may continue returning
+completed step count are known only at the end. dependent-model crate may continue returning
 those values in an in-memory run outcome, but preserving them in the sole
 `metadata.json` requires the deferred terminal-metadata API. That is the one
-Scientific Workflow decision to settle before deleting GLV's metadata
-implementation; creating a second GLV sidecar is not acceptable.
+Scientific Workflow decision to settle before deleting dependent-model crate's metadata
+implementation; creating a second dependent-model crate sidecar is not acceptable.
 
 Migration order is:
 
@@ -5325,23 +5325,23 @@ Migration order is:
    sanitization, noise, termination, and numerical kernels;
 3. replace solver-owned save branches with writer observation and typed stream
    intervals;
-4. replace GLV readers and metadata validation with Scientific Workflow
+4. replace dependent-model crate readers and metadata validation with Scientific Workflow
    readers and metadata;
 5. migrate examples and add numerical/output equivalence tests before deleting
    legacy IO; and
-6. publish GLV, then refactor dispatcher against that new API before migrating
-   simulator's more complex PiP state.
+6. publish dependent-model crate, then refactor orchestration layer against that new API before migrating
+   runtime model's more complex PiP state.
 
-The audited GLV baseline is green: all ten library tests and all five example
+The audited dependent-model crate baseline is green: all ten library tests and all five example
 test targets pass before migration. Existing tests currently live inside
 production modules; the refactor should move meaningful coverage into the
 dedicated `tests/` directory to match the repository-wide testing convention.
 
-### GLV refactor kickoff
+### dependent-model crate refactor kickoff
 
-GLV development proceeds on its dedicated `sw-version` branch. Its
+dependent-model crate development proceeds on its dedicated `sw-version` branch. Its
 repository-root `todo.md` is the
-authoritative staged migration checklist. No GLV production code was changed
+authoritative staged migration checklist. No dependent-model crate production code was changed
 when the branch and plan were created. The first implementation gate remains
 the terminal-metadata decision followed by local dependency and schema setup;
 each subsequent production file is reviewed individually.
@@ -5351,7 +5351,7 @@ each subsequent production file is reviewed individually.
 The complete `attractor_2d` example was audited to distinguish reusable
 workflow infrastructure from application policy. The example should remain
 explicit enough to teach the ownership model, but it should not have to invent
-generic project and recording lifecycle types that every downstream project
+generic project and recording lifecycle types that every consumer project
 will repeat.
 
 ### Patterns that belong in Scientific Workflow
@@ -5394,7 +5394,7 @@ writer and cannot append records.
 
 #### Terminal metadata at completion
 
-The example knows all metadata before evolution, but GLV demonstrates that
+The example knows all metadata before evolution, but dependent-model crate demonstrates that
 completed iteration count and termination reason exist only at the end. The
 completion operation now accepts an optional terminal user-metadata map that is
 committed atomically with completed status in the sole `metadata.json`.
@@ -5427,18 +5427,18 @@ analysis API.
 - The executable's `AppResult`, logging text, and process-exit behavior belong
   to the application.
 
-### Patterns to defer until GLV supplies a second use case
+### Patterns to defer until dependent-model crate supplies a second use case
 
 The short `observe initial -> step and observe -> complete with final state`
 loop is attractive but should not yet become a framework runner or an
-`EvolvingSystem` trait. GLV requires early termination, stochastic failure,
-progress reporting, separate solver scratch, and continuation; simulator adds
+`EvolvingSystem` trait. dependent-model crate requires early termination, stochastic failure,
+progress reporting, separate solver scratch, and continuation; runtime model adds
 group execution and activity-based stopping. A trait inferred only from the
 Hopf loop would either be too narrow or would prematurely make execution policy
 part of `SystemState`.
 
 Likewise, stream declarations should not yet be decoded automatically from
-magic `fixed.json` keys. If GLV repeats the same declaration structure, a
+magic `fixed.json` keys. If dependent-model crate repeats the same declaration structure, a
 format-independent recording-plan type may be justified. Until then,
 `StateStreamConfig` and `SystemStateWriterBuilder` are the correct explicit
 boundary.
@@ -5451,7 +5451,7 @@ boundary.
 3. `ScientificProject` owns the conventional `config/state.json` schema.
 4. `ExecutionScope` owns generated/named/opened execution directories and
    deterministic task recording paths.
-5. Revisit a generic run controller only after GLV and simulator expose the
+5. Revisit a generic run controller only after dependent-model crate and runtime model expose the
    complete set of evolution and termination needs.
 
 ## Operational timestamp and duration architecture
@@ -5522,12 +5522,12 @@ A generated execution scope receives both an opaque collision-resistant
 identifier and an automatic UTC creation timestamp. A readable timestamp may
 appear in its directory name, but timestamp text alone is not a uniqueness
 mechanism because concurrent processes can observe the same clock value. Named
-scope creation remains available when an application or dispatcher owns the
+scope creation remains available when an application or orchestration layer owns the
 external identity.
 
 Scope metadata should eventually record scope creation/finalization and total
 duration independently of each task recording. That belongs to the future
-dispatcher-oriented execution-scope feature; recording-level timing can be
+orchestration layer-oriented execution-scope feature; recording-level timing can be
 implemented first.
 
 ### What should not be automatic

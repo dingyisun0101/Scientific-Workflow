@@ -1,5 +1,10 @@
 # scientific-workflow
 
+This README is the public API documentation for the crates.io publication of
+`scientific-workflow`.
+For repository context, private crate boundaries, and runnable example guidance,
+see [`../README.md`](../README.md).
+
 `scientific-workflow` provides Rust primitives for representing scientific
 system states and building reproducible simulation workflows.
 
@@ -248,7 +253,7 @@ model itself.
 
 The public `SystemStateWriter` facade owns multi-stream metadata, one bounded
 queue and worker, and the recording's completion or failure lifecycle.
-Workflow dispatch remains a later
+Workflow orchestration-layer support remains a later
 development stage.
 
 ## Installation
@@ -265,7 +270,7 @@ The crate uses Rust edition 2024 and requires Rust 1.97 or newer.
 ## Complete Project Example
 
 The source repository includes `examples/attractor_2d`, a standalone
-downstream application that exercises configuration loading, Cartesian task
+consumer application that exercises configuration loading, Cartesian task
 expansion, directly owned mutable states, tuple payload borrowing, independent
 sample streams, bounded asynchronous recording, automatic chunking, and
 explicit completion. Its lazy `TaskConfig` iterator feeds Rayon's bounded

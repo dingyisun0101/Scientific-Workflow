@@ -3,7 +3,7 @@
 //! `scientific-workflow` provides the data and execution foundations needed to
 //! describe scientific systems, record their evolution, and organize scoped
 //! computational work. The crate is intentionally divided by responsibility:
-//! state representation, in-memory state time series, storage, dispatch, and
+//! state representation, in-memory state time series, storage, orchestration, and
 //! language bridges remain separate modules rather than accumulating behind
 //! one monolithic interface.
 //!
@@ -19,7 +19,7 @@
 //! collision-resistant or caller-named execution scopes and deterministic task
 //! recording paths without taking ownership away from storage writers.
 //! [`artifact`] atomically publishes and verifies content-addressed immutable
-//! bytes while leaving their scientific representation to downstream crates.
+//! bytes while leaving their scientific representation to consumer crates.
 //! [`reporting`] provides parameter-identified parallel progress tracking and
 //! one process-wide human-facing terminal owner. [`rng_record`] provides only
 //! validated, persisted RNG provenance records; random generation remains an
@@ -34,7 +34,7 @@
 //! - explicit per-payload cloning of complete states;
 //! - mutable, checked time-point progression.
 //!
-//! Type erasure and boxing remain internal to that module. Downstream crates
+//! Type erasure and boxing remain internal to that module. Consumer crates
 //! work with their original concrete payload types.
 //!
 //! [`time_series`] provides the in-memory analysis collection for complete,
@@ -77,7 +77,7 @@
 //! # }
 //! ```
 //!
-//! Future dispatcher functionality will organize scoped workflow execution
+//! Future orchestration-layer features will organize scoped workflow execution
 //! without changing the public state-value ownership or storage contracts.
 
 mod clock;

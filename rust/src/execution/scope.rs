@@ -1,57 +1,12 @@
-//! Automatic filesystem scopes for one project execution and its task recordings.
-//!
-//! [`ExecutionScope`] centralizes collision-resistant directory creation so
-//! applications do not format timestamps, append process identifiers, or
-//! create task directories themselves. The scope owns organization only;
-//! individual [`crate::storage::SystemStateWriter`] values still exclusively
-//! create and own their recording directories.
-
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use thiserror::Error;
-
 use crate::clock::utc_now_rfc3339;
 
-/// Process-local suffix used when multiple scopes share one timestamp.
-static EXECUTION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+use super::error::ExecutionScopeError;
 
-/// Failure while creating or opening an execution scope.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ExecutionScopeError {
-    /// A caller-supplied scope name was empty or not one safe path component.
-    #[error("invalid execution scope name `{name}`")]
-    InvalidName {
-        /// Rejected scope name.
-        name: String,
-    },
-    /// The host UTC clock could not be formatted for the scope identity.
-    #[error("failed to format execution scope creation timestamp")]
-    Timestamp {
-        /// Timestamp-formatting failure.
-        #[source]
-        source: time::error::Format,
-    },
-    /// A filesystem operation failed at a scope boundary.
-    #[error("failed to {operation} execution scope at `{path}`")]
-    Io {
-        /// Stable filesystem action.
-        operation: &'static str,
-        /// Affected root or scope path.
-        path: PathBuf,
-        /// Underlying operating-system failure.
-        #[source]
-        source: std::io::Error,
-    },
-    /// Generated identity attempts repeatedly collided with existing scopes.
-    #[error("could not allocate a unique execution scope beneath `{root}`")]
-    IdentityExhausted {
-        /// Parent directory in which allocation was attempted.
-        root: PathBuf,
-    },
-}
+static EXECUTION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// One created or reopened project-execution directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -201,3 +156,4 @@ fn compact_timestamp(timestamp: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .collect()
 }
+

@@ -16,4 +16,4 @@ path = "src/main.rs"
 
 [dependencies]
 rayon = "1.12"
-scientific-workflow = { path = "../../dev", version = "0.2.2" }
+scientific-workflow = { path = "../../rust", version = "0.2.2" }

@@ -1,14 +1,17 @@
 # Scientific Workflow
 
-The Rust crate is located in `dev/`. Run commands from that directory:
+The Rust crate is located in `rust/`. The crate-facing documentation is in
+[`rust/README.md`](rust/README.md).
+
+Run commands from that directory:
 
 ```bash
-cd dev
+cd rust
 ```
 
 ## Standalone scientific-project example
 
-[`examples/attractor_2d`](examples/attractor_2d) is a complete downstream
+[`examples/attractor_2d`](examples/attractor_2d) is a complete consumer
 application built against the local crate. It loads project-root
 `config/{fixed,sweep,paths,state}.json` inputs, expands a parameter sweep,
 iterates complete shared `TaskConfig` handles, evolves one directly owned
@@ -27,7 +30,7 @@ directory. `ExecutionScope` selects a new timestamped, collision-resistant run d
 example does not overwrite prior results. The executable covers configuration,
 task expansion, state evolution, bounded recording, chunking, explicit
 recording completion, latest-state reconstruction, and exact live-to-stored
-verification. It prints only one minimal validation result.
+verification. It prints validation and cross-check report lines.
 
 The example is maintained as a repository-level project and is not included
 in the library crate's crates.io archive. Its
@@ -85,7 +88,7 @@ It never generates random values or defines a competing RNG configuration.
 Applications should pass one upstream configuration—such as PiP's
 `RngConfig`—to the scientific component, then copy that component's resolved
 seed and method identity into `RngRecord`. The complete mapping and example are
-documented in [`dev/README.md`](dev/README.md#rng-records).
+documented in [`rust/README.md`](rust/README.md#rng-records).
 
 ## Centralized progress reporting
 
@@ -192,7 +195,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 The detailed coverage allocation and logging contract are documented in
 [`tests.md`](tests.md).
 
-Downstream crates can bring the complete supported API into scope with:
+Consumer crates can bring the complete supported API into scope with:
 
 ```rust
 use scientific_workflow::prelude::*;

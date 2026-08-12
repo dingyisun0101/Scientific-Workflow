@@ -23,7 +23,7 @@ use scientific_workflow::prelude::*;
 /// Error boundary shared by the example's application.
 pub(crate) type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-/// Runs every configured task and reports one minimal validation result.
+/// Runs every configured task and reports validation and correctness checks.
 fn main() -> AppResult<()> {
     // By convention the standalone crate root is also the scientific project
     // root, and ScientificProject loads all four files under `config/`.

@@ -571,7 +571,7 @@ ran.
 
 ## Commands after consolidation
 
-From `dev/`:
+From `rust/`:
 
 ```bash
 cargo test --test state_workflow -- --nocapture

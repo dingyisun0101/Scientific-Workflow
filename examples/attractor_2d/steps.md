@@ -100,7 +100,7 @@ named paths.
 
 `task_configs()` lazily yields the complete Cartesian product or the declared
 explicit cases. Each item owns only shared handles to parameter and path data,
-so it can be moved into a dispatcher queue without constructing a merged map.
+so it can be moved into a orchestration queue without constructing a merged map.
 Use `task_configs_matching(key, value)` to retain all combinations of the other
 axes, and use `unique_task_config_matching` only when one key/value pair is
 known to identify exactly one task.
@@ -249,7 +249,7 @@ Registration is per field, so two fields may use different decoders even when
 their serialized JSON shapes look similar.
 
 **Ready when:** decoder coverage exactly matches the selected fields and each
-decoder returns the type expected by downstream analysis.
+decoder returns the type expected by consumer analysis.
 
 ## Step 11: Reconstruct and analyze series
 

@@ -668,7 +668,7 @@ impl SystemState {
     /// clone, allocation, encoding, or ownership transfer occurs here.
     #[allow(
         dead_code,
-        reason = "reserved for storage::JsonStateRecordEncoder, which is implemented in the next module stage"
+        reason = "reserved for storage::json_state_record_encoder::JsonStateRecordEncoder"
     )]
     pub(crate) fn serializable(
         &self,

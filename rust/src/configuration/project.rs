@@ -120,7 +120,7 @@ impl ProjectConfig {
     /// Cartesian sweeps yield their full product in canonical task order, with
     /// the final axis changing fastest. Explicit-case sweeps yield exactly the
     /// declared cases. Iterator items are cheap owned handles suitable for
-    /// moving into scoped work or dispatcher queues.
+    /// moving into scoped work queues or other task schedulers.
     pub fn task_configs(&self) -> TaskConfigIter {
         TaskConfigIter {
             parameters: self.parameters.tasks(),

@@ -1,24 +1,13 @@
-//! Live state ownership and the two-dimensional scientific evolution kernel.
-//!
-//! [`HopfModel`] directly owns the sole continuously evolving
-//! [`SystemState`] for one task. Persistence receives only temporary immutable
-//! borrows of that state; validation reconstructs separate states after the
-//! recording is complete. This separation keeps the simulation's ownership
-//! unambiguous and avoids cloning scientific payloads at sampling boundaries.
-
 use scientific_workflow::prelude::*;
 use std::thread;
 use std::time::Duration;
 
 use crate::AppResult;
 
-/// Exact state-template key for the phase-space point.
 pub(crate) const POINT_FIELD: &str = "point";
 
-/// Exact state-template key for the scalar radial diagnostic.
 pub(crate) const RADIUS_FIELD: &str = "radius";
 
-/// Scientific model and sole owner of its continuously evolving state.
 pub(crate) struct HopfModel {
     state: SystemState,
     mu: f64,
@@ -27,11 +16,6 @@ pub(crate) struct HopfModel {
 }
 
 impl HopfModel {
-    /// Creates the initial complete state and transfers both payload owners.
-    ///
-    /// `point` and `radius` become typed state slots when their first values
-    /// are inserted. The model subsequently mutates those allocations in
-    /// place; it never keeps a second domain-state structure in sync.
     pub(crate) fn new(
         schema: &SystemStateSchema,
         initial_point: Vec<f64>,
@@ -54,24 +38,13 @@ impl HopfModel {
         })
     }
 
-    /// Borrows the current complete state for zero-copy observation.
-    ///
-    /// The writer and final validator need an immutable view, but ownership
-    /// remains here for the model's entire lifetime.
     pub(crate) fn state(&self) -> &SystemState {
         &self.state
     }
 
-    /// Advances the Hopf normal form by exactly one explicit-Euler step.
-    ///
-    /// Both derivatives use the same old point. The point and derived radius
-    /// are then committed within one coordinated mutable borrow, after which
-    /// simulation and physical time advance transactionally.
     pub(crate) fn step(&mut self) -> Result<(), StateError> {
-        // This demonstration-only pause makes the centralized progress display
-        // observable. Real scientific models should spend this time computing
-        // and should not add an artificial delay.
-        thread::sleep(Duration::from_micros(500));
+        // This demonstration-only pause makes the progress display clearly visible.
+        thread::sleep(Duration::from_millis(1));
 
         {
             // A tuple borrow gives simultaneous mutable access to two
