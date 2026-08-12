@@ -64,6 +64,7 @@ exception chained as their cause.
   - `stream_names`, `user_metadata`, `terminal_metadata`, and `timing`
   - `stream_record_count(name)` and `stream_encoded_bytes(name)`
   - `read_stream(name)`, `read_all_streams()`, and `read_latest(name)`
+  - `iter_verified_records(name)` for bounded-memory incremental consumers
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
@@ -75,6 +76,12 @@ closed.
 The record containers cannot be reassigned and their value mappings are
 read-only. Decoded payload objects retain the type and mutability chosen by
 JSON decoding or by the caller's field decoder.
+
+`read_stream()` is transactional: it returns a complete series or nothing.
+`iter_verified_records()` verifies an entire bounded chunk before yielding its
+first record, but a later chunk may fail after earlier records were consumed.
+Incremental callers should therefore write only to private temporary storage
+and publish it after iteration completes successfully.
 
 ## Integrity boundary
 

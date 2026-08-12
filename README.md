@@ -73,6 +73,10 @@ reader = open_completed_recording("path/to/completed/recording")
 signal = reader.read_stream("signal")
 ```
 
+Large consumers may use `iter_verified_records(name)`. It validates a complete
+bounded chunk before yielding from that chunk; unlike transactional
+`read_stream`, a later chunk may still fail after earlier records were used.
+
 ## RNG provenance
 
 Workflow's `RngRecord` stores a resolved method, sequence-affecting version,

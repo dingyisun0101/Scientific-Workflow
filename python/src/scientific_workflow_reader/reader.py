@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
+from collections.abc import Iterator
 from typing import Any, Callable, Mapping
 
 from .errors import (
@@ -368,13 +369,23 @@ class RecordingReader:
         """Eagerly verifies and reconstructs an entire stream transactionally."""
         declaration = self._stream(stream)
         fields = self._fields(declaration)
+        return StateSeries(stream, fields, tuple(self.iter_verified_records(stream)))
+
+    def iter_verified_records(self, stream: str) -> Iterator[StateRecord]:
+        """Incrementally yields records from fully verified chunks.
+
+        Each chunk's size, checksum, framing, record count, descriptor facts,
+        and ordering are validated before its first record is yielded. A later
+        chunk may still fail after records from earlier chunks were consumed;
+        callers requiring an all-or-nothing result must use :meth:`read_stream`.
+        """
+        declaration = self._stream(stream)
+        fields = self._fields(declaration)
         self._require_decoders(fields)
-        output: list[StateRecord] = []
         previous: int | None = None
         for chunk in declaration["chunks"]:
             records, previous = self._read_chunk(declaration, chunk, previous)
-            output.extend(records)
-        return StateSeries(stream, fields, tuple(output))
+            yield from records
 
     def read_all_streams(self) -> tuple[tuple[str, StateSeries], ...]:
         output: list[tuple[str, StateSeries]] = []

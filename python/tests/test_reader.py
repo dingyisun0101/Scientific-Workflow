@@ -27,6 +27,33 @@ class ReaderTests(unittest.TestCase):
         shutil.copytree(FIXTURE, destination)
         return temporary, destination
 
+    def split_fixture(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+        temporary, recording = self.copied_fixture()
+        stream_directory = recording / "streams" / "signal"
+        source = stream_directory / "chunk-000000.jsonl"
+        lines = source.read_bytes().splitlines(keepends=True)
+        chunks = []
+        for ordinal, line in enumerate(lines):
+            path = stream_directory / f"chunk-{ordinal:06}.jsonl"
+            path.write_bytes(line)
+            record = json.loads(line)
+            chunks.append(
+                {
+                    "ordinal": ordinal,
+                    "file": path.name,
+                    "records": 1,
+                    "bytes": len(line),
+                    "checksum": "sha256:" + hashlib.sha256(line).hexdigest(),
+                    "first_iteration": record["iteration"],
+                    "last_iteration": record["iteration"],
+                }
+            )
+        metadata_path = recording / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["streams"][0]["chunks"] = chunks
+        metadata_path.write_text(json.dumps(metadata))
+        return temporary, recording
+
     def test_completed_fixture_reconstructs_exact_series_and_latest_state(self) -> None:
         reader = open_completed_recording(FIXTURE)
         self.assertEqual(reader.format_version, 4)
@@ -57,6 +84,19 @@ class ReaderTests(unittest.TestCase):
         missing = open_completed_recording(FIXTURE, decoders={"population": tuple})
         with self.assertRaises(DecoderError):
             missing.read_stream("signal")
+
+    def test_incremental_reader_yields_only_fully_verified_chunks(self) -> None:
+        temporary, recording = self.split_fixture()
+        self.addCleanup(temporary.cleanup)
+        reader = open_completed_recording(recording)
+        records = reader.iter_verified_records("signal")
+        first = next(records)
+        self.assertEqual(first.iteration, 0)
+
+        final_chunk = recording / "streams" / "signal" / "chunk-000001.jsonl"
+        final_chunk.write_bytes(final_chunk.read_bytes() + b" ")
+        with self.assertRaises(IntegrityError):
+            next(records)
 
     def test_unknown_stream_is_typed(self) -> None:
         with self.assertRaises(UnknownStreamError):
