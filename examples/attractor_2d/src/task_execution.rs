@@ -8,13 +8,19 @@ use crate::{
     validation,
 };
 use scientific_workflow::prelude::*;
+use std::path::PathBuf;
+
+pub(crate) struct TaskExecutionSummary {
+    pub(crate) task_ordinal: u64,
+    pub(crate) recording_directory: PathBuf,
+}
 
 pub(crate) fn run_task(
     schema: &SystemStateSchema,
     execution: &ExecutionScope,
     task: TaskConfig,
     reporter: &ProgressReporter,
-) -> AppResult<()> {
+) -> AppResult<TaskExecutionSummary> {
     let initial_point: Vec<f64> = task.decode_value("initial_point")?;
     let mu: f64 = task.decode_value("mu")?;
     let angular_frequency: f64 = task.decode_value("angular_frequency")?;
@@ -30,6 +36,7 @@ pub(crate) fn run_task(
     }
 
     let cross_check_initial_point = [initial_point[0], initial_point[1]];
+    let task_ordinal = task.task_ordinal();
 
     let mut model = HopfModel::new(
         schema,
@@ -52,7 +59,7 @@ pub(crate) fn run_task(
     let target_iteration = initial_iteration + step_count;
     let progress = reporter.start_task(&task, initial_iteration, Some(target_iteration))?;
 
-    let directory = execution.task_recording_directory(task.task_ordinal());
+    let directory = execution.task_recording_directory(task_ordinal);
     let recording = recording::record_task(
         schema,
         &directory,
@@ -67,44 +74,26 @@ pub(crate) fn run_task(
         &progress,
     )?;
 
-    if let Err(error) = validation::validate_recording(
+    validation::validate_recording(
         model.state(),
         &recording,
         POINT_FIELD,
         RADIUS_FIELD,
-    ) {
-        return Err(format!(
-            "task {} validation failed: {}",
-            task.task_ordinal(),
-            error
-        )
-        .into());
-    }
+    )?;
 
-    println!(
-        "task {} validation result: passed (recording {})",
-        task.task_ordinal(),
-        recording.directory().display()
-    );
-
-    if let Err(error) = cross_check::assert_matches_reference(
+    cross_check::assert_matches_reference(
         model.state(),
         cross_check_initial_point,
         mu,
         angular_frequency,
         physical_time_increment_per_step,
         step_count,
-    ) {
-        return Err(format!(
-            "task {} cross-check failed: {}",
-            task.task_ordinal(),
-            error
-        )
-        .into());
-    }
-
-    println!("task {} cross-check result: passed", task.task_ordinal());
+    )?;
 
     progress.complete(None)?;
-    Ok(())
+
+    Ok(TaskExecutionSummary {
+        task_ordinal,
+        recording_directory: recording.directory().to_path_buf(),
+    })
 }

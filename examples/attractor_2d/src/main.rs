@@ -5,7 +5,7 @@
 //! 2. [`task_execution.rs`] for per-task orchestration.
 //! 3. [`recording.rs`] for writer creation and sample cadence.
 //! 4. [`validation.rs`] for round-trip validation strategy.
-//! 5. [`cross_check.rs`] for an optional, demo-only numerical correctness check.
+//! 5. [`cross_check.rs`] for the numerical correctness check.
 //! 6. [`hopf_model.rs`] for the scientific model implementation.
 
 mod cross_check;
@@ -44,17 +44,25 @@ fn main() -> AppResult<()> {
     // TaskConfig is an owned Send + Sync handle over shared immutable source data.
     // par_bridge therefore feeds the lazy Cartesian iterator directly to Rayon's
     // work-stealing pool without first collecting configs.
-    project
+    let mut task_summaries = project
         .task_configs()
         .par_bridge()
-        .try_for_each(|task| -> AppResult<()> {
-            task_execution::run_task(
-                &schema,
-                &execution,
-                task,
-                &reporter,
-            )
-        })?;
+        .map(|task| task_execution::run_task(&schema, &execution, task, &reporter))
+        .collect::<AppResult<Vec<_>>>()?;
+
+    task_summaries.sort_by_key(|summary| summary.task_ordinal);
+
+    for summary in &task_summaries {
+        println!(
+            "task {} validation result: passed (recording {})",
+            summary.task_ordinal,
+            summary.recording_directory.display()
+        );
+    }
+
+    for summary in &task_summaries {
+        println!("task {} cross-check result: passed", summary.task_ordinal);
+    }
 
     reporter.complete(format!(
         "round_trip=true output={}",
