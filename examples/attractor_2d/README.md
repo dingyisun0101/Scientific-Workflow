@@ -22,17 +22,15 @@ library abstraction answer a question already raised by the preceding file:
    create independent tasks, and where output belongs.
 2. [`config/state.json`](config/state.json): see the stable names of the values
    that evolve. The template intentionally does not prescribe Rust types.
-3. [`src/project_setup.rs`](src/project_setup.rs): see resolved JSON values
-   decoded into one task's model and writer settings.
-4. [`src/hopf_model.rs`](src/hopf_model.rs): see the model directly own and
-   mutate its `SystemState`; this is the scientific core.
-5. [`src/state_recording.rs`](src/state_recording.rs): see immutable state
-   observations become independently sampled, asynchronously written streams.
-6. [`src/recording_validation.rs`](src/recording_validation.rs): see the final
-   complete checkpoint decoded back into typed payloads and compared exactly.
-7. [`src/main.rs`](src/main.rs): read the orchestrator last. Once the pieces are
-   familiar, its short load → dispatch → record → validate sequence shows how
-   they compose without hiding domain logic in `main`.
+3. [`src/main.rs`](src/main.rs): follow the complete application flow:
+   project setup, task orchestration, and delegation to focused modules.
+4. [`src/task_execution.rs`](src/task_execution.rs): inspect per-task setup,
+   progress tracking, and delegated recording/validation calls.
+5. [`src/recording.rs`](src/recording.rs): inspect cadence, stream, and
+   writer setup.
+6. [`src/validation.rs`](src/validation.rs): inspect checkpoint round-trip checks.
+7. [`src/hopf_model.rs`](src/hopf_model.rs): see the scientific core that
+   owns the evolving `SystemState` directly.
 
 Use [`steps.md`](steps.md) afterward when adapting this pattern to another
 scientific project. It explains the general construction sequence; this README
@@ -81,11 +79,11 @@ attractor_2d/
 │   ├── paths.json          # Named project-relative paths
 │   └── state.json          # State field names and descriptions
 └── src/
-    ├── main.rs                # Top-level application orchestration
-    ├── project_setup.rs       # Configuration and task decoding
-    ├── hopf_model.rs          # Sole state owner and Euler kernel
-    ├── state_recording.rs     # Streams, sampling, and writer lifecycle
-    └── recording_validation.rs # Minimal typed round-trip verification
+    ├── main.rs                # orchestration: load project + run per-task work
+    ├── task_execution.rs      # per-task model execution and task lifecycle
+    ├── recording.rs           # writer config, sampling intervals, and output
+    ├── validation.rs          # typed checkpoint replay and equality checks
+    └── hopf_model.rs          # scientific core and state ownership
 ```
 
 The standalone crate root is also the scientific project root. The application
@@ -191,12 +189,6 @@ Each explicit-Euler step will:
 
 No payload is cloned, extracted, or reallocated during this loop.
 
-Because this two-variable calculation would otherwise finish before a person
-could inspect the progress bars, `HopfModel::step` includes a
-500-microsecond demonstration pause. It is not part of the differential
-equation or simulation time and should be removed when adapting the example to
-real computational work.
-
 ## Recording streams
 
 One task owns one `SystemStateWriter` with three independently sampled streams:
@@ -260,7 +252,7 @@ After each writer reaches completed status, the application:
 - reads only the latest complete checkpoint; and
 - requires exact final time and payload equality with the live state.
 
-Plotting and numerical analysis are deliberately absent. They are downstream
+Plotting and numerical analysis are deliberately absent. They are consumer
 consumers of valid recordings, not part of the minimum evolution workflow.
 
 The library enables Serde JSON's `float_roundtrip` behavior so finite `f64`
