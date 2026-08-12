@@ -87,30 +87,23 @@ pub(crate) fn run_task(
         recording.directory().display()
     );
 
-    if std::env::var("ATTRACTOR2D_CROSS_CHECK").is_ok() {
-        if let Err(error) = cross_check::assert_matches_reference(
-            model.state(),
-            cross_check_initial_point,
-            mu,
-            angular_frequency,
-            physical_time_increment_per_step,
-            step_count,
-        ) {
-            return Err(format!(
-                "task {} cross-check failed: {}",
-                task.task_ordinal(),
-                error
-            )
-            .into());
-        }
-
-        println!("task {} cross-check result: passed", task.task_ordinal());
-    } else {
-        println!(
-            "task {} cross-check result: skipped (set ATTRACTOR2D_CROSS_CHECK=1)",
-            task.task_ordinal()
-        );
+    if let Err(error) = cross_check::assert_matches_reference(
+        model.state(),
+        cross_check_initial_point,
+        mu,
+        angular_frequency,
+        physical_time_increment_per_step,
+        step_count,
+    ) {
+        return Err(format!(
+            "task {} cross-check failed: {}",
+            task.task_ordinal(),
+            error
+        )
+        .into());
     }
+
+    println!("task {} cross-check result: passed", task.task_ordinal());
 
     progress.complete(None)?;
     Ok(())

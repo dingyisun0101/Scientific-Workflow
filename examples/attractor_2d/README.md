@@ -29,7 +29,7 @@ library abstraction answer a question already raised by the preceding file:
 5. [`src/recording.rs`](src/recording.rs): inspect cadence, stream, and
    writer setup.
 6. [`src/validation.rs`](src/validation.rs): inspect checkpoint round-trip checks.
-7. [`src/cross_check.rs`](src/cross_check.rs): optional, demo-only numerical
+7. [`src/cross_check.rs`](src/cross_check.rs): numerical correctness check
    correctness check.
 8. [`src/hopf_model.rs`](src/hopf_model.rs): see the scientific core that
    owns the evolving `SystemState` directly.
@@ -261,16 +261,15 @@ payloads recover their original binary values when decoded from the emitted
 decimal representation. A mismatch terminates the example instead of merely
 printing a failed informational flag.
 
-## Optional demo-only cross-check
+## Cross-check
 
-The cross-check in [`src/cross_check.rs`](src/cross_check.rs) is intentionally
-present for demonstration only and is **not** part of the required workflow
-pattern.
+The cross-check in [`src/cross_check.rs`](src/cross_check.rs) is a compulsory
+numerical correctness verification in this example.
 
-It runs only when `ATTRACTOR2D_CROSS_CHECK` is set:
+Run it with the normal command:
 
 ```bash
-ATTRACTOR2D_CROSS_CHECK=1 cargo run --manifest-path examples/attractor_2d/Cargo.toml
+cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
 [`src/cross_check.rs`](src/cross_check.rs) contains the same Euler calculation

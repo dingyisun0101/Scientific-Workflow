@@ -294,5 +294,5 @@ Its final iteration, physical time, coordinates, and radius have been compared
 bit-for-bit with the workflow implementation for all three `mu` values. This
 validates that workflow ownership and recording do not alter the numerical
 kernel; storage behavior is validated by the typed round trip above and by the
-library integration suite. It is marked as an optional demo-only check rather
-than a required component of the core workflow.
+library integration suite. This cross-check is a required component of the
+example workflow.

@@ -3,10 +3,8 @@ use scientific_workflow::prelude::SystemState;
 
 const CROSS_CHECK_TOLERANCE: f64 = 1e-12;
 
-/// One-file, non-workflow reference implementation used only as a demo check.
-///
-/// This is intentionally optional and not part of the standard workflow pattern;
-/// it is included to show a direct numerical sanity check path for this example.
+/// One-file, non-workflow reference implementation used as the example's
+/// obligatory numerical reference check.
 pub(crate) fn assert_matches_reference(
     live_state: &SystemState,
     initial_point: [f64; 2],
