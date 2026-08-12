@@ -40,6 +40,7 @@ fn main() -> AppResult<()> {
 
     let reporter = ProgressReporter::for_project(&project)
         .identify_tasks_by(["mu"])
+        .terminal()
         .start()?;
 
     // TaskConfig is an owned Send + Sync handle over shared immutable source
@@ -58,7 +59,7 @@ fn main() -> AppResult<()> {
             let recording =
                 record_model(schema, &execution, &task, &settings, &mut model, &progress)?;
             validate_recording(model.state(), &recording)?;
-            progress.complete()?;
+            progress.complete(None)?;
             Ok(())
         })?;
 

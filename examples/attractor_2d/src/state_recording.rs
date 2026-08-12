@@ -76,20 +76,23 @@ fn build_writer(
         // Queue bytes bound memory and apply backpressure; chunk bytes govern
         // file rollover without ever splitting one encoded state record.
         .with_shared_stream_limits(settings.maximum_chunk_bytes, settings.writer_queue_bytes)
-        .add_sampled_state_stream(
+        .add_state_stream(StateStreamConfig::new(
             TRAJECTORY_STREAM,
             [POINT_FIELD],
             settings.trajectory_sampling_interval,
-        )
-        .add_sampled_state_stream(
+            None,
+        ))
+        .add_state_stream(StateStreamConfig::new(
             RADIUS_STREAM,
             [RADIUS_FIELD],
             settings.radius_sampling_interval,
-        )
-        .add_sampled_state_stream(
+            None,
+        ))
+        .add_state_stream(StateStreamConfig::new(
             CHECKPOINT_STREAM,
             [POINT_FIELD, RADIUS_FIELD],
             settings.checkpoint_sampling_interval,
-        )
+            None,
+        ))
         .create_new_recording()
 }
