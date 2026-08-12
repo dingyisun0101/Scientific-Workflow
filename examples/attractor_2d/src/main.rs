@@ -44,25 +44,13 @@ fn main() -> AppResult<()> {
     // TaskConfig is an owned Send + Sync handle over shared immutable source data.
     // par_bridge therefore feeds the lazy Cartesian iterator directly to Rayon's
     // work-stealing pool without first collecting configs.
-    let mut task_summaries = project
+    let task_summaries = project
         .task_configs()
         .par_bridge()
         .map(|task| task_execution::run_task(&schema, &execution, task, &reporter))
         .collect::<AppResult<Vec<_>>>()?;
 
-    task_summaries.sort_by_key(|summary| summary.task_ordinal);
-
-    for summary in &task_summaries {
-        println!(
-            "task {} validation result: passed (recording {})",
-            summary.task_ordinal,
-            summary.recording_directory.display()
-        );
-    }
-
-    for summary in &task_summaries {
-        println!("task {} cross-check result: passed", summary.task_ordinal);
-    }
+    cross_check::print_example_report(&task_summaries);
 
     reporter.complete(format!(
         "round_trip=true output={}",

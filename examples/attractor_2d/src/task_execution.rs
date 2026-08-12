@@ -10,6 +10,7 @@ use crate::{
 use scientific_workflow::prelude::*;
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub(crate) struct TaskExecutionSummary {
     pub(crate) task_ordinal: u64,
     pub(crate) recording_directory: PathBuf,

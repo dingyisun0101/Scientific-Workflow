@@ -1,4 +1,8 @@
-use crate::{hopf_model::{POINT_FIELD, RADIUS_FIELD}, AppResult};
+use crate::{
+    hopf_model::{POINT_FIELD, RADIUS_FIELD},
+    task_execution::TaskExecutionSummary,
+    AppResult,
+};
 use scientific_workflow::prelude::SystemState;
 
 const CROSS_CHECK_TOLERANCE: f64 = 1e-12;
@@ -81,6 +85,24 @@ pub(crate) fn assert_matches_reference(
     }
 
     Ok(())
+}
+
+/// Prints the deterministic final example report for completed tasks.
+pub(crate) fn print_example_report(task_summaries: &[TaskExecutionSummary]) {
+    let mut summaries = task_summaries.to_vec();
+    summaries.sort_by_key(|summary| summary.task_ordinal);
+
+    for summary in &summaries {
+        println!(
+            "task {} validation result: passed (recording {})",
+            summary.task_ordinal,
+            summary.recording_directory.display()
+        );
+    }
+
+    for summary in &summaries {
+        println!("task {} cross-check result: passed", summary.task_ordinal);
+    }
 }
 
 fn reference_state_at_step_count(
