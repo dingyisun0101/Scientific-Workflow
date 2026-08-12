@@ -62,6 +62,40 @@ making them suitable for large arrays and tensors.
   stream limits, continuation reasons, and RNG-record parameters.
 - Workflow records RNG provenance but never implements scientific randomness.
 
+## Supported public API
+
+This is the exhaustive supported API allowlist for `scientific-workflow`.
+Users may rely on these items, their public enum variants, and their documented
+public methods. Importing `scientific_workflow::prelude::*` brings the complete
+allowlist into scope. Compiler-visible implementation paths not listed here are
+not compatibility promises.
+
+- Artifacts: `ArtifactDescriptor`, `ArtifactDisposition`, `ArtifactError`,
+  `ArtifactLoadError`, `PersistedArtifact`, `VerifiedArtifact`,
+  `persist_artifact`, and `load_verified_artifact`.
+- Configuration: `ConfigurationError`, `MatchingTaskConfigIter`,
+  `ParameterSpace`, `ProjectConfig`, `ProjectPaths`, `TaskConfig`,
+  `TaskConfigIter`, `TaskParameters`, and `TaskParametersIter`.
+- Projects and execution: `ScientificProject`, `ScientificProjectError`,
+  `ExecutionScope`, and `ExecutionScopeError`.
+- Progress: `ProgressReporter`, `ProgressReporterBuilder`, `ProgressSummary`,
+  `ReportingError`, `TaskIdentity`, `TaskProgress`, and `TaskStatus`.
+- RNG provenance: `RNG_RECORDS_METADATA_KEY`, `RngRecord`, and
+  `RngRecordError`.
+- Persistent storage: `CompletedRecording`, `CompletedStreamSummary`,
+  `JsonPayloadDecoder`, `JsonPayloadDecoderRegistry`, `JsonStringDecoder`,
+  `JsonVecF64Decoder`, `RecordingTiming`, `SamplingInterval`,
+  `StateStreamConfig`, `StorageError`, `StoredStateSeriesReader`,
+  `SystemStateWriter`, `SystemStateWriterBuilder`, and `TimeAxisMetadata`.
+- State: `PayloadInsertError`, `SimulationTime`, `StateError`,
+  `StateFieldSchema`, `SystemState`, and `SystemStateSchema`.
+- In-memory series: `StateSeries`, `StateSeriesError`,
+  `StateSeriesPushError`, and `StateSeriesView`.
+
+The sections below document the supported constructors and operations by
+workflow responsibility. Generated crate documentation is the exact signature
+reference for every item in this list.
+
 ## Parallel Progress Reporting
 
 `ProgressReporter` derives human-facing identity from task parameters and uses
