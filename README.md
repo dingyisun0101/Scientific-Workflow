@@ -52,6 +52,27 @@ Checksums detect accidental alteration and storage corruption. They do not by
 themselves prove model correctness, authorship, or cryptographic authenticity;
 those are separate provenance concerns.
 
+## Official Python reader
+
+The repository's [`python`](python) package provides the official eager Python
+reader for completed format-v4 recordings. It validates the same lifecycle,
+metadata, framing, schema, ordering, byte-count, and SHA-256 rules as Rust's
+`StoredStateSeriesReader`. Both readers consume one checked-in conformance
+fixture, preventing the Python implementation from becoming an undocumented
+copy of incidental storage details.
+
+The cross-language suite also performs a bidirectional round trip: the public
+Rust writer emits a multi-chunk recording consumed by Python, a test-only
+Python conformance producer re-encodes the reconstructed records, and the
+public Rust reader verifies the Python output down to floating-point bits.
+
+```python
+from scientific_workflow_reader import open_completed_recording
+
+reader = open_completed_recording("path/to/completed/recording")
+signal = reader.read_stream("signal")
+```
+
 ## RNG provenance
 
 Workflow's `RngRecord` stores a resolved method, sequence-affecting version,

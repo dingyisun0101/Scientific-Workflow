@@ -60,6 +60,12 @@ __pycache__/
 coverage/
 *.profraw
 
+# Python packaging output and isolated environments.
+**/build/
+**/dist/
+**/*.egg-info/
+**/.venv/
+
 .env
 .env.*
 !.env.example

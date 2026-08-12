@@ -1,0 +1,42 @@
+{
+  "format": "scientific-workflow-jsonl",
+  "version": 4,
+  "status": {"state": "complete"},
+  "timing": {
+    "created_at_utc": "2026-01-01T00:00:00Z",
+    "finalized_at_utc": "2026-01-01T00:00:01Z",
+    "active_duration_ns": 1000000000,
+    "continuation_count": 0
+  },
+  "records": {"encoding": "json", "framing": "json_lines"},
+  "time": {
+    "iteration_name": "iteration",
+    "physical_time_name": "physical_time"
+  },
+  "user_metadata": {"study": "python-reader-conformance"},
+  "terminal_metadata": {"termination_reason": "fixture_complete"},
+  "streams": [
+    {
+      "name": "signal",
+      "directory": "streams/signal",
+      "sampling_interval": {"iterations": 2},
+      "fields": [
+        {"name": "population", "description": "Population vector"},
+        {"name": "label", "description": "State label"}
+      ],
+      "max_chunk_bytes": 1024,
+      "queue_bytes": 4096,
+      "chunks": [
+        {
+          "ordinal": 0,
+          "file": "chunk-000000.jsonl",
+          "records": 2,
+          "bytes": 172,
+          "checksum": "sha256:eb75dd209a3d39779504c9fcecc2a9e94f0d47c1f3884e2654a82ecb60536ea0",
+          "first_iteration": 0,
+          "last_iteration": 2
+        }
+      ]
+    }
+  ]
+}

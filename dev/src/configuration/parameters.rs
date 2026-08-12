@@ -284,7 +284,8 @@ impl TaskParameters {
 
     /// Reports whether this resolved dictionary contains an exact or nested key.
     pub fn contains(&self, key: &str) -> bool {
-        self.inner.fixed_by_name.contains_key(key) || self.inner.sweep_by_name.contains_key(key)
+        self.inner.fixed_by_name.contains_key(key)
+            || self.inner.sweep_by_name.contains_key(key)
             || split_nested_key(key).is_some_and(|(root, path)| {
                 self.inner.fixed_by_name.get(root).is_some_and(|&position| {
                     lookup_json_path(&self.inner.fixed[position].value, path).is_some()

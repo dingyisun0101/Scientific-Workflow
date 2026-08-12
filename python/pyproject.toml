@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scientific-workflow-reader"
+version = "0.1.0"
+description = "Verified Python reader for Scientific Workflow recordings"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Dingyi Sun"}]
+keywords = ["science", "workflow", "recording", "jsonl", "reproducibility"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/dingyisun0101/Scientific-Workflow"
+Repository = "https://github.com/dingyisun0101/Scientific-Workflow"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+scientific_workflow_reader = ["py.typed"]
