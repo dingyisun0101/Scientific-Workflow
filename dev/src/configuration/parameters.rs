@@ -237,10 +237,18 @@ impl TaskParameters {
         self.ordinal
     }
 
-    /// Borrows one fixed or selected sweep value by exact JSON key.
+    /// Borrows one fixed or selected sweep value by exact or dotted-nested JSON key.
     ///
     /// Missing keys return `None`. No value is cloned, decoded, or allocated.
     pub fn value(&self, key: &str) -> Option<&Value> {
+        if let Some((root, path)) = split_nested_key(key) {
+            if let Some(&position) = self.inner.fixed_by_name.get(root) {
+                return lookup_json_path(&self.inner.fixed[position].value, path);
+            }
+            if let Some(&position) = self.inner.sweep_by_name.get(root) {
+                return lookup_json_path(self.inner.sweep.value(self.ordinal, position), path);
+            }
+        }
         if let Some(&position) = self.inner.fixed_by_name.get(key) {
             return Some(&self.inner.fixed[position].value);
         }
@@ -274,9 +282,16 @@ impl TaskParameters {
         })
     }
 
-    /// Reports whether this resolved dictionary contains an exact key.
+    /// Reports whether this resolved dictionary contains an exact or nested key.
     pub fn contains(&self, key: &str) -> bool {
         self.inner.fixed_by_name.contains_key(key) || self.inner.sweep_by_name.contains_key(key)
+            || split_nested_key(key).is_some_and(|(root, path)| {
+                self.inner.fixed_by_name.get(root).is_some_and(|&position| {
+                    lookup_json_path(&self.inner.fixed[position].value, path).is_some()
+                }) || self.inner.sweep_by_name.get(root).is_some_and(|&position| {
+                    lookup_json_path(self.inner.sweep.value(self.ordinal, position), path).is_some()
+                })
+            })
     }
 
     /// Returns the fixed-plus-swept entry count.
@@ -324,6 +339,27 @@ impl TaskParameters {
             }
         })
     }
+}
+
+/// Splits `a.b.c` into (`a`, `b.c`) for nested parameter lookup.
+fn split_nested_key(key: &str) -> Option<(&str, &str)> {
+    let (root, path) = key.split_once('.')?;
+    if root.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((root, path))
+}
+
+/// Looks up one nested JSON path inside an object value.
+fn lookup_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        match current {
+            Value::Object(values) => current = values.get(segment)?,
+            _ => return None,
+        }
+    }
+    Some(current)
 }
 
 impl fmt::Debug for TaskParameters {
