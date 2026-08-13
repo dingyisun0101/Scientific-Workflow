@@ -655,6 +655,7 @@ struct ProgressSlot {
     current: AtomicU64,
     target: AtomicU64,
     target_known: AtomicBool,
+    started: AtomicBool,
     status: AtomicU8,
     phase: Mutex<Box<str>>,
 }
@@ -768,6 +769,7 @@ fn start_slot(
         .map_err(|_| ReportingError::TaskAlreadyStarted {
             identity: slot.identity.label().to_owned(),
         })?;
+    slot.started.store(true, Ordering::Release);
     slot.current.store(initial_iteration, Ordering::Relaxed);
     if let Some(target) = target_iteration {
         slot.target.store(target, Ordering::Relaxed);
@@ -846,6 +848,7 @@ fn build_slots(
             current: AtomicU64::new(0),
             target: AtomicU64::new(0),
             target_known: AtomicBool::new(false),
+            started: AtomicBool::new(false),
             status: AtomicU8::new(TaskStatus::Pending.encode()),
             phase: Mutex::new("pending".into()),
         }));
@@ -870,6 +873,7 @@ fn build_registered_slots(labels: &[String]) -> Result<Arc<[Arc<ProgressSlot>]>,
             current: AtomicU64::new(0),
             target: AtomicU64::new(0),
             target_known: AtomicBool::new(false),
+            started: AtomicBool::new(false),
             status: AtomicU8::new(TaskStatus::Pending.encode()),
             phase: Mutex::new("pending".into()),
         }));
@@ -1046,7 +1050,8 @@ fn render(
 struct TerminalDisplay {
     multi: MultiProgress,
     bars: Vec<ProgressBar>,
-    statuses: Vec<TaskStatus>,
+    started: Vec<bool>,
+    idle_style: ProgressStyle,
     known_style: ProgressStyle,
     unknown_style: ProgressStyle,
 }
@@ -1054,6 +1059,8 @@ struct TerminalDisplay {
 impl TerminalDisplay {
     fn new(slots: &[Arc<ProgressSlot>]) -> Self {
         let multi = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
+        let idle_style = ProgressStyle::with_template("{prefix:.bold} [{msg}]")
+            .expect("hard-coded idle progress template is valid");
         let known_style = ProgressStyle::with_template(
             "{prefix:.bold} [{msg}] {wide_bar:.cyan/blue} {pos}/{len} elapsed {elapsed_precise} ETA {eta_precise}",
         )
@@ -1067,7 +1074,7 @@ impl TerminalDisplay {
             .map(|slot| {
                 let bar = multi.add(ProgressBar::new_spinner());
                 bar.set_prefix(slot.identity.label().to_owned());
-                bar.set_style(unknown_style.clone());
+                bar.set_style(idle_style.clone());
                 bar.set_message("pending");
                 bar
             })
@@ -1083,27 +1090,35 @@ impl TerminalDisplay {
         Self {
             multi,
             bars,
-            statuses: vec![TaskStatus::Pending; slots.len()],
+            started: vec![false; slots.len()],
+            idle_style,
             known_style,
             unknown_style,
         }
     }
 
     fn refresh(&mut self, slots: &[Arc<ProgressSlot>]) {
-        for ((bar, previous_status), slot) in self.bars.iter().zip(&mut self.statuses).zip(slots) {
-            if !slot.target_known.load(Ordering::Acquire) {
-                bar.set_style(self.unknown_style.clone());
-            } else {
-                let target = slot.target.load(Ordering::Relaxed);
-                bar.set_style(self.known_style.clone());
-                bar.set_length(target);
-            }
-            bar.set_position(slot.current.load(Ordering::Relaxed));
+        for ((bar, started), slot) in self.bars.iter().zip(&mut self.started).zip(slots) {
             let status = TaskStatus::decode(slot.status.load(Ordering::Acquire));
-            if *previous_status == TaskStatus::Pending && status == TaskStatus::Running {
+            if !*started && slot.started.load(Ordering::Acquire) {
                 // Pending time is queueing time, not task execution time. Start
-                // elapsed and ETA measurement from the first running state.
+                // elapsed and ETA measurement only after execution begins.
                 bar.reset_elapsed();
+                *started = true;
+            }
+            if *started {
+                if !slot.target_known.load(Ordering::Acquire) {
+                    bar.set_style(self.unknown_style.clone());
+                } else {
+                    let target = slot.target.load(Ordering::Relaxed);
+                    bar.set_style(self.known_style.clone());
+                    bar.set_length(target);
+                }
+                bar.set_position(slot.current.load(Ordering::Relaxed));
+            } else {
+                // Pending and reused tasks have no execution interval, so do
+                // not render a clock that measures time spent in the queue.
+                bar.set_style(self.idle_style.clone());
             }
             let phase = lock(&slot.phase);
             if phase.is_empty() || phase.as_ref() == status.label() {
@@ -1111,8 +1126,9 @@ impl TerminalDisplay {
             } else {
                 bar.set_message(format!("{}: {}", status.label(), phase.as_ref()));
             }
-            bar.tick();
-            *previous_status = status;
+            if *started && status == TaskStatus::Running {
+                bar.tick();
+            }
         }
     }
 
