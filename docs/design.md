@@ -1244,21 +1244,25 @@ consumer callers -> scientific_workflow::configuration::{...}
 ## Planned WorkflowRuntime
 
 `WorkflowRuntime` is the single operational owner for one scientific program
-execution. It owns reporting, shared cancellation, cooperative resource
-control, and the supported subprocess boundary. It does not own scientific
-state, storage writers, execution directories, task dependencies, or the
-application's scientific protocol.
+execution. It owns first-class phases and tasks, generic phase/task scheduling,
+reporting, shared cancellation, cooperative resource control, and the supported
+subprocess boundary. It does not own scientific state, storage writers,
+execution directories, or the application's scientific protocol. Applications
+declare phase dependencies and task workloads; the runtime validates and
+executes that declared structure without inferring scientific dependencies.
 
 The responsibility split is:
 
 ```text
 application
-    owns scientific task definitions, dependencies, and result handling
+    owns scientific phase/task definitions, dependencies, workloads,
+    completion verification, and result handling
         -> WorkflowRuntime
-           owns task registration, reporting, resources, cancellation,
-           and supported child-process execution
-               -> task-local TaskProgress or ActivityTask handles
-                  are passed into models and operations
+           owns one or more phases, bounded scheduling, reporting,
+           resources, cancellation, and supported child-process execution
+               -> Phase
+                  owns one or more Tasks and its queue/concurrency policy
+                      -> task-local TaskContext is passed into work
 ```
 
 `ExecutionScope` retains its existing narrower meaning: a filesystem scope for
@@ -1273,58 +1277,173 @@ source, resource controller, and child-report receiver. A subprocess never
 constructs another runtime or reporter; it connects to the parent through a
 restricted reporting client.
 
-The runtime follows a declare-then-run lifecycle:
+The runtime follows a declare-select-run lifecycle:
 
-1. The application declares every user-visible task and display section.
-2. `WorkflowRuntimeBuilder::start` validates stable task IDs, display order,
-   section membership, resource policy, and output policy.
-3. The runtime acquires the process-wide lease and starts its private renderer
-   and event receiver.
-4. The application starts ready work according to its own dependency graph.
-5. Models and operations receive only task-local handles, cancellation tokens,
-   resource leases, or child-client configuration.
-6. Successful runtime completion requires every declared task to be completed
-   or explicitly reused. Failure preserves the observed task states and shuts
-   down the renderer and child-report endpoint in order.
+1. The application constructs at least one nonempty `Phase`.
+2. Tasks are added to a `PhaseBuilder`, never directly to
+   `WorkflowRuntimeBuilder` or a live runtime.
+3. `WorkflowRuntimeBuilder::build` validates phase IDs, task identities,
+   dependencies, display projections, queue/concurrency limits, resource
+   policy, and output policy.
+4. `run_phases`, `run_phases_exact`, or `run_phases_with_dependencies` selects
+   and validates at least one phase before any reporting or work starts.
+5. The selected run acquires the process-wide lease, starts its private
+   renderer and event receiver, and executes phases in validated dependency
+   order.
+6. Within an eligible phase, the runtime prepares work through a bounded queue
+   and executes tasks concurrently up to both phase-local and runtime-global
+   limits.
+7. Successful runtime completion requires every selected task to be completed
+   or explicitly reused. Failure preserves observed states, prevents dependent
+   phases from starting, and shuts down owned infrastructure in order.
 
-The runtime deliberately does not implement a DAG, interpret dependencies, or
-decide which scientific result makes another task ready. Flat parameter
-sweeps, compiled study graphs, nested ensembles, and one-off programs can all
-use the same operational boundary. A later scheduler may be built above this
-API without changing it.
+The runtime implements only the generic scheduling implied by declared phases,
+dependencies, and limits. It never derives a dependency from parameter values,
+paths, output names, or scientific results. Flat parameter sweeps, compiled
+study graphs, nested ensembles, and one-off programs can all declare the same
+runtime hierarchy.
 
-### Runtime task declarations
+### First-class phases
 
-Presentation labels are not identity. Each declaration contains an opaque,
-stable `TaskId`, a human-readable label, a display kind, and an optional
-`SectionId`:
+`Phase` is the mandatory top-level work unit beneath a runtime:
 
 ```text
-RuntimeTask
-├── id: TaskId
-├── label: String
-├── section: Option<SectionId>
-└── kind
-    ├── Progress { initial_iteration, target_iteration? }
-    └── Activity
+WorkflowRuntime
+└── Phase (one or more)
+    └── Task (one or more)
 ```
+
+A phase has a stable `PhaseId`, an automatically generated or caller-supplied
+human label, one or more tasks, zero or more declared predecessor `PhaseId`
+values, `max_concurrent_workloads`, and `queue_capacity`. Empty runtimes, empty
+phase selections, empty phases, duplicate phase IDs, unknown dependencies, and
+dependency cycles are rejected before execution.
+
+Selected phases execute in validated dependency order. A dependent phase
+starts only after all required predecessors are verified as satisfied. Tasks
+within one eligible phase execute concurrently. The initial implementation uses
+phase barriers; concurrent independent phases require a future explicit policy
+rather than occurring implicitly.
+
+Phase selection has two explicit modes:
+
+```text
+run_phases_exact([2, 4, 5])
+run_phases_with_dependencies([2, 4, 5])
+```
+
+Exact selection rejects an omitted unsatisfied prerequisite. Dependency-
+inclusive selection adds required predecessors. A previously completed phase
+counts as satisfied only through application-provided result verification, not
+because a directory happens to exist. The concise `run_phases` convenience has
+exact-selection semantics and never starts additional scientific work
+silently.
+
+A phase is also the reporter's display section. Its heading supplies the
+horizontal separator before its first task, so no independent `SectionId` or
+positional splitter model exists.
+
+The intended construction and selection shape is:
+
+```rust,ignore
+let simulation = Phase::builder(2, "simulation")
+    .progress_tasks_from_project(&project, "simulation")
+    .display_tasks_by("simulation", ["mu"])
+    .max_concurrent_workloads(4)
+    .queue_capacity(8)
+    .build()?;
+
+let validation = Phase::builder(4, "validation")
+    .activity(validation_task)
+    .depends_on(2)
+    .max_concurrent_workloads(1)
+    .queue_capacity(1)
+    .build()?;
+
+let runtime = WorkflowRuntime::builder()
+    .phases([simulation, validation])
+    .build()?;
+
+runtime.run_phases([2, 4])?;
+```
+
+This is directional API design rather than a commitment to the exact nested
+builder syntax. The semantic commitments are mandatory phase ownership,
+configuration-driven task generation, bounded work preparation/concurrency,
+and explicit phase selection.
+
+### First-class tasks and identity
+
+A task exists independently of reporting and belongs to exactly one phase:
+
+```text
+Task
+├── id: TaskId
+├── key: TaskKey { phase_id, task_id }
+├── kind/namespace
+├── complete structured parameter view
+├── generated display label
+├── display kind
+│   ├── Progress { initial_iteration, target_iteration? }
+│   └── Activity
+└── workload factory
+```
+
+`TaskKey` is the exact runtime lookup key. `TaskId` must be unique within its
+phase; qualifying it with `PhaseId` permits the same scientific configuration
+to participate in simulation, validation, and processing phases without an
+identity collision. Labels are generated presentation and never serve as
+lookup keys. Duplicate labels are valid when exact task keys differ.
 
 `Progress` is used for iterative work. `Activity` is used for work that runs
 once and only changes lifecycle state, such as creating an artifact, validating
-a recording, or executing a processor. Activity rows never invent an
-iteration counter or progress bar.
+a recording, or executing a processor. Activity rows never invent an iteration
+counter or progress bar.
 
-`ScientificProject` and `ProjectConfig` remain convenience sources that can
-expand deterministic parameter tasks into runtime declarations. Explicit
-registration is the core API because a complete program may also contain
-processors, artifact operations, nested ensemble members, and other work not
-described by one project parameter space.
+The lightweight task declaration exists before rendering. Its workload factory
+materializes expensive executable state only after the task enters the phase's
+bounded prepared-work queue. The runtime invokes work with a `TaskContext`
+containing the appropriate progress/activity handle, cancellation observation,
+resource access, and retained task configuration.
 
-Sections are declared before startup and tasks refer to them by stable ID. The
-renderer inserts a horizontal separator immediately before the first task in a
-section. A positional convenience may express "split before task N", but the
-stored model is section membership so filtering or task expansion cannot leave
-a separator attached to the wrong task.
+### Automatic configuration task generation
+
+`ProjectConfig` remains the sole authority for fixed/sweep parsing and
+deterministic task expansion. The concise
+`PhaseBuilder::{progress,activity}_tasks_from_{project,configuration}` helpers
+adapt each existing cheap `TaskConfig` into one managed task; the runtime does
+not implement a second Cartesian product, merged parameter map, or cloned JSON
+identity. This avoids a second task-set registration builder while preserving
+the central `config -> tasks -> phase -> runtime` procedure.
+
+Each generated task retains:
+
+- its configuration task ordinal for deterministic order;
+- a shared `TaskConfig` handle;
+- every resolved fixed parameter;
+- every selected sweep parameter; and
+- its task kind/namespace, which distinguishes different operations generated
+  from the same configuration.
+
+All resolved parameters remain available through task `value`, `require_value`,
+and `decode_value` operations. The default row label is generated from the task
+kind and every parameter that varies within the phase's generated task set.
+Shared fixed values remain accessible through every task's complete identity
+and phase-level inspection but are not repeated on every row. Arrays and
+objects use compact shape/length plus short-digest labels rather than expanding
+their complete contents into terminal output.
+
+Callers may request a shorter display projection such as `display_by(["mu"])`.
+Startup accepts it only when that exact parameter subset uniquely distinguishes
+the applicable tasks. A collision reports the conflicting exact task keys; it
+never produces indistinguishable rows.
+
+`TaskSelector` performs exact partial matching over task kind and any subset of
+the complete fixed/sweep parameter view. `unique_task_matching` returns one
+task only when the selector has exactly one result; zero matches and ambiguous
+matches are distinct contextual errors. Selecting by display text or parsing a
+label is unsupported. Omitting a phase from a runtime-wide selector is valid,
+but tasks in multiple phases then participate in ambiguity detection.
 
 ### Runtime reporting
 
@@ -1339,16 +1458,19 @@ presentation detail and is never embedded in labels, statuses, plain output,
 redirected logs, or persisted data.
 
 `TaskProgress` remains the model-facing handle for iterative work. A separate
-`ActivityTask` handle exposes phase, message, completion, failure, status, and
+`ActivityTask` handle exposes detail, message, completion, failure, status, and
 cancellation without iteration methods. Dropping either active handle marks
 the reporting task failed, but does not automatically convert a recoverable
 storage recording into a terminal failed recording. Reporting lifecycle and
 recording lifecycle remain distinct.
 
-The current `ProgressReporter` constructors become builder adapters or private
-runtime implementation details. Downstream libraries must not construct a
-reporter. All human-facing messages emitted while a runtime is active pass
-through the runtime or a task handle.
+The current transient `TaskProgress::set_phase` vocabulary becomes
+`set_detail`, avoiding collision with the structural `Phase` type. The current
+`ProgressReporter` constructors become private runtime implementation details.
+The reporter accepts immutable phase/task views and structured events from the
+runtime; it never creates, identifies, owns, selects, schedules, or looks up
+phases or tasks. All human-facing messages emitted while a runtime is active
+pass through the runtime or a task handle.
 
 ### Resource policy
 
@@ -1388,9 +1510,16 @@ Enforcement is explicit and honest:
   be governed by the library.
 
 Operation-specific limits, such as maximum concurrent members of one
-scientific ensemble, remain application policy unless those members are
-declared as ordinary runtime tasks and consume runtime leases. The runtime does
-not assign scientific meaning to resource groups.
+scientific ensemble, are expressed by the owning phase's
+`max_concurrent_workloads` when members are ordinary managed tasks. The runtime
+does not assign scientific meaning to phase or resource groups.
+
+`queue_capacity` limits prepared but not running workloads, not lightweight
+task declarations. This preserves complete preregistration and stable reporter
+rows without retaining an unbounded number of initialized models, closures, or
+subprocess requests. Effective active concurrency is the minimum of the
+phase-local maximum, runtime-wide active-task limit, and available
+compute/process permits. Phases never create independent compute pools.
 
 `RuntimeConfig` is the standard serializable configuration boundary for this
 policy and output behavior. It can be loaded directly or supplied by a higher
@@ -1399,11 +1528,11 @@ level application configuration; it is not embedded in `fixed.json` or
 
 ### Subprocess boundary
 
-A child process receives a restricted `RuntimeClientConfig` plus the exact task
-token it is allowed to update. `RuntimeClient` sends structured lifecycle,
-progress, phase, message, and cancellation events to the parent. It cannot
-register tasks, finalize the runtime, alter resource policy, or acquire
-terminal ownership.
+A child process receives a restricted `RuntimeClientConfig` plus the exact
+`TaskKey` token it is allowed to update. `RuntimeClient` sends structured
+lifecycle, progress, detail, message, and cancellation events to the parent. It
+cannot create phases or tasks, finalize the runtime, alter resource policy, or
+acquire terminal ownership.
 
 The transport remains private so local threads and subprocesses share one
 public event contract without committing the API to pipes, sockets, systemd,
@@ -1418,12 +1547,14 @@ still decides whether persisted work is resumed, retried in a new
 
 ### Implementation sequence
 
-1. Introduce task IDs, section declarations, progress/activity kinds, and the
-   two-region renderer while preserving current thread-based behavior.
-2. Introduce `WorkflowRuntime` as the only public owner and migrate
-   `ProgressReporter` convenience construction behind its builder.
+1. Introduce first-class phase/task identity, configuration-driven task
+   generation, partial selection, progress/activity kinds, generated labels,
+   and reporter observation without duplicating current slot machinery.
+2. Introduce `WorkflowRuntime` as the only public owner, require the
+   runtime/phase/task hierarchy, and add bounded phase scheduling and explicit
+   phase selection.
 3. Add `RuntimeConfig`, `ResourcePolicy`, validated leases, and the shared
-   compute boundary without adding a scientific scheduler.
+   compute boundary beneath the phase scheduler.
 4. Add the restricted subprocess client protocol and runtime-owned child
    launcher, then remove the direct-execution restriction from consumers that
    use it.
@@ -1464,7 +1595,7 @@ keys and colliding identities fail before any renderer or worker starts.
 
 One `ProgressReporter` owns a registry of per-task slots and one renderer
 thread. Workers update only per-slot atomics for iteration and status; the
-renderer polls at a bounded interval. Infrequent phase strings and messages use
+renderer polls at a bounded interval. Infrequent detail strings and messages use
 locks or a channel outside the numerical counter path. Interactive stderr uses
 Indicatif 0.18.6 as a private rendering backend. After the exclusive lease
 reaches the renderer thread and before any bar is created, terminal mode clears
@@ -1682,15 +1813,15 @@ successful model transition -> SystemState::simulation_time -> set_iteration
 attractor_2d::record_model -> TaskProgress::set_iteration
 ```
 
-#### TaskProgress::set_phase
+#### TaskProgress::set_detail
 
-Updates an infrequent human-readable phase such as `evolving`, `finalizing
+Updates an infrequent human-readable detail such as `evolving`, `finalizing
 storage`, or `validating recording`. It is not intended for hot-loop metrics.
 
 ##### Reference
 
 ```text
-application workflow boundary changes -> TaskProgress::set_phase
+application workflow boundary changes -> TaskProgress::set_detail
 ```
 
 #### TaskProgress::report
@@ -1749,7 +1880,9 @@ renderer labels, task messages, tests, and custom presentation
 ### TaskStatus
 
 Public non-exhaustive lifecycle enumeration: `Pending`, `Running`, `Completed`,
-and `Failed`. Ordinal ordering is deliberately not encoded as identity.
+`Reused`, and `Failed`. Reused work contributes to successful completed
+summary counts without inventing an execution interval. Ordinal ordering is
+deliberately not encoded as identity.
 
 ##### Reference
 
@@ -1986,7 +2119,9 @@ workflow/
 │   │   ├── runtime.rs
 │   │   ├── runtime/
 │   │   │   ├── error.rs
+│   │   │   ├── phase.rs
 │   │   │   ├── task.rs
+│   │   │   ├── scheduler.rs
 │   │   │   ├── resources.rs
 │   │   │   ├── reporting.rs
 │   │   │   ├── renderer.rs
@@ -4970,7 +5105,7 @@ Required method allocation:
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
 | `resume_workflow` | explicit `continue_existing_recording`/`continue_recording_from_latest_checkpoint`, full-state schema enforcement, typed checkpoint reconstruction, prepared and unprepared crash windows, multi-sealed-plus-open recovery without sealed-content inspection, continuation rejection boundaries, append seeding, `flush`, and exclusive root leasing |
 | `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `TaskConfig`, `TaskConfigIter`, `MatchingTaskConfigIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, complete task generation, exact filtering, unique selection, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
-| `reporting_workflow` | `ProgressReporterBuilder`, `ProgressReporter`, `TaskProgress`, `TaskIdentity`, `TaskStatus`, `ProgressSummary`, and `ReportingError`; identity validation, automatic ordering, parallel atomic updates, output modes, exclusive session ownership, lifecycle finalization, and failure-on-drop |
+| `reporting_workflow` | `Phase`, `Task`, structured selectors, configuration task generation, `ProgressReporterBuilder`, `PhaseProgressReporterBuilder`, `ProgressReporter`, `TaskProgress`, `ActivityTask`, `TaskIdentity`, `TaskStatus`, `ProgressSummary`, and `ReportingError`; identity validation, generated labels, phase headings, automatic ordering, parallel atomic updates, output modes, exclusive session ownership, lifecycle finalization, and failure-on-drop |
 
 The finished source reads as seven coherent workflows rather than an API census.
 The old aggregators and focused subdirectories have been removed.

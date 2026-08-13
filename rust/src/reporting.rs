@@ -1,10 +1,12 @@
 //! Centralized, parallel-safe progress and terminal reporting.
 //!
-//! [`ProgressReporter`] registers every project task under an exact
-//! parameter-derived [`TaskIdentity`], assigns ordering from configuration, and
-//! becomes the sole human-facing terminal writer for its lifetime. Worker
-//! threads receive non-clone [`TaskProgress`] handles and synchronize absolute
-//! iteration from their authoritative scientific state.
+//! First-class [`Phase`] values own [`Task`] declarations before reporting
+//! begins. Configuration helpers generate those tasks from complete fixed and
+//! swept parameter views, while [`TaskSelector`] supports exact partial lookup.
+//! [`ProgressReporter`] observes the supplied identities and becomes the sole
+//! human-facing terminal writer for its lifetime; it does not create or own
+//! phases or tasks. Worker threads receive non-clone [`TaskProgress`] or
+//! [`ActivityTask`] handles.
 //!
 //! Iteration updates use per-task atomics. One renderer thread polls them at a
 //! bounded frequency, so numerical workers never draw progress bars or contend
@@ -36,10 +38,15 @@
 //! ```
 
 mod error;
+mod phase;
 mod progress;
 
 pub use error::ReportingError;
+pub use phase::{
+    Phase, PhaseBuilder, PhaseId, Task, TaskDisplayKind, TaskId, TaskKey, TaskSelector,
+};
 pub use progress::{
-    CancellationToken, ProgressReporter, ProgressReporterBuilder, ProgressSummary,
-    RegisteredProgressReporterBuilder, TaskIdentity, TaskProgress, TaskStatus,
+    ActivityTask, CancellationToken, PhaseProgressReporterBuilder, ProgressReporter,
+    ProgressReporterBuilder, ProgressSummary, RegisteredProgressReporterBuilder, TaskIdentity,
+    TaskProgress, TaskStatus,
 };

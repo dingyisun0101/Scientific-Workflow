@@ -505,6 +505,16 @@ controlling the test harness terminal.
 
 ### Required behavior
 
+- First-class nonempty phases own every managed task; task IDs are unique
+  within a phase and exact lookup uses phase-qualified `TaskKey` values.
+- Project/configuration helpers generate one task per deterministic
+  `TaskConfig`, retain all fixed/sweep values through shared ownership, and
+  generate labels from varying parameters.
+- Exact partial selectors distinguish unique, missing, and ambiguous matches.
+- A requested display projection must uniquely label the applicable task kind.
+- Phase headings provide reporter separators without a separate section model.
+- Progress and lifecycle-only activity tasks share one reporter while activity
+  handles expose no artificial iteration API.
 - Default identity uses every sweep key and is unique for every task.
 - A caller-selected non-unique key combination is rejected before rendering.
 - Duplicate and unknown identity keys are rejected contextually.
@@ -521,8 +531,13 @@ controlling the test harness terminal.
 
 - `ProgressReporter::{for_project,for_configuration,start_task,report,summary,
   complete,fail,report_error}`;
+- `ProgressReporter::{for_phases,start_progress,start_activity,mark_reused}` and
+  `PhaseProgressReporterBuilder::{terminal,plain,hidden,start}`;
+- `Phase`, `PhaseBuilder`, `PhaseId`, `Task`, `TaskId`, `TaskKey`,
+  `TaskDisplayKind`, and `TaskSelector` constructors and accessors;
 - `ProgressReporterBuilder::{identify_tasks_by,terminal,plain,hidden,start}`;
-- every public `TaskProgress`, `TaskIdentity`, and `ProgressSummary` method;
+- every public `TaskProgress`, `ActivityTask`, `TaskIdentity`, and
+  `ProgressSummary` method;
 - `TaskStatus` lifecycle values and reachable `ReportingError` families;
 - exclusive terminal leasing, renderer polling, identity construction, and
   failure-on-drop indirectly.
@@ -530,6 +545,8 @@ controlling the test harness terminal.
 ### Log contract
 
     [identity-validation] exact-combination=true duplicate-key=true unknown-key=true ambiguity=true
+    [phase-task-model] generated=6 complete_parameters=true shared_config=true partial_lookup=true
+    [phase-reporting] phases=2 progress=6 activities=1 reused=1 observer_only=true
     [parallel-progress] tasks=6 completed=6 atomic_iterations=true terminal_exclusive=true
     [failure-lifecycle] duplicate-start=true regression=true target-bound=true drop-fails=true
     [completion-validation] initial-bound=true target-required=true explicit-fail=true incomplete-success-rejected=true

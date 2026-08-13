@@ -25,6 +25,107 @@ pub enum ReportingError {
         task_count: u64,
     },
 
+    /// One phase contains no tasks.
+    #[error("phase {phase} must contain at least one task")]
+    EmptyPhase { phase: u64 },
+
+    /// A first-class reporter/runtime plan contains no phase.
+    #[error("at least one phase is required")]
+    EmptyPhaseSet,
+
+    /// A phase label is empty or whitespace-only.
+    #[error("phase {phase} must have a nonempty label")]
+    InvalidPhaseLabel { phase: u64 },
+
+    /// A phase active-workload limit is zero.
+    #[error("phase {phase} max_concurrent_workloads must be greater than zero")]
+    InvalidPhaseWorkloadLimit { phase: u64 },
+
+    /// A phase prepared-work queue capacity is zero.
+    #[error("phase {phase} queue_capacity must be greater than zero")]
+    InvalidPhaseQueueCapacity { phase: u64 },
+
+    /// A reporter phase list repeats one phase ID.
+    #[error("phase ID {phase} appears more than once")]
+    DuplicatePhaseId { phase: u64 },
+
+    /// One task has an empty phase-local ID.
+    #[error("phase {phase} contains an empty task ID")]
+    InvalidManagedTaskId { phase: u64 },
+
+    /// One task has an empty kind/namespace.
+    #[error("task `{task}` must have a nonempty kind")]
+    InvalidManagedTaskKind { task: String },
+
+    /// One phase repeats the same phase-local task ID.
+    #[error("phase {phase} repeats task ID `{task}`")]
+    DuplicateManagedTaskId { phase: u64, task: String },
+
+    /// Tasks of one kind do not expose one consistent parameter-key set.
+    #[error("task kind `{kind}` has inconsistent parameter keys between `{first}` and `{second}`")]
+    InconsistentManagedTaskParameters {
+        kind: String,
+        first: String,
+        second: String,
+    },
+
+    /// A display projection names a task kind absent from the phase.
+    #[error("task kind `{kind}` is not declared by the phase")]
+    UnknownManagedTaskKind { kind: String },
+
+    /// Two tasks receive the same requested generated label.
+    #[error("generated task label `{label}` collides between `{first}` and `{second}`")]
+    ManagedTaskDisplayCollision {
+        label: String,
+        first: String,
+        second: String,
+    },
+
+    /// A partial selector matched no managed task.
+    #[error("task selector `{selector}` matched no task")]
+    ManagedTaskNotFound { selector: String },
+
+    /// A partial selector matched more than one managed task.
+    #[error("task selector `{selector}` is ambiguous between `{first}` and `{second}`")]
+    ManagedTaskSelectorAmbiguous {
+        selector: String,
+        first: String,
+        second: String,
+    },
+
+    /// A managed task does not contain one required parameter.
+    #[error("task `{task}` does not contain parameter `{key}`")]
+    UnknownManagedTaskParameter { task: String, key: String },
+
+    /// One managed task parameter could not be decoded.
+    #[error("task `{task}` parameter `{key}` could not be decoded")]
+    DecodeManagedTaskParameter {
+        task: String,
+        key: String,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// An explicit parameter key is empty.
+    #[error("task parameter key `{key}` is invalid")]
+    InvalidTaskParameter { key: String },
+
+    /// Configuration-derived parameters cannot be mutated.
+    #[error("configuration-derived task `{task}` has immutable parameters")]
+    ConfiguredTaskParametersImmutable { task: String },
+
+    /// The reporter does not contain one exact first-class task key.
+    #[error("managed task `{task}` does not exist in this reporter")]
+    UnknownManagedTask { task: String },
+
+    /// A requested handle does not match the task's declared display kind.
+    #[error("task `{task}` is declared as {actual}, not {requested}")]
+    ManagedTaskKindMismatch {
+        task: String,
+        requested: &'static str,
+        actual: &'static str,
+    },
+
     /// One identity key was supplied more than once.
     #[error("task identity repeats parameter key `{key}`")]
     DuplicateIdentityParameter {

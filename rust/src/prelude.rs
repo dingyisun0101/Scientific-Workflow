@@ -28,8 +28,10 @@ pub use crate::configuration::{
 pub use crate::execution::{ExecutionScope, ExecutionScopeError};
 pub use crate::project::{ScientificProject, ScientificProjectError};
 pub use crate::reporting::{
-    CancellationToken, ProgressReporter, ProgressReporterBuilder, ProgressSummary,
-    RegisteredProgressReporterBuilder, ReportingError, TaskIdentity, TaskProgress, TaskStatus,
+    ActivityTask, CancellationToken, Phase, PhaseBuilder, PhaseId, PhaseProgressReporterBuilder,
+    ProgressReporter, ProgressReporterBuilder, ProgressSummary, RegisteredProgressReporterBuilder,
+    ReportingError, Task, TaskDisplayKind, TaskId, TaskIdentity, TaskKey, TaskProgress,
+    TaskSelector, TaskStatus,
 };
 pub use crate::rng_record::{RNG_RECORDS_METADATA_KEY, RngRecord, RngRecordError};
 pub use crate::storage::{

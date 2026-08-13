@@ -149,7 +149,7 @@ fn reporter_identifies_parallel_tasks_and_owns_their_lifecycle() {
                 assert_eq!(progress.target_iteration(), Some(4));
                 assert!(progress.should_continue(0).unwrap());
                 assert!(format!("{progress:?}").contains("current_iteration"));
-                progress.set_phase("evolving");
+                progress.set_detail("evolving");
                 for iteration in 1..=4 {
                     progress.set_iteration(iteration).unwrap();
                 }
@@ -313,4 +313,223 @@ fn reporter_identifies_parallel_tasks_and_owns_their_lifecycle() {
     );
     std::fs::remove_dir_all(&fixed_only_root).unwrap();
     println!("[result] reporting_workflow=passed");
+}
+
+#[test]
+fn phases_generate_first_class_tasks_from_complete_configuration() {
+    let _guard = REPORTER_TEST.lock().unwrap();
+    let project = ScientificProject::load(fixture_project("cartesian_project")).unwrap();
+
+    assert!(matches!(
+        ProgressReporter::for_phases(Vec::<Phase>::new())
+            .hidden()
+            .start(),
+        Err(ReportingError::EmptyPhaseSet)
+    ));
+
+    assert!(matches!(
+        Phase::builder(2, "empty").build(),
+        Err(ReportingError::EmptyPhase { phase: 2 })
+    ));
+    assert!(matches!(
+        Phase::builder(2, "invalid")
+            .task(Task::activity("same", "prepare"))
+            .task(Task::activity("same", "validate"))
+            .build(),
+        Err(ReportingError::DuplicateManagedTaskId { phase: 2, .. })
+    ));
+    assert!(matches!(
+        Phase::builder(2, "inconsistent")
+            .task(
+                Task::activity("a", "prepare")
+                    .with_parameter("seed", serde_json::json!(1))
+                    .unwrap()
+            )
+            .task(Task::activity("b", "prepare"))
+            .build(),
+        Err(ReportingError::InconsistentManagedTaskParameters { .. })
+    ));
+    assert!(matches!(
+        Phase::builder(2, "simulation")
+            .progress_tasks_from_project(&project, "simulation")
+            .display_tasks_by("simulation", ["temperature"])
+            .build(),
+        Err(ReportingError::ManagedTaskDisplayCollision { .. })
+    ));
+
+    let simulation = Phase::builder(2, "simulation")
+        .progress_tasks_from_project(&project, "simulation")
+        .max_concurrent_workloads(3)
+        .queue_capacity(4)
+        .build()
+        .unwrap();
+    assert_eq!(simulation.id(), PhaseId::new(2));
+    assert_eq!(simulation.tasks().len(), 6);
+    assert_eq!(simulation.max_concurrent_workloads(), 3);
+    assert_eq!(simulation.queue_capacity(), 4);
+
+    let original = project.task_config(0).unwrap();
+    let generated = &simulation.tasks()[0];
+    assert_eq!(generated.configuration_ordinal(), Some(0));
+    assert_eq!(generated.iter().count(), 5);
+    assert!(std::ptr::eq(
+        generated.value("solver").unwrap(),
+        original.value("solver").unwrap()
+    ));
+    assert!(generated.label().contains("temperature="));
+    assert!(generated.label().contains("seed="));
+    assert!(!generated.label().contains("physical_time_increment="));
+    assert_eq!(generated.decode_value::<u64>("seed").unwrap(), 7);
+
+    let unique = simulation
+        .unique_task_matching(
+            &TaskSelector::new()
+                .kind("simulation")
+                .parameter("temperature", serde_json::json!(280.0))
+                .parameter("seed", serde_json::json!(11)),
+        )
+        .unwrap();
+    assert_eq!(unique.configuration_ordinal(), Some(1));
+    assert!(matches!(
+        simulation.unique_task_matching(
+            &TaskSelector::new().parameter("temperature", serde_json::json!(280.0))
+        ),
+        Err(ReportingError::ManagedTaskSelectorAmbiguous { .. })
+    ));
+    assert!(matches!(
+        simulation.unique_task_matching(
+            &TaskSelector::new().parameter("temperature", serde_json::json!(999.0))
+        ),
+        Err(ReportingError::ManagedTaskNotFound { .. })
+    ));
+
+    let preparation = Phase::builder(4, "preparation")
+        .task(
+            Task::activity("prepare", "prepare")
+                .with_parameter("temperature", serde_json::json!(280.0))
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+    assert_ne!(simulation.tasks()[0].key(), preparation.tasks()[0].key());
+    assert!(format!("{simulation:?}").contains("simulation"));
+    assert!(format!("{:?}", simulation.tasks()[0]).contains("parameters"));
+    println!(
+        "[phase-task-model] generated=6 complete_parameters=true shared_config=true partial_lookup=true"
+    );
+}
+
+#[test]
+fn reporter_observes_phases_progress_and_activities_without_owning_identity() {
+    let _guard = REPORTER_TEST.lock().unwrap();
+    let project = ScientificProject::load(fixture_project("cartesian_project")).unwrap();
+    let simulation = Phase::builder(2, "simulation")
+        .progress_tasks_from_project(&project, "simulation")
+        .build()
+        .unwrap();
+    let preparation = Phase::builder(4, "preparation")
+        .task(Task::activity("prepare", "prepare"))
+        .build()
+        .unwrap();
+
+    assert!(matches!(
+        ProgressReporter::for_phases([simulation.clone(), simulation.clone()])
+            .hidden()
+            .start(),
+        Err(ReportingError::DuplicatePhaseId { phase: 2 })
+    ));
+
+    let reporter = ProgressReporter::for_phases([simulation.clone(), preparation.clone()])
+        .hidden()
+        .start()
+        .unwrap();
+    let reused = simulation.tasks()[0].key().clone();
+    reporter.mark_reused(&reused).unwrap();
+    assert_eq!(reporter.summary().completed(), 1);
+
+    thread::scope(|scope| {
+        for task in &simulation.tasks()[1..] {
+            let reporter = &reporter;
+            let key = task.key().clone();
+            scope.spawn(move || {
+                let progress = reporter.start_progress(&key, 0, Some(2)).unwrap();
+                assert_eq!(progress.identity().task_key(), Some(&key));
+                assert_eq!(progress.identity().len(), 5);
+                progress.set_detail("evolving");
+                progress.set_iteration(2).unwrap();
+                progress.complete(None).unwrap();
+            });
+        }
+    });
+
+    let activity_key = preparation.tasks()[0].key();
+    assert!(matches!(
+        reporter.start_progress(activity_key, 0, None),
+        Err(ReportingError::ManagedTaskKindMismatch { .. })
+    ));
+    let activity = reporter.start_activity(activity_key).unwrap();
+    assert_eq!(activity.status(), TaskStatus::Running);
+    assert!(format!("{activity:?}").contains("ActivityTask"));
+    activity.set_detail("preparing inputs");
+    activity.report("inputs verified").unwrap();
+    activity.complete();
+
+    let summary = reporter.complete("phase reporting complete").unwrap();
+    assert_eq!(summary.total(), 7);
+    assert_eq!(summary.completed(), 7);
+    assert!(summary.is_success());
+    println!("[phase-reporting] phases=2 progress=6 activities=1 reused=1 observer_only=true");
+
+    let first = Phase::builder(10, "first")
+        .task(Task::activity("same", "duplicate label"))
+        .build()
+        .unwrap();
+    let second = Phase::builder(11, "second")
+        .task(Task::activity("same", "duplicate label"))
+        .build()
+        .unwrap();
+    assert_eq!(first.tasks()[0].label(), second.tasks()[0].label());
+    let reporter = ProgressReporter::for_phases([first.clone(), second.clone()])
+        .hidden()
+        .start()
+        .unwrap();
+    reporter
+        .start_activity(first.tasks()[0].key())
+        .unwrap()
+        .complete();
+    reporter
+        .start_activity(second.tasks()[0].key())
+        .unwrap()
+        .complete();
+    assert!(
+        reporter
+            .complete("duplicate labels use exact keys")
+            .unwrap()
+            .is_success()
+    );
+
+    for status in [
+        TaskStatus::Pending,
+        TaskStatus::Running,
+        TaskStatus::Completed,
+        TaskStatus::Reused,
+        TaskStatus::Failed,
+    ] {
+        assert!(!status.as_str().contains('\u{1b}'));
+    }
+
+    let interrupted = Phase::builder(12, "interrupted")
+        .task(Task::activity("drop", "drop validation"))
+        .build()
+        .unwrap();
+    let reporter = ProgressReporter::for_phases([&interrupted])
+        .hidden()
+        .start()
+        .unwrap();
+    drop(
+        reporter
+            .start_activity(interrupted.tasks()[0].key())
+            .unwrap(),
+    );
+    assert_eq!(reporter.fail("activity dropped").unwrap().failed(), 1);
 }

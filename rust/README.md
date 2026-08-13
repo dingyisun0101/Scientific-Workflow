@@ -83,8 +83,11 @@ not compatibility promises.
   `TaskConfigIter`, `TaskParameters`, and `TaskParametersIter`.
 - Projects and execution: `ScientificProject`, `ScientificProjectError`,
   `ExecutionScope`, and `ExecutionScopeError`.
-- Progress: `ProgressReporter`, `ProgressReporterBuilder`, `ProgressSummary`,
-  `ReportingError`, `TaskIdentity`, `TaskProgress`, and `TaskStatus`.
+- Phases and progress: `Phase`, `PhaseBuilder`, `PhaseId`, `Task`, `TaskId`,
+  `TaskKey`, `TaskSelector`, `TaskDisplayKind`, `ProgressReporter`,
+  `PhaseProgressReporterBuilder`, `ProgressReporterBuilder`,
+  `ProgressSummary`, `ReportingError`, `TaskIdentity`, `TaskProgress`,
+  `ActivityTask`, and `TaskStatus`.
 - RNG provenance: `RNG_RECORDS_METADATA_KEY`, `RngRecord`, and
   `RngRecordError`.
 - Persistent storage: `CompletedRecording`, `CompletedStreamSummary`,
@@ -102,6 +105,45 @@ workflow responsibility. Generated crate documentation is the exact signature
 reference for every item in this list.
 
 ## Parallel Progress Reporting
+
+First-class tasks belong to a phase before reporting begins. Parameterized
+tasks are generated directly from the existing configuration manager, retain
+all fixed and selected sweep values without cloning their shared JSON owners,
+and receive automatic labels from the parameters that vary:
+
+```rust,no_run
+use scientific_workflow::prelude::*;
+
+# fn example(project: &ScientificProject) -> Result<(), Box<dyn std::error::Error>> {
+let phase = Phase::builder(2, "simulation")
+    .progress_tasks_from_project(project, "simulation")
+    .display_tasks_by("simulation", ["temperature", "seed"])
+    .max_concurrent_workloads(4)
+    .queue_capacity(8)
+    .build()?;
+
+let selected = phase.unique_task_matching(
+    &TaskSelector::new()
+        .kind("simulation")
+        .parameter("temperature", serde_json::json!(300.0))
+        .parameter("seed", serde_json::json!(11)),
+)?;
+let selected_key = selected.key().clone();
+
+let reporter = ProgressReporter::for_phases([phase]).hidden().start()?;
+let progress = reporter.start_progress(&selected_key, 0, Some(1_000))?;
+progress.set_iteration(1_000)?;
+progress.complete(None)?;
+reporter.fail("other declared tasks intentionally not run")?;
+# Ok(())
+# }
+```
+
+The reporter observes phase/task identities supplied by the work-management
+layer; it does not construct them. A phase heading becomes the display
+separator for its task rows. Lifecycle-only `ActivityTask` handles provide
+status, detail, messages, cancellation, completion, and failure without an
+iteration API.
 
 `ProgressReporter` derives human-facing identity from task parameters and uses
 the automatically assigned task ordinal only for stable ordering. With no

@@ -5,6 +5,7 @@
 //! write for the session. Progress never mutates or replaces scientific time;
 //! callers synchronize it from their authoritative model state.
 
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
@@ -26,6 +27,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::Value;
 
 use super::error::ReportingError;
+use super::phase::{Phase, Task, TaskDisplayKind, TaskKey};
 use crate::configuration::{ProjectConfig, TaskConfig};
 use crate::project::ScientificProject;
 
@@ -42,17 +44,31 @@ pub enum TaskStatus {
     Running,
     /// Evolution, persistence, and caller-defined validation completed.
     Completed,
+    /// Previously verified work was reused without executing again.
+    Reused,
     /// The task explicitly failed or dropped its active handle prematurely.
     Failed,
 }
 
 impl TaskStatus {
+    /// Returns the stable uncolored lifecycle label used by logs and APIs.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Reused => "reused",
+        }
+    }
+
     fn encode(self) -> u8 {
         match self {
             Self::Pending => 0,
             Self::Running => 1,
             Self::Completed => 2,
             Self::Failed => 3,
+            Self::Reused => 4,
         }
     }
 
@@ -62,17 +78,13 @@ impl TaskStatus {
             1 => Self::Running,
             2 => Self::Completed,
             3 => Self::Failed,
+            4 => Self::Reused,
             _ => unreachable!("task status is written only through TaskStatus::encode"),
         }
     }
 
     fn label(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-        }
+        self.as_str()
     }
 }
 
@@ -85,6 +97,7 @@ impl TaskStatus {
 pub struct TaskIdentity {
     fields: Arc<[(Box<str>, Value)]>,
     label: Arc<str>,
+    task: Option<Task>,
 }
 
 impl TaskIdentity {
@@ -95,7 +108,9 @@ impl TaskIdentity {
 
     /// Returns the number of parameter fields forming this identity.
     pub fn len(&self) -> usize {
-        self.fields.len()
+        self.task
+            .as_ref()
+            .map_or_else(|| self.fields.len(), |task| task.iter().count())
     }
 
     /// Reports whether the identity contains no parameter fields.
@@ -105,16 +120,31 @@ impl TaskIdentity {
 
     /// Borrows one exact identity value by parameter name.
     pub fn value(&self, key: &str) -> Option<&Value> {
+        if let Some(task) = &self.task {
+            return task.value(key);
+        }
         self.fields
             .iter()
             .find_map(|(name, value)| (name.as_ref() == key).then_some(value))
     }
 
     /// Iterates identity fields in the configured display order.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &Value)> {
-        self.fields
-            .iter()
-            .map(|(name, value)| (name.as_ref(), value))
+    pub fn iter(&self) -> Box<dyn Iterator<Item = (&str, &Value)> + '_> {
+        if let Some(task) = &self.task {
+            task.iter()
+        } else {
+            Box::new(
+                self.fields
+                    .iter()
+                    .map(|(name, value)| (name.as_ref(), value)),
+            )
+        }
+    }
+
+    /// Returns the exact first-class task key when this identity came from a
+    /// phase declaration.
+    pub fn task_key(&self) -> Option<&TaskKey> {
+        self.task.as_ref().map(Task::key)
     }
 
     fn matches(&self, task: &TaskConfig) -> bool {
@@ -186,6 +216,56 @@ pub struct ProgressReporterBuilder {
 pub struct RegisteredProgressReporterBuilder {
     labels: Vec<String>,
     output: OutputMode,
+}
+
+/// Builder that makes the reporter observe existing first-class phases/tasks.
+pub struct PhaseProgressReporterBuilder {
+    phases: Vec<Phase>,
+    output: OutputMode,
+}
+
+impl PhaseProgressReporterBuilder {
+    /// Forces cursor-controlled isolated-screen rendering.
+    pub fn terminal(mut self) -> Self {
+        self.output = OutputMode::Terminal;
+        self
+    }
+
+    /// Forces stable line-oriented output.
+    pub fn plain(mut self) -> Self {
+        self.output = OutputMode::Plain;
+        self
+    }
+
+    /// Suppresses rendering while retaining lifecycle validation.
+    pub fn hidden(mut self) -> Self {
+        self.output = OutputMode::Hidden;
+        self
+    }
+
+    /// Validates phase uniqueness and starts one observing reporter.
+    pub fn start(self) -> Result<ProgressReporter, ReportingError> {
+        let slots = build_phase_slots(&self.phases)?;
+        start_reporter(slots, Arc::from([]), self.output)
+    }
+}
+
+impl fmt::Debug for PhaseProgressReporterBuilder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PhaseProgressReporterBuilder")
+            .field("phases", &self.phases.len())
+            .field(
+                "tasks",
+                &self
+                    .phases
+                    .iter()
+                    .map(|phase| phase.tasks().len())
+                    .sum::<usize>(),
+            )
+            .field("output", &self.output)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RegisteredProgressReporterBuilder {
@@ -283,6 +363,21 @@ pub struct ProgressReporter {
 }
 
 impl ProgressReporter {
+    /// Observes tasks already owned and identified by first-class phases.
+    pub fn for_phases<I, P>(phases: I) -> PhaseProgressReporterBuilder
+    where
+        I: IntoIterator<Item = P>,
+        P: Borrow<Phase>,
+    {
+        PhaseProgressReporterBuilder {
+            phases: phases
+                .into_iter()
+                .map(|phase| phase.borrow().clone())
+                .collect(),
+            output: OutputMode::Auto,
+        }
+    }
+
     /// Registers one ordered application task set independent of any one
     /// Workflow project. This is the embedding boundary for study runners.
     pub fn for_registered_tasks<I, S>(labels: I) -> RegisteredProgressReporterBuilder
@@ -350,21 +445,39 @@ impl ProgressReporter {
         start_slot(&self.inner, slot, initial_iteration, target_iteration)
     }
 
+    /// Starts one exact first-class iterative task.
+    pub fn start_progress(
+        &self,
+        key: &TaskKey,
+        initial_iteration: u64,
+        target_iteration: Option<u64>,
+    ) -> Result<TaskProgress, ReportingError> {
+        let slot = managed_slot(&self.inner.slots, key)?;
+        if slot.display_kind != TaskDisplayKind::Progress {
+            return Err(kind_mismatch(&slot, "progress"));
+        }
+        start_slot(&self.inner, slot, initial_iteration, target_iteration)
+    }
+
+    /// Starts one exact first-class lifecycle-only activity task.
+    pub fn start_activity(&self, key: &TaskKey) -> Result<ActivityTask, ReportingError> {
+        let slot = managed_slot(&self.inner.slots, key)?;
+        if slot.display_kind != TaskDisplayKind::Activity {
+            return Err(kind_mismatch(&slot, "activity"));
+        }
+        start_activity_slot(&self.inner, slot)
+    }
+
+    /// Marks one exact first-class task complete through verified reuse.
+    pub fn mark_reused(&self, key: &TaskKey) -> Result<(), ReportingError> {
+        let slot = managed_slot(&self.inner.slots, key)?;
+        mark_slot_reused(&slot)
+    }
+
     /// Marks a registered task as already complete through verified reuse.
     pub fn mark_registered_reused(&self, label: &str) -> Result<(), ReportingError> {
         let slot = registered_slot(&self.inner.slots, label)?;
-        slot.status
-            .compare_exchange(
-                TaskStatus::Pending.encode(),
-                TaskStatus::Completed.encode(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .map_err(|_| ReportingError::TaskAlreadyStarted {
-                identity: label.to_owned(),
-            })?;
-        *lock(&slot.phase) = "reused".into();
-        Ok(())
+        mark_slot_reused(&slot)
     }
 
     /// Returns the cancellation token set by Ctrl-C in interactive mode.
@@ -561,10 +674,10 @@ impl TaskProgress {
                 .is_none_or(|target| iteration < target))
     }
 
-    /// Updates one infrequent human-readable phase such as `evolving` or
-    /// `validating`. Phase updates may lock; iteration updates do not.
-    pub fn set_phase(&self, phase: impl Into<String>) {
-        *lock(&self.slot.phase) = phase.into().into_boxed_str();
+    /// Updates one infrequent human-readable detail such as `evolving` or
+    /// `validating`. Detail updates may lock; iteration updates do not.
+    pub fn set_detail(&self, detail: impl Into<String>) {
+        *lock(&self.slot.detail) = detail.into().into_boxed_str();
     }
 
     /// Sends one task-scoped message through the sole renderer.
@@ -588,7 +701,7 @@ impl TaskProgress {
         {
             let current = self.current_iteration();
             if current != target {
-                *lock(&self.slot.phase) = "target not reached".into();
+                *lock(&self.slot.detail) = "target not reached".into();
                 self.slot
                     .status
                     .store(TaskStatus::Failed.encode(), Ordering::Release);
@@ -600,7 +713,7 @@ impl TaskProgress {
                 });
             }
         }
-        *lock(&self.slot.phase) = reason
+        *lock(&self.slot.detail) = reason
             .unwrap_or_else(|| "completed".to_owned())
             .into_boxed_str();
         self.slot
@@ -610,9 +723,9 @@ impl TaskProgress {
         Ok(())
     }
 
-    /// Marks the task failed, records a concise phase, and consumes the handle.
+    /// Marks the task failed, records a concise detail, and consumes the handle.
     pub fn fail(mut self, reason: impl Into<String>) {
-        *lock(&self.slot.phase) = reason.into().into_boxed_str();
+        *lock(&self.slot.detail) = reason.into().into_boxed_str();
         self.slot
             .status
             .store(TaskStatus::Failed.encode(), Ordering::Release);
@@ -635,7 +748,90 @@ impl fmt::Debug for TaskProgress {
 impl Drop for TaskProgress {
     fn drop(&mut self) {
         if self.active {
-            *lock(&self.slot.phase) = "interrupted".into();
+            *lock(&self.slot.detail) = "interrupted".into();
+            self.slot
+                .status
+                .store(TaskStatus::Failed.encode(), Ordering::Release);
+        }
+    }
+}
+
+/// Non-clone task-local handle for lifecycle-only work.
+///
+/// Activities deliberately expose no iteration or target operations. Dropping
+/// an active handle marks only its reporting task failed.
+pub struct ActivityTask {
+    slot: Arc<ProgressSlot>,
+    events: Sender<RenderEvent>,
+    cancelled: Arc<AtomicBool>,
+    active: bool,
+}
+
+impl ActivityTask {
+    /// Reports whether the owning reporter requested cooperative termination.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Borrows the task identity supplied by the owning phase.
+    pub fn identity(&self) -> &TaskIdentity {
+        &self.slot.identity
+    }
+
+    /// Returns the current lifecycle status.
+    pub fn status(&self) -> TaskStatus {
+        TaskStatus::decode(self.slot.status.load(Ordering::Acquire))
+    }
+
+    /// Updates one infrequent human-readable execution detail.
+    pub fn set_detail(&self, detail: impl Into<String>) {
+        *lock(&self.slot.detail) = detail.into().into_boxed_str();
+    }
+
+    /// Sends one task-scoped message through the sole renderer.
+    pub fn report(&self, message: impl Into<String>) -> Result<(), ReportingError> {
+        self.events
+            .send(RenderEvent::TaskMessage {
+                identity: self.identity().label().to_owned(),
+                message: message.into(),
+            })
+            .map_err(|_| ReportingError::RendererUnavailable)
+    }
+
+    /// Marks this activity successful and consumes its handle.
+    pub fn complete(mut self) {
+        *lock(&self.slot.detail) = "completed".into();
+        self.slot
+            .status
+            .store(TaskStatus::Completed.encode(), Ordering::Release);
+        self.active = false;
+    }
+
+    /// Marks this activity failed and consumes its handle.
+    pub fn fail(mut self, reason: impl Into<String>) {
+        *lock(&self.slot.detail) = reason.into().into_boxed_str();
+        self.slot
+            .status
+            .store(TaskStatus::Failed.encode(), Ordering::Release);
+        self.active = false;
+    }
+}
+
+impl fmt::Debug for ActivityTask {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ActivityTask")
+            .field("identity", &self.identity().label())
+            .field("status", &self.status())
+            .field("active", &self.active)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ActivityTask {
+    fn drop(&mut self) {
+        if self.active {
+            *lock(&self.slot.detail) = "interrupted".into();
             self.slot
                 .status
                 .store(TaskStatus::Failed.encode(), Ordering::Release);
@@ -652,12 +848,14 @@ struct ReporterInner {
 
 struct ProgressSlot {
     identity: TaskIdentity,
+    phase_label: Option<Arc<str>>,
+    display_kind: TaskDisplayKind,
     current: AtomicU64,
     target: AtomicU64,
     target_known: AtomicBool,
     started: AtomicBool,
     status: AtomicU8,
-    phase: Mutex<Box<str>>,
+    detail: Mutex<Box<str>>,
 }
 
 enum RenderEvent {
@@ -746,6 +944,48 @@ fn registered_slot(
         })
 }
 
+fn managed_slot(
+    slots: &[Arc<ProgressSlot>],
+    key: &TaskKey,
+) -> Result<Arc<ProgressSlot>, ReportingError> {
+    slots
+        .iter()
+        .find(|slot| slot.identity.task_key() == Some(key))
+        .cloned()
+        .ok_or_else(|| ReportingError::UnknownManagedTask {
+            task: key.to_string(),
+        })
+}
+
+fn kind_mismatch(slot: &ProgressSlot, requested: &'static str) -> ReportingError {
+    ReportingError::ManagedTaskKindMismatch {
+        task: slot
+            .identity
+            .task_key()
+            .map_or_else(|| slot.identity.label().to_owned(), ToString::to_string),
+        requested,
+        actual: match slot.display_kind {
+            TaskDisplayKind::Progress => "progress",
+            TaskDisplayKind::Activity => "activity",
+        },
+    }
+}
+
+fn mark_slot_reused(slot: &ProgressSlot) -> Result<(), ReportingError> {
+    slot.status
+        .compare_exchange(
+            TaskStatus::Pending.encode(),
+            TaskStatus::Reused.encode(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| ReportingError::TaskAlreadyStarted {
+            identity: slot.identity.label().to_owned(),
+        })?;
+    *lock(&slot.detail) = "reused".into();
+    Ok(())
+}
+
 fn start_slot(
     inner: &ReporterInner,
     slot: Arc<ProgressSlot>,
@@ -777,8 +1017,33 @@ fn start_slot(
     } else {
         slot.target_known.store(false, Ordering::Release);
     }
-    *lock(&slot.phase) = "running".into();
+    *lock(&slot.detail) = "running".into();
     Ok(TaskProgress {
+        slot,
+        events: inner.events.clone(),
+        cancelled: Arc::clone(&inner.cancelled),
+        active: true,
+    })
+}
+
+fn start_activity_slot(
+    inner: &ReporterInner,
+    slot: Arc<ProgressSlot>,
+) -> Result<ActivityTask, ReportingError> {
+    slot.status
+        .compare_exchange(
+            TaskStatus::Pending.encode(),
+            TaskStatus::Running.encode(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| ReportingError::TaskAlreadyStarted {
+            identity: slot.identity.label().to_owned(),
+        })?;
+    slot.started.store(true, Ordering::Release);
+    slot.target_known.store(false, Ordering::Release);
+    *lock(&slot.detail) = "running".into();
+    Ok(ActivityTask {
         slot,
         events: inner.events.clone(),
         cancelled: Arc::clone(&inner.cancelled),
@@ -844,13 +1109,16 @@ fn build_slots(
                     .collect::<Vec<_>>()
                     .into(),
                 label: label.into(),
+                task: None,
             },
+            phase_label: None,
+            display_kind: TaskDisplayKind::Progress,
             current: AtomicU64::new(0),
             target: AtomicU64::new(0),
             target_known: AtomicBool::new(false),
             started: AtomicBool::new(false),
             status: AtomicU8::new(TaskStatus::Pending.encode()),
-            phase: Mutex::new("pending".into()),
+            detail: Mutex::new("pending".into()),
         }));
     }
     Ok(slots.into())
@@ -869,14 +1137,52 @@ fn build_registered_slots(labels: &[String]) -> Result<Arc<[Arc<ProgressSlot>]>,
             identity: TaskIdentity {
                 fields: Arc::from([]),
                 label: label.clone().into(),
+                task: None,
             },
+            phase_label: None,
+            display_kind: TaskDisplayKind::Progress,
             current: AtomicU64::new(0),
             target: AtomicU64::new(0),
             target_known: AtomicBool::new(false),
             started: AtomicBool::new(false),
             status: AtomicU8::new(TaskStatus::Pending.encode()),
-            phase: Mutex::new("pending".into()),
+            detail: Mutex::new("pending".into()),
         }));
+    }
+    Ok(slots.into())
+}
+
+fn build_phase_slots(phases: &[Phase]) -> Result<Arc<[Arc<ProgressSlot>]>, ReportingError> {
+    if phases.is_empty() {
+        return Err(ReportingError::EmptyPhaseSet);
+    }
+    let mut phase_ids = HashSet::with_capacity(phases.len());
+    let capacity = phases.iter().map(|phase| phase.tasks().len()).sum();
+    let mut slots = Vec::with_capacity(capacity);
+    for phase in phases {
+        if !phase_ids.insert(phase.id()) {
+            return Err(ReportingError::DuplicatePhaseId {
+                phase: phase.id().get(),
+            });
+        }
+        let phase_label: Arc<str> = phase.label().into();
+        for task in phase.tasks() {
+            slots.push(Arc::new(ProgressSlot {
+                identity: TaskIdentity {
+                    fields: Arc::from([]),
+                    label: task.label().into(),
+                    task: Some(task.clone()),
+                },
+                phase_label: Some(Arc::clone(&phase_label)),
+                display_kind: task.display_kind(),
+                current: AtomicU64::new(0),
+                target: AtomicU64::new(0),
+                target_known: AtomicBool::new(false),
+                started: AtomicBool::new(false),
+                status: AtomicU8::new(TaskStatus::Pending.encode()),
+                detail: Mutex::new("pending".into()),
+            }));
+        }
     }
     Ok(slots.into())
 }
@@ -910,7 +1216,7 @@ fn summarize(slots: &[Arc<ProgressSlot>]) -> ProgressSummary {
         match TaskStatus::decode(slot.status.load(Ordering::Acquire)) {
             TaskStatus::Pending => summary.pending += 1,
             TaskStatus::Running => summary.running += 1,
-            TaskStatus::Completed => summary.completed += 1,
+            TaskStatus::Completed | TaskStatus::Reused => summary.completed += 1,
             TaskStatus::Failed => summary.failed += 1,
         }
     }
@@ -1049,9 +1355,11 @@ fn render(
 
 struct TerminalDisplay {
     multi: MultiProgress,
+    headings: Vec<ProgressBar>,
     bars: Vec<ProgressBar>,
     started: Vec<bool>,
     idle_style: ProgressStyle,
+    activity_style: ProgressStyle,
     known_style: ProgressStyle,
     unknown_style: ProgressStyle,
 }
@@ -1061,6 +1369,9 @@ impl TerminalDisplay {
         let multi = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
         let idle_style = ProgressStyle::with_template("{prefix:.bold} [{msg}]")
             .expect("hard-coded idle progress template is valid");
+        let activity_style =
+            ProgressStyle::with_template("{prefix:.bold} [{msg}] elapsed {elapsed_precise}")
+                .expect("hard-coded activity template is valid");
         let known_style = ProgressStyle::with_template(
             "{prefix:.bold} [{msg}] {wide_bar:.cyan/blue} {pos}/{len} elapsed {elapsed_precise} ETA {eta_precise}",
         )
@@ -1069,16 +1380,27 @@ impl TerminalDisplay {
             "{prefix:.bold} [{msg}] {spinner:.cyan} iteration {pos} elapsed {elapsed_precise} ETA unknown",
         )
         .expect("hard-coded spinner template is valid");
-        let bars: Vec<_> = slots
-            .iter()
-            .map(|slot| {
-                let bar = multi.add(ProgressBar::new_spinner());
-                bar.set_prefix(slot.identity.label().to_owned());
-                bar.set_style(idle_style.clone());
-                bar.set_message("pending");
-                bar
-            })
-            .collect();
+        let heading_style = ProgressStyle::with_template("{prefix:.bold}")
+            .expect("hard-coded phase-heading template is valid");
+        let mut headings = Vec::new();
+        let mut bars = Vec::with_capacity(slots.len());
+        let mut previous_phase: Option<&str> = None;
+        for slot in slots {
+            if let Some(phase) = slot.phase_label.as_deref()
+                && previous_phase != Some(phase)
+            {
+                let heading = multi.add(ProgressBar::new(0));
+                heading.set_style(heading_style.clone());
+                heading.set_prefix(format!("── {phase} ──"));
+                headings.push(heading);
+                previous_phase = Some(phase);
+            }
+            let bar = multi.add(ProgressBar::new_spinner());
+            bar.set_prefix(slot.identity.label().to_owned());
+            bar.set_style(idle_style.clone());
+            bar.set_message(terminal_status(TaskStatus::Pending));
+            bars.push(bar);
+        }
 
         // MultiProgress throttles draws globally. Force each bar's initial
         // state once so pending tasks are materialized instead of being
@@ -1086,12 +1408,17 @@ impl TerminalDisplay {
         for bar in &bars {
             bar.force_draw();
         }
+        for heading in &headings {
+            heading.force_draw();
+        }
 
         Self {
             multi,
+            headings,
             bars,
             started: vec![false; slots.len()],
             idle_style,
+            activity_style,
             known_style,
             unknown_style,
         }
@@ -1106,7 +1433,13 @@ impl TerminalDisplay {
                 bar.reset_elapsed();
                 *started = true;
             }
-            if *started {
+            if slot.display_kind == TaskDisplayKind::Activity {
+                bar.set_style(if *started {
+                    self.activity_style.clone()
+                } else {
+                    self.idle_style.clone()
+                });
+            } else if *started {
                 if !slot.target_known.load(Ordering::Acquire) {
                     bar.set_style(self.unknown_style.clone());
                 } else {
@@ -1120,11 +1453,11 @@ impl TerminalDisplay {
                 // not render a clock that measures time spent in the queue.
                 bar.set_style(self.idle_style.clone());
             }
-            let phase = lock(&slot.phase);
-            if phase.is_empty() || phase.as_ref() == status.label() {
-                bar.set_message(status.label());
+            let detail = lock(&slot.detail);
+            if detail.is_empty() || detail.as_ref() == status.label() {
+                bar.set_message(terminal_status(status));
             } else {
-                bar.set_message(format!("{}: {}", status.label(), phase.as_ref()));
+                bar.set_message(format!("{}: {}", terminal_status(status), detail.as_ref()));
             }
             if *started && status == TaskStatus::Running {
                 bar.tick();
@@ -1135,7 +1468,10 @@ impl TerminalDisplay {
     fn finish(&self, slots: &[Arc<ProgressSlot>]) {
         for (bar, slot) in self.bars.iter().zip(slots) {
             let status = TaskStatus::decode(slot.status.load(Ordering::Acquire));
-            bar.finish_with_message(status.label());
+            bar.finish_with_message(terminal_status(status));
+        }
+        for heading in &self.headings {
+            heading.finish();
         }
         let _ = self.multi.clear();
     }
@@ -1157,12 +1493,12 @@ fn write_plain_transitions(slots: &[Arc<ProgressSlot>], previous: &mut [TaskStat
     for (slot, old) in slots.iter().zip(previous) {
         let status = TaskStatus::decode(slot.status.load(Ordering::Acquire));
         if status != *old {
-            let phase = lock(&slot.phase);
+            let detail = lock(&slot.detail);
             eprintln!(
-                "[task] identity={} status={} phase={} iteration={} target={}",
+                "[task] identity={} status={} detail={} iteration={} target={}",
                 slot.identity.label(),
                 status.label(),
-                phase.as_ref(),
+                detail.as_ref(),
                 slot.current.load(Ordering::Relaxed),
                 format_target(slot)
             );
@@ -1193,6 +1529,18 @@ fn format_target(slot: &ProgressSlot) -> String {
     } else {
         "unknown".to_owned()
     }
+}
+
+fn terminal_status(status: TaskStatus) -> String {
+    let style = match status {
+        TaskStatus::Pending => console::Style::new().dim(),
+        TaskStatus::Running => console::Style::new().cyan(),
+        TaskStatus::Completed => console::Style::new().green(),
+        TaskStatus::Reused => console::Style::new().blue(),
+        TaskStatus::Failed => console::Style::new().red(),
+    }
+    .force_styling(true);
+    style.apply_to(status.label()).to_string()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
