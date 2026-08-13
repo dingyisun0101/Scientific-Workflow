@@ -35,6 +35,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::error::ConfigurationError;
+use super::parameter_key_tuple::ParameterKeyTuple;
 use super::parameters::{ParameterSpace, TaskParameters, TaskParametersIter};
 use super::paths::ProjectPaths;
 
@@ -278,6 +279,14 @@ impl TaskConfig {
         T: DeserializeOwned,
     {
         self.parameters.decode_value(key)
+    }
+
+    /// Decodes several required parameters into a heterogeneous tuple.
+    pub fn decode_values<Values, Keys>(&self, keys: Keys) -> Result<Values, ConfigurationError>
+    where
+        Keys: ParameterKeyTuple<Values>,
+    {
+        self.parameters.decode_values(keys)
     }
 
     /// Resolves one named path lexically against the project root.

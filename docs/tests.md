@@ -458,9 +458,9 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 - Generate complete fixed/sweep/path `TaskConfig` handles for the full
   Cartesian product, filter one sweep value while retaining other-axis
   combinations, and reject missing or ambiguous unique selection.
-- Exercise raw, required, and typed parameter lookup; resolved task iteration;
-  deterministic task JSON; cheap cloning; owning iterator independence; and
-  `Send + Sync` boundaries.
+- Exercise raw, required, single-value, and heterogeneous tuple decoding through
+  arity twelve; resolved task iteration; deterministic task JSON; cheap
+  cloning; owning iterator independence; and `Send + Sync` boundaries.
 - Inspect unresolved paths and resolve relative paths against the project root
   without canonicalization or existence checks.
 - Export all three exact source byte sequences to a new project, reload the
@@ -518,6 +518,8 @@ test harness terminal; a bounded plain-output check covers renderer output.
 - Application verification can satisfy an omitted completed dependency.
 - Project helpers generate executable tasks retaining complete `TaskConfig`
   values and automatic labels.
+- Concise helpers share one callable safely across generated tasks, while
+  advanced factories retain distinct single-use workload ownership.
 - Single-use workloads can move non-Clone resources directly into execution.
 - Phase concurrency and prepared-work queue capacity remain bounded.
 - Progress, activity, and verified reused tasks share one phase lifecycle.
@@ -536,7 +538,7 @@ test harness terminal; a bounded plain-output check covers renderer output.
   inspection;
 - `Phase`, `PhaseBuilder`, `PhaseId`, `Task`, `TaskId`, `TaskKey`,
   `TaskDisplayKind`, `TaskSelector`, and configuration workload helpers;
-- `TaskContext`, `TaskProgress`, `ActivityTask`, `TaskIdentity`,
+- `TaskContext` direct progress forwarding, `TaskProgress`, `ActivityTask`, `TaskIdentity`,
   `ProgressSummary`, `TaskStatus`, and reachable `RuntimeError` families;
 - scheduler barriers, bounded queues, renderer ownership, and terminal leases
   indirectly, including bounded message backpressure and plain/hidden output.

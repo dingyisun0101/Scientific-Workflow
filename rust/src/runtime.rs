@@ -16,7 +16,7 @@
 //!         source: Box::new(error),
 //!     })?;
 //! let phase = Phase::builder(2, "simulation")
-//!     .activity_workloads_from_project(&project, "prepare", |_| |context| {
+//!     .activity_tasks_from_project(&project, "prepare", |context| {
 //!         context.set_detail("ready");
 //!         Ok(())
 //!     })

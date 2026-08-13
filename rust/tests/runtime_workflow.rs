@@ -176,12 +176,12 @@ fn fn_once_scheduler_bounds_work_and_supports_reuse() {
             move |context: &TaskContext| {
                 assert_eq!(context.configuration().task_ordinal(), resource.0);
                 assert!(context.value("temperature").is_some());
-                let progress = context.progress_handle().unwrap();
-                progress.set_target_iteration(2)?;
+                context.set_target_iteration(2)?;
                 let current = active.fetch_add(1, Ordering::AcqRel) + 1;
                 maximum.fetch_max(current, Ordering::AcqRel);
                 thread::sleep(Duration::from_millis(5));
-                progress.set_iteration(2)?;
+                context.set_iteration(2)?;
+                assert!(!context.should_continue(2)?);
                 active.fetch_sub(1, Ordering::AcqRel);
                 completed.fetch_add(1, Ordering::AcqRel);
                 Ok(())
@@ -396,7 +396,13 @@ fn structured_selectors_use_complete_configuration_identity() {
     let _guard = RUNTIME_TEST.lock().unwrap();
     let project = project();
     let phase = Phase::builder(2, "simulation")
-        .activity_workloads_from_project(&project, "simulation", |_| |_| Ok(()))
+        .activity_tasks_from_project(&project, "simulation", |context| {
+            assert!(matches!(
+                context.set_iteration(1),
+                Err(RuntimeError::ManagedTaskKindMismatch { .. })
+            ));
+            Ok(())
+        })
         .display_tasks_by("simulation", ["temperature", "seed"])
         .build()
         .unwrap();

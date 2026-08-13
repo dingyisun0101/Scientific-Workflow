@@ -1,19 +1,33 @@
 use scientific_workflow::prelude::basics::*;
 
-use std::path::Path;
+use crate::{
+    AppResult,
+    hopf_model::{POINT_FIELD, RADIUS_FIELD},
+    recording::CHECKPOINT_STREAM,
+};
+use scientific_workflow::prelude::runtime::TaskContext;
 
-use crate::{recording::CHECKPOINT_STREAM, AppResult};
-
-/// Reconstructs the final complete checkpoint for dependent validation work.
-pub(crate) fn read_final_checkpoint(
-    recording_directory: &Path,
-    point_field: &str,
-    radius_field: &str,
-) -> AppResult<SystemState> {
+pub(crate) fn validate_recording(
+    execution: &ExecutionScope,
+    context: &TaskContext,
+) -> AppResult<()> {
+    context.set_detail("checking final checkpoint");
     let decoders = JsonPayloadDecoderRegistry::new()
-        .with_json_field::<Vec<f64>>(point_field)?
-        .with_json_field::<f64>(radius_field)?;
-    let reader =
-        StoredStateSeriesReader::open_completed_recording(recording_directory, decoders)?;
-    Ok(reader.read_latest_state_from_stream(CHECKPOINT_STREAM)?)
+        .with_json_field::<Vec<f64>>(POINT_FIELD)?
+        .with_json_field::<f64>(RADIUS_FIELD)?;
+    let directory = execution.task_recording_directory(context.configuration().task_ordinal());
+    let state = StoredStateSeriesReader::open_completed_recording(directory, decoders)?
+        .read_latest_state_from_stream(CHECKPOINT_STREAM)?;
+    let point = state.payload::<Vec<f64>>(POINT_FIELD)?;
+    let radius = state.payload::<f64>(RADIUS_FIELD)?;
+    let expected_iteration: u64 = context.decode_value("step_count")?;
+
+    if point.len() != 2 || *radius != point[0].hypot(point[1]) {
+        return Err("checkpoint radius is inconsistent with its point".into());
+    }
+    if state.simulation_time().iteration() != expected_iteration {
+        return Err("checkpoint does not contain the configured final iteration".into());
+    }
+    context.set_detail("checkpoint verified");
+    Ok(())
 }

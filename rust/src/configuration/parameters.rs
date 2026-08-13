@@ -59,7 +59,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Number, Value};
 
-use super::error::ConfigurationError;
+use super::{ParameterKeyTuple, error::ConfigurationError};
 
 const FIXED_FILE: &str = "fixed.json";
 const SWEEP_FILE: &str = "sweep.json";
@@ -280,6 +280,18 @@ impl TaskParameters {
             key: key.to_owned(),
             source,
         })
+    }
+
+    /// Decodes several required parameters into a heterogeneous tuple.
+    ///
+    /// Supported key tuples have arities two through twelve. Every element
+    /// follows [`Self::decode_value`], so a failure retains the exact task
+    /// ordinal and parameter key without constructing a merged JSON object.
+    pub fn decode_values<Values, Keys>(&self, keys: Keys) -> Result<Values, ConfigurationError>
+    where
+        Keys: ParameterKeyTuple<Values>,
+    {
+        keys.decode(self)
     }
 
     /// Reports whether this resolved dictionary contains an exact or nested key.

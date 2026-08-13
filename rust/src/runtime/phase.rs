@@ -422,6 +422,42 @@ impl PhaseBuilder {
         self
     }
 
+    /// Generates iterative tasks that share one thread-safe workload.
+    ///
+    /// Use this concise form when the callable can borrow shared captured
+    /// state. Use [`Self::progress_workloads_from_project`] when each task must
+    /// instead own a separately constructed resource.
+    pub fn progress_tasks_from_project<W>(
+        self,
+        project: &ScientificProject,
+        kind: impl Into<String>,
+        workload: W,
+    ) -> Self
+    where
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.progress_tasks_from_configuration(project.configuration(), kind, workload)
+    }
+
+    /// Generates iterative tasks from configuration with one shared workload.
+    pub fn progress_tasks_from_configuration<W>(
+        mut self,
+        configuration: &ProjectConfig,
+        kind: impl Into<String>,
+        workload: W,
+    ) -> Self
+    where
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.extend_shared_workload(
+            configuration,
+            kind.into(),
+            TaskDisplayKind::Progress,
+            workload,
+        );
+        self
+    }
+
     /// Generates executable iterative tasks from every project configuration.
     pub fn progress_workloads_from_project<F, W>(
         self,
@@ -452,6 +488,41 @@ impl PhaseBuilder {
             kind.into(),
             TaskDisplayKind::Progress,
             factory,
+        );
+        self
+    }
+
+    /// Generates activity tasks that share one thread-safe workload.
+    ///
+    /// Use [`Self::activity_workloads_from_project`] when each task needs a
+    /// separately constructed single-owner resource.
+    pub fn activity_tasks_from_project<W>(
+        self,
+        project: &ScientificProject,
+        kind: impl Into<String>,
+        workload: W,
+    ) -> Self
+    where
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.activity_tasks_from_configuration(project.configuration(), kind, workload)
+    }
+
+    /// Generates activity tasks from configuration with one shared workload.
+    pub fn activity_tasks_from_configuration<W>(
+        mut self,
+        configuration: &ProjectConfig,
+        kind: impl Into<String>,
+        workload: W,
+    ) -> Self
+    where
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.extend_shared_workload(
+            configuration,
+            kind.into(),
+            TaskDisplayKind::Activity,
+            workload,
         );
         self
     }
@@ -610,6 +681,28 @@ impl PhaseBuilder {
                 kind.clone(),
                 display_kind,
                 Some(Box::new(workload)),
+                false,
+            );
+        }
+    }
+
+    fn extend_shared_workload<W>(
+        &mut self,
+        configuration: &ProjectConfig,
+        kind: String,
+        display_kind: TaskDisplayKind,
+        workload: W,
+    ) where
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        let workload = Arc::new(workload);
+        for config in configuration.task_configs() {
+            let workload = Arc::clone(&workload);
+            self.push_configuration_task(
+                config,
+                kind.clone(),
+                display_kind,
+                Some(Box::new(move |context| workload(context))),
                 false,
             );
         }

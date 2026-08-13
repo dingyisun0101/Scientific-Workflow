@@ -519,6 +519,19 @@ generic JSON tree first. The returned domain value is owned and may allocate.
 simulation setup before numerical hot loops
 ```
 
+#### TaskParameters::decode_values
+
+Decodes a heterogeneous tuple of two through twelve exact parameter keys by
+reusing `decode_value` for each element. This groups values at their point of
+use without a user-defined configuration struct, cloned JSON tree, or merged
+map; failures retain the exact key and task ordinal.
+
+##### Reference
+
+```text
+model and recording setup -> TaskParameters::decode_values
+```
+
 #### TaskParameters::contains
 
 Checks both fixed and sweep indexes for an exact key.
@@ -976,7 +989,7 @@ Borrows the shared complete path dictionary for lower-level path inspection.
 advanced multi-path task setup -> TaskConfig::paths
 ```
 
-#### TaskConfig::value / require_value / decode_value
+#### TaskConfig::value / require_value / decode_value / decode_values
 
 Delegate clone-free raw lookup and explicit typed decoding to
 `TaskParameters`.
@@ -985,6 +998,7 @@ Delegate clone-free raw lookup and explicit typed decoding to
 
 ```text
 application task assembly -> TaskConfig::decode_value
+grouped application inputs -> TaskConfig::decode_values
 generic task inspection -> TaskConfig::value / require_value
 ```
 
@@ -1354,14 +1368,14 @@ The intended construction and selection shape is:
 
 ```rust,ignore
 let simulation = Phase::builder(2, "simulation")
-    .progress_workloads_from_project(&project, "simulation", simulation_workload)
+    .progress_tasks_from_project(&project, "simulation", simulation_workload)
     .display_tasks_by("simulation", ["mu"])
     .max_concurrent_workloads(4)
     .queue_capacity(8)
     .build()?;
 
 let validation = Phase::builder(4, "validation")
-    .activity_workloads_from_project(&project, "validation", validation_workload)
+    .activity_tasks_from_project(&project, "validation", validation_workload)
     .depends_on(2)
     .max_concurrent_workloads(1)
     .queue_capacity(1)
@@ -1886,7 +1900,6 @@ workflow/
         ├── Cargo.lock
         ├── README.md
         ├── design.md
-        ├── steps.md
         ├── config/
         │   ├── fixed.json
         │   ├── paths.json
@@ -1894,7 +1907,6 @@ workflow/
         │   └── sweep.json
         └── src/
             ├── main.rs
-            ├── cross_check.rs
             ├── hopf_model.rs
             ├── recording.rs
             ├── task_execution.rs
@@ -4850,7 +4862,6 @@ examples/
     │   └── state.json
     └── src/
         ├── main.rs
-        ├── cross_check.rs
         ├── hopf_model.rs
         ├── recording.rs
         ├── task_execution.rs
@@ -4864,7 +4875,7 @@ cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
 The standalone manifest depends on the local library through
-`scientific-workflow = { version = "0.3.0", path = "../../rust" }`. The version
+`scientific-workflow = { version = "0.3.1", path = "../../rust" }`. The version
 constraint documents compatibility while the path keeps repository development
 joint and offline. A root Cargo workspace is not required for the first
 example; adding one should be a separate repository-wide decision if multiple
@@ -5055,8 +5066,8 @@ suite, rather than this tutorial application, carries exhaustive validation
 and failure coverage.
 
 Example source modules use descriptive snake-case nouns consistently:
-`hopf_model.rs`, `recording.rs`, `task_execution.rs`, `validation.rs`, and
-`cross_check.rs`. These names identify either the primary domain object or the
+`hopf_model.rs`, `recording.rs`, `task_execution.rs`, and `validation.rs`.
+These names identify either the primary domain object or the
 module's exact application responsibility. `main.rs` remains the conventional
 orchestrator entry point.
 
@@ -5180,17 +5191,9 @@ complete checkpoint because repeating the same endpoint assertions for partial
 streams teaches no additional storage API. Its README directs readers from
 configuration through the model and storage modules to `main.rs`, making the
 orchestrator the conclusion rather than the entry point for understanding.
-`HopfModel::step` includes a demonstration-only 500-microsecond pause so the
-interactive runtime display remains visible during this tiny calculation;
-real models must omit that artificial delay.
-
-An independent one-file reference at
-`examples/attractor_2d/validation/naive_hopf.rs` now validates the scientific
-kernel without using `scientific-workflow` or any external dependency. Direct
-`rustc` execution matches the workflow's final iteration and the exact
-IEEE-754 bit patterns of accumulated physical time, both coordinates, and
-radius for all three swept tasks. Its scope is deliberately numerical; storage
-and reconstruction remain validated by the workflow and library tests.
+Each phase workload includes a demonstration-only three-second pause so the
+interactive display remains readable during this tiny calculation; real
+models must omit that artificial delay.
 
 ### User-API simplification implementation
 
@@ -5521,12 +5524,10 @@ the completed-recording result should be one lifecycle refactor.
 
 #### Latest-record reading
 
-`validation::read_final_checkpoint` uses
-`read_latest_state_from_stream` to reconstruct
-the latest state of one completed stream without scanning or retaining the
-entire series. It returns that stream's partial state schema; callers decide
-whether it is a complete checkpoint. Full-series reconstruction remains the
-analysis API.
+`validation::validate_recording` derives the task recording path from its
+configuration ordinal and uses `read_latest_state_from_stream` to reconstruct
+the latest state without scanning or retaining the entire series. Full-series
+reconstruction remains the analysis API.
 
 ### Patterns that should remain application code
 

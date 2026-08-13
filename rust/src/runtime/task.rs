@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::error::RuntimeError;
-use super::phase::{Task, TaskId, TaskKey};
+use super::phase::{Task, TaskDisplayKind, TaskId, TaskKey};
 use super::reporting::{ActivityTask, TaskProgress};
 use crate::configuration::TaskConfig;
 
@@ -91,6 +91,21 @@ impl TaskContext {
         }
     }
 
+    /// Sets or replaces the target iteration of a progress task.
+    pub fn set_target_iteration(&self, target: u64) -> Result<(), RuntimeError> {
+        self.required_progress()?.set_target_iteration(target)
+    }
+
+    /// Synchronizes a progress task to the authoritative scientific iteration.
+    pub fn set_iteration(&self, iteration: u64) -> Result<(), RuntimeError> {
+        self.required_progress()?.set_iteration(iteration)
+    }
+
+    /// Synchronizes iteration and reports whether work should continue.
+    pub fn should_continue(&self, iteration: u64) -> Result<bool, RuntimeError> {
+        self.required_progress()?.should_continue(iteration)
+    }
+
     /// Borrows lifecycle-only reporting for an activity task.
     pub fn activity_handle(&self) -> Option<&ActivityTask> {
         match &self.handle {
@@ -149,6 +164,18 @@ impl TaskContext {
             TaskHandle::Progress(progress) => progress.cancel(reason),
             TaskHandle::Activity(activity) => activity.cancel(reason),
         }
+    }
+
+    fn required_progress(&self) -> Result<&TaskProgress, RuntimeError> {
+        self.progress_handle()
+            .ok_or_else(|| RuntimeError::ManagedTaskKindMismatch {
+                task: self.key().to_string(),
+                requested: "progress",
+                actual: match self.task.display_kind() {
+                    TaskDisplayKind::Progress => "progress",
+                    TaskDisplayKind::Activity => "activity",
+                },
+            })
     }
 }
 

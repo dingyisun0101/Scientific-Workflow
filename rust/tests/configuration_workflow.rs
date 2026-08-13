@@ -312,6 +312,26 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
 
     let first = parameters.task(0).unwrap();
     let second = parameters.task(1).unwrap();
+    let (dt, shape, solver, temperature, seed): (f64, Vec<u64>, Value, f64, u64) = first
+        .decode_values((
+            "physical_time_increment",
+            "lattice_shape",
+            "solver",
+            "temperature",
+            "seed",
+        ))
+        .unwrap();
+    assert_eq!(dt, 0.125);
+    assert_eq!(shape, [4, 8]);
+    assert_eq!(solver["method"], "rk4");
+    assert_eq!((temperature, seed), (280.0, 7));
+    let twelve: (u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) = first
+        .decode_values((
+            "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed",
+            "seed",
+        ))
+        .unwrap();
+    assert_eq!(twelve, (7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7));
     let copied = first.clone();
     assert_eq!(first.task_ordinal(), 0);
     assert_eq!(first.len(), 5);

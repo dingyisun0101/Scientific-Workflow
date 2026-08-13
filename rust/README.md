@@ -119,15 +119,10 @@ use scientific_workflow::prelude::runtime::*;
 
 # fn example(project: &ScientificProject) -> Result<(), RuntimeError> {
 let phase = Phase::builder(2, "simulation")
-    .progress_workloads_from_project(project, "simulation", |config| {
-        let ordinal = config.task_ordinal();
-        move |context: &TaskContext| {
-            assert_eq!(context.configuration().task_ordinal(), ordinal);
-            let progress = context.progress_handle().unwrap();
-            progress.set_target_iteration(1_000)?;
-            progress.set_iteration(1_000)?;
-            Ok(())
-        }
+    .progress_tasks_from_project(project, "simulation", |context| {
+        context.set_target_iteration(1_000)?;
+        context.set_iteration(1_000)?;
+        Ok(())
     })
     .display_tasks_by("simulation", ["temperature", "seed"])
     .max_concurrent_workloads(4)
@@ -156,6 +151,9 @@ phase. They are not CPU, memory, process, or I/O limits. Each workload owns all
 scientific I/O and any subprocesses; the externally configured systemd/service
 scope contains the complete application. `TaskContext` exposes only retained
 identity/configuration, progress or activity reporting, and cancellation.
+The corresponding `progress_workloads_from_project` and
+`activity_workloads_from_project` factory methods remain available when each
+task must capture a distinct owned, possibly non-Clone resource.
 
 Only the active phase is displayed interactively. Plain mode emits append-only
 uncolored phase and task lifecycle records. Progress updates are atomic and
@@ -416,8 +414,10 @@ known to identify exactly one task, as is common for an explicit case ID.
 
 Task handles share the parsed source allocations and do not clone values or
 construct merged maps. `value` and `require_value` borrow raw JSON;
-`decode_value` explicitly constructs one requested Rust value. The final sweep
-axis changes fastest. Fixed and swept names must be disjoint.
+`decode_value` explicitly constructs one requested Rust value, while
+`decode_values` decodes a heterogeneous tuple of two through twelve values
+without an application configuration struct or merged JSON map. The final
+sweep axis changes fastest. Fixed and swept names must be disjoint.
 
 `ProjectConfig::write_source_config(destination)` reproduces the three
 parameter/path files byte for byte beneath a new destination project. It never overwrites an

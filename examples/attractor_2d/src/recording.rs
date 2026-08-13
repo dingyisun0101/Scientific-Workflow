@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 
 use crate::AppResult;
 use scientific_workflow::prelude::basics::*;
-use scientific_workflow::prelude::runtime::TaskProgress;
+use scientific_workflow::prelude::runtime::TaskContext;
 
 use crate::hopf_model::{POINT_FIELD, RADIUS_FIELD};
 
@@ -19,58 +19,42 @@ pub(crate) fn record_task(
     schema: &SystemStateSchema,
     directory: &std::path::Path,
     task: &TaskConfig,
-    step_count: u64,
-    trajectory_sampling_interval: SamplingInterval,
-    radius_sampling_interval: SamplingInterval,
-    checkpoint_sampling_interval: SamplingInterval,
-    maximum_chunk_bytes: NonZeroU64,
-    writer_queue_bytes: NonZeroU64,
     model: &mut crate::hopf_model::HopfModel,
-    progress: &TaskProgress,
-) -> AppResult<CompletedRecording> {
-    // The scope derives a stable task path but does not create it. Exclusive
-    // directory creation belongs to the writer, preventing accidental reuse.
-    let mut writer = build_writer(
-        schema,
-        directory,
-        task,
-        trajectory_sampling_interval,
-        radius_sampling_interval,
-        checkpoint_sampling_interval,
-        maximum_chunk_bytes,
-        writer_queue_bytes,
-    )?;
+    context: &TaskContext,
+) -> AppResult<()> {
+    let step_count: u64 = task.decode_value("step_count")?;
+    let mut writer = build_writer(schema, directory, task)?;
 
-    // The initial condition is a legitimate sample at iteration zero.
+    context.set_iteration(0)?;
+    context.set_target_iteration(step_count)?;
     writer.observe_state(model.state())?;
     for _ in 0..step_count {
         model.step()?;
-
-        // Progress observes the model's authoritative absolute iteration. It
-        // never owns or independently increments scientific time.
-        progress.set_iteration(model.state().simulation_time().iteration())?;
-
-        // Observation is intentionally unconditional. Writer owns every stream's
-        // cadence and returns immediately when no sample is due.
+        context.set_iteration(model.state().simulation_time().iteration())?;
         writer.observe_state(model.state())?;
     }
-
-    // Completion offers the endpoint once more, ensuring a final sample is always
-    // recorded even when the requested step count misses a configured interval.
-    Ok(writer.complete_recording_with_final_state(model.state())?)
+    writer.complete_recording_with_final_state(model.state())?;
+    Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_writer(
     schema: &SystemStateSchema,
     directory: &std::path::Path,
     task: &TaskConfig,
-    trajectory_sampling_interval: SamplingInterval,
-    radius_sampling_interval: SamplingInterval,
-    checkpoint_sampling_interval: SamplingInterval,
-    maximum_chunk_bytes: NonZeroU64,
-    writer_queue_bytes: NonZeroU64,
 ) -> AppResult<SystemStateWriter> {
+    let (trajectory_interval, radius_interval, checkpoint_interval, chunk_bytes, queue_bytes): (
+        SamplingInterval,
+        SamplingInterval,
+        SamplingInterval,
+        NonZeroU64,
+        NonZeroU64,
+    ) = task.decode_values((
+        "trajectory_sampling_interval",
+        "radius_sampling_interval",
+        "checkpoint_sampling_interval",
+        "maximum_chunk_bytes",
+        "writer_queue_bytes",
+    ))?;
     // Iteration and physical time belong to the scientific record. Operational
     // UTC timestamps and active duration are added by the writer itself.
     let time_axis = TimeAxisMetadata::new("iteration")
@@ -87,22 +71,22 @@ fn build_writer(
         .add_state_stream(StateStreamConfig::new(
             TRAJECTORY_STREAM,
             [POINT_FIELD],
-            trajectory_sampling_interval,
+            trajectory_interval,
             None,
         ))
         .add_state_stream(StateStreamConfig::new(
             RADIUS_STREAM,
             [RADIUS_FIELD],
-            radius_sampling_interval,
+            radius_interval,
             None,
         ))
         .add_state_stream(StateStreamConfig::new(
             CHECKPOINT_STREAM,
             [POINT_FIELD, RADIUS_FIELD],
-            checkpoint_sampling_interval,
+            checkpoint_interval,
             None,
         ))
-        .with_shared_stream_limits(maximum_chunk_bytes, writer_queue_bytes)
+        .with_shared_stream_limits(chunk_bytes, queue_bytes)
         .create_new_recording()?;
 
     Ok(writer)

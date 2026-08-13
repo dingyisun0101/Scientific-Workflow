@@ -31,8 +31,8 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let project = ProjectConfig::load("scientific-project")?;
 //! for task in project.task_configs() {
-//!     let temperature = task.decode_value::<f64>("temperature")?;
-//!     let seed = task.decode_value::<u64>("seed")?;
+//!     let (temperature, seed): (f64, u64) =
+//!         task.decode_values(("temperature", "seed"))?;
 //!     let output_root = task.resolve_path("output_root")?;
 //!     println!(
 //!         "task={} temperature={temperature} seed={seed} output={}",
@@ -66,11 +66,14 @@
 //! `config/` directory.
 
 mod error;
+mod parameter_key_tuple;
 mod parameters;
 mod paths;
 mod project_config;
 
 pub use error::ConfigurationError;
+#[doc(hidden)]
+pub use parameter_key_tuple::ParameterKeyTuple;
 pub use parameters::{ParameterSpace, TaskParameters, TaskParametersIter};
 pub use paths::ProjectPaths;
 pub use project_config::{MatchingTaskConfigIter, ProjectConfig, TaskConfig, TaskConfigIter};

@@ -32,12 +32,10 @@ example does not overwrite prior results. The executable covers configuration,
 task expansion, dependency-aware phase selection, state evolution, bounded
 recording, format-v5 positional chunks, explicit recording completion,
 latest-state reconstruction, and numerical verification. It prints validation
-and cross-check report lines.
+status through the runtime display.
 
 The example is maintained as a repository-level project and is not included
-in the library crate's crates.io archive. Its
-[`steps.md`](examples/attractor_2d/steps.md) explains the reusable development
-sequence for a general scientific project.
+in the library crate's crates.io archive.
 
 ## Mandatory chunk integrity
 
@@ -97,9 +95,10 @@ documented in [`rust/README.md`](rust/README.md#rng-records).
 First-class `Phase` values own every `Task` before reporting begins.
 Parameterized tasks are generated from the configuration manager with all
 fixed/sweep values retained, automatic labels, and exact partial selectors.
-Every workload is a single-use `FnOnce`, so task-owned models and writers move
-directly into execution. Phase failure defaults to fail-fast and may instead be
-configured to finish already active work without admitting more tasks.
+Concise task helpers share one thread-safe callable across generated tasks;
+advanced workload factories create a distinct single-use `FnOnce` when a task
+must own a unique resource. Phase failure defaults to fail-fast and may instead
+be configured to finish already active work without admitting more tasks.
 `WorkflowRuntime` schedules only tasks registered through those phases and owns
 their human-facing display. Each task remains responsible for its own files,
 recordings, artifacts, networking, and subprocesses. Hard process resources are

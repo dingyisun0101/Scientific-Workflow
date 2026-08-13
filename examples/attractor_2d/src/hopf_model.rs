@@ -1,6 +1,4 @@
 use scientific_workflow::prelude::basics::*;
-use std::thread;
-use std::time::Duration;
 
 use crate::AppResult;
 
@@ -18,7 +16,7 @@ pub(crate) struct HopfModel {
 impl HopfModel {
     pub(crate) fn new(
         schema: &SystemStateSchema,
-        initial_point: Vec<f64>,
+        initial_point: [f64; 2],
         mu: f64,
         omega: f64,
         physical_time_increment_per_step: f64,
@@ -28,7 +26,7 @@ impl HopfModel {
             .expect("zero is a finite physical-time coordinate");
         let mut state = schema.create_empty_state(initial_time);
 
-        state.insert_payload(POINT_FIELD, initial_point)?;
+        state.insert_payload(POINT_FIELD, initial_point.to_vec())?;
         state.insert_payload(RADIUS_FIELD, radius)?;
         Ok(Self {
             state,
@@ -43,9 +41,6 @@ impl HopfModel {
     }
 
     pub(crate) fn step(&mut self) -> Result<(), StateError> {
-        // This demonstration-only pause makes the progress display clearly visible.
-        thread::sleep(Duration::from_millis(1));
-
         {
             // A tuple borrow gives simultaneous mutable access to two
             // distinct slots while preserving SystemState's aliasing rules.
