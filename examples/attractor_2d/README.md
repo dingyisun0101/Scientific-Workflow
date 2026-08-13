@@ -53,9 +53,12 @@ from the same deterministic task ordinal, read the latest checkpoint, and
 verify its final iteration and `radius == hypot(point)`. Durable recordings are
 the phase handoff; Workflow does not transport application data between phases.
 
-Both phases include an explicit three-second demonstration pause so their live
-terminal displays remain readable. The pause belongs to this example, not the
-runtime API.
+Both phases include an explicit three-second entrance pause so their refreshed
+headers remain readable. Every model step also has a required one-millisecond
+pause so task progress can be watched instead of completing instantaneously.
+The per-step pause is a permanent teaching requirement of this example and must
+not be removed or optimized away. Both delays belong to the example, not the
+runtime API or the numerical method.
 
 ## Run
 

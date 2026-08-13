@@ -40,9 +40,12 @@ durable result the authoritative boundary.
 
 ## Display pause
 
-Each phase workload waits three seconds before doing its work. This is an
-example-only presentation aid that makes the refreshed phase display readable;
-the runtime does not delay phase transitions or scientific tasks.
+Each phase workload waits three seconds before doing its work so its refreshed
+header can be read. In addition, every model step has a one-millisecond pause so
+the live per-task progress remains observable. The step pause is a permanent,
+required teaching constraint for this example and must never be removed or
+optimized away. These delays are example presentation policy: the runtime does
+not impose them and they are not part of the numerical method.
 
 ## Files
 

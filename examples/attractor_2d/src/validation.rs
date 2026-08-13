@@ -12,16 +12,25 @@ pub(crate) fn validate_recording(
     context: &TaskContext,
 ) -> AppResult<()> {
     context.set_detail("checking final checkpoint");
+
+    // Recording metadata carries field names and type tags; this small registry
+    // binds those tags back to concrete Rust values for this consumer.
     let decoders = JsonPayloadDecoderRegistry::new()
         .with_json_field::<Vec<f64>>(POINT_FIELD)?
         .with_json_field::<f64>(RADIUS_FIELD)?;
+    // The validation phase regenerates the same task ordinal from configuration,
+    // so it can locate phase 1 output without a runtime-owned result map.
     let directory = execution.task_recording_directory(context.configuration().task_ordinal());
+
+    // Validation needs only the latest restart-capable checkpoint. The reader
+    // reconstructs named payloads from compact values plus central metadata.
     let state = StoredStateSeriesReader::open_completed_recording(directory, decoders)?
         .read_latest_state_from_stream(CHECKPOINT_STREAM)?;
     let point = state.payload::<Vec<f64>>(POINT_FIELD)?;
     let radius = state.payload::<f64>(RADIUS_FIELD)?;
     let expected_iteration: u64 = context.decode_value("step_count")?;
 
+    // Check durable scientific invariants rather than rerunning the solver.
     if point.len() != 2 || *radius != point[0].hypot(point[1]) {
         return Err("checkpoint radius is inconsistent with its point".into());
     }

@@ -5200,9 +5200,12 @@ complete checkpoint because repeating the same endpoint assertions for partial
 streams teaches no additional storage API. Its README directs readers from
 configuration through the model and storage modules to `main.rs`, making the
 orchestrator the conclusion rather than the entry point for understanding.
-Each phase workload includes a demonstration-only three-second pause so the
-interactive display remains readable during this tiny calculation; real
-models must omit that artificial delay.
+Each phase workload includes a demonstration-only three-second entrance pause,
+and every model step includes a required one-millisecond pause, so the phase
+header and live task progress remain readable during this tiny calculation.
+The per-step pause is a permanent teaching constraint of the example and must
+not be removed or optimized away. Neither delay is runtime policy or part of
+the numerical method; production models need not reproduce them.
 
 ### User-API simplification implementation
 
