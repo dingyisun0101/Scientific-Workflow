@@ -59,6 +59,14 @@ pub enum ReportingError {
         task_ordinal: u64,
     },
 
+    /// A directly registered application task name was not found.
+    #[error("registered task `{identity}` does not exist")]
+    UnknownRegisteredTask { identity: String },
+
+    /// The same directly registered application task name appeared twice.
+    #[error("registered task `{identity}` appears more than once")]
+    DuplicateRegisteredTask { identity: String },
+
     /// A task handle's selected identity differs from the registered project.
     #[error("task ordinal {task_ordinal} does not match its registered parameter identity")]
     TaskIdentityMismatch {
@@ -121,6 +129,14 @@ pub enum ReportingError {
     #[error("failed to start the centralized terminal reporter")]
     StartRenderer {
         /// Underlying thread-creation failure.
+        #[source]
+        source: io::Error,
+    },
+
+    /// Interactive terminal isolation could not be established.
+    #[error("failed to {operation} for the isolated progress screen")]
+    TerminalSetup {
+        operation: &'static str,
         #[source]
         source: io::Error,
     },

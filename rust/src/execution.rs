@@ -8,4 +8,3 @@ mod scope;
 
 pub use error::ExecutionScopeError;
 pub use scope::ExecutionScope;
-

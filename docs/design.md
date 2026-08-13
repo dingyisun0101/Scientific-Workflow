@@ -1751,7 +1751,6 @@ ExecutionScope::create_generated -> compact_timestamp
     scientific-workflow/
     ├── design.md                 authoritative architecture and references
     ├── tests.md                  integration-test architecture and coverage
-    ├── todo.md                   next-stage and deferred work only
     ├── README.md                 repository test entry points
     └── rust/
         ├── Cargo.toml            publishable Rust package manifest
@@ -4727,7 +4726,6 @@ examples/
     ├── Cargo.lock
     ├── README.md
     ├── design.md
-    ├── todo.md
     ├── config/
     │   ├── fixed.json
     │   ├── sweep.json
@@ -5339,12 +5337,7 @@ dedicated `tests/` directory to match the repository-wide testing convention.
 
 ### dependent-model crate refactor kickoff
 
-dependent-model crate development proceeds on its dedicated `sw-version` branch. Its
-repository-root `todo.md` is the
-authoritative staged migration checklist. No dependent-model crate production code was changed
-when the branch and plan were created. The first implementation gate remains
-the terminal-metadata decision followed by local dependency and schema setup;
-each subsequent production file is reviewed individually.
+dependent-model crate development proceeds on its dedicated `sw-version` branch.
 
 ## Example-pattern absorption audit
 

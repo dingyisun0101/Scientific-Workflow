@@ -40,6 +40,6 @@ mod progress;
 
 pub use error::ReportingError;
 pub use progress::{
-    ProgressReporter, ProgressReporterBuilder, ProgressSummary, TaskIdentity, TaskProgress,
-    TaskStatus,
+    CancellationToken, ProgressReporter, ProgressReporterBuilder, ProgressSummary,
+    RegisteredProgressReporterBuilder, TaskIdentity, TaskProgress, TaskStatus,
 };

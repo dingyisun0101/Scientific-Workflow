@@ -156,4 +156,3 @@ fn compact_timestamp(timestamp: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .collect()
 }
-

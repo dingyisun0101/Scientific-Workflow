@@ -7,9 +7,12 @@
 //! ```
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::thread;
 
 use scientific_workflow::prelude::*;
+
+static REPORTER_TEST: Mutex<()> = Mutex::new(());
 
 fn fixture_project(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -20,7 +23,68 @@ fn fixture_project(name: &str) -> PathBuf {
 fn assert_send_sync<T: Send + Sync>() {}
 
 #[test]
+fn one_registered_reporter_spans_projects_and_cancels_cooperatively() {
+    let _guard = REPORTER_TEST.lock().unwrap();
+    let reporter = ProgressReporter::for_registered_tasks([
+        "ODE K=200",
+        "ODE K=400",
+        "lattice K=200 kernel=flat",
+    ])
+    .hidden()
+    .start()
+    .unwrap();
+    reporter
+        .mark_registered_reused("lattice K=200 kernel=flat")
+        .unwrap();
+    thread::scope(|scope| {
+        for label in ["ODE K=200", "ODE K=400"] {
+            let reporter = &reporter;
+            scope.spawn(move || {
+                let progress = reporter.start_registered_task(label, 0, Some(2)).unwrap();
+                assert_eq!(progress.identity().label(), label);
+                progress.set_iteration(2).unwrap();
+                progress.complete(None).unwrap();
+            });
+        }
+    });
+    assert!(reporter.complete("study complete").unwrap().is_success());
+
+    let reporter = ProgressReporter::for_registered_tasks(["long task"])
+        .hidden()
+        .start()
+        .unwrap();
+    let progress = reporter
+        .start_registered_task("long task", 0, Some(10))
+        .unwrap();
+    reporter.cancellation_token().cancel();
+    assert!(!progress.should_continue(1).unwrap());
+    progress.fail("cancelled");
+    reporter.fail("cancelled study").unwrap();
+}
+
+#[test]
+fn registered_reporter_rejects_duplicate_and_unknown_tasks() {
+    let _guard = REPORTER_TEST.lock().unwrap();
+    assert!(matches!(
+        ProgressReporter::for_registered_tasks(["same", "same"])
+            .hidden()
+            .start(),
+        Err(ReportingError::DuplicateRegisteredTask { .. })
+    ));
+    let reporter = ProgressReporter::for_registered_tasks(["known"])
+        .hidden()
+        .start()
+        .unwrap();
+    assert!(matches!(
+        reporter.start_registered_task("unknown", 0, None),
+        Err(ReportingError::UnknownRegisteredTask { .. })
+    ));
+    reporter.fail("validation complete").unwrap();
+}
+
+#[test]
 fn reporter_identifies_parallel_tasks_and_owns_their_lifecycle() {
+    let _guard = REPORTER_TEST.lock().unwrap();
     assert_send_sync::<ProgressReporter>();
     assert_send_sync::<TaskProgress>();
     assert_send_sync::<TaskIdentity>();

@@ -72,7 +72,6 @@ attractor_2d/
 ├── README.md
 ├── design.md              # Example-specific architecture
 ├── steps.md               # General scientific-project tutorial
-├── todo.md                 # Ordered implementation work
 ├── config/
 │   ├── fixed.json          # Values shared by every task
 │   ├── sweep.json          # Parameter-space definition
