@@ -1,4 +1,4 @@
-//! First-class phase and task declarations observed by progress reporting.
+//! First-class phase and task declarations owned by the runtime.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -9,6 +9,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::error::ReportingError;
+use super::task::{TaskContext, TaskResult, Workload};
 use crate::configuration::{ProjectConfig, TaskConfig};
 use crate::project::ScientificProject;
 
@@ -122,6 +123,8 @@ pub struct Task {
     display_kind: TaskDisplayKind,
     label: Arc<str>,
     display_keys: Option<Arc<[Box<str>]>>,
+    workload: Option<Workload>,
+    reused: bool,
 }
 
 impl Task {
@@ -149,7 +152,29 @@ impl Task {
             parameters: ParameterSource::Explicit(Arc::from([])),
             display_kind,
             display_keys: None,
+            workload: None,
+            reused: false,
         }
+    }
+
+    /// Attaches the task-owned executable workload.
+    ///
+    /// The runtime schedules this closure and supplies reporting and
+    /// cancellation through [`TaskContext`]. The closure remains solely
+    /// responsible for all scientific I/O and any subprocesses.
+    pub fn workload<F>(mut self, workload: F) -> Self
+    where
+        F: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.workload = Some(Arc::new(workload));
+        self
+    }
+
+    /// Declares that application-verified prior work satisfies this task.
+    pub fn reused(mut self) -> Self {
+        self.workload = None;
+        self.reused = true;
+        self
     }
 
     /// Adds one exact structured parameter to an explicit task.
@@ -274,6 +299,14 @@ impl Task {
         self.display_keys.as_deref()
     }
 
+    pub(crate) fn executable(&self) -> Option<&Workload> {
+        self.workload.as_ref()
+    }
+
+    pub(crate) const fn is_reused(&self) -> bool {
+        self.reused
+    }
+
     fn attach_to_phase(&mut self, phase: PhaseId) {
         self.key.phase = phase;
     }
@@ -323,6 +356,7 @@ pub struct Phase {
     tasks: Arc<[Task]>,
     max_concurrent_workloads: usize,
     queue_capacity: usize,
+    dependencies: Arc<[PhaseId]>,
 }
 
 impl Phase {
@@ -335,6 +369,7 @@ impl Phase {
             display_by_kind: HashMap::new(),
             max_concurrent_workloads: 1,
             queue_capacity: 1,
+            dependencies: Vec::new(),
         }
     }
 
@@ -361,6 +396,11 @@ impl Phase {
     /// Returns the prepared-but-not-running workload ceiling.
     pub const fn queue_capacity(&self) -> usize {
         self.queue_capacity
+    }
+
+    /// Returns declared predecessor phases in declaration order.
+    pub fn dependencies(&self) -> &[PhaseId] {
+        &self.dependencies
     }
 
     /// Returns one exact phase-local task by ID.
@@ -395,6 +435,7 @@ pub struct PhaseBuilder {
     display_by_kind: HashMap<String, Vec<String>>,
     max_concurrent_workloads: usize,
     queue_capacity: usize,
+    dependencies: Vec<PhaseId>,
 }
 
 impl PhaseBuilder {
@@ -423,6 +464,40 @@ impl PhaseBuilder {
         self
     }
 
+    /// Generates executable iterative tasks from every project configuration.
+    pub fn progress_workloads_from_project<F, W>(
+        self,
+        project: &ScientificProject,
+        kind: impl Into<String>,
+        factory: F,
+    ) -> Self
+    where
+        F: Fn(&TaskConfig) -> W,
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.progress_workloads_from_configuration(project.configuration(), kind, factory)
+    }
+
+    /// Generates executable iterative tasks from lower-level configuration.
+    pub fn progress_workloads_from_configuration<F, W>(
+        mut self,
+        configuration: &ProjectConfig,
+        kind: impl Into<String>,
+        factory: F,
+    ) -> Self
+    where
+        F: Fn(&TaskConfig) -> W,
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.extend_configuration_workloads(
+            configuration,
+            kind.into(),
+            TaskDisplayKind::Progress,
+            factory,
+        );
+        self
+    }
+
     /// Generates one activity task per deterministic project configuration.
     pub fn activity_tasks_from_project(
         self,
@@ -439,6 +514,40 @@ impl PhaseBuilder {
         kind: impl Into<String>,
     ) -> Self {
         self.extend_configuration(configuration, kind.into(), TaskDisplayKind::Activity);
+        self
+    }
+
+    /// Generates executable activity tasks from every project configuration.
+    pub fn activity_workloads_from_project<F, W>(
+        self,
+        project: &ScientificProject,
+        kind: impl Into<String>,
+        factory: F,
+    ) -> Self
+    where
+        F: Fn(&TaskConfig) -> W,
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.activity_workloads_from_configuration(project.configuration(), kind, factory)
+    }
+
+    /// Generates executable activity tasks from lower-level configuration.
+    pub fn activity_workloads_from_configuration<F, W>(
+        mut self,
+        configuration: &ProjectConfig,
+        kind: impl Into<String>,
+        factory: F,
+    ) -> Self
+    where
+        F: Fn(&TaskConfig) -> W,
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        self.extend_configuration_workloads(
+            configuration,
+            kind.into(),
+            TaskDisplayKind::Activity,
+            factory,
+        );
         self
     }
 
@@ -462,6 +571,12 @@ impl PhaseBuilder {
     /// Sets the later scheduler's prepared-work queue capacity.
     pub fn queue_capacity(mut self, capacity: usize) -> Self {
         self.queue_capacity = capacity;
+        self
+    }
+
+    /// Declares one phase that must be satisfied before this phase starts.
+    pub fn depends_on(mut self, dependency: impl Into<PhaseId>) -> Self {
+        self.dependencies.push(dependency.into());
         self
     }
 
@@ -499,6 +614,13 @@ impl PhaseBuilder {
             task.attach_to_phase(self.id);
         }
 
+        let mut dependencies = HashSet::with_capacity(self.dependencies.len());
+        for dependency in &self.dependencies {
+            if !dependencies.insert(*dependency) || *dependency == self.id {
+                return Err(ReportingError::PhaseDependencyCycle { phase: self.id.0 });
+            }
+        }
+
         let kinds: HashSet<_> = self
             .tasks
             .iter()
@@ -521,6 +643,7 @@ impl PhaseBuilder {
             tasks: self.tasks.into(),
             max_concurrent_workloads: self.max_concurrent_workloads,
             queue_capacity: self.queue_capacity,
+            dependencies: self.dependencies.into(),
         })
     }
 
@@ -539,6 +662,34 @@ impl PhaseBuilder {
                 display_kind,
                 label: kind.clone().into(),
                 display_keys: None,
+                workload: None,
+                reused: false,
+            });
+        }
+    }
+
+    fn extend_configuration_workloads<F, W>(
+        &mut self,
+        configuration: &ProjectConfig,
+        kind: String,
+        display_kind: TaskDisplayKind,
+        factory: F,
+    ) where
+        F: Fn(&TaskConfig) -> W,
+        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+    {
+        for config in configuration.task_configs() {
+            let workload = factory(&config);
+            let id = TaskId::new(format!("{kind}:{}", config.task_ordinal()));
+            self.tasks.push(Task {
+                key: TaskKey::new(self.id, id),
+                kind: kind.clone().into(),
+                parameters: ParameterSource::Configuration(config),
+                display_kind,
+                label: kind.clone().into(),
+                display_keys: None,
+                workload: Some(Arc::new(workload)),
+                reused: false,
             });
         }
     }
@@ -584,6 +735,7 @@ impl fmt::Debug for PhaseBuilder {
             .field("tasks", &self.tasks.len())
             .field("max_concurrent_workloads", &self.max_concurrent_workloads)
             .field("queue_capacity", &self.queue_capacity)
+            .field("dependencies", &self.dependencies)
             .finish_non_exhaustive()
     }
 }
@@ -629,7 +781,7 @@ impl TaskSelector {
         self
     }
 
-    fn matches(&self, task: &Task) -> bool {
+    pub(crate) fn matches(&self, task: &Task) -> bool {
         self.phase.is_none_or(|phase| task.key.phase == phase)
             && self.kind.as_deref().is_none_or(|kind| task.kind() == kind)
             && self

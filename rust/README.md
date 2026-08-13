@@ -83,11 +83,11 @@ not compatibility promises.
   `TaskConfigIter`, `TaskParameters`, and `TaskParametersIter`.
 - Projects and execution: `ScientificProject`, `ScientificProjectError`,
   `ExecutionScope`, and `ExecutionScopeError`.
-- Phases and progress: `Phase`, `PhaseBuilder`, `PhaseId`, `Task`, `TaskId`,
-  `TaskKey`, `TaskSelector`, `TaskDisplayKind`, `ProgressReporter`,
-  `PhaseProgressReporterBuilder`, `ProgressReporterBuilder`,
-  `ProgressSummary`, `ReportingError`, `TaskIdentity`, `TaskProgress`,
-  `ActivityTask`, and `TaskStatus`.
+- Runtime: `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeError`,
+  `RuntimeSummary`, `PhaseSummary`, `Phase`, `PhaseBuilder`, `PhaseId`, `Task`,
+  `TaskId`, `TaskKey`, `TaskSelector`, `TaskDisplayKind`, `TaskContext`,
+  `TaskResult`, `ProgressSummary`, `TaskIdentity`, `TaskProgress`,
+  `ActivityTask`, `CancellationToken`, and `TaskStatus`.
 - RNG provenance: `RNG_RECORDS_METADATA_KEY`, `RngRecord`, and
   `RngRecordError`.
 - Persistent storage: `CompletedRecording`, `CompletedStreamSummary`,
@@ -104,19 +104,28 @@ The sections below document the supported constructors and operations by
 workflow responsibility. Generated crate documentation is the exact signature
 reference for every item in this list.
 
-## Parallel Progress Reporting
+## Runtime Scheduling and Display
 
-First-class tasks belong to a phase before reporting begins. Parameterized
-tasks are generated directly from the existing configuration manager, retain
-all fixed and selected sweep values without cloning their shared JSON owners,
-and receive automatic labels from the parameters that vary:
+First-class executable tasks belong to a phase before runtime construction.
+Parameterized workloads are generated directly from the configuration manager,
+retain all fixed and selected sweep values, and receive automatic labels from
+the parameters that vary:
 
 ```rust,no_run
 use scientific_workflow::prelude::*;
 
-# fn example(project: &ScientificProject) -> Result<(), Box<dyn std::error::Error>> {
+# fn example(project: &ScientificProject) -> Result<(), RuntimeError> {
 let phase = Phase::builder(2, "simulation")
-    .progress_tasks_from_project(project, "simulation")
+    .progress_workloads_from_project(project, "simulation", |config| {
+        let ordinal = config.task_ordinal();
+        move |context: &TaskContext| {
+            assert_eq!(context.configuration().unwrap().task_ordinal(), ordinal);
+            let progress = context.progress_handle().unwrap();
+            progress.set_target_iteration(1_000)?;
+            progress.set_iteration(1_000)?;
+            Ok(())
+        }
+    })
     .display_tasks_by("simulation", ["temperature", "seed"])
     .max_concurrent_workloads(4)
     .queue_capacity(8)
@@ -128,63 +137,26 @@ let selected = phase.unique_task_matching(
         .parameter("temperature", serde_json::json!(300.0))
         .parameter("seed", serde_json::json!(11)),
 )?;
-let selected_key = selected.key().clone();
-
-let reporter = ProgressReporter::for_phases([phase]).hidden().start()?;
-let progress = reporter.start_progress(&selected_key, 0, Some(1_000))?;
-progress.set_iteration(1_000)?;
-progress.complete(None)?;
-reporter.fail("other declared tasks intentionally not run")?;
-# Ok(())
-# }
-```
-
-The reporter observes phase/task identities supplied by the work-management
-layer; it does not construct them. A phase heading becomes the display
-separator for its task rows. Lifecycle-only `ActivityTask` handles provide
-status, detail, messages, cancellation, completion, and failure without an
-iteration API.
-
-`ProgressReporter` derives human-facing identity from task parameters and uses
-the automatically assigned task ordinal only for stable ordering. With no
-explicit identity selection, all sweep keys form the identity. Applications may
-choose any smaller parameter combination that remains unique:
-
-```rust,no_run
-use scientific_workflow::prelude::*;
-
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
-let project = ScientificProject::load("project-root")?;
-let reporter = ProgressReporter::for_project(&project)
-    .identify_tasks_by(["temperature", "seed"])
-    .start()?;
-
-for task in project.task_configs() {
-    let progress = reporter.start_task(&task, 0, Some(1_000))?;
-    // Workflow owns the generic target decision.
-    assert!(!progress.should_continue(1_000)?);
-    progress.complete(None)?;
-}
-
-let summary = reporter.complete("all scientific tasks completed")?;
+assert_eq!(selected.kind(), "simulation");
+let summary = WorkflowRuntime::builder()
+    .phase(phase)
+    .hidden()
+    .build()?
+    .run_phases([2])?;
 assert!(summary.is_success());
 # Ok(())
 # }
 ```
 
-Iteration updates are atomic and allocation-free. One renderer thread polls all
-tasks at a bounded frequency and is the only component permitted to write
-human-facing terminal output during the session. Interactive stderr is cleared
-once at renderer startup and then receives one row for every configured task,
-including tasks still waiting for a worker. Known-target rows show elapsed task
-execution time and ETA; redirected stderr receives line-oriented lifecycle
-events without being cleared. Dropping an unfinished `TaskProgress` marks that
-task failed.
+`max_concurrent_workloads` and `queue_capacity` bound scheduling within each
+phase. They are not CPU, memory, process, or I/O limits. Each workload owns all
+scientific I/O and any subprocesses; the externally configured systemd/service
+scope contains the complete application. `TaskContext` exposes only retained
+identity/configuration, progress or activity reporting, and cancellation.
 
-Progress is not scientific state. Callers set it from the authoritative
-`SystemState::simulation_time()` after a successful transition. Known targets
-use absolute iterations, while `None` supports convergence-driven or otherwise
-open-ended work.
+Only the active phase is displayed interactively. Plain mode emits append-only
+uncolored phase and task lifecycle records. Progress updates are atomic and
+remain synchronized from the application's authoritative scientific state.
 
 ## RNG Records
 

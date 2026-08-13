@@ -1244,38 +1244,38 @@ consumer callers -> scientific_workflow::configuration::{...}
 ## Planned WorkflowRuntime
 
 `WorkflowRuntime` is the single operational owner for one scientific program
-execution. It owns first-class phases and tasks, generic phase/task scheduling,
-reporting, shared cancellation, cooperative resource control, and the supported
-subprocess boundary. It does not own scientific state, storage writers,
-execution directories, or the application's scientific protocol. Applications
-declare phase dependencies and task workloads; the runtime validates and
-executes that declared structure without inferring scientific dependencies.
+execution. It owns first-class phases and tasks, generic bounded phase/task
+scheduling, display, and cooperative cancellation for registered work. It does
+not own scientific state, storage writers, execution directories, task I/O,
+subprocesses, machine resource isolation, or the application's scientific
+protocol. Applications declare phase dependencies and task workloads; the
+runtime validates, schedules, and displays that declared structure without
+inferring scientific dependencies.
 
 The responsibility split is:
 
 ```text
 application
     owns scientific phase/task definitions, dependencies, workloads,
-    completion verification, and result handling
+    all task I/O, subprocesses, completion verification, and result handling
         -> WorkflowRuntime
-           owns one or more phases, bounded scheduling, reporting,
-           resources, cancellation, and supported child-process execution
+           owns one or more phases, bounded scheduling, display, and
+           cancellation for registered work
                -> Phase
                   owns one or more Tasks and its queue/concurrency policy
                       -> task-local TaskContext is passed into work
 ```
 
 `ExecutionScope` retains its existing narrower meaning: a filesystem scope for
-recordings and artifacts. Resource isolation is never called an execution
-scope in the public API.
+recordings and artifacts used directly by task code. The runtime does not
+create or manage execution scopes.
 
 ### Runtime ownership and lifecycle
 
 Only one `WorkflowRuntime` may be active in a process, including hidden-output
-operation. Its process-wide lease covers the reporter, renderer, cancellation
-source, resource controller, and child-report receiver. A subprocess never
-constructs another runtime or reporter; it connects to the parent through a
-restricted reporting client.
+operation. Its process-wide lease covers its scheduler, renderer, reporting
+state, and cancellation source. It owns no task storage or child-process
+infrastructure.
 
 The runtime follows a declare-select-run lifecycle:
 
@@ -1283,16 +1283,15 @@ The runtime follows a declare-select-run lifecycle:
 2. Tasks are added to a `PhaseBuilder`, never directly to
    `WorkflowRuntimeBuilder` or a live runtime.
 3. `WorkflowRuntimeBuilder::build` validates phase IDs, task identities,
-   dependencies, display projections, queue/concurrency limits, resource
-   policy, and output policy.
+   dependencies, display projections, queue/concurrency limits, and display
+   policy.
 4. `run_phases`, `run_phases_exact`, or `run_phases_with_dependencies` selects
    and validates at least one phase before any reporting or work starts.
 5. The selected run acquires the process-wide lease, starts its private
    renderer and event receiver, and executes phases in validated dependency
    order.
 6. Within an eligible phase, the runtime prepares work through a bounded queue
-   and executes tasks concurrently up to both phase-local and runtime-global
-   limits.
+   and executes tasks concurrently up to the phase-local limit.
 7. Successful runtime completion requires every selected task to be completed
    or explicitly reused. Failure preserves observed states, prevents dependent
    phases from starting, and shuts down owned infrastructure in order.
@@ -1339,9 +1338,10 @@ because a directory happens to exist. The concise `run_phases` convenience has
 exact-selection semantics and never starts additional scientific work
 silently.
 
-A phase is also the reporter's display section. Its heading supplies the
-horizontal separator before its first task, so no independent `SectionId` or
-positional splitter model exists.
+A phase is also the renderer's interactive display unit. Only the active
+phase's header, tasks, and phase-local messages occupy the live display; phases
+are not rendered as simultaneous sections and therefore need neither an
+independent `SectionId` nor positional splitters.
 
 The intended construction and selection shape is:
 
@@ -1404,7 +1404,8 @@ The lightweight task declaration exists before rendering. Its workload factory
 materializes expensive executable state only after the task enters the phase's
 bounded prepared-work queue. The runtime invokes work with a `TaskContext`
 containing the appropriate progress/activity handle, cancellation observation,
-resource access, and retained task configuration.
+and retained task configuration. The workload itself owns every read, write,
+recording, artifact, network operation, and subprocess needed by that task.
 
 ### Automatic configuration task generation
 
@@ -1447,10 +1448,44 @@ but tasks in multiple phases then participate in ambiguity detection.
 
 ### Runtime reporting
 
-The renderer has two distinct regions:
+The interactive renderer is an active-phase projection of the complete runtime
+state. The runtime continues to own every selected phase and task, but the live
+terminal shows only work belonging to the phase currently crossing its
+execution barrier. It has three regions:
 
-- a stable task region containing progress and activity rows; and
-- an append-only message region for runtime-wide and task-scoped events.
+- a phase header at the top;
+- a stable task region containing only that phase's progress and activity rows;
+  and
+- a bounded phase-local message region for runtime and task events relevant to
+  the active phase.
+
+The header distinguishes selection order from stable identity. For example,
+`Phase 2 of 3 — [4] validation` means the second phase in this selected run has
+stable `PhaseId(4)`. It also presents phase status, total/running/pending/reused
+task counts, the phase's active-work and queue limits, phase-local elapsed time,
+and declared dependency state. These are structured runtime values, not text
+inferred from labels.
+
+At a phase transition the renderer finalizes and archives the previous phase's
+summary, removes its live task and message regions, creates the next phase
+header, and installs only the next phase's task rows. Phase-local elapsed time
+and messages restart at that boundary. A successful phase may transition
+immediately without an artificial viewing delay. A failed phase remains on
+screen as the terminal interactive state so the failure and its task context
+are not erased.
+
+Runtime-wide messages emitted during a phase are visibly distinguished from
+task-scoped messages. The runtime retains only a documented bounded phase
+summary. A task that requires durable diagnostics must write its own log or
+artifact; the display is never a task's persistence mechanism.
+
+Non-interactive output never clears or rewrites prior lines. It emits uncolored
+structured lifecycle records such as `[phase-start]`, `[task]`, and
+`[phase-complete]`, including stable phase/task keys where applicable. After a
+successful run, the interactive display is replaced by an overall summary of
+selected phase and task outcomes rather than leaving the last successful phase
+as if it were still active. Hidden mode maintains the same state and lifecycle
+semantics without terminal output.
 
 Interactive status flags use terminal-aware color: pending is subdued,
 running is active, completed is successful, and failed is an error. Color is a
@@ -1472,95 +1507,53 @@ runtime; it never creates, identifies, owns, selects, schedules, or looks up
 phases or tasks. All human-facing messages emitted while a runtime is active
 pass through the runtime or a task handle.
 
-### Resource policy
+### Scheduling boundary, task I/O, and resource containment
 
-`WorkflowRuntime` owns a `ResourceController`, but reporting and resource
-control remain sibling responsibilities. The public `ResourcePolicy`
-distinguishes:
+`max_concurrent_workloads` limits running workloads within a phase, while
+`queue_capacity` limits prepared but not running workloads. Neither limit
+describes CPU, memory, process, thread, file, or network resources. Complete
+lightweight task declarations remain preregistered so display identity and
+ordering are stable even when expensive workload preparation is bounded.
 
-```text
-ResourcePolicy
-├── max_active_tasks
-├── compute_threads
-├── max_child_processes
-└── isolation
-    ├── None
-    └── platform policy
-        ├── memory high/max
-        ├── swap limit
-        ├── CPU quota
-        ├── process/thread limit
-        └── wall-clock timeout
-```
+Each task is solely responsible for its scientific execution and I/O. Task
+code creates and owns its `ExecutionScope`, storage writers, artifact files,
+network clients, subprocesses, thread pools, and any application-specific
+backpressure. The runtime invokes the task workload and observes its declared
+lifecycle; it does not inspect results, verify receipts, open recordings,
+redirect subprocess output, merge writer queues, or infer success from files.
+Applications must route any task-owned terminal output through task messages
+when an interactive runtime display is active.
 
-The library supplies validation, defaults, serde configuration, resource
-leases, a shared compute-pool boundary, and child-process launch integration.
-Scientific applications should not contain custom `systemd-run` argument
-assembly or their own resource-scope validation. Systemd user scopes may be
-one Linux backend; they are not the public abstraction and availability never
-silently changes the selected policy.
+Hard resource containment is external to Workflow. The complete application is
+launched under an operator-configured service or systemd scope that applies
+aggregate CPU, memory, swap, process, and thread limits to the process and its
+descendants. Workflow neither translates nor validates those settings. Work
+created outside the phase/task interface remains subject to the external scope
+but is invisible to runtime scheduling and display.
 
-Enforcement is explicit and honest:
+This yields two deliberately separate guarantees:
 
-- work started through runtime task/compute APIs obeys active-task and compute
-  limits;
-- children launched through the runtime obey child-count and configured OS
-  isolation limits;
-- arbitrary threads, pools, and processes created outside the runtime cannot
-  be governed by the library.
+- the external service scope contains the entire application; and
+- `WorkflowRuntime` schedules and displays only registered phases and tasks.
 
-Operation-specific limits, such as maximum concurrent members of one
-scientific ensemble, are expressed by the owning phase's
-`max_concurrent_workloads` when members are ordinary managed tasks. The runtime
-does not assign scientific meaning to phase or resource groups.
-
-`queue_capacity` limits prepared but not running workloads, not lightweight
-task declarations. This preserves complete preregistration and stable reporter
-rows without retaining an unbounded number of initialized models, closures, or
-subprocess requests. Effective active concurrency is the minimum of the
-phase-local maximum, runtime-wide active-task limit, and available
-compute/process permits. Phases never create independent compute pools.
-
-`RuntimeConfig` is the standard serializable configuration boundary for this
-policy and output behavior. It can be loaded directly or supplied by a higher
-level application configuration; it is not embedded in `fixed.json` or
-`sweep.json`, because machine execution policy is not a scientific parameter.
-
-### Subprocess boundary
-
-A child process receives a restricted `RuntimeClientConfig` plus the exact
-`TaskKey` token it is allowed to update. `RuntimeClient` sends structured
-lifecycle, progress, detail, message, and cancellation events to the parent. It
-cannot create phases or tasks, finalize the runtime, alter resource policy, or
-acquire terminal ownership.
-
-The transport remains private so local threads and subprocesses share one
-public event contract without committing the API to pipes, sockets, systemd,
-or a particular operating system. Child stdout and stderr are captured by the
-runtime launcher and routed to task messages or retained task logs; they never
-write through the interactive task display.
-
-Process loss or protocol disconnect fails the associated reporting task and
-releases its resource lease. The application's scientific recovery policy
-still decides whether persisted work is resumed, retried in a new
-`ExecutionScope`, or explicitly declared terminally failed.
+The runtime does not expose `ResourcePolicy`, `RuntimeClient`, a subprocess
+launcher, an IPC protocol, or OS-isolation configuration. Applications such as
+Dispatcher retain ownership of Python invocation, systemd integration, worker
+protocols, and result verification.
 
 ### Implementation sequence
 
 1. Introduce first-class phase/task identity, configuration-driven task
    generation, partial selection, progress/activity kinds, generated labels,
    and reporter observation without duplicating current slot machinery.
-2. Introduce `WorkflowRuntime` as the only public owner, require the
-   runtime/phase/task hierarchy, and add bounded phase scheduling and explicit
-   phase selection.
-3. Add `RuntimeConfig`, `ResourcePolicy`, validated leases, and the shared
-   compute boundary beneath the phase scheduler.
-4. Add the restricted subprocess client protocol and runtime-owned child
-   launcher, then remove the direct-execution restriction from consumers that
-   use it.
-5. Migrate examples and dependent model runners so they accept only task-local
+2. Introduce `WorkflowRuntime` as the public scheduling and display owner,
+   require the runtime/phase/task hierarchy, and add bounded phase scheduling
+   and explicit phase selection.
+3. Harden the runtime display, cancellation, scheduler shutdown, and public
+   documentation while retaining the strict no-I/O boundary.
+4. Migrate examples and dependent model runners so they accept only task-local
    handles and never construct reporters or resource scopes.
-6. Remove superseded reporting entry points after all in-repository consumers
+5. Remove superseded reporting entry points after all in-repository consumers
    use `WorkflowRuntime`; no compatibility layer is required.
 
 State and series equality are not part of this plan. Type-erased scientific
@@ -2122,10 +2115,8 @@ workflow/
 │   │   │   ├── phase.rs
 │   │   │   ├── task.rs
 │   │   │   ├── scheduler.rs
-│   │   │   ├── resources.rs
 │   │   │   ├── reporting.rs
-│   │   │   ├── renderer.rs
-│   │   │   └── subprocess.rs
+│   │   │   └── renderer.rs
 │   │   ├── system_state.rs
 │   │   ├── system_state/
 │   │   │   ├── error.rs
@@ -2210,10 +2201,10 @@ workflow/
 
 `runtime` replaces the standalone public `reporting` module and owns all
 reporting implementation. `execution` remains intentionally small because its
-filesystem-scope responsibility is independent of runtime resources. Storage,
+filesystem-scope responsibility is independent of runtime scheduling. Storage,
 state, time-series, configuration, and Python reading retain their established
-responsibility boundaries. The excluded development-only `rust/src/main.rs` is
-removed rather than carried into the intended package layout.
+responsibility boundaries. The excluded development-only `rust/src/main.rs`
+is removed rather than carried into the intended package layout.
 
 ## System state
 

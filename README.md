@@ -90,25 +90,22 @@ Applications should pass one upstream configuration—such as PiP's
 seed and method identity into `RngRecord`. The complete mapping and example are
 documented in [`rust/README.md`](rust/README.md#rng-records).
 
-## Centralized progress reporting
+## Workflow runtime
 
 First-class `Phase` values own every `Task` before reporting begins.
 Parameterized tasks are generated from the configuration manager with all
 fixed/sweep values retained, automatic labels, and exact partial selectors.
-`ProgressReporter` observes those phase/task declarations as the sole
-human-facing terminal owner while parallel work is active; it never constructs
-or owns their identities. Models, writers, and Rayon workers do not print or
-draw terminal elements directly.
+`WorkflowRuntime` schedules only tasks registered through those phases and owns
+their human-facing display. Each task remains responsible for its own files,
+recordings, artifacts, networking, and subprocesses. Hard process resources are
+contained by the externally configured systemd/service scope, not by Workflow.
 
-Interactive sessions clear the terminal once after the reporter acquires its
-exclusive lease, then receive one persistent row per configured task. Known
-targets display elapsed execution time and estimated remaining time; activity
-tasks display lifecycle/detail state without artificial counters. Phase
-headings separate task groups, and task messages remain distinct from stable
-rows. Redirected stderr receives uncolored line-oriented status and is never
-cleared. Task progress is observational: models continue to own scientific
-iteration through `SystemState`, and workers synchronize the reporter with
-`TaskProgress::set_iteration`.
+Interactive sessions show only the active phase: its identity, scheduling
+limits, elapsed time, task counts, messages, and rows. Successful transitions
+replace that phase with the next; failures retain task context. Redirected
+stderr receives append-only uncolored phase/task lifecycle records. Task
+progress remains observational: models own scientific iteration through
+`SystemState` and synchronize `TaskProgress::set_iteration`.
 
 ## Integration tests
 
@@ -178,15 +175,15 @@ reconstruction, multiple-sealed-plus-open recovery without inspecting sealed
 content, continued append ordering, continuation rejection boundaries,
 explicit durability barriers, and artifact-free exclusive writer ownership.
 
-### Parallel progress reporting
+### Runtime scheduling and display
 
 ```bash
-cargo test --test reporting_workflow -- --nocapture
+cargo test --test runtime_workflow -- --nocapture
 ```
 
-Validates parameter-combination identity, automatic ordinal ordering,
-parallel-safe atomic updates, exclusive terminal ownership, known and unknown
-targets, lifecycle summaries, and failure-on-drop behavior.
+Validates phase dependencies and selection, bounded parallel scheduling,
+configuration-generated workloads, exact selectors, exclusive runtime
+ownership, task-owned I/O, lifecycle summaries, and failure barriers.
 
 ## Complete verification
 

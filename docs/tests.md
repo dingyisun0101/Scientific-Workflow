@@ -36,7 +36,7 @@ replace many narrow tests.
     ├── storage_workflow.rs
     ├── storage_resilience.rs
     ├── resume_workflow.rs
-    └── reporting_workflow.rs
+    └── runtime_workflow.rs
 
 The former `tests/system_state/`, `tests/time_series/`, and `tests/storage/`
 subdirectories and their aggregator files have been removed. All seven
@@ -494,63 +494,46 @@ the copy, and reject meaningful ambiguous or invalid inputs.
     [validation] fixed_only=true nested_duplicate=true overlap=true inconsistent_cases=true invalid_path=true
     [result] configuration_workflow=passed
 
-## Test 7: reporting_workflow.rs
+## Test 7: runtime_workflow.rs
 
 ### Scenario
 
-Load the real six-task Cartesian project, derive identities from its sweep
-parameters, and update all task counters concurrently through scoped worker
-threads. Rendering is hidden so the test validates state and lifecycle without
-controlling the test harness terminal.
+Build validated runtime plans from explicit and configuration-generated tasks,
+then exercise dependency selection, bounded phase scheduling, task-local
+progress, reuse, failure barriers, and task-owned I/O. Rendering is hidden so
+the test validates lifecycle without controlling the test harness terminal.
 
 ### Required behavior
 
-- First-class nonempty phases own every managed task; task IDs are unique
-  within a phase and exact lookup uses phase-qualified `TaskKey` values.
-- Project/configuration helpers generate one task per deterministic
-  `TaskConfig`, retain all fixed/sweep values through shared ownership, and
-  generate labels from varying parameters.
-- Exact partial selectors distinguish unique, missing, and ambiguous matches.
-- A requested display projection must uniquely label the applicable task kind.
-- Phase headings provide reporter separators without a separate section model.
-- Progress and lifecycle-only activity tasks share one reporter while activity
-  handles expose no artificial iteration API.
-- Default identity uses every sweep key and is unique for every task.
-- A caller-selected non-unique key combination is rejected before rendering.
-- Duplicate and unknown identity keys are rejected contextually.
-- Task ordinals come only from `TaskConfig` and are never caller-supplied.
-- One process-wide reporting session excludes a second reporter.
-- Parallel iteration updates are atomic, monotonic, and target-bounded.
-- Known-target completion requires exact target attainment.
-- Known and unknown absolute targets are supported.
-- Dropping an incomplete task handle marks it failed.
-- Successful completion requires every registered task to complete.
-- Summary counts are stable and exact.
+- Empty runtimes/phases, missing workloads, duplicate phase IDs, unknown
+  dependencies, and dependency cycles fail during plan validation.
+- Exact selection rejects an omitted unsatisfied dependency; inclusive
+  selection adds dependencies in deterministic topological order.
+- Application verification can satisfy an omitted completed dependency.
+- Project helpers generate executable tasks retaining complete `TaskConfig`
+  values and automatic labels.
+- Phase concurrency and prepared-work queue capacity remain bounded.
+- Progress, activity, and verified reused tasks share one phase lifecycle.
+- One active runtime excludes another even in hidden mode and releases its
+  lease after success, failure, and panic-safe shutdown.
+- A failed phase prevents dependent phases from starting.
+- Exact partial selectors use structured parameters rather than display text.
+- Task workloads own their files; the runtime neither creates nor removes them.
 
 ### Structures and methods
 
-- `ProgressReporter::{for_project,for_configuration,start_task,report,summary,
-  complete,fail,report_error}`;
-- `ProgressReporter::{for_phases,start_progress,start_activity,mark_reused}` and
-  `PhaseProgressReporterBuilder::{terminal,plain,hidden,start}`;
+- `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeSummary`, and
+  `PhaseSummary` construction, selection, execution, and inspection;
 - `Phase`, `PhaseBuilder`, `PhaseId`, `Task`, `TaskId`, `TaskKey`,
-  `TaskDisplayKind`, and `TaskSelector` constructors and accessors;
-- `ProgressReporterBuilder::{identify_tasks_by,terminal,plain,hidden,start}`;
-- every public `TaskProgress`, `ActivityTask`, `TaskIdentity`, and
-  `ProgressSummary` method;
-- `TaskStatus` lifecycle values and reachable `ReportingError` families;
-- exclusive terminal leasing, renderer polling, identity construction, and
-  failure-on-drop indirectly.
+  `TaskDisplayKind`, `TaskSelector`, and configuration workload helpers;
+- `TaskContext`, `TaskProgress`, `ActivityTask`, `TaskIdentity`,
+  `ProgressSummary`, `TaskStatus`, and reachable `RuntimeError` families;
+- scheduler barriers, bounded queues, renderer ownership, and terminal leases
+  indirectly.
 
 ### Log contract
 
-    [identity-validation] exact-combination=true duplicate-key=true unknown-key=true ambiguity=true
-    [phase-task-model] generated=6 complete_parameters=true shared_config=true partial_lookup=true
-    [phase-reporting] phases=2 progress=6 activities=1 reused=1 observer_only=true
-    [parallel-progress] tasks=6 completed=6 atomic_iterations=true terminal_exclusive=true
-    [failure-lifecycle] duplicate-start=true regression=true target-bound=true drop-fails=true
-    [completion-validation] initial-bound=true target-required=true explicit-fail=true incomplete-success-rejected=true
-    [result] reporting_workflow=passed
+    test result: ok. 6 passed; 0 failed
 
 ## Logging rules
 
@@ -574,7 +557,7 @@ controlling the test harness terminal.
 5. `resume_workflow.rs` implemented for crash recovery and append.
 6. `configuration_workflow.rs` implemented for project configuration and task
    expansion.
-7. `reporting_workflow.rs` implemented for centralized parallel progress.
+7. `runtime_workflow.rs` implements phase scheduling and runtime display.
 8. Meaningful ownership, invariant, storage, decoder, integrity, recovery,
    configuration, and reporting assertions mapped into the seven scenarios.
 9. Old aggregators and test subdirectories removed after replacements passed.
@@ -597,7 +580,7 @@ cargo test --test storage_workflow -- --nocapture
 cargo test --test storage_resilience -- --nocapture
 cargo test --test resume_workflow -- --nocapture
 cargo test --test configuration_workflow -- --nocapture
-cargo test --test reporting_workflow -- --nocapture
+cargo test --test runtime_workflow -- --nocapture
 cargo test --all-targets --no-fail-fast --locked
 cargo test --doc --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings

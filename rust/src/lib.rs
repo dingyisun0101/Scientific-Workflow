@@ -20,8 +20,9 @@
 //! recording paths without taking ownership away from storage writers.
 //! [`artifact`] atomically publishes and verifies content-addressed immutable
 //! bytes while leaving their scientific representation to consumer crates.
-//! [`reporting`] provides parameter-identified parallel progress tracking and
-//! one process-wide human-facing terminal owner. [`rng_record`] provides only
+//! [`runtime`] provides phase-based bounded scheduling and one process-wide
+//! human-facing display for registered tasks. Task workloads retain ownership
+//! of all scientific I/O. [`rng_record`] provides only
 //! validated, persisted RNG provenance records; random generation remains an
 //! application responsibility.
 //!
@@ -87,8 +88,8 @@ pub mod configuration;
 pub mod execution;
 pub mod prelude;
 pub mod project;
-pub mod reporting;
 pub mod rng_record;
+pub mod runtime;
 pub mod storage;
 pub mod system_state;
 pub mod time_series;

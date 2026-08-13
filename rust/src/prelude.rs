@@ -27,13 +27,13 @@ pub use crate::configuration::{
 };
 pub use crate::execution::{ExecutionScope, ExecutionScopeError};
 pub use crate::project::{ScientificProject, ScientificProjectError};
-pub use crate::reporting::{
-    ActivityTask, CancellationToken, Phase, PhaseBuilder, PhaseId, PhaseProgressReporterBuilder,
-    ProgressReporter, ProgressReporterBuilder, ProgressSummary, RegisteredProgressReporterBuilder,
-    ReportingError, Task, TaskDisplayKind, TaskId, TaskIdentity, TaskKey, TaskProgress,
-    TaskSelector, TaskStatus,
-};
 pub use crate::rng_record::{RNG_RECORDS_METADATA_KEY, RngRecord, RngRecordError};
+pub use crate::runtime::{
+    ActivityTask, CancellationToken, Phase, PhaseBuilder, PhaseId, PhaseSummary, ProgressSummary,
+    RuntimeError, RuntimeSummary, Task, TaskContext, TaskDisplayKind, TaskId, TaskIdentity,
+    TaskKey, TaskProgress, TaskResult, TaskSelector, TaskStatus, WorkflowRuntime,
+    WorkflowRuntimeBuilder,
+};
 pub use crate::storage::{
     CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
     JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, SamplingInterval, StateStreamConfig,

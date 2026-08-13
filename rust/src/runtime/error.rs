@@ -1,4 +1,4 @@
-//! Errors produced by centralized progress registration and rendering.
+//! Errors produced by runtime planning, scheduling, and rendering.
 
 use std::io;
 
@@ -6,10 +6,10 @@ use thiserror::Error;
 
 use crate::configuration::ConfigurationError;
 
-/// Failure while configuring, updating, or finalizing progress reporting.
+/// Failure while planning, executing, or displaying a workflow runtime.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ReportingError {
+pub enum RuntimeError {
     /// Project configuration could not supply a required task or identity value.
     #[error(transparent)]
     Configuration(#[from] ConfigurationError),
@@ -48,6 +48,38 @@ pub enum ReportingError {
     /// A reporter phase list repeats one phase ID.
     #[error("phase ID {phase} appears more than once")]
     DuplicatePhaseId { phase: u64 },
+
+    /// One phase dependency is not registered in the runtime plan.
+    #[error("phase {phase} depends on unknown phase {dependency}")]
+    UnknownPhaseDependency { phase: u64, dependency: u64 },
+
+    /// The phase dependency graph contains a cycle.
+    #[error("phase dependency graph contains a cycle involving phase {phase}")]
+    PhaseDependencyCycle { phase: u64 },
+
+    /// A selected phase ID is absent from the runtime plan.
+    #[error("selected phase {phase} is not registered")]
+    UnknownSelectedPhase { phase: u64 },
+
+    /// Exact selection omitted a dependency that was not externally verified.
+    #[error("selected phase {phase} requires unsatisfied phase {dependency}")]
+    UnsatisfiedPhaseDependency { phase: u64, dependency: u64 },
+
+    /// One declared task has no executable workload.
+    #[error("task `{task}` has no workload")]
+    MissingTaskWorkload { task: String },
+
+    /// A task-owned workload returned an error.
+    #[error("task `{task}` failed: {source}")]
+    TaskWorkload {
+        task: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    /// A scheduler worker panicked.
+    #[error("a runtime scheduler worker panicked")]
+    SchedulerPanicked,
 
     /// One task has an empty phase-local ID.
     #[error("phase {phase} contains an empty task ID")]
@@ -263,3 +295,5 @@ pub enum ReportingError {
         failed: u64,
     },
 }
+
+pub(crate) use RuntimeError as ReportingError;

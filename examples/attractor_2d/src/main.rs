@@ -17,8 +17,8 @@ mod validation;
 use std::error::Error;
 use std::path::PathBuf;
 
-use rayon::prelude::*;
 use scientific_workflow::prelude::*;
+use std::sync::{Arc, Mutex};
 
 /// Error boundary shared by the example's application.
 pub(crate) type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -29,32 +29,43 @@ fn main() -> AppResult<()> {
     // root, and ScientificProject loads all four files under `config/`.
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let project = ScientificProject::load(&project_root)?;
-    let schema = project.state_schema();
+    let schema = project.state_schema().clone();
 
     // ExecutionScope owns collision-safe run-directory organization. The
     // application supplies only the configured parent directory.
     let recording_root = project.resolve_path("recording_root")?;
     let execution = ExecutionScope::create_generated(&recording_root)?;
 
-    let reporter = ProgressReporter::for_project(&project)
-        .identify_tasks_by(["mu"])
+    let task_summaries = Arc::new(Mutex::new(Vec::new()));
+    let summaries = Arc::clone(&task_summaries);
+    let phase = Phase::builder(1, "attractor simulation")
+        .progress_workloads_from_project(&project, "attractor", move |_| {
+            let schema = schema.clone();
+            let execution = execution.clone();
+            let summaries = Arc::clone(&summaries);
+            move |context| {
+                let summary = task_execution::run_task(&schema, &execution, context)?;
+                summaries.lock().unwrap().push(summary);
+                Ok(())
+            }
+        })
+        .display_tasks_by("attractor", ["mu"])
+        .max_concurrent_workloads(
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
+        )
+        .queue_capacity(2)
+        .build()?;
+    WorkflowRuntime::builder()
+        .phase(phase)
         .terminal()
-        .start()?;
+        .build()?
+        .run_phases([1])?;
 
-    // TaskConfig is an owned Send + Sync handle over shared immutable source data.
-    // par_bridge therefore feeds the lazy Cartesian iterator directly to Rayon's
-    // work-stealing pool without first collecting configs.
-    let task_summaries = project
-        .task_configs()
-        .par_bridge()
-        .map(|task| task_execution::run_task(&schema, &execution, task, &reporter))
-        .collect::<AppResult<Vec<_>>>()?;
+    let task_summaries = task_summaries.lock().unwrap().clone();
 
     cross_check::print_example_report(&task_summaries);
 
-    reporter.complete(format!(
-        "round_trip=true output={}",
-        execution.directory().display()
-    ))?;
     Ok(())
 }

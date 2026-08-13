@@ -19,9 +19,11 @@ pub(crate) struct TaskExecutionSummary {
 pub(crate) fn run_task(
     schema: &SystemStateSchema,
     execution: &ExecutionScope,
-    task: TaskConfig,
-    reporter: &ProgressReporter,
+    context: &TaskContext,
 ) -> AppResult<TaskExecutionSummary> {
+    let task = context
+        .configuration()
+        .ok_or("attractor task requires retained project configuration")?;
     let initial_point: Vec<f64> = task.decode_value("initial_point")?;
     let mu: f64 = task.decode_value("mu")?;
     let angular_frequency: f64 = task.decode_value("angular_frequency")?;
@@ -58,13 +60,17 @@ pub(crate) fn run_task(
 
     let initial_iteration = model.state().simulation_time().iteration();
     let target_iteration = initial_iteration + step_count;
-    let progress = reporter.start_task(&task, initial_iteration, Some(target_iteration))?;
+    let progress = context
+        .progress_handle()
+        .ok_or("attractor task requires iterative progress")?;
+    progress.set_iteration(initial_iteration)?;
+    progress.set_target_iteration(target_iteration)?;
 
     let directory = execution.task_recording_directory(task_ordinal);
     let recording = recording::record_task(
         schema,
         &directory,
-        &task,
+        task,
         step_count,
         trajectory_sampling_interval,
         radius_sampling_interval,
@@ -90,8 +96,6 @@ pub(crate) fn run_task(
         physical_time_increment_per_step,
         step_count,
     )?;
-
-    progress.complete(None)?;
 
     Ok(TaskExecutionSummary {
         task_ordinal,

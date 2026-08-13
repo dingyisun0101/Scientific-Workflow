@@ -1,4 +1,4 @@
-//! Thread-safe task progress state and the sole terminal renderer.
+//! Private thread-safe task progress state and terminal renderer.
 //!
 //! Workers publish only atomics on the hot path. A single renderer thread polls
 //! those slots at a bounded frequency and owns every human-facing terminal
@@ -6,7 +6,7 @@
 //! callers synchronize it from their authoritative model state.
 
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
@@ -28,8 +28,6 @@ use serde_json::Value;
 
 use super::error::ReportingError;
 use super::phase::{Phase, Task, TaskDisplayKind, TaskKey};
-use crate::configuration::{ProjectConfig, TaskConfig};
-use crate::project::ScientificProject;
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
@@ -95,9 +93,8 @@ impl TaskStatus {
 /// validation uses the retained JSON values themselves.
 #[derive(Clone, Debug)]
 pub struct TaskIdentity {
-    fields: Arc<[(Box<str>, Value)]>,
     label: Arc<str>,
-    task: Option<Task>,
+    task: Task,
 }
 
 impl TaskIdentity {
@@ -108,49 +105,28 @@ impl TaskIdentity {
 
     /// Returns the number of parameter fields forming this identity.
     pub fn len(&self) -> usize {
-        self.task
-            .as_ref()
-            .map_or_else(|| self.fields.len(), |task| task.iter().count())
+        self.task.iter().count()
     }
 
     /// Reports whether the identity contains no parameter fields.
     pub fn is_empty(&self) -> bool {
-        self.fields.is_empty()
+        self.task.iter().next().is_none()
     }
 
     /// Borrows one exact identity value by parameter name.
     pub fn value(&self, key: &str) -> Option<&Value> {
-        if let Some(task) = &self.task {
-            return task.value(key);
-        }
-        self.fields
-            .iter()
-            .find_map(|(name, value)| (name.as_ref() == key).then_some(value))
+        self.task.value(key)
     }
 
     /// Iterates identity fields in the configured display order.
     pub fn iter(&self) -> Box<dyn Iterator<Item = (&str, &Value)> + '_> {
-        if let Some(task) = &self.task {
-            task.iter()
-        } else {
-            Box::new(
-                self.fields
-                    .iter()
-                    .map(|(name, value)| (name.as_ref(), value)),
-            )
-        }
+        self.task.iter()
     }
 
     /// Returns the exact first-class task key when this identity came from a
     /// phase declaration.
-    pub fn task_key(&self) -> Option<&TaskKey> {
-        self.task.as_ref().map(Task::key)
-    }
-
-    fn matches(&self, task: &TaskConfig) -> bool {
-        self.fields
-            .iter()
-            .all(|(key, value)| task.value(key) == Some(value))
+    pub fn task_key(&self) -> &TaskKey {
+        self.task.key()
     }
 }
 
@@ -161,6 +137,7 @@ pub struct ProgressSummary {
     pending: u64,
     running: u64,
     completed: u64,
+    reused: u64,
     failed: u64,
 }
 
@@ -185,6 +162,11 @@ impl ProgressSummary {
         self.completed
     }
 
+    /// Returns the number of application-verified reused tasks.
+    pub fn reused(&self) -> u64 {
+        self.reused
+    }
+
     /// Returns the number of failed or interrupted tasks.
     pub fn failed(&self) -> u64 {
         self.failed
@@ -192,7 +174,10 @@ impl ProgressSummary {
 
     /// Reports whether every registered task completed successfully.
     pub fn is_success(&self) -> bool {
-        self.completed == self.total && self.pending == 0 && self.running == 0 && self.failed == 0
+        self.completed + self.reused == self.total
+            && self.pending == 0
+            && self.running == 0
+            && self.failed == 0
     }
 }
 
@@ -205,26 +190,18 @@ enum OutputMode {
     Hidden,
 }
 
-/// Builder for one process-wide progress-reporting session.
-pub struct ProgressReporterBuilder {
-    configuration: ProjectConfig,
-    identity_keys: Option<Vec<String>>,
-    output: OutputMode,
-}
-
-/// Builder for an application-owned task registry spanning multiple projects.
-pub struct RegisteredProgressReporterBuilder {
-    labels: Vec<String>,
-    output: OutputMode,
-}
-
 /// Builder that makes the reporter observe existing first-class phases/tasks.
-pub struct PhaseProgressReporterBuilder {
+pub(crate) struct RuntimeReporterBuilder {
     phases: Vec<Phase>,
     output: OutputMode,
+    heading: Option<String>,
 }
 
-impl PhaseProgressReporterBuilder {
+impl RuntimeReporterBuilder {
+    pub(crate) fn phase_heading(mut self, heading: String) -> Self {
+        self.heading = Some(heading);
+        self
+    }
     /// Forces cursor-controlled isolated-screen rendering.
     pub fn terminal(mut self) -> Self {
         self.output = OutputMode::Terminal;
@@ -244,16 +221,16 @@ impl PhaseProgressReporterBuilder {
     }
 
     /// Validates phase uniqueness and starts one observing reporter.
-    pub fn start(self) -> Result<ProgressReporter, ReportingError> {
-        let slots = build_phase_slots(&self.phases)?;
-        start_reporter(slots, Arc::from([]), self.output)
+    pub fn start(self) -> Result<RuntimeReporter, ReportingError> {
+        let slots = build_phase_slots(&self.phases, self.heading.as_deref())?;
+        start_reporter(slots, self.output)
     }
 }
 
-impl fmt::Debug for PhaseProgressReporterBuilder {
+impl fmt::Debug for RuntimeReporterBuilder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PhaseProgressReporterBuilder")
+            .debug_struct("RuntimeReporterBuilder")
             .field("phases", &self.phases.len())
             .field(
                 "tasks",
@@ -268,181 +245,28 @@ impl fmt::Debug for PhaseProgressReporterBuilder {
     }
 }
 
-impl RegisteredProgressReporterBuilder {
-    /// Forces cursor-controlled isolated-screen rendering.
-    pub fn terminal(mut self) -> Self {
-        self.output = OutputMode::Terminal;
-        self
-    }
-
-    /// Forces stable line-oriented output.
-    pub fn plain(mut self) -> Self {
-        self.output = OutputMode::Plain;
-        self
-    }
-
-    /// Suppresses rendering while retaining progress state.
-    pub fn hidden(mut self) -> Self {
-        self.output = OutputMode::Hidden;
-        self
-    }
-
-    /// Starts the sole reporter for the complete registered task set.
-    pub fn start(self) -> Result<ProgressReporter, ReportingError> {
-        let slots = build_registered_slots(&self.labels)?;
-        start_reporter(slots, Arc::from([]), self.output)
-    }
-}
-
-impl ProgressReporterBuilder {
-    /// Selects the exact parameter combination used to identify every task.
-    ///
-    /// Keys may refer to fixed or swept parameters, but the complete selected
-    /// tuple must be unique for every generated task. Calling this method with
-    /// no keys is valid only for a one-task project.
-    pub fn identify_tasks_by<I, S>(mut self, keys: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.identity_keys = Some(keys.into_iter().map(Into::into).collect());
-        self
-    }
-
-    /// Forces cursor-controlled terminal rendering even when stderr is not a
-    /// terminal. Most applications should retain automatic output selection.
-    pub fn terminal(mut self) -> Self {
-        self.output = OutputMode::Terminal;
-        self
-    }
-
-    /// Forces stable line-oriented output suitable for logs and CI systems.
-    pub fn plain(mut self) -> Self {
-        self.output = OutputMode::Plain;
-        self
-    }
-
-    /// Suppresses rendering while retaining counters and lifecycle validation.
-    ///
-    /// This is useful for tests and embedding applications with their own
-    /// non-terminal presentation layer. It does not disable progress tracking.
-    pub fn hidden(mut self) -> Self {
-        self.output = OutputMode::Hidden;
-        self
-    }
-
-    /// Validates identities, acquires exclusive terminal ownership, and starts
-    /// the centralized renderer.
-    pub fn start(self) -> Result<ProgressReporter, ReportingError> {
-        let identity_keys: Arc<[Box<str>]> =
-            validate_identity_keys(&self.configuration, self.identity_keys)?
-                .into_iter()
-                .map(String::into_boxed_str)
-                .collect();
-        let slots = build_slots(&self.configuration, Arc::clone(&identity_keys))?;
-        start_reporter(slots, identity_keys, self.output)
-    }
-}
-
-impl fmt::Debug for ProgressReporterBuilder {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ProgressReporterBuilder")
-            .field("tasks", &self.configuration.task_count())
-            .field("identity_keys", &self.identity_keys)
-            .field("output", &self.output)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Central progress registry and exclusive human-facing terminal owner.
-pub struct ProgressReporter {
+pub(crate) struct RuntimeReporter {
     inner: Arc<ReporterInner>,
     renderer: Option<JoinHandle<()>>,
     finished: bool,
 }
 
-impl ProgressReporter {
+impl RuntimeReporter {
     /// Observes tasks already owned and identified by first-class phases.
-    pub fn for_phases<I, P>(phases: I) -> PhaseProgressReporterBuilder
+    pub fn for_phases<I, P>(phases: I) -> RuntimeReporterBuilder
     where
         I: IntoIterator<Item = P>,
         P: Borrow<Phase>,
     {
-        PhaseProgressReporterBuilder {
+        RuntimeReporterBuilder {
             phases: phases
                 .into_iter()
                 .map(|phase| phase.borrow().clone())
                 .collect(),
             output: OutputMode::Auto,
+            heading: None,
         }
-    }
-
-    /// Registers one ordered application task set independent of any one
-    /// Workflow project. This is the embedding boundary for study runners.
-    pub fn for_registered_tasks<I, S>(labels: I) -> RegisteredProgressReporterBuilder
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        RegisteredProgressReporterBuilder {
-            labels: labels.into_iter().map(Into::into).collect(),
-            output: OutputMode::Auto,
-        }
-    }
-
-    /// Creates a builder from a conventional four-file scientific project.
-    ///
-    /// By default all sweep keys, in declaration order, form task identity.
-    pub fn for_project(project: &ScientificProject) -> ProgressReporterBuilder {
-        Self::for_configuration(project.configuration())
-    }
-
-    /// Creates a builder from the lower-level three-file project configuration.
-    pub fn for_configuration(configuration: &ProjectConfig) -> ProgressReporterBuilder {
-        ProgressReporterBuilder {
-            configuration: configuration.clone(),
-            identity_keys: None,
-            output: OutputMode::Auto,
-        }
-    }
-
-    /// Starts tracking one task using identity and ordering from `TaskConfig`.
-    ///
-    /// `initial_iteration` and `target_iteration` are absolute scientific
-    /// coordinates. A missing target creates an indeterminate progress display.
-    /// Callers never supply an ordinal or terminal label.
-    pub fn start_task(
-        &self,
-        task: &TaskConfig,
-        initial_iteration: u64,
-        target_iteration: Option<u64>,
-    ) -> Result<TaskProgress, ReportingError> {
-        let ordinal = task.task_ordinal();
-        let index = usize::try_from(ordinal)
-            .ok()
-            .filter(|index| *index < self.inner.slots.len())
-            .ok_or(ReportingError::UnknownTaskOrdinal {
-                task_ordinal: ordinal,
-            })?;
-        let slot = Arc::clone(&self.inner.slots[index]);
-        if !slot.identity.matches(task) {
-            return Err(ReportingError::TaskIdentityMismatch {
-                task_ordinal: ordinal,
-            });
-        }
-        start_slot(&self.inner, slot, initial_iteration, target_iteration)
-    }
-
-    /// Starts one application-registered task by exact stable label.
-    pub fn start_registered_task(
-        &self,
-        label: &str,
-        initial_iteration: u64,
-        target_iteration: Option<u64>,
-    ) -> Result<TaskProgress, ReportingError> {
-        let slot = registered_slot(&self.inner.slots, label)?;
-        start_slot(&self.inner, slot, initial_iteration, target_iteration)
     }
 
     /// Starts one exact first-class iterative task.
@@ -472,25 +296,6 @@ impl ProgressReporter {
     pub fn mark_reused(&self, key: &TaskKey) -> Result<(), ReportingError> {
         let slot = managed_slot(&self.inner.slots, key)?;
         mark_slot_reused(&slot)
-    }
-
-    /// Marks a registered task as already complete through verified reuse.
-    pub fn mark_registered_reused(&self, label: &str) -> Result<(), ReportingError> {
-        let slot = registered_slot(&self.inner.slots, label)?;
-        mark_slot_reused(&slot)
-    }
-
-    /// Returns the cancellation token set by Ctrl-C in interactive mode.
-    pub fn cancellation_token(&self) -> CancellationToken {
-        CancellationToken(Arc::clone(&self.inner.cancelled))
-    }
-
-    /// Sends one application-wide message through the sole renderer.
-    pub fn report(&self, message: impl Into<String>) -> Result<(), ReportingError> {
-        self.inner
-            .events
-            .send(RenderEvent::Message(message.into()))
-            .map_err(|_| ReportingError::RendererUnavailable)
     }
 
     /// Returns a non-blocking snapshot of all task lifecycle counts.
@@ -526,14 +331,6 @@ impl ProgressReporter {
         Ok(summary)
     }
 
-    /// Emits one terminal error through the reporting subsystem.
-    ///
-    /// This helper is intended for failures occurring before a reporting
-    /// session starts or after it has released the terminal lease.
-    pub fn report_error(message: impl fmt::Display) {
-        eprintln!("[error] {message}");
-    }
-
     fn stop(&mut self, success: bool, message: String) -> Result<(), ReportingError> {
         self.inner
             .events
@@ -553,18 +350,17 @@ impl ProgressReporter {
     }
 }
 
-impl fmt::Debug for ProgressReporter {
+impl fmt::Debug for RuntimeReporter {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ProgressReporter")
+            .debug_struct("RuntimeReporter")
             .field("tasks", &self.inner.slots.len())
-            .field("identity_keys", &self.inner.identity_keys)
             .field("summary", &self.summary())
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for ProgressReporter {
+impl Drop for RuntimeReporter {
     fn drop(&mut self) {
         if self.finished {
             return;
@@ -630,6 +426,21 @@ impl TaskProgress {
         } else {
             None
         }
+    }
+
+    /// Sets or replaces the absolute target for this running task.
+    pub fn set_target_iteration(&self, target: u64) -> Result<(), ReportingError> {
+        let current = self.current_iteration();
+        if current > target {
+            return Err(ReportingError::InitialIterationBeyondTarget {
+                identity: self.identity().label().to_owned(),
+                initial: current,
+                target,
+            });
+        }
+        self.slot.target.store(target, Ordering::Relaxed);
+        self.slot.target_known.store(true, Ordering::Release);
+        Ok(())
     }
 
     /// Returns this task's current lifecycle status.
@@ -841,7 +652,6 @@ impl Drop for ActivityTask {
 
 struct ReporterInner {
     slots: Arc<[Arc<ProgressSlot>]>,
-    identity_keys: Arc<[Box<str>]>,
     events: Sender<RenderEvent>,
     cancelled: Arc<AtomicBool>,
 }
@@ -859,7 +669,6 @@ struct ProgressSlot {
 }
 
 enum RenderEvent {
-    Message(String),
     TaskMessage { identity: String, message: String },
     Stop { success: bool, message: String },
 }
@@ -891,9 +700,8 @@ fn resolve_output(output: OutputMode) -> OutputMode {
 
 fn start_reporter(
     slots: Arc<[Arc<ProgressSlot>]>,
-    identity_keys: Arc<[Box<str>]>,
     requested_output: OutputMode,
-) -> Result<ProgressReporter, ReportingError> {
+) -> Result<RuntimeReporter, ReportingError> {
     acquire_terminal()?;
     let lease = TerminalLease;
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -919,10 +727,9 @@ fn start_reporter(
         Ok(renderer) => renderer,
         Err(source) => return Err(ReportingError::StartRenderer { source }),
     };
-    Ok(ProgressReporter {
+    Ok(RuntimeReporter {
         inner: Arc::new(ReporterInner {
             slots,
-            identity_keys,
             events,
             cancelled,
         }),
@@ -931,26 +738,13 @@ fn start_reporter(
     })
 }
 
-fn registered_slot(
-    slots: &[Arc<ProgressSlot>],
-    label: &str,
-) -> Result<Arc<ProgressSlot>, ReportingError> {
-    slots
-        .iter()
-        .find(|slot| slot.identity.label() == label)
-        .cloned()
-        .ok_or_else(|| ReportingError::UnknownRegisteredTask {
-            identity: label.to_owned(),
-        })
-}
-
 fn managed_slot(
     slots: &[Arc<ProgressSlot>],
     key: &TaskKey,
 ) -> Result<Arc<ProgressSlot>, ReportingError> {
     slots
         .iter()
-        .find(|slot| slot.identity.task_key() == Some(key))
+        .find(|slot| slot.identity.task_key() == key)
         .cloned()
         .ok_or_else(|| ReportingError::UnknownManagedTask {
             task: key.to_string(),
@@ -959,10 +753,7 @@ fn managed_slot(
 
 fn kind_mismatch(slot: &ProgressSlot, requested: &'static str) -> ReportingError {
     ReportingError::ManagedTaskKindMismatch {
-        task: slot
-            .identity
-            .task_key()
-            .map_or_else(|| slot.identity.label().to_owned(), ToString::to_string),
+        task: slot.identity.task_key().to_string(),
         requested,
         actual: match slot.display_kind {
             TaskDisplayKind::Progress => "progress",
@@ -1051,108 +842,10 @@ fn start_activity_slot(
     })
 }
 
-fn validate_identity_keys(
-    configuration: &ProjectConfig,
-    requested: Option<Vec<String>>,
-) -> Result<Vec<String>, ReportingError> {
-    let keys = requested.unwrap_or_else(|| {
-        configuration
-            .parameters()
-            .sweep_keys()
-            .map(str::to_owned)
-            .collect()
-    });
-    let mut seen = HashSet::with_capacity(keys.len());
-    for key in &keys {
-        if !seen.insert(key.as_str()) {
-            return Err(ReportingError::DuplicateIdentityParameter { key: key.clone() });
-        }
-        if !configuration.parameters().contains_parameter(key) {
-            return Err(ReportingError::UnknownIdentityParameter { key: key.clone() });
-        }
-    }
-    Ok(keys)
-}
-
-fn build_slots(
-    configuration: &ProjectConfig,
-    keys: Arc<[Box<str>]>,
+fn build_phase_slots(
+    phases: &[Phase],
+    heading: Option<&str>,
 ) -> Result<Arc<[Arc<ProgressSlot>]>, ReportingError> {
-    let capacity = usize::try_from(configuration.task_count()).map_err(|_| {
-        ReportingError::TaskCountTooLarge {
-            task_count: configuration.task_count(),
-        }
-    })?;
-    let mut slots = Vec::with_capacity(capacity);
-    let mut identities = HashMap::<String, u64>::with_capacity(capacity);
-    for task in configuration.task_configs() {
-        let label = render_identity(&task, &keys);
-        if let Some(first_ordinal) = identities.insert(label.clone(), task.task_ordinal()) {
-            return Err(ReportingError::NonUniqueTaskIdentity {
-                identity: label,
-                first_ordinal,
-                second_ordinal: task.task_ordinal(),
-            });
-        }
-        slots.push(Arc::new(ProgressSlot {
-            identity: TaskIdentity {
-                fields: keys
-                    .iter()
-                    .map(|key| {
-                        (
-                            key.clone(),
-                            task.value(key)
-                                .expect("validated identity keys resolve for every task")
-                                .clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .into(),
-                label: label.into(),
-                task: None,
-            },
-            phase_label: None,
-            display_kind: TaskDisplayKind::Progress,
-            current: AtomicU64::new(0),
-            target: AtomicU64::new(0),
-            target_known: AtomicBool::new(false),
-            started: AtomicBool::new(false),
-            status: AtomicU8::new(TaskStatus::Pending.encode()),
-            detail: Mutex::new("pending".into()),
-        }));
-    }
-    Ok(slots.into())
-}
-
-fn build_registered_slots(labels: &[String]) -> Result<Arc<[Arc<ProgressSlot>]>, ReportingError> {
-    let mut seen = HashSet::with_capacity(labels.len());
-    let mut slots = Vec::with_capacity(labels.len());
-    for label in labels {
-        if !seen.insert(label.as_str()) {
-            return Err(ReportingError::DuplicateRegisteredTask {
-                identity: label.clone(),
-            });
-        }
-        slots.push(Arc::new(ProgressSlot {
-            identity: TaskIdentity {
-                fields: Arc::from([]),
-                label: label.clone().into(),
-                task: None,
-            },
-            phase_label: None,
-            display_kind: TaskDisplayKind::Progress,
-            current: AtomicU64::new(0),
-            target: AtomicU64::new(0),
-            target_known: AtomicBool::new(false),
-            started: AtomicBool::new(false),
-            status: AtomicU8::new(TaskStatus::Pending.encode()),
-            detail: Mutex::new("pending".into()),
-        }));
-    }
-    Ok(slots.into())
-}
-
-fn build_phase_slots(phases: &[Phase]) -> Result<Arc<[Arc<ProgressSlot>]>, ReportingError> {
     if phases.is_empty() {
         return Err(ReportingError::EmptyPhaseSet);
     }
@@ -1165,13 +858,12 @@ fn build_phase_slots(phases: &[Phase]) -> Result<Arc<[Arc<ProgressSlot>]>, Repor
                 phase: phase.id().get(),
             });
         }
-        let phase_label: Arc<str> = phase.label().into();
+        let phase_label: Arc<str> = heading.unwrap_or_else(|| phase.label()).into();
         for task in phase.tasks() {
             slots.push(Arc::new(ProgressSlot {
                 identity: TaskIdentity {
-                    fields: Arc::from([]),
                     label: task.label().into(),
-                    task: Some(task.clone()),
+                    task: task.clone(),
                 },
                 phase_label: Some(Arc::clone(&phase_label)),
                 display_kind: task.display_kind(),
@@ -1187,36 +879,21 @@ fn build_phase_slots(phases: &[Phase]) -> Result<Arc<[Arc<ProgressSlot>]>, Repor
     Ok(slots.into())
 }
 
-fn render_identity(task: &TaskConfig, keys: &[Box<str>]) -> String {
-    if keys.is_empty() {
-        return "task".to_owned();
-    }
-    keys.iter()
-        .map(|key| {
-            let value = task
-                .value(key)
-                .expect("validated identity keys resolve for every task");
-            let value = serde_json::to_string(value)
-                .expect("serde_json::Value always serializes to valid JSON");
-            format!("{key}={value}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn summarize(slots: &[Arc<ProgressSlot>]) -> ProgressSummary {
     let mut summary = ProgressSummary {
         total: u64::try_from(slots.len()).expect("slot count originated from a u64 task count"),
         pending: 0,
         running: 0,
         completed: 0,
+        reused: 0,
         failed: 0,
     };
     for slot in slots {
         match TaskStatus::decode(slot.status.load(Ordering::Acquire)) {
             TaskStatus::Pending => summary.pending += 1,
             TaskStatus::Running => summary.running += 1,
-            TaskStatus::Completed | TaskStatus::Reused => summary.completed += 1,
+            TaskStatus::Completed => summary.completed += 1,
+            TaskStatus::Reused => summary.reused += 1,
             TaskStatus::Failed => summary.failed += 1,
         }
     }
@@ -1326,7 +1003,6 @@ fn render(
             display.refresh(&slots);
         }
         match receiver.recv_timeout(REFRESH_INTERVAL) {
-            Ok(RenderEvent::Message(message)) => write_message(output, terminal.as_ref(), &message),
             Ok(RenderEvent::TaskMessage { identity, message }) => {
                 write_message(output, terminal.as_ref(), &format!("{identity}: {message}"));
             }
@@ -1380,8 +1056,9 @@ impl TerminalDisplay {
             "{prefix:.bold} [{msg}] {spinner:.cyan} iteration {pos} elapsed {elapsed_precise} ETA unknown",
         )
         .expect("hard-coded spinner template is valid");
-        let heading_style = ProgressStyle::with_template("{prefix:.bold}")
-            .expect("hard-coded phase-heading template is valid");
+        let heading_style =
+            ProgressStyle::with_template("{prefix:.bold} [{msg}] elapsed {elapsed_precise}")
+                .expect("hard-coded phase-heading template is valid");
         let mut headings = Vec::new();
         let mut bars = Vec::with_capacity(slots.len());
         let mut previous_phase: Option<&str> = None;
@@ -1425,6 +1102,22 @@ impl TerminalDisplay {
     }
 
     fn refresh(&mut self, slots: &[Arc<ProgressSlot>]) {
+        let summary = summarize(slots);
+        let status = if summary.failed > 0 {
+            "failed"
+        } else if summary.running > 0 {
+            "running"
+        } else if summary.pending > 0 {
+            "pending"
+        } else {
+            "completed"
+        };
+        for heading in &self.headings {
+            heading.set_message(format!(
+                "{status} · running={} pending={} completed={} reused={} failed={}",
+                summary.running, summary.pending, summary.completed, summary.reused, summary.failed,
+            ));
+        }
         for ((bar, started), slot) in self.bars.iter().zip(&mut self.started).zip(slots) {
             let status = TaskStatus::decode(slot.status.load(Ordering::Acquire));
             if !*started && slot.started.load(Ordering::Acquire) {
@@ -1496,7 +1189,7 @@ fn write_plain_transitions(slots: &[Arc<ProgressSlot>], previous: &mut [TaskStat
             let detail = lock(&slot.detail);
             eprintln!(
                 "[task] identity={} status={} detail={} iteration={} target={}",
-                slot.identity.label(),
+                slot.identity.task_key(),
                 status.label(),
                 detail.as_ref(),
                 slot.current.load(Ordering::Relaxed),
@@ -1513,10 +1206,11 @@ fn write_final(output: OutputMode, slots: &[Arc<ProgressSlot>], success: bool, m
     }
     let summary = summarize(slots);
     eprintln!(
-        "[workflow] status={} tasks={} completed={} failed={} pending={} message={}",
+        "[workflow] status={} tasks={} completed={} reused={} failed={} pending={} message={}",
         if success { "completed" } else { "failed" },
         summary.total,
         summary.completed,
+        summary.reused,
         summary.failed,
         summary.pending,
         message
