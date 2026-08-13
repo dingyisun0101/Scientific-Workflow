@@ -1,8 +1,9 @@
 //! Integrated coverage for configuration-backed phase scheduling and display.
 
+use std::io::Write;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
@@ -49,6 +50,7 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
         Phase::builder(1, "empty").build(),
         Err(RuntimeError::EmptyPhase { phase: 1 })
     ));
+    assert!(!activity_phase(&project, 1, "default", |_| Ok(())).requires_confirmation());
     let duplicate_a = activity_phase(&project, 1, "one", |_| Ok(()));
     let duplicate_b = activity_phase(&project, 1, "two", |_| Ok(()));
     assert!(matches!(
@@ -516,22 +518,37 @@ fn plain_and_hidden_public_output_modes_are_stable() {
     const CHILD_MODE: &str = "SCIENTIFIC_WORKFLOW_RUNTIME_OUTPUT_CHILD";
     if let Ok(mode) = std::env::var(CHILD_MODE) {
         let project = project();
-        let first = activity_phase(&project, 2, "message", |context| {
-            context.report("phase-local-message")?;
-            Ok(())
-        });
+        let confirm = mode.starts_with("confirm");
+        let first = Phase::builder(2, "first")
+            .activity_workload(config(&project, 0), "message", |context| {
+                context.report("phase-local-message")?;
+                Ok(())
+            })
+            .require_confirm(confirm)
+            .build()
+            .unwrap();
         let second = Phase::builder(4, "second")
             .depends_on(2)
             .activity_workload(config(&project, 0), "complete", |_| Ok(()))
+            .require_confirm(confirm)
             .build()
             .unwrap();
         let builder = WorkflowRuntime::builder().phases([first, second]);
         let runtime = match mode.as_str() {
-            "plain" => builder.plain().build().unwrap(),
+            "plain" | "confirm-yes" | "confirm-eof" => builder.plain().build().unwrap(),
             "terminal" => builder.terminal().build().unwrap(),
             _ => builder.hidden().build().unwrap(),
         };
-        assert!(runtime.run_phases([2, 4]).unwrap().is_success());
+        let result = runtime.run_phases([2, 4]);
+        if mode == "confirm-eof" {
+            let error = result.unwrap_err();
+            assert!(matches!(
+                error.execution_cause(),
+                Some(RuntimeError::PhaseConfirmationEof { phase: 2 })
+            ));
+        } else {
+            assert!(result.unwrap().is_success());
+        }
         return;
     }
 
@@ -552,6 +569,7 @@ fn plain_and_hidden_public_output_modes_are_stable() {
     assert!(plain.status.success());
     let stderr = String::from_utf8(plain.stderr).unwrap();
     assert!(stderr.contains("[phase-start] position=1/2 phase=2"));
+    assert!(stderr.contains("require_confirm=false"));
     assert!(stderr.contains("[task] identity=2/message:0 status=completed"));
     assert!(stderr.contains("[phase-complete] phase=4"));
     assert!(stderr.contains("[runtime] status=completed phases=2 tasks=2"));
@@ -563,4 +581,36 @@ fn plain_and_hidden_public_output_modes_are_stable() {
     assert!(!stderr.contains("[phase-start]"));
     assert!(!stderr.contains("[task]"));
     assert!(!stderr.contains("[runtime]"));
+
+    let mut confirmed = Command::new(&executable)
+        .args([
+            "--exact",
+            "plain_and_hidden_public_output_modes_are_stable",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD_MODE, "confirm-yes")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    confirmed
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"no\nYeS\n")
+        .unwrap();
+    let confirmed = confirmed.wait_with_output().unwrap();
+    assert!(confirmed.status.success());
+    let stderr = String::from_utf8(confirmed.stderr).unwrap();
+    assert_eq!(stderr.matches("type yes to continue").count(), 2);
+    assert!(stderr.contains("confirmation not accepted"));
+    assert!(stderr.contains("[phase-start] position=2/2 phase=4"));
+
+    let eof = run_child("confirm-eof");
+    assert!(eof.status.success());
+    let stderr = String::from_utf8(eof.stderr).unwrap();
+    assert!(stderr.contains("type yes to continue"));
+    assert!(!stderr.contains("[phase-start] position=2/2 phase=4"));
 }

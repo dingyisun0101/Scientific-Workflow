@@ -301,7 +301,7 @@ impl WorkflowRuntime {
         let mut summaries = Vec::with_capacity(total_phases);
         let mut phases = self.phases.into_iter().map(Some).collect::<Vec<_>>();
 
-        for (selection_position, phase_position) in selected.into_iter().enumerate() {
+        for (selection_position, phase_position) in selected.iter().copied().enumerate() {
             let phase = phases[phase_position]
                 .take()
                 .expect("selected phase positions are unique");
@@ -318,6 +318,7 @@ impl WorkflowRuntime {
             .start()?;
             let phase_id = phase.id();
             let phase_label: Arc<str> = phase.label().into();
+            let require_confirm = phase.requires_confirmation();
             let result = scheduler::execute_phase(phase, &reporter);
             let progress = if result.is_ok() {
                 reporter.complete(format!("phase {phase_id} completed"))?
@@ -339,6 +340,42 @@ impl WorkflowRuntime {
                     },
                     source: Box::new(error),
                 });
+            }
+            if require_confirm && selection_position + 1 < total_phases {
+                let next = phases[selected[selection_position + 1]]
+                    .as_ref()
+                    .expect("the next selected phase has not executed");
+                let confirmed = match renderer::confirm_transition(phase_id, next) {
+                    Ok(confirmed) => confirmed,
+                    Err(source) => {
+                        renderer::runtime_complete(
+                            self.output,
+                            summaries.len(),
+                            total_tasks,
+                            false,
+                        );
+                        return Err(RuntimeError::PhaseExecutionFailed {
+                            summary: RuntimeSummary {
+                                phases: summaries.into(),
+                            },
+                            source: Box::new(RuntimeError::PhaseConfirmationInput {
+                                phase: phase_id.get(),
+                                source,
+                            }),
+                        });
+                    }
+                };
+                if !confirmed {
+                    renderer::runtime_complete(self.output, summaries.len(), total_tasks, false);
+                    return Err(RuntimeError::PhaseExecutionFailed {
+                        summary: RuntimeSummary {
+                            phases: summaries.into(),
+                        },
+                        source: Box::new(RuntimeError::PhaseConfirmationEof {
+                            phase: phase_id.get(),
+                        }),
+                    });
+                }
             }
         }
 

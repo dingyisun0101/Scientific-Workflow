@@ -1316,6 +1316,10 @@ The runtime follows a declare-select-run lifecycle:
    or explicitly reused. Phase failure follows an explicit policy whose
    default is fail-fast, preserves observed states, prevents dependent phases
    from starting, and shuts down owned infrastructure in order.
+8. A successfully completed non-final phase advances immediately unless its
+   `require_confirm` policy is enabled. In that case the completed reporter
+   releases terminal mode, the runtime waits for the exact word `yes`, and only
+   then starts the next selected phase.
 
 The runtime implements only the generic scheduling implied by declared phases,
 dependencies, and limits. It never derives a dependency from parameter values,
@@ -1335,8 +1339,9 @@ WorkflowRuntime
 
 A phase has a stable `PhaseId`, an automatically generated or caller-supplied
 human label, one or more tasks, zero or more declared predecessor `PhaseId`
-values, `max_concurrent_workloads`, and `queue_capacity`. Empty runtimes, empty
-phase selections, empty phases, duplicate phase IDs, unknown dependencies, and
+values, `max_concurrent_workloads`, `queue_capacity`, and a `require_confirm`
+transition flag that defaults to `false`. Empty runtimes, empty phase
+selections, empty phases, duplicate phase IDs, unknown dependencies, and
 dependency cycles are rejected before execution.
 
 Selected phases execute in validated dependency order. A dependent phase
@@ -1510,9 +1515,13 @@ At a phase transition the renderer finalizes and archives the previous phase's
 summary, removes its live task and message regions, creates the next phase
 header, and installs only the next phase's task rows. Phase-local elapsed time
 and messages restart at that boundary. A successful phase may transition
-immediately without an artificial viewing delay. A failed phase remains on
-screen as the terminal interactive state so the failure and its task context
-are not erased.
+immediately without an artificial viewing delay, or may explicitly require
+confirmation before the next phase starts. Confirmation accepts only `yes`
+after case-folding and whitespace trimming; other input re-prompts, while EOF
+or an input failure returns a structured runtime error with the completed phase
+summary. A final selected phase never prompts. A failed phase remains on screen
+as the terminal interactive state so the failure and its task context are not
+erased.
 
 Runtime-wide messages emitted during a phase are visibly distinguished from
 task-scoped messages. The runtime retains only a documented bounded phase

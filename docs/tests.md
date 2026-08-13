@@ -523,6 +523,9 @@ test harness terminal; a bounded plain-output check covers renderer output.
 - Single-use workloads can move non-Clone resources directly into execution.
 - Phase concurrency and prepared-work queue capacity remain bounded.
 - Progress, activity, and verified reused tasks share one phase lifecycle.
+- Confirmation defaults off, accepts `yes` case-insensitively after rejecting
+  other input, blocks the next phase until accepted, reports EOF context, and
+  never prompts after the final selected phase.
 - One active runtime excludes another even in hidden mode and releases its
   lease after success, failure, and panic-safe shutdown.
 - Default fail-fast and optional finish-active policies stop admission after a

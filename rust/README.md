@@ -155,6 +155,12 @@ The corresponding `progress_workloads_from_project` and
 `activity_workloads_from_project` factory methods remain available when each
 task must capture a distinct owned, possibly non-Clone resource.
 
+Phase transitions are automatic by default. Calling
+`require_confirm(true)` on a phase makes a successful non-final transition
+prompt for the exact word `yes` before the next selected phase starts. Other
+answers re-prompt; end-of-input or an input error stops execution with a
+structured `RuntimeError`. The final selected phase never prompts.
+
 Only the active phase is displayed interactively. Plain mode emits append-only
 uncolored phase and task lifecycle records. Progress updates are atomic and
 remain synchronized from the application's authoritative scientific state.

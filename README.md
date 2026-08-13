@@ -104,6 +104,11 @@ their human-facing display. Each task remains responsible for its own files,
 recordings, artifacts, networking, and subprocesses. Hard process resources are
 contained by the externally configured systemd/service scope, not by Workflow.
 
+Phases advance automatically by default. A phase configured with
+`.require_confirm(true)` pauses after successful completion and requires the
+user to type `yes` before the next selected phase starts. The final selected
+phase never prompts because there is no transition.
+
 Interactive sessions show only the active phase: its identity, scheduling
 limits, elapsed time, task counts, messages, and rows. Successful transitions
 replace that phase with the next; failures retain task context. Redirected

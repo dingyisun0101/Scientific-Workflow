@@ -75,6 +75,20 @@ pub enum RuntimeError {
     #[error("selected phase {phase} requires unsatisfied phase {dependency}")]
     UnsatisfiedPhaseDependency { phase: u64, dependency: u64 },
 
+    /// Standard input ended before a required phase transition was confirmed.
+    #[error("confirmation input ended after phase {phase} before the next phase could start")]
+    PhaseConfirmationEof { phase: u64 },
+
+    /// A required phase-transition confirmation could not read standard input.
+    #[error("failed to read confirmation after phase {phase}")]
+    PhaseConfirmationInput {
+        /// Successfully completed phase awaiting permission to advance.
+        phase: u64,
+        /// Underlying standard-input or prompt-output failure.
+        #[source]
+        source: io::Error,
+    },
+
     /// One declared task has no executable workload.
     #[error("task `{task}` has no workload")]
     MissingTaskWorkload { task: String },

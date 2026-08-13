@@ -1,5 +1,7 @@
 //! Runtime-level phase headings and line-oriented lifecycle records.
 
+use std::io::{self, BufRead, Write};
+
 use super::phase::{Phase, PhaseId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,27 +24,60 @@ pub(crate) fn phase_heading(phase: &Phase, position: usize, total: usize) -> Str
             .join(",")
     };
     format!(
-        "Phase {position} of {total} — [{}] {} · tasks={} · active≤{} · queue={} · failure={} · dependencies={dependencies}",
+        "Phase {position} of {total} — [{}] {} · tasks={} · active≤{} · queue={} · failure={} · confirm={} · dependencies={dependencies}",
         phase.id(),
         phase.label(),
         phase.tasks().len(),
         phase.max_concurrent_workloads(),
         phase.queue_capacity(),
         phase.failure_policy().as_str(),
+        if phase.requires_confirmation() {
+            "yes"
+        } else {
+            "no"
+        },
     )
 }
 
 pub(crate) fn phase_start(output: RuntimeOutput, phase: &Phase, position: usize, total: usize) {
     if output == RuntimeOutput::Plain {
         eprintln!(
-            "[phase-start] position={position}/{total} phase={} label={} tasks={} active_limit={} queue_capacity={} failure_policy={}",
+            "[phase-start] position={position}/{total} phase={} label={} tasks={} active_limit={} queue_capacity={} failure_policy={} require_confirm={}",
             phase.id(),
             phase.label(),
             phase.tasks().len(),
             phase.max_concurrent_workloads(),
             phase.queue_capacity(),
             phase.failure_policy().as_str(),
+            phase.requires_confirmation(),
         );
+    }
+}
+
+pub(crate) fn confirm_transition(current: PhaseId, next: &Phase) -> io::Result<bool> {
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let stderr = io::stderr();
+    let mut output = stderr.lock();
+    let mut answer = String::new();
+
+    loop {
+        write!(
+            output,
+            "[phase-confirm] phase={current} next_phase={} label={} — type yes to continue: ",
+            next.id(),
+            next.label(),
+        )?;
+        output.flush()?;
+        answer.clear();
+        if input.read_line(&mut answer)? == 0 {
+            writeln!(output)?;
+            return Ok(false);
+        }
+        if answer.trim().eq_ignore_ascii_case("yes") {
+            return Ok(true);
+        }
+        writeln!(output, "[phase-confirm] confirmation not accepted")?;
     }
 }
 

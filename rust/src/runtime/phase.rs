@@ -256,6 +256,7 @@ pub struct Phase {
     queue_capacity: usize,
     dependencies: Vec<PhaseId>,
     failure_policy: PhaseFailurePolicy,
+    require_confirm: bool,
 }
 
 /// Scheduling behavior after the first workload failure in a phase.
@@ -291,6 +292,7 @@ impl Phase {
             queue_capacity: 1,
             dependencies: Vec::new(),
             failure_policy: PhaseFailurePolicy::FailFast,
+            require_confirm: false,
         }
     }
 
@@ -327,6 +329,12 @@ impl Phase {
     /// Returns the behavior selected for the first workload failure.
     pub const fn failure_policy(&self) -> PhaseFailurePolicy {
         self.failure_policy
+    }
+
+    /// Reports whether successful completion requires confirmation before the
+    /// next selected phase may start.
+    pub const fn requires_confirmation(&self) -> bool {
+        self.require_confirm
     }
 
     pub(crate) fn into_tasks(self) -> Vec<Task> {
@@ -367,6 +375,7 @@ pub struct PhaseBuilder {
     queue_capacity: usize,
     dependencies: Vec<PhaseId>,
     failure_policy: PhaseFailurePolicy,
+    require_confirm: bool,
 }
 
 impl PhaseBuilder {
@@ -596,6 +605,15 @@ impl PhaseBuilder {
         self
     }
 
+    /// Requires the user to type `yes` before advancing to the next phase.
+    ///
+    /// The default is `false`. This setting has no effect when this phase is
+    /// the final selected phase because there is no transition to confirm.
+    pub fn require_confirm(mut self, require: bool) -> Self {
+        self.require_confirm = require;
+        self
+    }
+
     /// Validates and creates one immutable nonempty phase.
     pub fn build(mut self) -> Result<Phase, ReportingError> {
         if self.label.trim().is_empty() {
@@ -661,6 +679,7 @@ impl PhaseBuilder {
             queue_capacity: self.queue_capacity,
             dependencies: self.dependencies,
             failure_policy: self.failure_policy,
+            require_confirm: self.require_confirm,
         })
     }
 
@@ -772,6 +791,7 @@ impl fmt::Debug for Phase {
             .field("queue_capacity", &self.queue_capacity)
             .field("dependencies", &self.dependencies)
             .field("failure_policy", &self.failure_policy)
+            .field("require_confirm", &self.require_confirm)
             .finish()
     }
 }
@@ -786,6 +806,7 @@ impl fmt::Debug for PhaseBuilder {
             .field("max_concurrent_workloads", &self.max_concurrent_workloads)
             .field("queue_capacity", &self.queue_capacity)
             .field("dependencies", &self.dependencies)
+            .field("require_confirm", &self.require_confirm)
             .finish_non_exhaustive()
     }
 }
