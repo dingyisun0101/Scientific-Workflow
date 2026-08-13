@@ -1241,7 +1241,206 @@ prelude -> explicit configuration type re-exports
 consumer callers -> scientific_workflow::configuration::{...}
 ```
 
-## Centralized progress reporting
+## Planned WorkflowRuntime
+
+`WorkflowRuntime` is the single operational owner for one scientific program
+execution. It owns reporting, shared cancellation, cooperative resource
+control, and the supported subprocess boundary. It does not own scientific
+state, storage writers, execution directories, task dependencies, or the
+application's scientific protocol.
+
+The responsibility split is:
+
+```text
+application
+    owns scientific task definitions, dependencies, and result handling
+        -> WorkflowRuntime
+           owns task registration, reporting, resources, cancellation,
+           and supported child-process execution
+               -> task-local TaskProgress or ActivityTask handles
+                  are passed into models and operations
+```
+
+`ExecutionScope` retains its existing narrower meaning: a filesystem scope for
+recordings and artifacts. Resource isolation is never called an execution
+scope in the public API.
+
+### Runtime ownership and lifecycle
+
+Only one `WorkflowRuntime` may be active in a process, including hidden-output
+operation. Its process-wide lease covers the reporter, renderer, cancellation
+source, resource controller, and child-report receiver. A subprocess never
+constructs another runtime or reporter; it connects to the parent through a
+restricted reporting client.
+
+The runtime follows a declare-then-run lifecycle:
+
+1. The application declares every user-visible task and display section.
+2. `WorkflowRuntimeBuilder::start` validates stable task IDs, display order,
+   section membership, resource policy, and output policy.
+3. The runtime acquires the process-wide lease and starts its private renderer
+   and event receiver.
+4. The application starts ready work according to its own dependency graph.
+5. Models and operations receive only task-local handles, cancellation tokens,
+   resource leases, or child-client configuration.
+6. Successful runtime completion requires every declared task to be completed
+   or explicitly reused. Failure preserves the observed task states and shuts
+   down the renderer and child-report endpoint in order.
+
+The runtime deliberately does not implement a DAG, interpret dependencies, or
+decide which scientific result makes another task ready. Flat parameter
+sweeps, compiled study graphs, nested ensembles, and one-off programs can all
+use the same operational boundary. A later scheduler may be built above this
+API without changing it.
+
+### Runtime task declarations
+
+Presentation labels are not identity. Each declaration contains an opaque,
+stable `TaskId`, a human-readable label, a display kind, and an optional
+`SectionId`:
+
+```text
+RuntimeTask
+├── id: TaskId
+├── label: String
+├── section: Option<SectionId>
+└── kind
+    ├── Progress { initial_iteration, target_iteration? }
+    └── Activity
+```
+
+`Progress` is used for iterative work. `Activity` is used for work that runs
+once and only changes lifecycle state, such as creating an artifact, validating
+a recording, or executing a processor. Activity rows never invent an
+iteration counter or progress bar.
+
+`ScientificProject` and `ProjectConfig` remain convenience sources that can
+expand deterministic parameter tasks into runtime declarations. Explicit
+registration is the core API because a complete program may also contain
+processors, artifact operations, nested ensemble members, and other work not
+described by one project parameter space.
+
+Sections are declared before startup and tasks refer to them by stable ID. The
+renderer inserts a horizontal separator immediately before the first task in a
+section. A positional convenience may express "split before task N", but the
+stored model is section membership so filtering or task expansion cannot leave
+a separator attached to the wrong task.
+
+### Runtime reporting
+
+The renderer has two distinct regions:
+
+- a stable task region containing progress and activity rows; and
+- an append-only message region for runtime-wide and task-scoped events.
+
+Interactive status flags use terminal-aware color: pending is subdued,
+running is active, completed is successful, and failed is an error. Color is a
+presentation detail and is never embedded in labels, statuses, plain output,
+redirected logs, or persisted data.
+
+`TaskProgress` remains the model-facing handle for iterative work. A separate
+`ActivityTask` handle exposes phase, message, completion, failure, status, and
+cancellation without iteration methods. Dropping either active handle marks
+the reporting task failed, but does not automatically convert a recoverable
+storage recording into a terminal failed recording. Reporting lifecycle and
+recording lifecycle remain distinct.
+
+The current `ProgressReporter` constructors become builder adapters or private
+runtime implementation details. Downstream libraries must not construct a
+reporter. All human-facing messages emitted while a runtime is active pass
+through the runtime or a task handle.
+
+### Resource policy
+
+`WorkflowRuntime` owns a `ResourceController`, but reporting and resource
+control remain sibling responsibilities. The public `ResourcePolicy`
+distinguishes:
+
+```text
+ResourcePolicy
+├── max_active_tasks
+├── compute_threads
+├── max_child_processes
+└── isolation
+    ├── None
+    └── platform policy
+        ├── memory high/max
+        ├── swap limit
+        ├── CPU quota
+        ├── process/thread limit
+        └── wall-clock timeout
+```
+
+The library supplies validation, defaults, serde configuration, resource
+leases, a shared compute-pool boundary, and child-process launch integration.
+Scientific applications should not contain custom `systemd-run` argument
+assembly or their own resource-scope validation. Systemd user scopes may be
+one Linux backend; they are not the public abstraction and availability never
+silently changes the selected policy.
+
+Enforcement is explicit and honest:
+
+- work started through runtime task/compute APIs obeys active-task and compute
+  limits;
+- children launched through the runtime obey child-count and configured OS
+  isolation limits;
+- arbitrary threads, pools, and processes created outside the runtime cannot
+  be governed by the library.
+
+Operation-specific limits, such as maximum concurrent members of one
+scientific ensemble, remain application policy unless those members are
+declared as ordinary runtime tasks and consume runtime leases. The runtime does
+not assign scientific meaning to resource groups.
+
+`RuntimeConfig` is the standard serializable configuration boundary for this
+policy and output behavior. It can be loaded directly or supplied by a higher
+level application configuration; it is not embedded in `fixed.json` or
+`sweep.json`, because machine execution policy is not a scientific parameter.
+
+### Subprocess boundary
+
+A child process receives a restricted `RuntimeClientConfig` plus the exact task
+token it is allowed to update. `RuntimeClient` sends structured lifecycle,
+progress, phase, message, and cancellation events to the parent. It cannot
+register tasks, finalize the runtime, alter resource policy, or acquire
+terminal ownership.
+
+The transport remains private so local threads and subprocesses share one
+public event contract without committing the API to pipes, sockets, systemd,
+or a particular operating system. Child stdout and stderr are captured by the
+runtime launcher and routed to task messages or retained task logs; they never
+write through the interactive task display.
+
+Process loss or protocol disconnect fails the associated reporting task and
+releases its resource lease. The application's scientific recovery policy
+still decides whether persisted work is resumed, retried in a new
+`ExecutionScope`, or explicitly declared terminally failed.
+
+### Implementation sequence
+
+1. Introduce task IDs, section declarations, progress/activity kinds, and the
+   two-region renderer while preserving current thread-based behavior.
+2. Introduce `WorkflowRuntime` as the only public owner and migrate
+   `ProgressReporter` convenience construction behind its builder.
+3. Add `RuntimeConfig`, `ResourcePolicy`, validated leases, and the shared
+   compute boundary without adding a scientific scheduler.
+4. Add the restricted subprocess client protocol and runtime-owned child
+   launcher, then remove the direct-execution restriction from consumers that
+   use it.
+5. Migrate examples and dependent model runners so they accept only task-local
+   handles and never construct reporters or resource scopes.
+6. Remove superseded reporting entry points after all in-repository consumers
+   use `WorkflowRuntime`; no compatibility layer is required.
+
+State and series equality are not part of this plan. Type-erased scientific
+payloads retain the existing `Serialize + Clone + Send + 'static` boundary;
+`SystemState` and `StateSeries` do not implement `Eq` or `PartialEq`.
+
+## Current centralized progress reporting
+
+This section records the implemented `ProgressReporter` baseline that the
+`WorkflowRuntime` sequence above will migrate. Where its public ownership model
+conflicts with the planned runtime, the runtime plan is authoritative.
 
 The `reporting` module is the sole human-facing terminal owner during parallel
 scientific execution. It is operational observation, not scientific state:
@@ -1746,68 +1945,140 @@ ExecutionScope::create_generated -> compact_timestamp
 14. A reader returns a complete series or an error, never a partial series.
 15. Reader key lookup and decoder conversion are separate responsibilities.
 
-## Current file tree
+## Intended file tree
 
-    scientific-workflow/
-    ├── design.md                 authoritative architecture and references
-    ├── tests.md                  integration-test architecture and coverage
-    ├── README.md                 repository test entry points
-    └── rust/
-        ├── Cargo.toml            publishable Rust package manifest
-        ├── README.md             crate-facing usage and test documentation
-        ├── src/
-        │   ├── lib.rs            crate documentation and public module exports
-        │   ├── main.rs           excluded non-package development placeholder
-        │   ├── prelude.rs        explicit complete end-user API re-exports
-        │   ├── reporting.rs      centralized progress-reporting facade
-        │   ├── reporting/
-        │   │   ├── error.rs  reporting lifecycle and identity errors
-        │   │   └── progress.rs task identities, counters, renderer, and handles
-        │   ├── configuration.rs  standard project-configuration facade
-        │   ├── configuration/
-        │   │   ├── error.rs      configuration error vocabulary
-        │   │   ├── parameters.rs fixed/sweep parsing and resolved task dictionaries
-        │   │   ├── paths.rs      named project paths and lexical resolution
-        │   │   └── project.rs    coordinated loading and exact source export
-        │   ├── system_state.rs   system-state facade and re-exports
-        │   ├── system_state/
-        │   │   ├── error.rs      state and ownership-preserving set errors
-        │   │   ├── schema.rs     JSON template and shared layout
-        │   │   ├── state.rs      SimulationTime and SystemState
-        │   │   └── value.rs      private boxed type erasure
-        │   ├── time_series.rs    analysis-series facade and re-exports
-        │   ├── time_series/
-        │   │   ├── error.rs      collection/access errors
-        │   │   └── state_series.rs StateSeries and StateSeriesView
-        │   ├── storage.rs        public recording facade and configuration
-        │   └── storage/
-        │       ├── error.rs      complete storage error vocabulary
-        │       ├── jsonl_format.rs metadata and encoded-record contract
-        │       ├── json_state_record_encoder.rs borrowed JSON encoding
-        │       ├── queued_state_writer.rs bounded queue and chunk persistence
-        │       ├── json_payload_decoder.rs decoder trait and registry
-        │       ├── json_payload_decoder/
-        │       │   ├── string.rs String default decoder
-        │       │   └── vec_f64.rs Vec<f64> default decoder
-        │       └── stored_state_series_reader.rs verified eager reconstruction
-        └── tests/
-            ├── fixtures/
-            │   ├── configuration/
-            │   │   ├── cartesian_project/config/{fixed,sweep,paths}.json
-            │   │   └── cases_project/config/{fixed,sweep,paths}.json
-            │   ├── state.json
-            │   └── coupled_state.json
-            ├── configuration_workflow.rs
-            ├── state_workflow.rs
-            ├── analysis_workflow.rs
-            ├── storage_workflow.rs
-            ├── storage_resilience.rs
-            ├── resume_workflow.rs
-            └── reporting_workflow.rs
+The refactor retains Rust's modern split-module layout: a public module facade
+such as `configuration.rs` may own implementation files in a same-named
+`configuration/` directory. No `mod.rs` files are used. Small independent
+concepts remain single files. Generated build output and virtual environments
+are omitted.
 
-Rust 2024 split-module layout is used. There are no `mod.rs` files. `lib.rs`
-exports all five functional modules and the explicit prelude. All implementation
-submodules remain private behind their documented facade files.
+```text
+workflow/
+├── .gitignore
+├── README.md
+├── audit.md
+├── docs/
+│   ├── design.md
+│   └── tests.md
+├── rust/
+│   ├── Cargo.toml
+│   ├── Cargo.lock
+│   ├── LICENSE
+│   ├── README.md
+│   ├── src/
+│   │   ├── lib.rs
+│   │   ├── prelude.rs
+│   │   ├── clock.rs
+│   │   ├── artifact.rs
+│   │   ├── project.rs
+│   │   ├── rng_record.rs
+│   │   ├── configuration.rs
+│   │   ├── configuration/
+│   │   │   ├── error.rs
+│   │   │   ├── parameters.rs
+│   │   │   ├── paths.rs
+│   │   │   └── project_config.rs
+│   │   ├── execution.rs
+│   │   ├── execution/
+│   │   │   ├── error.rs
+│   │   │   └── scope.rs
+│   │   ├── runtime.rs
+│   │   ├── runtime/
+│   │   │   ├── error.rs
+│   │   │   ├── task.rs
+│   │   │   ├── resources.rs
+│   │   │   ├── reporting.rs
+│   │   │   ├── renderer.rs
+│   │   │   └── subprocess.rs
+│   │   ├── system_state.rs
+│   │   ├── system_state/
+│   │   │   ├── error.rs
+│   │   │   ├── schema.rs
+│   │   │   ├── state.rs
+│   │   │   └── value.rs
+│   │   ├── time_series.rs
+│   │   ├── time_series/
+│   │   │   ├── error.rs
+│   │   │   └── state_series.rs
+│   │   ├── storage.rs
+│   │   └── storage/
+│   │       ├── error.rs
+│   │       ├── json_payload_decoder.rs
+│   │       ├── jsonl_format.rs
+│   │       ├── json_state_record_encoder.rs
+│   │       ├── queued_state_writer.rs
+│   │       ├── stored_state_series_reader.rs
+│   │       └── json_payload_decoder/
+│   │           ├── string.rs
+│   │           └── vec_f64.rs
+│   └── tests/
+│       ├── fixtures/
+│       │   ├── configuration/
+│       │   │   ├── cartesian_project/config/
+│       │   │   │   ├── fixed.json
+│       │   │   │   ├── paths.json
+│       │   │   │   ├── state.json
+│       │   │   │   └── sweep.json
+│       │   │   └── cases_project/config/
+│       │   │       ├── fixed.json
+│       │   │       ├── paths.json
+│       │   │       └── sweep.json
+│       │   ├── coupled_state.json
+│       │   └── state.json
+│       ├── analysis_workflow.rs
+│       ├── artifact_workflow.rs
+│       ├── configuration_workflow.rs
+│       ├── python_reader_conformance.rs
+│       ├── resume_workflow.rs
+│       ├── rng_record_workflow.rs
+│       ├── runtime_workflow.rs
+│       ├── state_workflow.rs
+│       ├── storage_resilience.rs
+│       └── storage_workflow.rs
+├── python/
+│   ├── pyproject.toml
+│   ├── LICENSE
+│   ├── README.md
+│   ├── src/scientific_workflow_reader/
+│   │   ├── __init__.py
+│   │   ├── errors.py
+│   │   ├── model.py
+│   │   ├── py.typed
+│   │   └── reader.py
+│   └── tests/
+│       ├── fixtures/complete/
+│       │   ├── metadata.json
+│       │   └── streams/signal/chunk-000000.jsonl
+│       ├── roundtrip_bridge.py
+│       └── test_reader.py
+└── examples/
+    └── attractor_2d/
+        ├── Cargo.toml
+        ├── Cargo.lock
+        ├── README.md
+        ├── design.md
+        ├── steps.md
+        ├── config/
+        │   ├── fixed.json
+        │   ├── paths.json
+        │   ├── state.json
+        │   └── sweep.json
+        └── src/
+            ├── main.rs
+            ├── cross_check.rs
+            ├── hopf_model.rs
+            ├── recording.rs
+            ├── task_execution.rs
+            └── validation.rs
+```
+
+`runtime` replaces the standalone public `reporting` module and owns all
+reporting implementation. `execution` remains intentionally small because its
+filesystem-scope responsibility is independent of runtime resources. Storage,
+state, time-series, configuration, and Python reading retain their established
+responsibility boundaries. The excluded development-only `rust/src/main.rs` is
+removed rather than carried into the intended package layout.
 
 ## System state
 
@@ -4430,14 +4701,15 @@ global queue, worker pool, or aggregate backpressure policy.
 
 The one-state/one-writer boundary keeps failures, queue pressure, output paths,
 and lifecycle transitions local to their scientific recording. Per-stream byte
-limits bound only that recording. Applications running many simulations choose their
-own concurrency and therefore naturally control aggregate memory and writer
-count. Storage does not attempt to infer relationships among independent runs.
+limits bound only that recording. Applications running many simulations
+control aggregate memory and writer count through `WorkflowRuntime`
+task/resource limits. Storage does not infer relationships among independent
+runs, and the runtime does not merge their writers or queues.
 
-This is the final architecture for the current stage; no central-writer
-benchmark or shared-runtime implementation is planned. A future explicitly
-requested scalability stage may reconsider implementation internals without
-changing the on-disk format.
+This remains the final storage architecture: no central-writer manager or
+process-global storage queue is planned. The separate `WorkflowRuntime`
+coordinates execution resources outside storage without changing writer
+ownership or the on-disk format.
 
 #### Naming refactor completed
 

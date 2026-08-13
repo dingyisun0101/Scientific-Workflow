@@ -68,9 +68,9 @@
 mod error;
 mod parameters;
 mod paths;
-mod project;
+mod project_config;
 
 pub use error::ConfigurationError;
 pub use parameters::{ParameterSpace, TaskParameters, TaskParametersIter};
 pub use paths::ProjectPaths;
-pub use project::{MatchingTaskConfigIter, ProjectConfig, TaskConfig, TaskConfigIter};
+pub use project_config::{MatchingTaskConfigIter, ProjectConfig, TaskConfig, TaskConfigIter};
