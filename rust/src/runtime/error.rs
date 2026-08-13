@@ -81,6 +81,10 @@ pub enum RuntimeError {
     #[error("a runtime scheduler worker panicked")]
     SchedulerPanicked,
 
+    /// Cooperative cancellation stopped the selected runtime plan.
+    #[error("workflow runtime was cancelled")]
+    Cancelled,
+
     /// One task has an empty phase-local ID.
     #[error("phase {phase} contains an empty task ID")]
     InvalidManagedTaskId { phase: u64 },

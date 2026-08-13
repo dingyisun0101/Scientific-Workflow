@@ -157,6 +157,10 @@ identity/configuration, progress or activity reporting, and cancellation.
 Only the active phase is displayed interactively. Plain mode emits append-only
 uncolored phase and task lifecycle records. Progress updates are atomic and
 remain synchronized from the application's authoritative scientific state.
+`WorkflowRuntime::cancellation_token` permits programmatic cancellation and
+shares state with interactive Ctrl-C. Display messages use a bounded 256-event
+channel with backpressure and are never a substitute for task-owned durable
+logs; the runtime does not silently truncate them.
 
 ## RNG Records
 
@@ -287,8 +291,8 @@ The source repository includes `examples/attractor_2d`, a standalone
 consumer application that exercises configuration loading, Cartesian task
 expansion, directly owned mutable states, tuple payload borrowing, independent
 sample streams, bounded asynchronous recording, automatic chunking, and
-explicit completion. Its lazy `TaskConfig` iterator feeds Rayon's bounded
-work-stealing pool, while stable task indices keep recording paths deterministic
+explicit completion. Its lazy `TaskConfig` iterator feeds runtime phase
+construction, while stable task indices keep recording paths deterministic
 regardless of completion order. It then reads the complete checkpoint's latest state with typed payload
 decoders and verifies the final live-to-stored round trip exactly. From the
 repository root, run:

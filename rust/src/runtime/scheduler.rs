@@ -57,17 +57,33 @@ pub(crate) fn execute_phase(phase: &Phase, reporter: &RuntimeReporter) -> Result
                         }));
                         continue;
                     };
+                    if context.is_cancelled() {
+                        context.fail("cancelled before task execution");
+                        let _ = results.send(Err(RuntimeError::Cancelled));
+                        continue;
+                    }
                     match catch_unwind(AssertUnwindSafe(|| workload(&context))) {
                         Ok(Ok(())) => {
-                            let result = context.complete().map(|()| key);
+                            let result = if context.is_cancelled() {
+                                context.fail("cancelled");
+                                Err(RuntimeError::Cancelled)
+                            } else {
+                                context.complete().map(|()| key)
+                            };
                             let _ = results.send(result);
                         }
                         Ok(Err(source)) => {
+                            let cancelled = context.is_cancelled();
                             context.fail(source.to_string());
-                            let _ = results.send(Err(RuntimeError::TaskWorkload {
-                                task: key.to_string(),
-                                source,
-                            }));
+                            let error = if cancelled {
+                                RuntimeError::Cancelled
+                            } else {
+                                RuntimeError::TaskWorkload {
+                                    task: key.to_string(),
+                                    source,
+                                }
+                            };
+                            let _ = results.send(Err(error));
                         }
                         Err(_) => {
                             context.fail("task workload panicked");

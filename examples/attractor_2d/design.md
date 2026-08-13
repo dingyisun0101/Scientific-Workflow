@@ -34,12 +34,11 @@ canonical order. Each handle shares the parsed fixed values, selected sweep
 storage, and project paths, so the same type can later move directly into a
 orchestration mission without a merged configuration allocation.
 
-The example connects this lazy iterator to Rayon through `par_bridge`. Rayon
-pulls tasks into its bounded work-stealing pool without an intermediate
-`Vec<TaskConfig>`. Every concurrent closure owns its `TaskConfig`, `HopfModel`,
-and `SystemStateWriter`; only the immutable schema and execution scope are
-shared. The application error boundary is `Send + Sync` so failures can cross
-worker-thread boundaries.
+The example adapts this lazy iterator through
+`progress_workloads_from_project`. The phase scheduler prepares workloads
+through a bounded queue without requiring the application to maintain a second
+task registry. Every concurrent closure owns its model and writer; only the
+immutable configuration, schema, and execution scope are shared.
 
 ## Project configuration
 
@@ -118,14 +117,13 @@ inspect endpoints. Serde JSON's finite-float round-trip behavior preserves the
 original `f64` bit patterns. Any mismatch becomes an application error before a
 success result is printed.
 
-The reporter owns all normal terminal output and clears an interactive terminal
-once before drawing its first bars. All three parameter tasks receive rows at
-startup, including pending tasks not yet assigned to a Rayon worker. Each
-running row reports elapsed execution time and ETA. Its final non-interactive
-line is:
+`WorkflowRuntime` owns scheduling and display for the registered simulation
+phase. All three parameter tasks receive rows before their task-owned model and
+recording work starts. Each running row reports elapsed execution time and ETA.
+Plain output ends with:
 
 ```text
-[workflow] status=completed tasks=3 completed=3 failed=0 pending=0 message=round_trip=true output=...
+[runtime] status=completed phases=1 tasks=3
 ```
 
 Reaching this line proves that configuration loading, sweep expansion, state
@@ -145,10 +143,10 @@ src/
 
 ```text
 load project
-  -> create execution scope and reporter
-  -> Rayon par_bridge over TaskConfig values
-       -> assemble -> evolve/record -> validate checkpoint
-  -> reporter prints one result
+  -> create execution scope and configuration-generated runtime phase
+  -> runtime schedules bounded TaskContext workloads
+       -> task owns assemble -> evolve/record -> validate checkpoint
+  -> runtime displays the phase summary
 ```
 
 No module duplicates the live state. `main.rs` owns the complete task
@@ -238,7 +236,7 @@ settings.
 #### Reference
 
 ```text
-run Rayon task closure -> prepare_task
+runtime TaskContext workload -> prepare_task
 ```
 
 ### `record_model`
@@ -250,7 +248,7 @@ storage with the final state.
 #### Reference
 
 ```text
-run Rayon task closure -> record_model(model, progress)
+runtime TaskContext workload -> record_model(model, progress)
 ```
 
 ### `build_writer`
@@ -272,13 +270,13 @@ rechecking their shared fields would add repetition rather than a new API.
 #### Reference
 
 ```text
-run Rayon task closure -> validate_recording
+runtime TaskContext workload -> validate_recording
 ```
 
 ### `main`
 
-Sequences project loading, scope creation, reporter startup, lazy Rayon task
-execution flow, and reporter-owned finalization after all task closures validate.
+Sequences project loading, scope creation, runtime startup, bounded task
+execution, and runtime finalization after all task closures validate.
 
 #### Reference
 

@@ -118,6 +118,7 @@ impl WorkflowRuntimeBuilder {
             phases: self.phases.into(),
             output: self.output,
             satisfied_phase: self.satisfied_phase,
+            cancellation: CancellationToken::new(),
         })
     }
 }
@@ -141,6 +142,7 @@ pub struct WorkflowRuntime {
     phases: Arc<[Phase]>,
     output: RuntimeOutput,
     satisfied_phase: Option<SatisfiedPhaseVerifier>,
+    cancellation: CancellationToken,
 }
 
 impl WorkflowRuntime {
@@ -162,6 +164,11 @@ impl WorkflowRuntime {
     pub fn phase(&self, id: impl Into<PhaseId>) -> Option<&Phase> {
         let id = id.into();
         self.phases.iter().find(|phase| phase.id() == id)
+    }
+
+    /// Returns a cheap token that can request or observe runtime cancellation.
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
     }
 
     /// Returns the unique task matching an exact partial selector.
@@ -290,7 +297,9 @@ impl WorkflowRuntime {
             let phase = &self.phases[phase_position];
             renderer::phase_start(self.output, phase, selection_position + 1, total_phases);
             let heading = renderer::phase_heading(phase, selection_position + 1, total_phases);
-            let builder = RuntimeReporter::for_phases([phase]).phase_heading(heading);
+            let builder = RuntimeReporter::for_phases([phase])
+                .phase_heading(heading)
+                .cancellation_token(self.cancellation.clone());
             let reporter = match self.output {
                 RuntimeOutput::Auto => builder,
                 RuntimeOutput::Terminal => builder.terminal(),

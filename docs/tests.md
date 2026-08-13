@@ -523,17 +523,18 @@ the test validates lifecycle without controlling the test harness terminal.
 ### Structures and methods
 
 - `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeSummary`, and
-  `PhaseSummary` construction, selection, execution, and inspection;
+  `PhaseSummary` construction, selection, execution, cancellation, and
+  inspection;
 - `Phase`, `PhaseBuilder`, `PhaseId`, `Task`, `TaskId`, `TaskKey`,
   `TaskDisplayKind`, `TaskSelector`, and configuration workload helpers;
 - `TaskContext`, `TaskProgress`, `ActivityTask`, `TaskIdentity`,
   `ProgressSummary`, `TaskStatus`, and reachable `RuntimeError` families;
 - scheduler barriers, bounded queues, renderer ownership, and terminal leases
-  indirectly.
+  indirectly, including bounded message backpressure and plain/hidden output.
 
 ### Log contract
 
-    test result: ok. 6 passed; 0 failed
+    test result: ok. 9 passed; 0 failed
 
 ## Logging rules
 

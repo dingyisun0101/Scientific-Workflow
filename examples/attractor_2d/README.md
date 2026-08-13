@@ -95,10 +95,10 @@ cheap owned handles over shared fixed, sweep, and path data. The main loop can
 therefore pass each complete configuration through model assembly and recording
 without separately carrying `TaskParameters` and `ProjectPaths`.
 
-The iterator is connected directly to Rayon's work-stealing pool with
-`par_bridge()`. Tasks execute concurrently without first collecting the sweep,
-while each worker owns an independent model and recording writer. The schema
-and execution scope are shared immutably.
+The phase builder adapts that iterator directly into executable tasks. The
+runtime prepares them through its bounded queue and executes up to the phase's
+concurrency limit, while each workload owns an independent model and recording
+writer. The schema and execution scope are shared immutably.
 
 For a reusable explanation of this organization, see [steps.md](steps.md).
 
@@ -229,18 +229,17 @@ directory and exposes its creation timestamp. Existing recordings are not
 deleted or deliberately reused. Each task recording automatically persists its
 UTC creation/finalization timestamps and monotonic active duration.
 
-Rayon bounds simultaneous model execution by its worker-pool size. Successful
-return from the parallel operation means every task also completed typed
+The phase's `max_concurrent_workloads` bounds simultaneous task-owned model
+execution. Successful runtime return means every task also completed typed
 checkpoint round-trip validation; an error prevents the final success line.
 
-The centralized reporter is the only human-facing terminal writer. It clears
-an interactive terminal once when reporting starts and immediately creates all
-three `mu` rows, even if Rayon has fewer than three workers. Running rows show
-elapsed execution time and ETA. In a redirected or CI run, no clearing occurs
-and the final line has this form:
+`WorkflowRuntime` is the only human-facing terminal writer while the registered
+phase runs. It creates all three `mu` rows before workloads start. Running rows
+show elapsed execution time and ETA. In a redirected or CI run, output is
+append-only and the final line has this form:
 
 ```text
-[workflow] status=completed tasks=3 completed=3 failed=0 pending=0 message=round_trip=true output=...
+[runtime] status=completed phases=1 tasks=3
 ```
 
 ## Readback validation

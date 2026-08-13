@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -30,6 +30,7 @@ use super::error::ReportingError;
 use super::phase::{Phase, Task, TaskDisplayKind, TaskKey};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const MESSAGE_CAPACITY: usize = 256;
 static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
 
 /// Lifecycle status of one independently executing scientific task.
@@ -195,11 +196,17 @@ pub(crate) struct RuntimeReporterBuilder {
     phases: Vec<Phase>,
     output: OutputMode,
     heading: Option<String>,
+    cancellation: Option<CancellationToken>,
 }
 
 impl RuntimeReporterBuilder {
     pub(crate) fn phase_heading(mut self, heading: String) -> Self {
         self.heading = Some(heading);
+        self
+    }
+
+    pub(crate) fn cancellation_token(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = Some(cancellation);
         self
     }
     /// Forces cursor-controlled isolated-screen rendering.
@@ -223,7 +230,7 @@ impl RuntimeReporterBuilder {
     /// Validates phase uniqueness and starts one observing reporter.
     pub fn start(self) -> Result<RuntimeReporter, ReportingError> {
         let slots = build_phase_slots(&self.phases, self.heading.as_deref())?;
-        start_reporter(slots, self.output)
+        start_reporter(slots, self.output, self.cancellation)
     }
 }
 
@@ -266,6 +273,7 @@ impl RuntimeReporter {
                 .collect(),
             output: OutputMode::Auto,
             heading: None,
+            cancellation: None,
         }
     }
 
@@ -382,7 +390,7 @@ impl Drop for RuntimeReporter {
 /// safe without a separate cleanup branch.
 pub struct TaskProgress {
     slot: Arc<ProgressSlot>,
-    events: Sender<RenderEvent>,
+    events: SyncSender<RenderEvent>,
     cancelled: Arc<AtomicBool>,
     active: bool,
 }
@@ -392,6 +400,14 @@ pub struct TaskProgress {
 pub struct CancellationToken(Arc<AtomicBool>);
 
 impl CancellationToken {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub(crate) fn shared(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+
     /// Reports whether interactive Ctrl-C requested termination.
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
@@ -573,7 +589,7 @@ impl Drop for TaskProgress {
 /// an active handle marks only its reporting task failed.
 pub struct ActivityTask {
     slot: Arc<ProgressSlot>,
-    events: Sender<RenderEvent>,
+    events: SyncSender<RenderEvent>,
     cancelled: Arc<AtomicBool>,
     active: bool,
 }
@@ -652,7 +668,7 @@ impl Drop for ActivityTask {
 
 struct ReporterInner {
     slots: Arc<[Arc<ProgressSlot>]>,
-    events: Sender<RenderEvent>,
+    events: SyncSender<RenderEvent>,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -701,10 +717,13 @@ fn resolve_output(output: OutputMode) -> OutputMode {
 fn start_reporter(
     slots: Arc<[Arc<ProgressSlot>]>,
     requested_output: OutputMode,
+    cancellation: Option<CancellationToken>,
 ) -> Result<RuntimeReporter, ReportingError> {
     acquire_terminal()?;
     let lease = TerminalLease;
-    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled = cancellation
+        .map(|token| token.shared())
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let mut output = resolve_output(requested_output);
     let terminal = if output == OutputMode::Terminal {
         match TerminalSession::enter(Arc::clone(&cancelled)) {
@@ -718,7 +737,7 @@ fn start_reporter(
     } else {
         None
     };
-    let (events, receiver) = mpsc::channel();
+    let (events, receiver) = mpsc::sync_channel(MESSAGE_CAPACITY);
     let renderer_slots = Arc::clone(&slots);
     let renderer = match thread::Builder::new()
         .name("scientific-workflow-progress".to_owned())
@@ -1201,10 +1220,21 @@ fn write_plain_transitions(slots: &[Arc<ProgressSlot>], previous: &mut [TaskStat
 }
 
 fn write_final(output: OutputMode, slots: &[Arc<ProgressSlot>], success: bool, message: &str) {
-    if output == OutputMode::Hidden {
+    if output == OutputMode::Hidden || (output == OutputMode::Terminal && success) {
         return;
     }
     let summary = summarize(slots);
+    if !success {
+        for slot in slots {
+            let detail = lock(&slot.detail);
+            eprintln!(
+                "[task-final] task={} status={} detail={}",
+                slot.identity.task_key(),
+                TaskStatus::decode(slot.status.load(Ordering::Acquire)).label(),
+                detail.as_ref(),
+            );
+        }
+    }
     eprintln!(
         "[workflow] status={} tasks={} completed={} reused={} failed={} pending={} message={}",
         if success { "completed" } else { "failed" },

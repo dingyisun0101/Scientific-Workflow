@@ -281,15 +281,11 @@ For each task, create a separate:
 - writer and recording directory; and
 - success or failure result.
 
-Begin with sequential execution. Once that path is validated, task-level
-parallelism can consume the same owned `TaskConfig` handles. The attractor
-example uses Rayon's `par_bridge()` to feed the lazy configuration iterator
-without collecting it first. Parallel tasks still retain independent models
-and writers, so their queues, storage rates, and failures remain isolated.
-
-Rayon limits active simulations to its worker-pool size; “execute all tasks in
-parallel” means all tasks are submitted to the parallel schedule, not that an
-unbounded number of operating-system threads is created.
+Begin with a phase concurrency limit of one. Once that path is validated,
+increase `max_concurrent_workloads` while retaining the same configuration-
+generated tasks. Parallel workloads still own independent models and writers,
+so storage queues, rates, and failures remain isolated. `queue_capacity` bounds
+prepared but not yet running workloads.
 
 **Ready when:** task identity maps unambiguously to parameters, metadata,
 recording directory, and final result.

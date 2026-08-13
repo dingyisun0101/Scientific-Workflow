@@ -1,6 +1,8 @@
 //! Integrated coverage for phase scheduling and runtime-owned display.
 
+use std::num::NonZeroU64;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
@@ -336,4 +338,145 @@ fn structured_selectors_remain_independent_of_generated_labels() {
         .unwrap();
     assert_eq!(selected.id().as_str(), "low");
     assert!(runtime.run_phases([2]).unwrap().is_success());
+}
+
+#[test]
+fn message_bursts_and_large_pending_sets_remain_bounded_and_responsive() {
+    let _guard = RUNTIME_TEST.lock().unwrap();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let mut builder = Phase::builder(7, "many rows")
+        .max_concurrent_workloads(2)
+        .queue_capacity(1);
+    for index in 0..96 {
+        let completed = Arc::clone(&completed);
+        builder = builder.task(Task::activity(format!("task-{index:03}"), "many").workload(
+            move |context| {
+                if index == 0 {
+                    for message in 0..512 {
+                        context.report(format!("burst-{message}"))?;
+                    }
+                }
+                completed.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        ));
+    }
+    let summary = WorkflowRuntime::builder()
+        .phase(builder.build().unwrap())
+        .hidden()
+        .build()
+        .unwrap()
+        .run_phases([7])
+        .unwrap();
+    assert!(summary.is_success());
+    assert_eq!(completed.load(Ordering::Acquire), 96);
+}
+
+#[test]
+fn cancellation_does_not_publish_task_owned_recording_failure() {
+    let _guard = RUNTIME_TEST.lock().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "scientific-workflow-runtime-cancel-{}",
+        std::process::id()
+    ));
+    let recording = root.join("recording");
+    std::fs::create_dir(&root).unwrap();
+    let schema = SystemStateSchema::load_json_template(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state.json"),
+    )
+    .unwrap();
+    let (started_sender, started_receiver) = mpsc::channel();
+    let task_recording = recording.clone();
+    let task = Task::activity("recording", "activity").workload(move |context| {
+        let _writer = SystemStateWriter::builder(&task_recording, &schema)
+            .with_shared_stream_limits(
+                NonZeroU64::new(1_000_000).unwrap(),
+                NonZeroU64::new(1_000_000).unwrap(),
+            )
+            .add_state_stream(StateStreamConfig::new(
+                "population",
+                ["population"],
+                SamplingInterval::iterations(1).unwrap(),
+                None,
+            ))
+            .create_new_recording()?;
+        started_sender.send(()).unwrap();
+        while !context.is_cancelled() {
+            thread::yield_now();
+        }
+        Err(std::io::Error::other("cancelled by runtime").into())
+    });
+    let runtime = WorkflowRuntime::builder()
+        .phase(phase(8, task))
+        .hidden()
+        .build()
+        .unwrap();
+    let cancellation = runtime.cancellation_token();
+    let runner = thread::spawn(move || runtime.run_phases([8]));
+    started_receiver.recv().unwrap();
+    cancellation.cancel();
+    assert!(matches!(
+        runner.join().unwrap(),
+        Err(RuntimeError::Cancelled)
+    ));
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(recording.join("metadata.json")).unwrap()).unwrap();
+    assert_eq!(metadata["status"]["state"], "running");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn plain_and_hidden_public_output_modes_are_stable() {
+    const CHILD_MODE: &str = "SCIENTIFIC_WORKFLOW_RUNTIME_OUTPUT_CHILD";
+    if let Ok(mode) = std::env::var(CHILD_MODE) {
+        let first = Phase::builder(2, "first")
+            .task(Task::activity("message", "activity").workload(|context| {
+                context.report("phase-local-message")?;
+                Ok(())
+            }))
+            .build()
+            .unwrap();
+        let second = Phase::builder(4, "second")
+            .depends_on(2)
+            .task(activity("complete"))
+            .build()
+            .unwrap();
+        let builder = WorkflowRuntime::builder().phases([first, second]);
+        let runtime = match mode.as_str() {
+            "plain" => builder.plain().build().unwrap(),
+            "terminal" => builder.terminal().build().unwrap(),
+            _ => builder.hidden().build().unwrap(),
+        };
+        assert!(runtime.run_phases([2, 4]).unwrap().is_success());
+        return;
+    }
+
+    let executable = std::env::current_exe().unwrap();
+    let run_child = |mode: &str| {
+        Command::new(&executable)
+            .args([
+                "--exact",
+                "plain_and_hidden_public_output_modes_are_stable",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_MODE, mode)
+            .output()
+            .unwrap()
+    };
+    let plain = run_child("plain");
+    assert!(plain.status.success());
+    let stderr = String::from_utf8(plain.stderr).unwrap();
+    assert!(stderr.contains("[phase-start] position=1/2 phase=2"));
+    assert!(stderr.contains("[task] identity=2/message status=completed"));
+    assert!(stderr.contains("[phase-complete] phase=4"));
+    assert!(stderr.contains("[runtime] status=completed phases=2 tasks=2"));
+    assert!(!stderr.contains('\u{1b}'));
+
+    let hidden = run_child("hidden");
+    assert!(hidden.status.success());
+    let stderr = String::from_utf8(hidden.stderr).unwrap();
+    assert!(!stderr.contains("[phase-start]"));
+    assert!(!stderr.contains("[task]"));
+    assert!(!stderr.contains("[runtime]"));
 }

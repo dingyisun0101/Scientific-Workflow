@@ -69,7 +69,7 @@ cargo test --doc --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 
 cd ../python
-python -m pytest
+PYTHONPATH=src python -m unittest discover -s tests -v
 
 cd ../examples/attractor_2d
 cargo test --all-targets --locked
@@ -320,24 +320,25 @@ the Workflow repository after this phase.
 
 ### Objectives
 
-- [ ] Exercise terminal startup, resize/input handling, Ctrl-C, message bursts,
+- [x] Exercise terminal startup, resize/input handling, Ctrl-C, message bursts,
       plain output, hidden output, and renderer shutdown through public APIs.
-- [ ] Verify the runtime remains responsive with more registered rows than the
+- [x] Verify the runtime remains responsive with more registered rows than the
       terminal height and with pending tasks held by phase scheduling limits.
-- [ ] Exercise active-phase header resizing, phase transitions, failed-phase
+- [x] Exercise active-phase header resizing, phase transitions, failed-phase
       retention, and final overall-summary rendering in narrow and short
       terminals.
-- [ ] Bound retained display-message buffering and document truncation
-      behavior. Task-owned logs and other I/O remain outside the runtime.
-- [ ] Verify cancellation and error propagation do not overwrite recoverable
+- [x] Bound retained display-message buffering and document its no-truncation
+      backpressure behavior. Task-owned logs and other I/O remain outside the
+      runtime.
+- [x] Verify cancellation and error propagation do not overwrite recoverable
       `Running` storage recordings with `Failed`.
-- [ ] Update crate-level docs, Rust README, repository README, examples, and
+- [x] Update crate-level docs, Rust README, repository README, examples, and
       doctests to use only `WorkflowRuntime`.
-- [ ] Update `docs/design.md` from planned wording to implemented wording as
+- [x] Update `docs/design.md` from planned wording to implemented wording as
       each contract becomes true.
-- [ ] Update `docs/tests.md` with every public runtime structure and method,
+- [x] Update `docs/tests.md` with every public runtime structure and method,
       including indirect coverage of private scheduler and renderer code.
-- [ ] Confirm the published crate contains the complete intended module tree
+- [x] Confirm the published crate contains the complete intended module tree
       and no superseded reporting source files.
 
 ### Exit gate

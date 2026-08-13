@@ -14,8 +14,8 @@ cd rust
 [`examples/attractor_2d`](examples/attractor_2d) is a complete consumer
 application built against the local crate. It loads project-root
 `config/{fixed,sweep,paths,state}.json` inputs, expands a parameter sweep,
-iterates complete shared `TaskConfig` handles, evolves one directly owned
-`SystemState` per task concurrently through Rayon, and
+adapts complete shared `TaskConfig` handles into a runtime phase, evolves one
+directly owned `SystemState` per scheduled task, and
 offers every evolved state to one writer that owns the independent trajectory,
 radius, and checkpoint sampling intervals.
 

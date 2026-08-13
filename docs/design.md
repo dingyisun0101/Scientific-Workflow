@@ -1020,7 +1020,7 @@ Preserves canonical ordinal order and the lower-level iterator's count bounds.
 ```text
 ProjectConfig::task_configs -> TaskConfigIter
 all-task orchestration layer loop -> TaskConfigIter::next
-attractor_2d Rayon par_bridge -> TaskConfigIter::next
+attractor_2d phase workload generation -> TaskConfigIter::next
 ```
 
 #### TaskConfigIter::clone / Debug
@@ -1241,7 +1241,7 @@ prelude -> explicit configuration type re-exports
 consumer callers -> scientific_workflow::configuration::{...}
 ```
 
-## Planned WorkflowRuntime
+## WorkflowRuntime
 
 `WorkflowRuntime` is the single operational owner for one scientific program
 execution. It owns first-class phases and tasks, generic bounded phase/task
@@ -1499,13 +1499,11 @@ the reporting task failed, but does not automatically convert a recoverable
 storage recording into a terminal failed recording. Reporting lifecycle and
 recording lifecycle remain distinct.
 
-The current transient `TaskProgress::set_phase` vocabulary becomes
-`set_detail`, avoiding collision with the structural `Phase` type. The current
-`ProgressReporter` constructors become private runtime implementation details.
-The reporter accepts immutable phase/task views and structured events from the
-runtime; it never creates, identifies, owns, selects, schedules, or looks up
-phases or tasks. All human-facing messages emitted while a runtime is active
-pass through the runtime or a task handle.
+`TaskProgress::set_detail` is distinct from the structural `Phase` type.
+Private reporting machinery accepts immutable phase/task views and structured
+events from the runtime; it never creates, identifies, owns, selects,
+schedules, or looks up phases or tasks. Human-facing task messages pass through
+task-local handles.
 
 ### Scheduling boundary, task I/O, and resource containment
 
@@ -1545,14 +1543,14 @@ protocols, and result verification.
 
 1. Introduce first-class phase/task identity, configuration-driven task
    generation, partial selection, progress/activity kinds, generated labels,
-   and reporter observation without duplicating current slot machinery.
+   and runtime display without duplicating current slot machinery.
 2. Introduce `WorkflowRuntime` as the public scheduling and display owner,
    require the runtime/phase/task hierarchy, and add bounded phase scheduling
    and explicit phase selection.
 3. Harden the runtime display, cancellation, scheduler shutdown, and public
    documentation while retaining the strict no-I/O boundary.
 4. Migrate examples and dependent model runners so they accept only task-local
-   handles and never construct reporters or resource scopes.
+   handles and never construct runtime schedulers or machine-resource scopes.
 5. Remove superseded reporting entry points after all in-repository consumers
    use `WorkflowRuntime`; no compatibility layer is required.
 
@@ -1560,383 +1558,31 @@ State and series equality are not part of this plan. Type-erased scientific
 payloads retain the existing `Serialize + Clone + Send + 'static` boundary;
 `SystemState` and `StateSeries` do not implement `Eq` or `PartialEq`.
 
-## Current centralized progress reporting
-
-This section records the implemented `ProgressReporter` baseline that the
-`WorkflowRuntime` sequence above will migrate. Where its public ownership model
-conflicts with the planned runtime, the runtime plan is authoritative.
-
-The `reporting` module is the sole human-facing terminal owner during parallel
-scientific execution. It is operational observation, not scientific state:
-`SystemState::simulation_time()` remains authoritative and callers explicitly
-synchronize its absolute iteration into a task-local atomic counter after a
-successful model transition.
-
-The vocabulary is intentionally distinct:
-
-- **task ordinal** is assigned automatically by deterministic configuration
-  expansion and is used only for stable ordering and path organization;
-- **task identity** is an exact caller-selected combination of parameter
-  key/value pairs; and
-- **task label** is the deterministic compact JSON rendering of that identity
-  for terminal output.
-
-Default identity contains all sweep keys in declaration order. Applications may
-select any fixed/swept parameter combination, but it must uniquely distinguish
-every generated task. Paths cannot be identity fields. Duplicate or unknown
-keys and colliding identities fail before any renderer or worker starts.
-
-One `ProgressReporter` owns a registry of per-task slots and one renderer
-thread. Workers update only per-slot atomics for iteration and status; the
-renderer polls at a bounded interval. Infrequent detail strings and messages use
-locks or a channel outside the numerical counter path. Interactive stderr uses
-Indicatif 0.18.6 as a private rendering backend. After the exclusive lease
-reaches the renderer thread and before any bar is created, terminal mode clears
-stderr's terminal exactly once through `console::Term`; redirected stderr
-receives stable line-oriented transitions and is never cleared. Hidden mode
-retains lifecycle validation for tests or embedding without rendering.
-
-Every configured task receives a bar immediately, including tasks that remain
-pending because the worker pool is smaller than the parameter space. The
-renderer forces each initial bar state once to prevent Indicatif's global draw
-throttle from starving later rows during synchronized initialization. A task's
-elapsed clock resets on its `Pending -> Running` transition, excluding queue
-wait from execution time. Known targets render precise elapsed time and ETA;
-unknown targets retain elapsed time but label ETA as unknown.
-
-A pseudo-terminal validation of `attractor_2d` captures all three identities
-(`mu=-0.25`, `mu=0.25`, and `mu=1.0`) simultaneously, with each completed row
-showing `elapsed` and `ETA`. This specifically guards the observed failure mode
-where global draw throttling materialized only the earlier rows.
-
-Only one reporting session may exist in a process at a time. A static lease is
-acquired after identity validation and released only after renderer shutdown.
-Workers, models, writers, and application orchestration must not call terminal
-printing APIs while the lease is active; all messages flow through the
-reporter. `ProgressReporter::report_error` is the post-session/startup error
-boundary used by a binary's `main`.
-
-### ProgressReporterBuilder
-
-Owns a cheap cloned `ProjectConfig`, optional identity keys, and output policy
-until validation and renderer startup.
-
-#### ProgressReporterBuilder::identify_tasks_by
-
-Replaces default all-sweep identity with an ordered parameter-key combination.
-Uniqueness is validated across the complete task space at `start`.
-
-##### Reference
-
-```text
-attractor_2d identity policy -> identify_tasks_by(["mu"])
-multi-axis projects -> identify_tasks_by(["temperature", "seed"])
-```
-
-#### ProgressReporterBuilder::terminal / plain / hidden
-
-Override automatic stderr detection. Terminal selects cursor-controlled bars,
-plain selects stable lifecycle lines, and hidden suppresses output without
-disabling counters or lifecycle validation.
-
-##### Reference
-
-```text
-interactive application override -> terminal
-CI/log capture -> plain
-reporting_workflow and embedding -> hidden
-```
-
-#### ProgressReporterBuilder::start
-
-Validates identity keys and uniqueness, allocates one slot per automatically
-ordered task, acquires the process-wide lease, and starts one renderer thread.
-No task is started and no scientific model is constructed by this method.
-
-##### Reference
-
-```text
-application reporting startup -> ProgressReporterBuilder::start
-```
-
-### ProgressReporter
-
-Non-clone owner of one reporting session, renderer thread, and complete task
-registry. Its shared inner registry is borrowed by parallel `start_task` calls;
-the session itself retains exclusive finalization authority.
-
-#### ProgressReporter::for_project
-
-Creates the normal builder from `ScientificProject` and delegates its lower
-configuration handle.
-
-##### Reference
-
-```text
-attractor_2d and conventional applications -> ProgressReporter::for_project
-```
-
-#### ProgressReporter::for_configuration
-
-Creates a builder for parameter/path-only workflows without requiring a state
-schema.
-
-##### Reference
-
-```text
-orchestration layer planning and fixed-only reporting tests -> for_configuration
-```
-
-#### ProgressReporter::start_task
-
-Derives ordinal and identity from `TaskConfig`, verifies membership, atomically
-transitions the slot from pending to running, and installs absolute initial and
-optional target iterations. Callers never provide an ordinal or label.
-
-##### Reference
-
-```text
-parallel task closure startup -> ProgressReporter::start_task
-```
-
-#### ProgressReporter::report
-
-Routes one application-wide human message through the sole renderer.
-
-##### Reference
-
-```text
-infrequent execution announcements -> ProgressReporter::report
-```
-
-#### ProgressReporter::summary
-
-Returns a non-blocking aggregate snapshot of pending, running, completed, and
-failed slot counts without stopping reporting.
-
-##### Reference
-
-```text
-monitoring and reporting_workflow assertions -> ProgressReporter::summary
-```
-
-#### ProgressReporter::complete
-
-Requires every registered task to be completed, emits the final success message
-and summary, joins the renderer, and releases terminal ownership. Pending,
-running, or failed tasks make successful completion an error after orderly
-renderer shutdown.
-
-##### Reference
-
-```text
-successful application termination -> ProgressReporter::complete
-```
-
-#### ProgressReporter::fail
-
-Emits an unsuccessful final summary while preserving each task's observed
-status, then joins the renderer and releases terminal ownership.
-
-##### Reference
-
-```text
-parallel execution error boundary -> ProgressReporter::fail
-```
-
-#### ProgressReporter::report_error
-
-Writes a single standardized error after no live reporter owns the terminal,
-covering startup failure and the binary process boundary.
-
-##### Reference
-
-```text
-binary error boundaries and reporting_workflow -> ProgressReporter::report_error
-```
-
-#### ProgressReporter::Debug / Drop
-
-Debug exposes only identity keys and aggregate counts. Dropping an unfinished
-reporter asks the renderer to publish failure, joins it, and releases the lease.
-
-##### Reference
-
-```text
-bounded diagnostics and panic/early-return cleanup
-```
-
-### TaskProgress
-
-Non-clone worker-local handle to one task slot. Its hot-path iteration update is
-an atomic maximum operation. Dropping an active handle marks the task failed,
-so ordinary `?` propagation cannot leave it permanently running.
-
-#### TaskProgress::identity
-
-Borrows the exact parameter-derived identity without cloning JSON values.
-
-##### Reference
-
-```text
-task-local messages and diagnostics -> TaskProgress::identity
-```
-
-#### TaskProgress::current_iteration / target_iteration / status
-
-Read atomic task progress and lifecycle state. Targets are optional and support
-open-ended or convergence-driven scientific work.
-
-##### Reference
-
-```text
-monitoring, tests, and custom non-terminal presentation
-```
-
-#### TaskProgress::set_iteration
-
-Synchronizes to an authoritative absolute simulation iteration without locking
-or allocation. Regressions and movement beyond a known target are rejected
-without changing the counter.
-
-##### Reference
-
-```text
-successful model transition -> SystemState::simulation_time -> set_iteration
-attractor_2d::record_model -> TaskProgress::set_iteration
-```
-
-#### TaskProgress::set_detail
-
-Updates an infrequent human-readable detail such as `evolving`, `finalizing
-storage`, or `validating recording`. It is not intended for hot-loop metrics.
-
-##### Reference
-
-```text
-application workflow boundary changes -> TaskProgress::set_detail
-```
-
-#### TaskProgress::report
-
-Routes one identity-prefixed task message through the sole renderer.
-
-##### Reference
-
-```text
-infrequent task events -> TaskProgress::report
-```
-
-#### TaskProgress::complete / fail
-
-Consume the task handle and commit one terminal status. Completion means the
-caller-defined complete workflow—including persistence and validation when
-applicable—succeeded, not merely that numerical iteration ended. When a target
-is known, completion also requires the current absolute iteration to equal it;
-open-ended successful work uses no target.
-
-##### Reference
-
-```text
-task closure success -> TaskProgress::complete
-handled task failure -> TaskProgress::fail
-unhandled early return -> TaskProgress::Drop -> failed
-```
-
-#### TaskProgress::Debug / Drop
-
-Debug exposes bounded identity/progress facts. Drop marks an active handle
-failed with phase `interrupted`.
-
-##### Reference
-
-```text
-parallel worker diagnostics and failure-safe cleanup
-```
-
-### TaskIdentity
-
-Cheap clone retaining a `TaskConfig`, shared identity-key list, and rendered
-label. It never clones parameter JSON values.
-
-#### TaskIdentity::label / len / is_empty / value / iter
-
-Expose deterministic display text and clone-free inspection of the exact
-parameter combination in configured key order.
-
-##### Reference
-
-```text
-renderer labels, task messages, tests, and custom presentation
-```
-
-### TaskStatus
-
-Public non-exhaustive lifecycle enumeration: `Pending`, `Running`, `Completed`,
-`Reused`, and `Failed`. Reused work contributes to successful completed
-summary counts without inventing an execution interval. Ordinal ordering is
-deliberately not encoded as identity.
-
-##### Reference
-
-```text
-TaskProgress::status, ProgressSummary aggregation, renderer output
-```
-
-### ProgressSummary
-
-Immutable aggregate captured during or after reporting.
-
-#### ProgressSummary::total / pending / running / completed / failed
-
-Return exact task lifecycle counts.
-
-##### Reference
-
-```text
-ProgressReporter::summary/complete/fail and orchestration layer run summaries
-```
-
-#### ProgressSummary::is_success
-
-Returns true only when every registered task completed and every other count is
-zero.
-
-##### Reference
-
-```text
-successful finalization validation and reporting_workflow
-```
-
-### ReportingError
-
-Non-exhaustive contextual failures cover configuration propagation, identity
-keys and uniqueness, task membership and duplicate starts, iteration bounds,
-exclusive session ownership, renderer startup/liveness/panic, and incomplete
-success finalization.
-
-##### Reference
-
-```text
-ProgressReporterBuilder and ProgressReporter/TaskProgress fallible methods
-reporting_workflow reachable failure families
-```
-
-### Private reporting infrastructure
-
-`ReporterInner`, `ProgressSlot`, `RenderEvent`, `TerminalLease`, and
-`TerminalDisplay` remain private. They implement shared atomics, the infrequent
-message channel, process lease, one-time interactive terminal clearing,
-complete initial-row materialization, task-relative elapsed/ETA tracking,
-Indicatif rendering, plain transitions, and failure-safe shutdown without
-becoming extension points.
-
-##### Reference
-
-```text
-public reporting facade -> private centralized renderer implementation
-```
-
+## WorkflowRuntime implementation
+
+The runtime contract above is implemented as the sole public
+scheduling and display API. `runtime.rs` exposes phases, executable tasks,
+selection, summaries, task-local handles, and contextual errors. Private
+`runtime/reporting.rs`, `runtime/renderer.rs`, and `runtime/scheduler.rs` own the
+bounded scheduling and presentation machinery; there is no standalone display
+owner.
+
+Runtime display messages use a bounded 256-event channel. This applies
+backpressure to infrequent task messages rather than retaining an unbounded
+queue. Durable diagnostics remain task-owned I/O. Interactive mode uses an
+alternate screen and restores raw mode, cursor visibility, and input handling
+on every terminal path. Plain mode emits append-only uncolored lifecycle
+records, while hidden mode performs no terminal writes.
+
+`WorkflowRuntime::cancellation_token` provides programmatic cancellation and
+interactive Ctrl-C updates the same shared token. Cooperative workloads observe
+it through `TaskContext`. Cancellation fails runtime scheduling but never
+publishes failure into task-owned recordings.
+
+The historical standalone progress API design has been removed. Current public
+runtime structures and behavioral allocation are recorded in `docs/tests.md`.
+
+<!-- Historical reporting design removed after WorkflowRuntime migration. -->
 ## Execution scopes
 
 `ExecutionScope` owns one project-execution directory but never creates task
@@ -4339,11 +3985,12 @@ The configuration portion includes:
   `TaskConfig`, `TaskConfigIter`, and `MatchingTaskConfigIter`;
 - `ProjectPaths` and `ConfigurationError`.
 
-The reporting portion includes:
+The runtime portion includes:
 
-- `ProgressReporter`, `ProgressReporterBuilder`, `TaskProgress`, and
-  `TaskIdentity`;
-- `TaskStatus`, `ProgressSummary`, and `ReportingError`.
+- `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeSummary`, and
+  `PhaseSummary`;
+- `Phase`, `Task`, `TaskContext`, `TaskProgress`, `ActivityTask`,
+  `TaskIdentity`, `TaskStatus`, `ProgressSummary`, and `RuntimeError`.
 
 The storage portion includes:
 
@@ -5096,7 +4743,7 @@ Required method allocation:
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
 | `resume_workflow` | explicit `continue_existing_recording`/`continue_recording_from_latest_checkpoint`, full-state schema enforcement, typed checkpoint reconstruction, prepared and unprepared crash windows, multi-sealed-plus-open recovery without sealed-content inspection, continuation rejection boundaries, append seeding, `flush`, and exclusive root leasing |
 | `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `TaskConfig`, `TaskConfigIter`, `MatchingTaskConfigIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, complete task generation, exact filtering, unique selection, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
-| `reporting_workflow` | `Phase`, `Task`, structured selectors, configuration task generation, `ProgressReporterBuilder`, `PhaseProgressReporterBuilder`, `ProgressReporter`, `TaskProgress`, `ActivityTask`, `TaskIdentity`, `TaskStatus`, `ProgressSummary`, and `ReportingError`; identity validation, generated labels, phase headings, automatic ordering, parallel atomic updates, output modes, exclusive session ownership, lifecycle finalization, and failure-on-drop |
+| `runtime_workflow` | `WorkflowRuntime`, phases, executable tasks, structured selectors, configuration workload generation, `TaskContext`, task-local handles, summaries, and `RuntimeError`; plan validation, dependency selection, bounded scheduling, active-phase display, cancellation, exclusive ownership, task-owned I/O, and failure barriers |
 
 The finished source reads as seven coherent workflows rather than an API census.
 The old aggregators and focused subdirectories have been removed.
@@ -5419,15 +5066,13 @@ and counts, minimal output policy, typed verification, and the runnable command.
 
 The standalone example manifest is complete: `attractor-2d` is an unpublished
 Rust 2024 binary with a Rust 1.85 floor and an explicit `src/main.rs` target. It
-uses the local `scientific-workflow` crate plus Rayon 1.12 for bounded
-task-level parallelism. Its application `Cargo.lock` is retained for
-reproducibility.
+uses the local `scientific-workflow` runtime for bounded task-level scheduling.
+Its application `Cargo.lock` is retained for reproducibility.
 
 The minimal modular executable and `Cargo.lock` are implemented. `main.rs`
 orchestrates dedicated project, simulation, recording, and validation modules.
-It feeds the lazy `TaskConfigIter` into Rayon's bounded work-stealing pool with
-`par_bridge`, avoiding an eager task list while moving owned handles safely
-between workers. The program
+It adapts the lazy `TaskConfigIter` into phase-owned workloads, preserving cheap
+configuration handles while bounding prepared and active work. The program
 loads configuration, moves `Vec<f64>` into each state without cloning,
 updates heterogeneous payloads through tuple mutation, samples three streams,
 explicitly closes every writer lifecycle, reads the complete checkpoint's
@@ -5446,16 +5091,16 @@ feature alongside `raw_value`. The rerun reconstructs every final time and
 payload with exact equality; the example does not hide the issue behind a
 numerical tolerance.
 
-The example now exercises only the minimum reporting surface: parameter-based
-identity, task start, absolute iteration updates, task completion, and reporter
-completion. It omits custom progress phases, checked-arithmetic scaffolding,
-and explicit parallel success/failure branching. Readback validates only the
+The example exercises the minimum runtime surface: configuration-generated
+identity, phase scheduling, absolute iteration updates, and task completion.
+It omits checked-arithmetic scaffolding and explicit parallel success/failure
+branching. Readback validates only the
 complete checkpoint because repeating the same endpoint assertions for partial
 streams teaches no additional storage API. Its README directs readers from
 configuration through the model and storage modules to `main.rs`, making the
 orchestrator the conclusion rather than the entry point for understanding.
 `HopfModel::step` includes a demonstration-only 500-microsecond pause so the
-interactive reporter remains visible during this otherwise tiny calculation;
+interactive runtime display remains visible during this tiny calculation;
 real models must omit that artificial delay.
 
 An independent one-file reference at
