@@ -14,7 +14,8 @@ cd rust
 [`examples/attractor_2d`](examples/attractor_2d) is a complete consumer
 application built against the local crate. It loads project-root
 `config/{fixed,sweep,paths,state}.json` inputs, expands a parameter sweep,
-adapts complete shared `TaskConfig` handles into a runtime phase, evolves one
+adapts complete shared `TaskConfig` handles into simulation and validation
+phases, evolves one
 directly owned `SystemState` per scheduled task, and
 offers every evolved state to one writer that owns the independent trajectory,
 radius, and checkpoint sampling intervals.
@@ -28,9 +29,10 @@ cargo run --manifest-path examples/attractor_2d/Cargo.toml
 Recordings are written beneath the example's ignored `target/recordings`
 directory. `ExecutionScope` selects a new timestamped, collision-resistant run directory, so rerunning the
 example does not overwrite prior results. The executable covers configuration,
-task expansion, state evolution, bounded recording, chunking, explicit
-recording completion, latest-state reconstruction, and exact live-to-stored
-verification. It prints validation and cross-check report lines.
+task expansion, dependency-aware phase selection, state evolution, bounded
+recording, format-v5 positional chunks, explicit recording completion,
+latest-state reconstruction, and numerical verification. It prints validation
+and cross-check report lines.
 
 The example is maintained as a repository-level project and is not included
 in the library crate's crates.io archive. Its
@@ -58,7 +60,7 @@ those are separate provenance concerns.
 ## Official Python reader
 
 The repository's [`python`](python) package provides the official eager Python
-reader for completed format-v4 recordings. It validates the same lifecycle,
+reader for completed format-v5 recordings. It validates the same lifecycle,
 metadata, framing, schema, ordering, byte-count, and SHA-256 rules as Rust's
 `StoredStateSeriesReader`. Both readers consume one checked-in conformance
 fixture, preventing the Python implementation from becoming an undocumented
@@ -95,6 +97,9 @@ documented in [`rust/README.md`](rust/README.md#rng-records).
 First-class `Phase` values own every `Task` before reporting begins.
 Parameterized tasks are generated from the configuration manager with all
 fixed/sweep values retained, automatic labels, and exact partial selectors.
+Every workload is a single-use `FnOnce`, so task-owned models and writers move
+directly into execution. Phase failure defaults to fail-fast and may instead be
+configured to finish already active work without admitting more tasks.
 `WorkflowRuntime` schedules only tasks registered through those phases and owns
 their human-facing display. Each task remains responsible for its own files,
 recordings, artifacts, networking, and subprocesses. Hard process resources are
@@ -109,8 +114,9 @@ progress remains observational: models own scientific iteration through
 
 ## Integration tests
 
-The permanent suite contains seven logged, behavior-oriented workflows rather
-than source-file-level tests.
+The permanent suite contains ten behavior-oriented integration targets rather
+than source-file-level tests. The core workflow targets emit concise stable
+logs under `--nocapture`.
 
 ### Project configuration
 
@@ -194,10 +200,11 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
 The detailed coverage allocation and logging contract are documented in
-[`tests.md`](tests.md).
+[`docs/tests.md`](docs/tests.md).
 
-Consumer crates can bring the complete supported API into scope with:
+Consumer modules import only the responsibility they use:
 
 ```rust
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::runtime::*; // orchestration boundaries only
 ```

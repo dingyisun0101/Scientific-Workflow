@@ -25,6 +25,19 @@ The final architecture has these fixed boundaries:
 - `ProjectConfig` remains the authority for automatic fixed/sweep task
   expansion; runtime adapters retain its cheap `TaskConfig` handles rather than
   duplicating configuration logic.
+- `Task` remains the sole first-class runtime task type, but public callers
+  inspect rather than construct it. `PhaseBuilder` generates every task from a
+  `ScientificProject`, `ProjectConfig`, or existing `TaskConfig`; no narrow
+  `ConfiguredTask` wrapper or generic task-injection API is added.
+- Every executable workload is single-use `FnOnce`; runtime execution consumes
+  the validated phase/task plan and does not require cloneable workloads.
+- Phase failure policy is configurable and defaults to fail-fast.
+- Format-v5 JSONL records store positional payload values. The authoritative
+  ordered field names remain in each stream declaration in the sole
+  `metadata.json`; no `keys.json`, schema sidecar, or naming change is added.
+- End-user imports are split into `prelude::basics` for scientific primitives
+  and `prelude::runtime` for task/phase/runtime management. The parent prelude
+  does not remain an omnibus import.
 - `ExecutionScope` remains a filesystem scope for recordings and artifacts.
 - Every task is responsible for its own recordings, artifacts, files, network
   access, subprocesses, and other I/O. Storage writers remain per-recording
@@ -282,7 +295,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
       dependency-inclusive selection adds them deterministically.
 - [x] Phase queue depth and active workload counts never exceed their declared
       limits under contention.
-- [x] Config-derived, explicit, progress, activity, and reused tasks coexist
+- [x] Config-derived progress, activity, and reused tasks coexist
       across multiple phases in one runtime.
 - [x] One phase failure prevents dependent phases from starting while
       preserving independent observed task states.
@@ -352,13 +365,137 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo package --allow-dirty --locked
 
 cd ../python
-python -m pytest
+PYTHONPATH=src python -m unittest discover -s tests -v
 
 cd ../examples/attractor_2d
 cargo test --all-targets --locked
 ```
 
-## Phase 5 — Migrate dependent scientific projects
+## Phase 5 — Tighten task execution, failure, persistence, and the canonical example
+
+### Runtime task construction and ownership
+
+- [x] Change executable workloads from cloneable `Fn` to
+      `FnOnce(&TaskContext) -> TaskResult + Send + 'static` and consume each
+      workload exactly once without `Arc<Mutex<_>>` or
+      `Mutex<Option<FnOnce>>` indirection.
+- [x] Let runtime execution consume the validated plan; remove `Clone` from
+      `Task` and `Phase` where it exists only to support the old workload path.
+- [x] Keep `Task` public for identity, parameter, selector, and display
+      inspection, but remove public task constructors and the generic
+      `PhaseBuilder::task` injection path.
+- [x] Make `PhaseBuilder` the only task-construction boundary, generating tasks
+      from `ScientificProject`, `ProjectConfig`, or existing `TaskConfig`
+      handles. Support complete expansion and intentionally selected subsets
+      without introducing `ConfiguredTask` or another public task wrapper.
+- [x] Preserve automatic IDs, labels, complete fixed/sweep identity, stable
+      task ordering, exact partial selection, and progress/activity display
+      kinds through the tightened construction API.
+- [x] Confirm a fixed-only configuration generates exactly one task and covers
+      one-off scientific activities without an identity-only escape hatch.
+
+### Failure policy and outcomes
+
+- [x] Add an explicit phase failure policy with `FailFast` as the default and
+      `FinishActive` as the initial alternative.
+- [x] On fail-fast, stop preparing/dequeuing work after the first failure,
+      mark never-started tasks skipped, cooperatively cancel active workloads,
+      mark an active task cancelled only when it aborts cooperatively, wait for
+      every active return, and never start a later selected phase.
+- [x] On finish-active, stop admitting new work but allow already active
+      workloads to return without failure-triggered cancellation.
+- [x] Preserve the boundary that runtime cancellation never completes or fails
+      a task-owned recording.
+- [x] Distinguish completed, reused, failed, cancelled, and never-started or
+      skipped tasks in structured phase/runtime summaries and display.
+
+### Prelude boundary
+
+- [x] Add explicit `prelude::basics` and `prelude::runtime` sub-preludes.
+- [x] Put configuration, project, state, series, execution, artifact, storage,
+      and decoding APIs in `basics`; put the complete task/phase/runtime API in
+      `runtime`.
+- [x] Remove the omnibus parent-prelude re-exports and migrate Workflow's own
+      tests, doctests, README, and example to the narrow imports.
+
+### Positional storage format
+
+- [x] Bump the clean-slate recording format from version 4 to version 5.
+- [x] Encode each record's `values` as an array in the canonical order already
+      declared by that stream's `fields` in `metadata.json`.
+- [x] Do not add `keys.json`, another sidecar, another public layout/schema
+      type, or rename `SystemStateSchema`.
+- [x] Keep payload serialization opaque: only repeated top-level state-field
+      keys are removed; nested payload objects retain their codec-defined keys.
+- [x] Update Rust recovery/full-series readers and the Python reader to require
+      exact positional width, pair positions with metadata field names, select
+      decoders by those names, and expose the existing name-addressable state
+      API downstream.
+- [x] Preserve empty-field streams as `values: []`, payload-level `null`,
+      partial streams, complete checkpoint reconstruction, strict iteration
+      ordering, chunk byte/checksum validation, and bounded error context.
+- [x] Update fixtures and round-trip bridges to version 5; reject version-4
+      object-valued records rather than maintaining dual-format compatibility.
+
+### Canonical full-procedure example
+
+- [x] Refactor `examples/attractor_2d` into the canonical public procedure:
+      `config -> generated tasks -> phases -> WorkflowRuntime`.
+- [x] Demonstrate at least two stable phases, an explicit dependency, bounded
+      queue/concurrency settings, automatic generated task labels, default
+      fail-fast behavior, and explicit dependency-aware phase selection.
+- [x] Run simulation/recording and verification as `FnOnce` task workloads that
+      receive only `TaskContext`; keep all execution scopes, writers, files,
+      decoding, and result verification application-owned.
+- [x] Demonstrate both `prelude::basics` and `prelude::runtime` and no direct
+      construction of `Task`.
+- [x] Keep the example concise enough to serve as the primary end-user path,
+      while its README explains phase selection and where generated recordings
+      are left for inspection.
+
+### Required tests
+
+- [x] A workload can move a non-Clone owned model/resource into its closure and
+      executes exactly once.
+- [x] No public API can construct or add a task unrelated to `TaskConfig`.
+- [x] Complete and filtered configuration expansion retain all fixed/sweep
+      identity and deterministic labels.
+- [x] Default fail-fast admits no new work after the first observed failure;
+      active tasks see cancellation and pending tasks receive exact outcomes.
+- [x] Finish-active admits no new work but does not cancel already active work.
+- [x] Positional records round-trip scalar, nested array/object, `null`, empty,
+      partial-stream, and full-checkpoint payload sets in Rust and Python.
+- [x] Readers reject too few or too many positional values and reject
+      version-4 object-valued `values`.
+- [x] Existing Dispatcher-style signal, space, and checkpoint payload shapes
+      reconstruct into the same downstream name-addressable values.
+- [x] The attractor example exercises configuration generation, two phases,
+      runtime execution, task-owned recording I/O, and verified reconstruction.
+
+### Exit gate
+
+```bash
+cd workflow/rust
+cargo fmt --all --check
+cargo test --test runtime_workflow -- --nocapture
+cargo test --all-targets --no-fail-fast --locked
+cargo test --doc --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo package --allow-dirty --locked
+
+cd ../python
+PYTHONPATH=src python -m unittest discover -s tests -v
+
+cd ../examples/attractor_2d
+cargo test --all-targets --locked
+cargo run --locked
+```
+
+The phase is complete only when the public example demonstrates the entire
+agreed procedure and format-v5 recordings remain consumable through the
+unchanged name-addressable downstream reader API.
+
+## Phase 6 — Migrate dependent scientific projects
 
 Migrate in dependency order. Do not remove an old Workflow entry point until
 all callers identified by `rg` have moved.
@@ -393,8 +530,9 @@ all callers identified by `rg` have moved.
       stable phase IDs, declared dependencies, bounded queues, and phase-local
       workload limits.
 - [ ] Generate parameterized tasks from their materialized `ProjectConfig`
-      where possible, retaining every fixed/sweep value and using explicit
-      activity tasks only for non-parameterized operations.
+      values, retaining every fixed/sweep value. Represent non-parameterized
+      operations through fixed-only configuration that generates one activity
+      task rather than bypassing the task-construction contract.
 - [ ] Use typed stable task IDs and automatically generated labels; remove
       repeated preregistration/startup label-construction functions.
 - [ ] Represent matrix generation, initial-state creation, conversion, and
@@ -446,7 +584,7 @@ rg -n "ProgressReporter|RegisteredProgressReporterBuilder|scientific_workflow::r
 
 The search must return no production, test, example, or documentation caller.
 
-## Phase 6 — Final cleanup and release gate
+## Phase 7 — Final cleanup and release gate
 
 ### Objectives
 
@@ -476,7 +614,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo package --allow-dirty --locked
 
 cd ../python
-python -m pytest
+PYTHONPATH=src python -m unittest discover -s tests -v
 
 cd ../examples/attractor_2d
 cargo test --all-targets --locked

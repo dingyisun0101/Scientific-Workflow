@@ -30,17 +30,21 @@ replace many narrow tests.
     │   │   └── cases_project/config/{fixed,sweep,paths}.json
     │   ├── state.json
     │   └── coupled_state.json
-    ├── configuration_workflow.rs
-    ├── state_workflow.rs
     ├── analysis_workflow.rs
-    ├── storage_workflow.rs
-    ├── storage_resilience.rs
+    ├── artifact_workflow.rs
+    ├── configuration_workflow.rs
+    ├── python_reader_conformance.rs
     ├── resume_workflow.rs
-    └── runtime_workflow.rs
+    ├── rng_record_workflow.rs
+    ├── runtime_workflow.rs
+    ├── state_workflow.rs
+    ├── storage_resilience.rs
+    └── storage_workflow.rs
 
 The former `tests/system_state/`, `tests/time_series/`, and `tests/storage/`
-subdirectories and their aggregator files have been removed. All seven
-replacement targets pass independently with the logs specified below.
+subdirectories and their aggregator files have been removed. All ten
+integration targets pass independently; the seven core workflow scenarios
+retain the bounded logs specified below.
 
 Doctests remain in production documentation and are not replaced by this
 consolidation.
@@ -214,9 +218,9 @@ multiple logical streams at different sampling intervals, encode borrowed payloa
 write byte-targeted chunks through bounded queues, commit one metadata file,
 and reconstruct typed analysis series.
 
-The target imports `scientific_workflow::prelude::*` and never includes private
-source files. This makes the test a compile-time audit of the supported public
-surface.
+The target imports `scientific_workflow::prelude::basics::*` and never includes
+private source files. This makes the test a compile-time audit of the supported
+public surface.
 
 ### Required behavior
 
@@ -335,8 +339,9 @@ large exact-display snapshots.
   stream/index/key plus `serde_json::Error` source.
 - Reject running and failed metadata when completed analysis is required.
 - Detect missing chunks, exact-size mismatch, and same-size checksum corruption.
-- Reject malformed/unterminated JSONL, missing/additional/duplicate payload
-  keys, invalid physical time, and non-increasing indices.
+- Reject malformed/unterminated JSONL, too few or too many positional payload
+  values, legacy object-valued records, invalid physical time, and
+  non-increasing indices.
 - Verify transactional reading returns no partial `StateSeries`.
 - Verify the most important nested `StateError`, `StateSeriesError`, IO, JSON, and
   decoder sources remain traversable.
@@ -498,25 +503,29 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 
 ### Scenario
 
-Build validated runtime plans from explicit and configuration-generated tasks,
+Build validated runtime plans exclusively from configuration-backed workloads,
 then exercise dependency selection, bounded phase scheduling, task-local
-progress, reuse, failure barriers, and task-owned I/O. Rendering is hidden so
-the test validates lifecycle without controlling the test harness terminal.
+progress, reuse, configurable failure barriers, and task-owned I/O. Rendering
+is normally hidden so the test validates lifecycle without controlling the
+test harness terminal; a bounded plain-output check covers renderer output.
 
 ### Required behavior
 
-- Empty runtimes/phases, missing workloads, duplicate phase IDs, unknown
-  dependencies, and dependency cycles fail during plan validation.
+- Empty runtimes/phases, duplicate phase IDs, unknown dependencies, and
+  dependency cycles fail during plan validation.
 - Exact selection rejects an omitted unsatisfied dependency; inclusive
   selection adds dependencies in deterministic topological order.
 - Application verification can satisfy an omitted completed dependency.
 - Project helpers generate executable tasks retaining complete `TaskConfig`
   values and automatic labels.
+- Single-use workloads can move non-Clone resources directly into execution.
 - Phase concurrency and prepared-work queue capacity remain bounded.
 - Progress, activity, and verified reused tasks share one phase lifecycle.
 - One active runtime excludes another even in hidden mode and releases its
   lease after success, failure, and panic-safe shutdown.
-- A failed phase prevents dependent phases from starting.
+- Default fail-fast and optional finish-active policies stop admission after a
+  failure, distinguish failed/cancelled/skipped outcomes, and prevent dependent
+  phases from starting while retaining structured failure summaries.
 - Exact partial selectors use structured parameters rather than display text.
 - Task workloads own their files; the runtime neither creates nor removes them.
 
@@ -534,7 +543,7 @@ the test validates lifecycle without controlling the test harness terminal.
 
 ### Log contract
 
-    test result: ok. 9 passed; 0 failed
+    test result: ok. 10 passed; 0 failed
 
 ## Logging rules
 
@@ -560,10 +569,12 @@ the test validates lifecycle without controlling the test harness terminal.
    expansion.
 7. `runtime_workflow.rs` implements phase scheduling and runtime display.
 8. Meaningful ownership, invariant, storage, decoder, integrity, recovery,
-   configuration, and reporting assertions mapped into the seven scenarios.
+   configuration, and reporting assertions mapped into the core scenarios and
+   focused artifact, RNG, and Python-conformance targets.
 9. Old aggregators and test subdirectories removed after replacements passed.
 10. README and architecture documentation updated to the consolidated layout.
-11. Storage, configuration, and reporting tests use only the public prelude.
+11. Workflow-owned tests use only the relevant `prelude::basics` and
+    `prelude::runtime` public boundaries.
 12. Full formatting, all-target, doctest, and Clippy verification is the final
    closeout gate for every later change.
 
@@ -591,14 +602,13 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 
 The cleanup is complete only when:
 
-- the final tree contains the fixtures and seven integration files;
+- the final tree contains the fixtures and ten integration files;
 - every implemented public structure and method is checked off above;
 - every high-risk private subsystem has observable behavioral coverage;
-- all seven targets emit their documented bounded logs;
+- all core scenario targets emit their documented bounded logs;
 - no test depends on execution order or retained generated data;
 - the complete verification command set passes.
 
-All criteria are satisfied for the current implemented crate: the test tree is
-the fixtures plus five workflows, every target emits its bounded report, all
-integration tests and doctests pass, formatting is clean, and Clippy passes
-across all targets with warnings denied.
+All criteria are satisfied for the current implemented crate when the release
+gate below passes: every integration target and doctest succeeds, formatting
+is clean, and Clippy passes across all targets with warnings denied.

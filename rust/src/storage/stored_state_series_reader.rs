@@ -26,13 +26,12 @@
 //! reconstructed state. A future out-of-core method may be added on this same
 //! reader without exposing the private raw-record machinery.
 
-use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use serde::de::{MapAccess, Visitor};
+use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
@@ -586,24 +585,24 @@ struct BorrowedRecord<'a> {
     values: BorrowedValues<'a>,
 }
 
-/// Duplicate-preserving field collection backed by borrowed raw JSON slices.
+/// Positional field collection backed by borrowed raw JSON slices.
 struct BorrowedValues<'a> {
-    entries: Vec<(String, &'a RawValue)>,
+    entries: Vec<&'a RawValue>,
 }
 
 impl<'de: 'a, 'a> Deserialize<'de> for BorrowedValues<'a> {
-    /// Rejects duplicate keys while retaining raw value boundaries.
+    /// Retains each positional raw value boundary without decoding its payload.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_map(BorrowedValuesVisitor {
+        deserializer.deserialize_seq(BorrowedValuesVisitor {
             output: std::marker::PhantomData,
         })
     }
 }
 
-/// Serde visitor for one record's `values` object.
+/// Serde visitor for one record's positional `values` array.
 struct BorrowedValuesVisitor<'a> {
     /// Selects the shorter lifetime exposed by the containing record.
     output: std::marker::PhantomData<&'a RawValue>,
@@ -614,24 +613,18 @@ impl<'de: 'a, 'a> Visitor<'de> for BorrowedValuesVisitor<'a> {
 
     /// Describes the required JSON representation.
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("an object of unique field keys and raw JSON values")
+        formatter.write_str("an array of raw JSON payload values")
     }
 
-    /// Collects small owned keys while every potentially large value is
-    /// borrowed directly from the input line.
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    /// Collects each potentially large value as a borrow into the input line.
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
     where
-        A: MapAccess<'de>,
+        A: SeqAccess<'de>,
     {
-        let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
-        while let Some((key, value)) = map.next_entry::<Cow<'de, str>, &'de RawValue>()? {
-            if entries.iter().any(|(existing, _)| existing == key.as_ref()) {
-                return Err(serde::de::Error::custom(format!(
-                    "duplicate payload field `{key}`"
-                )));
-            }
+        let mut entries = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+        while let Some(value) = sequence.next_element::<&'de RawValue>()? {
             let value: &'a RawValue = value;
-            entries.push((key.into_owned(), value));
+            entries.push(value);
         }
         Ok(BorrowedValues { entries })
     }
@@ -737,28 +730,28 @@ fn validate_iteration(
     Ok(())
 }
 
-/// Validates exact keys, dispatches canonical decoders, and fills one state.
+/// Validates positional width, dispatches canonical decoders, and fills one state.
 fn decode_values(
     decoders: &JsonPayloadDecoderRegistry,
     stream: &StateStreamMetadata,
     path: &Path,
     line: u64,
-    mut values: BorrowedValues<'_>,
+    values: BorrowedValues<'_>,
     state: &mut crate::system_state::SystemState,
 ) -> Result<(), StorageError> {
-    for field in &stream.fields {
-        let Some(position) = values
-            .entries
-            .iter()
-            .position(|(name, _)| name == &field.name)
-        else {
-            return Err(invalid_record(
-                path,
-                line,
-                format!("missing payload field `{}`", field.name),
-            ));
-        };
-        let (_, raw) = values.entries.swap_remove(position);
+    if values.entries.len() != stream.fields.len() {
+        return Err(invalid_record(
+            path,
+            line,
+            format!(
+                "record contains {} payload values but stream `{}` declares {} fields",
+                values.entries.len(),
+                stream.name,
+                stream.fields.len()
+            ),
+        ));
+    }
+    for (field, raw) in stream.fields.iter().zip(values.entries) {
         decoders.decode_into(
             &stream.name,
             state.simulation_time().iteration(),
@@ -766,19 +759,6 @@ fn decode_values(
             raw.get(),
             state,
         )?;
-    }
-    if !values.entries.is_empty() {
-        let mut extra = values
-            .entries
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect::<Vec<_>>();
-        extra.sort_unstable();
-        return Err(invalid_record(
-            path,
-            line,
-            format!("undeclared payload fields: {}", extra.join(", ")),
-        ));
     }
     Ok(())
 }

@@ -13,7 +13,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -360,8 +360,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let wrong_type = TempWorkspace::new("wrong-type");
     write_valid_run(&wrong_type);
-    let wrong_bytes =
-        b"{\"iteration\":2,\"values\":{\"population\":\"bad\",\"activity\":\"valid\"}}\n";
+    let wrong_bytes = b"{\"iteration\":2,\"values\":[\"bad\",\"valid\"]}\n";
     replace_first_chunk(&wrong_type.run(), wrong_bytes, 1, 2, 2);
     let error = StoredStateSeriesReader::open_completed_recording(wrong_type.run(), decoders())
         .unwrap()
@@ -391,43 +390,40 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let missing_field = TempWorkspace::new("missing-field");
     write_valid_run(&missing_field);
-    let missing_field_bytes = b"{\"iteration\":2,\"values\":{\"population\":[2.0]}}\n";
+    let missing_field_bytes = b"{\"iteration\":2,\"values\":[[2.0]]}\n";
     replace_first_chunk(&missing_field.run(), missing_field_bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(missing_field.run(), decoders())
             .unwrap()
             .read_stream_as_state_series("signal"),
-        Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("missing payload field `activity`")
+        Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("contains 1 payload values")
     ));
 
-    let duplicate_field = TempWorkspace::new("duplicate-field");
-    write_valid_run(&duplicate_field);
-    let duplicate_bytes =
-        b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"activity\":\"b\"}}\n";
-    replace_first_chunk(&duplicate_field.run(), duplicate_bytes, 1, 2, 2);
+    let object_values = TempWorkspace::new("object-values");
+    write_valid_run(&object_values);
+    let object_bytes = b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n";
+    replace_first_chunk(&object_values.run(), object_bytes, 1, 2, 2);
     assert!(matches!(
-        StoredStateSeriesReader::open_completed_recording(duplicate_field.run(), decoders())
+        StoredStateSeriesReader::open_completed_recording(object_values.run(), decoders())
             .unwrap()
             .read_stream_as_state_series("signal"),
-        Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("duplicate payload field")
+        Err(StorageError::InvalidRecord { .. })
     ));
 
     let additional_field = TempWorkspace::new("additional-field");
     write_valid_run(&additional_field);
-    let additional_bytes =
-        b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\",\"extra\":0}}\n";
+    let additional_bytes = b"{\"iteration\":2,\"values\":[[2.0],\"a\",0]}\n";
     replace_first_chunk(&additional_field.run(), additional_bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(additional_field.run(), decoders())
             .unwrap()
             .read_stream_as_state_series("signal"),
-        Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("undeclared payload fields: extra")
+        Err(StorageError::InvalidRecord { reason, .. }) if reason.contains("contains 3 payload values")
     ));
 
     let invalid_physical = TempWorkspace::new("invalid-physical");
     write_valid_run(&invalid_physical);
-    let physical_bytes =
-        b"{\"iteration\":2,\"physical_time\":1e400,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n";
+    let physical_bytes = b"{\"iteration\":2,\"physical_time\":1e400,\"values\":[[2.0],\"a\"]}\n";
     replace_first_chunk(&invalid_physical.run(), physical_bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(invalid_physical.run(), decoders())
@@ -438,7 +434,8 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let non_increasing = TempWorkspace::new("non-increasing");
     write_valid_run(&non_increasing);
-    let repeated = b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}\n{\"iteration\":2,\"values\":{\"population\":[3.0],\"activity\":\"b\"}}\n";
+    let repeated =
+        b"{\"iteration\":2,\"values\":[[2.0],\"a\"]}\n{\"iteration\":2,\"values\":[[3.0],\"b\"]}\n";
     replace_first_chunk(&non_increasing.run(), repeated, 2, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(non_increasing.run(), decoders())
@@ -490,7 +487,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let unterminated = TempWorkspace::new("unterminated");
     write_valid_run(&unterminated);
-    let bytes = b"{\"iteration\":2,\"values\":{\"population\":[2.0],\"activity\":\"a\"}}";
+    let bytes = b"{\"iteration\":2,\"values\":[[2.0],\"a\"]}";
     replace_first_chunk(&unterminated.run(), bytes, 1, 2, 2);
     assert!(matches!(
         StoredStateSeriesReader::open_completed_recording(unterminated.run(), decoders())

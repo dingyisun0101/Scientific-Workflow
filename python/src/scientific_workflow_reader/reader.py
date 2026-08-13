@@ -1,4 +1,4 @@
-"""Verified eager reader for Scientific Workflow JSONL format version 4."""
+"""Verified eager reader for Scientific Workflow JSONL format version 5."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from .errors import (
 from .model import StateField, StateRecord, StateSeries
 
 FORMAT_NAME = "scientific-workflow-jsonl"
-FORMAT_VERSION = 4
+FORMAT_VERSION = 5
 METADATA_FILE = "metadata.json"
 
 Decoder = Callable[[Any], Any]
@@ -148,7 +148,7 @@ def _validate_metadata(document: Any, path: Path) -> dict[str, Any]:
     version = _uint(metadata["version"], "metadata.version")
     if version != FORMAT_VERSION:
         raise MetadataError(
-            f"unsupported metadata version {metadata['version']!r}; supported version is 4"
+            f"unsupported metadata version {metadata['version']!r}; supported version is 5"
         )
 
     status = _mapping(metadata["status"], "status")
@@ -526,16 +526,16 @@ class RecordingReader:
             if not math.isfinite(physical):
                 raise RecordError(f"record at line {line_number} has nonfinite physical time")
         raw_values = document["values"]
-        if not isinstance(raw_values, dict):
-            raise RecordError(f"record at line {line_number} values must be an object")
+        if not isinstance(raw_values, list):
+            raise RecordError(f"record at line {line_number} values must be an array")
         expected = [field["name"] for field in declaration["fields"]]
-        if set(raw_values) != set(expected):
+        if len(raw_values) != len(expected):
             raise RecordError(
-                f"record at line {line_number} fields differ from stream schema"
+                f"record at line {line_number} has {len(raw_values)} values "
+                f"but stream declares {len(expected)} fields"
             )
         decoded: dict[str, Any] = {}
-        for name in expected:
-            value = raw_values[name]
+        for name, value in zip(expected, raw_values, strict=True):
             if self._decoders is not None:
                 try:
                     value = self._decoders[name](value)

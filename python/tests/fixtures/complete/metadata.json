@@ -1,6 +1,6 @@
 {
   "format": "scientific-workflow-jsonl",
-  "version": 4,
+  "version": 5,
   "status": {"state": "complete"},
   "timing": {
     "created_at_utc": "2026-01-01T00:00:00Z",
@@ -31,8 +31,8 @@
           "ordinal": 0,
           "file": "chunk-000000.jsonl",
           "records": 2,
-          "bytes": 172,
-          "checksum": "sha256:eb75dd209a3d39779504c9fcecc2a9e94f0d47c1f3884e2654a82ecb60536ea0",
+          "bytes": 130,
+          "checksum": "sha256:eb51b8dd52d7adcd98ae1886daf952bdba982ee12013dbcd86263c4ab361a4cb",
           "first_iteration": 0,
           "last_iteration": 2
         }

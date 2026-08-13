@@ -12,7 +12,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use serde::Serialize;
 use serde::ser::Error as _;
 use serde_json::Value;

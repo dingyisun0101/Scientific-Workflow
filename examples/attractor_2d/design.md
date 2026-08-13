@@ -34,11 +34,12 @@ canonical order. Each handle shares the parsed fixed values, selected sweep
 storage, and project paths, so the same type can later move directly into a
 orchestration mission without a merged configuration allocation.
 
-The example adapts this lazy iterator through
-`progress_workloads_from_project`. The phase scheduler prepares workloads
+The example adapts this lazy iterator through simulation progress workloads and
+dependent validation activity workloads. Each phase scheduler prepares work
 through a bounded queue without requiring the application to maintain a second
-task registry. Every concurrent closure owns its model and writer; only the
-immutable configuration, schema, and execution scope are shared.
+task registry. Every simulation closure owns its model and writer; validation
+closures own reconstruction and numerical checks. Only immutable
+configuration, schema, and execution-scope handles are shared.
 
 ## Project configuration
 
@@ -105,25 +106,28 @@ example manages only scientific iteration and physical time.
 
 ## Validation boundary
 
-Validation is intentionally narrower than analysis. For each completed task it:
+Validation is intentionally narrower than analysis. A dependent phase task for
+each completed simulation:
 
 1. registers JSON payload decoders for `point: Vec<f64>` and `radius: f64`;
 2. opens the completed recording;
 3. reads only the latest complete checkpoint; and
-4. asserts exact time and payload equality against the live final state.
+4. compares exact time and payload values against the independent Euler
+   reference implementation.
 
 `read_latest_state_from_stream` avoids reconstructing complete series merely to
 inspect endpoints. Serde JSON's finite-float round-trip behavior preserves the
 original `f64` bit patterns. Any mismatch becomes an application error before a
 success result is printed.
 
-`WorkflowRuntime` owns scheduling and display for the registered simulation
-phase. All three parameter tasks receive rows before their task-owned model and
-recording work starts. Each running row reports elapsed execution time and ETA.
+`WorkflowRuntime` owns scheduling and display for registered simulation and
+validation phases. All three parameter tasks receive rows before their
+task-owned work starts, and only the active phase remains on screen. Simulation
+rows report elapsed execution time and ETA.
 Plain output ends with:
 
 ```text
-[runtime] status=completed phases=1 tasks=3
+[runtime] status=completed phases=2 tasks=6
 ```
 
 Reaching this line proves that configuration loading, sweep expansion, state
@@ -143,10 +147,13 @@ src/
 
 ```text
 load project
-  -> create execution scope and configuration-generated runtime phase
-  -> runtime schedules bounded TaskContext workloads
-       -> task owns assemble -> evolve/record -> validate checkpoint
-  -> runtime displays the phase summary
+  -> create execution scope
+  -> generate simulation tasks -> phase 1
+  -> generate validation tasks -> dependent phase 2
+  -> runtime selects phase 2 with dependencies
+       -> simulation task owns assemble -> evolve -> record
+       -> validation task owns reconstruct -> numerical cross-check
+  -> runtime displays phase and overall summaries
 ```
 
 No module duplicates the live state. `main.rs` owns the complete task
@@ -261,7 +268,7 @@ Maps application stream policy and byte limits onto `SystemStateWriterBuilder`.
 record_model -> build_writer
 ```
 
-### `validate_recording`
+### `read_final_checkpoint`
 
 Decodes the latest complete checkpoint and asserts exact equality with the live
 completed state. Partial streams remain demonstrations of independent sampling;
@@ -270,7 +277,7 @@ rechecking their shared fields would add repetition rather than a new API.
 #### Reference
 
 ```text
-runtime TaskContext workload -> validate_recording
+validation-phase TaskContext workload -> read_final_checkpoint
 ```
 
 ### `main`

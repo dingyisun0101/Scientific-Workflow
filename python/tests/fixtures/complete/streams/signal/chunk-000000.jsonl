@@ -1,2 +1,2 @@
-{"iteration":0,"physical_time":0.0,"values":{"population":[2.0,1.0],"label":"start"}}
-{"iteration":2,"physical_time":0.5,"values":{"population":[1.0,2.0],"label":"later"}}
+{"iteration":0,"physical_time":0.0,"values":[[2.0,1.0],"start"]}
+{"iteration":2,"physical_time":0.5,"values":[[1.0,2.0],"later"]}

@@ -108,18 +108,11 @@ pub enum TaskDisplayKind {
     Activity,
 }
 
-#[derive(Clone)]
-enum ParameterSource {
-    Configuration(TaskConfig),
-    Explicit(Arc<[(Box<str>, Value)]>),
-}
-
 /// First-class immutable task declaration owned by exactly one [`Phase`].
-#[derive(Clone)]
 pub struct Task {
     key: TaskKey,
     kind: Arc<str>,
-    parameters: ParameterSource,
+    configuration: TaskConfig,
     display_kind: TaskDisplayKind,
     label: Arc<str>,
     display_keys: Option<Arc<[Box<str>]>>,
@@ -128,87 +121,6 @@ pub struct Task {
 }
 
 impl Task {
-    /// Creates an explicit iterative task without project configuration.
-    pub fn progress(id: impl Into<String>, kind: impl Into<String>) -> Self {
-        Self::explicit(id, kind, TaskDisplayKind::Progress)
-    }
-
-    /// Creates an explicit one-shot activity task.
-    pub fn activity(id: impl Into<String>, kind: impl Into<String>) -> Self {
-        Self::explicit(id, kind, TaskDisplayKind::Activity)
-    }
-
-    fn explicit(
-        id: impl Into<String>,
-        kind: impl Into<String>,
-        display_kind: TaskDisplayKind,
-    ) -> Self {
-        let id = TaskId::new(id);
-        let kind: Arc<str> = kind.into().into();
-        Self {
-            key: TaskKey::new(0, id),
-            label: Arc::clone(&kind),
-            kind,
-            parameters: ParameterSource::Explicit(Arc::from([])),
-            display_kind,
-            display_keys: None,
-            workload: None,
-            reused: false,
-        }
-    }
-
-    /// Attaches the task-owned executable workload.
-    ///
-    /// The runtime schedules this closure and supplies reporting and
-    /// cancellation through [`TaskContext`]. The closure remains solely
-    /// responsible for all scientific I/O and any subprocesses.
-    pub fn workload<F>(mut self, workload: F) -> Self
-    where
-        F: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
-    {
-        self.workload = Some(Arc::new(workload));
-        self
-    }
-
-    /// Declares that application-verified prior work satisfies this task.
-    pub fn reused(mut self) -> Self {
-        self.workload = None;
-        self.reused = true;
-        self
-    }
-
-    /// Adds one exact structured parameter to an explicit task.
-    ///
-    /// Repeating a key replaces its earlier value, matching ordinary builder
-    /// semantics. Configuration-derived tasks are immutable and reject this
-    /// operation.
-    pub fn with_parameter(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<Value>,
-    ) -> Result<Self, ReportingError> {
-        let ParameterSource::Explicit(fields) = &self.parameters else {
-            return Err(ReportingError::ConfiguredTaskParametersImmutable {
-                task: self.key.to_string(),
-            });
-        };
-        let key = key.into();
-        if key.trim().is_empty() {
-            return Err(ReportingError::InvalidTaskParameter { key });
-        }
-        let mut fields = fields.to_vec();
-        if let Some((_, current)) = fields
-            .iter_mut()
-            .find(|(candidate, _)| candidate.as_ref() == key)
-        {
-            *current = value.into();
-        } else {
-            fields.push((key.into_boxed_str(), value.into()));
-        }
-        self.parameters = ParameterSource::Explicit(fields.into());
-        Ok(self)
-    }
-
     /// Returns the exact phase-qualified task key.
     pub fn key(&self) -> &TaskKey {
         &self.key
@@ -234,31 +146,19 @@ impl Task {
         self.display_kind
     }
 
-    /// Returns the originating deterministic configuration ordinal, if any.
-    pub fn configuration_ordinal(&self) -> Option<u64> {
-        match &self.parameters {
-            ParameterSource::Configuration(config) => Some(config.task_ordinal()),
-            ParameterSource::Explicit(_) => None,
-        }
+    /// Returns the originating deterministic configuration ordinal.
+    pub fn configuration_ordinal(&self) -> u64 {
+        self.configuration.task_ordinal()
     }
 
-    /// Borrows the retained cheap task-configuration handle, if generated from
-    /// a project or configuration.
-    pub fn configuration(&self) -> Option<&TaskConfig> {
-        match &self.parameters {
-            ParameterSource::Configuration(config) => Some(config),
-            ParameterSource::Explicit(_) => None,
-        }
+    /// Borrows the retained cheap task-configuration handle.
+    pub fn configuration(&self) -> &TaskConfig {
+        &self.configuration
     }
 
-    /// Borrows one fixed, swept, or explicit parameter by exact key.
+    /// Borrows one fixed or swept parameter by exact key.
     pub fn value(&self, key: &str) -> Option<&Value> {
-        match &self.parameters {
-            ParameterSource::Configuration(config) => config.value(key),
-            ParameterSource::Explicit(fields) => fields
-                .iter()
-                .find_map(|(name, value)| (name.as_ref() == key).then_some(value)),
-        }
+        self.configuration.value(key)
     }
 
     /// Borrows one required task parameter.
@@ -284,14 +184,9 @@ impl Task {
         })
     }
 
-    /// Iterates every fixed/swept or explicit parameter without cloning values.
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (&str, &Value)> + '_> {
-        match &self.parameters {
-            ParameterSource::Configuration(config) => Box::new(config.parameters().iter()),
-            ParameterSource::Explicit(fields) => {
-                Box::new(fields.iter().map(|(key, value)| (key.as_ref(), value)))
-            }
-        }
+    /// Iterates every fixed or swept parameter without cloning values.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> + '_ {
+        self.configuration.parameters().iter()
     }
 
     /// Borrows the exact keys used to generate the current label.
@@ -299,8 +194,12 @@ impl Task {
         self.display_keys.as_deref()
     }
 
-    pub(crate) fn executable(&self) -> Option<&Workload> {
-        self.workload.as_ref()
+    pub(crate) fn take_workload(&mut self) -> Option<Workload> {
+        self.workload.take()
+    }
+
+    pub(crate) fn has_workload(&self) -> bool {
+        self.workload.is_some()
     }
 
     pub(crate) const fn is_reused(&self) -> bool {
@@ -349,14 +248,35 @@ impl fmt::Debug for Task {
 }
 
 /// Immutable nonempty execution phase and reporter section.
-#[derive(Clone, Debug)]
 pub struct Phase {
     id: PhaseId,
     label: Arc<str>,
-    tasks: Arc<[Task]>,
+    tasks: Vec<Task>,
     max_concurrent_workloads: usize,
     queue_capacity: usize,
-    dependencies: Arc<[PhaseId]>,
+    dependencies: Vec<PhaseId>,
+    failure_policy: PhaseFailurePolicy,
+}
+
+/// Scheduling behavior after the first workload failure in a phase.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PhaseFailurePolicy {
+    /// Stop new work and cooperatively cancel active workloads.
+    #[default]
+    FailFast,
+    /// Stop new work but allow already active workloads to finish.
+    FinishActive,
+}
+
+impl PhaseFailurePolicy {
+    /// Returns the stable uncolored policy name used by plain output.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FailFast => "fail-fast",
+            Self::FinishActive => "finish-active",
+        }
+    }
 }
 
 impl Phase {
@@ -370,6 +290,7 @@ impl Phase {
             max_concurrent_workloads: 1,
             queue_capacity: 1,
             dependencies: Vec::new(),
+            failure_policy: PhaseFailurePolicy::FailFast,
         }
     }
 
@@ -401,6 +322,15 @@ impl Phase {
     /// Returns declared predecessor phases in declaration order.
     pub fn dependencies(&self) -> &[PhaseId] {
         &self.dependencies
+    }
+
+    /// Returns the behavior selected for the first workload failure.
+    pub const fn failure_policy(&self) -> PhaseFailurePolicy {
+        self.failure_policy
+    }
+
+    pub(crate) fn into_tasks(self) -> Vec<Task> {
+        self.tasks
     }
 
     /// Returns one exact phase-local task by ID.
@@ -436,31 +366,59 @@ pub struct PhaseBuilder {
     max_concurrent_workloads: usize,
     queue_capacity: usize,
     dependencies: Vec<PhaseId>,
+    failure_policy: PhaseFailurePolicy,
 }
 
 impl PhaseBuilder {
-    /// Adds one explicit task to this phase.
-    pub fn task(mut self, task: Task) -> Self {
-        self.tasks.push(task);
+    /// Adds one iterative workload backed by an already selected configuration.
+    pub fn progress_workload<W>(
+        mut self,
+        configuration: TaskConfig,
+        kind: impl Into<String>,
+        workload: W,
+    ) -> Self
+    where
+        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
+    {
+        self.push_configuration_task(
+            configuration,
+            kind.into(),
+            TaskDisplayKind::Progress,
+            Some(Box::new(workload)),
+            false,
+        );
         self
     }
 
-    /// Generates one iterative task per deterministic project configuration.
-    pub fn progress_tasks_from_project(
-        self,
-        project: &ScientificProject,
+    /// Adds one activity workload backed by an already selected configuration.
+    pub fn activity_workload<W>(
+        mut self,
+        configuration: TaskConfig,
         kind: impl Into<String>,
-    ) -> Self {
-        self.progress_tasks_from_configuration(project.configuration(), kind)
+        workload: W,
+    ) -> Self
+    where
+        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
+    {
+        self.push_configuration_task(
+            configuration,
+            kind.into(),
+            TaskDisplayKind::Activity,
+            Some(Box::new(workload)),
+            false,
+        );
+        self
     }
 
-    /// Generates one iterative task per deterministic lower-level configuration.
-    pub fn progress_tasks_from_configuration(
-        mut self,
-        configuration: &ProjectConfig,
-        kind: impl Into<String>,
-    ) -> Self {
-        self.extend_configuration(configuration, kind.into(), TaskDisplayKind::Progress);
+    /// Adds one application-verified reused activity task.
+    pub fn reused_activity(mut self, configuration: TaskConfig, kind: impl Into<String>) -> Self {
+        self.push_configuration_task(
+            configuration,
+            kind.into(),
+            TaskDisplayKind::Activity,
+            None,
+            true,
+        );
         self
     }
 
@@ -473,7 +431,7 @@ impl PhaseBuilder {
     ) -> Self
     where
         F: Fn(&TaskConfig) -> W,
-        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
     {
         self.progress_workloads_from_configuration(project.configuration(), kind, factory)
     }
@@ -487,7 +445,7 @@ impl PhaseBuilder {
     ) -> Self
     where
         F: Fn(&TaskConfig) -> W,
-        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
     {
         self.extend_configuration_workloads(
             configuration,
@@ -495,25 +453,6 @@ impl PhaseBuilder {
             TaskDisplayKind::Progress,
             factory,
         );
-        self
-    }
-
-    /// Generates one activity task per deterministic project configuration.
-    pub fn activity_tasks_from_project(
-        self,
-        project: &ScientificProject,
-        kind: impl Into<String>,
-    ) -> Self {
-        self.activity_tasks_from_configuration(project.configuration(), kind)
-    }
-
-    /// Generates one activity task per deterministic lower-level configuration.
-    pub fn activity_tasks_from_configuration(
-        mut self,
-        configuration: &ProjectConfig,
-        kind: impl Into<String>,
-    ) -> Self {
-        self.extend_configuration(configuration, kind.into(), TaskDisplayKind::Activity);
         self
     }
 
@@ -526,7 +465,7 @@ impl PhaseBuilder {
     ) -> Self
     where
         F: Fn(&TaskConfig) -> W,
-        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
     {
         self.activity_workloads_from_configuration(project.configuration(), kind, factory)
     }
@@ -540,7 +479,7 @@ impl PhaseBuilder {
     ) -> Self
     where
         F: Fn(&TaskConfig) -> W,
-        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
     {
         self.extend_configuration_workloads(
             configuration,
@@ -577,6 +516,12 @@ impl PhaseBuilder {
     /// Declares one phase that must be satisfied before this phase starts.
     pub fn depends_on(mut self, dependency: impl Into<PhaseId>) -> Self {
         self.dependencies.push(dependency.into());
+        self
+    }
+
+    /// Selects behavior after the first workload failure.
+    pub fn failure_policy(mut self, policy: PhaseFailurePolicy) -> Self {
+        self.failure_policy = policy;
         self
     }
 
@@ -640,32 +585,12 @@ impl PhaseBuilder {
         Ok(Phase {
             id: self.id,
             label: self.label.into(),
-            tasks: self.tasks.into(),
+            tasks: self.tasks,
             max_concurrent_workloads: self.max_concurrent_workloads,
             queue_capacity: self.queue_capacity,
-            dependencies: self.dependencies.into(),
+            dependencies: self.dependencies,
+            failure_policy: self.failure_policy,
         })
-    }
-
-    fn extend_configuration(
-        &mut self,
-        configuration: &ProjectConfig,
-        kind: String,
-        display_kind: TaskDisplayKind,
-    ) {
-        for config in configuration.task_configs() {
-            let id = TaskId::new(format!("{kind}:{}", config.task_ordinal()));
-            self.tasks.push(Task {
-                key: TaskKey::new(self.id, id),
-                kind: kind.clone().into(),
-                parameters: ParameterSource::Configuration(config),
-                display_kind,
-                label: kind.clone().into(),
-                display_keys: None,
-                workload: None,
-                reused: false,
-            });
-        }
     }
 
     fn extend_configuration_workloads<F, W>(
@@ -676,22 +601,39 @@ impl PhaseBuilder {
         factory: F,
     ) where
         F: Fn(&TaskConfig) -> W,
-        W: Fn(&TaskContext) -> TaskResult + Send + Sync + 'static,
+        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
     {
         for config in configuration.task_configs() {
             let workload = factory(&config);
-            let id = TaskId::new(format!("{kind}:{}", config.task_ordinal()));
-            self.tasks.push(Task {
-                key: TaskKey::new(self.id, id),
-                kind: kind.clone().into(),
-                parameters: ParameterSource::Configuration(config),
+            self.push_configuration_task(
+                config,
+                kind.clone(),
                 display_kind,
-                label: kind.clone().into(),
-                display_keys: None,
-                workload: Some(Arc::new(workload)),
-                reused: false,
-            });
+                Some(Box::new(workload)),
+                false,
+            );
         }
+    }
+
+    fn push_configuration_task(
+        &mut self,
+        configuration: TaskConfig,
+        kind: String,
+        display_kind: TaskDisplayKind,
+        workload: Option<Workload>,
+        reused: bool,
+    ) {
+        let id = TaskId::new(format!("{kind}:{}", configuration.task_ordinal()));
+        self.tasks.push(Task {
+            key: TaskKey::new(self.id, id),
+            kind: kind.clone().into(),
+            configuration,
+            display_kind,
+            label: kind.into(),
+            display_keys: None,
+            workload,
+            reused,
+        });
     }
 
     fn generate_labels(&mut self, kind: &str) -> Result<(), ReportingError> {
@@ -723,6 +665,21 @@ impl PhaseBuilder {
             }
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for Phase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Phase")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("tasks", &self.tasks.len())
+            .field("max_concurrent_workloads", &self.max_concurrent_workloads)
+            .field("queue_capacity", &self.queue_capacity)
+            .field("dependencies", &self.dependencies)
+            .field("failure_policy", &self.failure_policy)
+            .finish()
     }
 }
 

@@ -5,7 +5,6 @@
 //! write for the session. Progress never mutates or replaces scientific time;
 //! callers synchronize it from their authoritative model state.
 
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
@@ -27,7 +26,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::Value;
 
 use super::error::ReportingError;
-use super::phase::{Phase, Task, TaskDisplayKind, TaskKey};
+use super::phase::{Phase, TaskDisplayKind, TaskKey};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const MESSAGE_CAPACITY: usize = 256;
@@ -47,6 +46,10 @@ pub enum TaskStatus {
     Reused,
     /// The task explicitly failed or dropped its active handle prematurely.
     Failed,
+    /// The task cooperatively stopped after cancellation was requested.
+    Cancelled,
+    /// The task was never started because its phase stopped admitting work.
+    Skipped,
 }
 
 impl TaskStatus {
@@ -58,6 +61,8 @@ impl TaskStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Reused => "reused",
+            Self::Cancelled => "cancelled",
+            Self::Skipped => "skipped",
         }
     }
 
@@ -68,6 +73,8 @@ impl TaskStatus {
             Self::Completed => 2,
             Self::Failed => 3,
             Self::Reused => 4,
+            Self::Cancelled => 5,
+            Self::Skipped => 6,
         }
     }
 
@@ -78,6 +85,8 @@ impl TaskStatus {
             2 => Self::Completed,
             3 => Self::Failed,
             4 => Self::Reused,
+            5 => Self::Cancelled,
+            6 => Self::Skipped,
             _ => unreachable!("task status is written only through TaskStatus::encode"),
         }
     }
@@ -95,7 +104,8 @@ impl TaskStatus {
 #[derive(Clone, Debug)]
 pub struct TaskIdentity {
     label: Arc<str>,
-    task: Task,
+    key: TaskKey,
+    configuration: crate::configuration::TaskConfig,
 }
 
 impl TaskIdentity {
@@ -106,28 +116,28 @@ impl TaskIdentity {
 
     /// Returns the number of parameter fields forming this identity.
     pub fn len(&self) -> usize {
-        self.task.iter().count()
+        self.configuration.parameters().len()
     }
 
     /// Reports whether the identity contains no parameter fields.
     pub fn is_empty(&self) -> bool {
-        self.task.iter().next().is_none()
+        self.configuration.parameters().is_empty()
     }
 
     /// Borrows one exact identity value by parameter name.
     pub fn value(&self, key: &str) -> Option<&Value> {
-        self.task.value(key)
+        self.configuration.value(key)
     }
 
     /// Iterates identity fields in the configured display order.
     pub fn iter(&self) -> Box<dyn Iterator<Item = (&str, &Value)> + '_> {
-        self.task.iter()
+        Box::new(self.configuration.parameters().iter())
     }
 
     /// Returns the exact first-class task key when this identity came from a
     /// phase declaration.
     pub fn task_key(&self) -> &TaskKey {
-        self.task.key()
+        &self.key
     }
 }
 
@@ -140,6 +150,8 @@ pub struct ProgressSummary {
     completed: u64,
     reused: u64,
     failed: u64,
+    cancelled: u64,
+    skipped: u64,
 }
 
 impl ProgressSummary {
@@ -173,12 +185,24 @@ impl ProgressSummary {
         self.failed
     }
 
+    /// Returns the number of active tasks that cooperatively cancelled.
+    pub fn cancelled(&self) -> u64 {
+        self.cancelled
+    }
+
+    /// Returns the number of tasks that were never started.
+    pub fn skipped(&self) -> u64 {
+        self.skipped
+    }
+
     /// Reports whether every registered task completed successfully.
     pub fn is_success(&self) -> bool {
         self.completed + self.reused == self.total
             && self.pending == 0
             && self.running == 0
             && self.failed == 0
+            && self.cancelled == 0
+            && self.skipped == 0
     }
 }
 
@@ -193,18 +217,12 @@ enum OutputMode {
 
 /// Builder that makes the reporter observe existing first-class phases/tasks.
 pub(crate) struct RuntimeReporterBuilder {
-    phases: Vec<Phase>,
+    slots: Arc<[Arc<ProgressSlot>]>,
     output: OutputMode,
-    heading: Option<String>,
     cancellation: Option<CancellationToken>,
 }
 
 impl RuntimeReporterBuilder {
-    pub(crate) fn phase_heading(mut self, heading: String) -> Self {
-        self.heading = Some(heading);
-        self
-    }
-
     pub(crate) fn cancellation_token(mut self, cancellation: CancellationToken) -> Self {
         self.cancellation = Some(cancellation);
         self
@@ -229,8 +247,7 @@ impl RuntimeReporterBuilder {
 
     /// Validates phase uniqueness and starts one observing reporter.
     pub fn start(self) -> Result<RuntimeReporter, ReportingError> {
-        let slots = build_phase_slots(&self.phases, self.heading.as_deref())?;
-        start_reporter(slots, self.output, self.cancellation)
+        start_reporter(self.slots, self.output, self.cancellation)
     }
 }
 
@@ -238,15 +255,7 @@ impl fmt::Debug for RuntimeReporterBuilder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeReporterBuilder")
-            .field("phases", &self.phases.len())
-            .field(
-                "tasks",
-                &self
-                    .phases
-                    .iter()
-                    .map(|phase| phase.tasks().len())
-                    .sum::<usize>(),
-            )
+            .field("tasks", &self.slots.len())
             .field("output", &self.output)
             .finish_non_exhaustive()
     }
@@ -261,20 +270,15 @@ pub(crate) struct RuntimeReporter {
 
 impl RuntimeReporter {
     /// Observes tasks already owned and identified by first-class phases.
-    pub fn for_phases<I, P>(phases: I) -> RuntimeReporterBuilder
-    where
-        I: IntoIterator<Item = P>,
-        P: Borrow<Phase>,
-    {
-        RuntimeReporterBuilder {
-            phases: phases
-                .into_iter()
-                .map(|phase| phase.borrow().clone())
-                .collect(),
+    pub fn for_phase(
+        phase: &Phase,
+        heading: &str,
+    ) -> Result<RuntimeReporterBuilder, ReportingError> {
+        Ok(RuntimeReporterBuilder {
+            slots: build_phase_slots(std::slice::from_ref(phase), Some(heading))?,
             output: OutputMode::Auto,
-            heading: None,
             cancellation: None,
-        }
+        })
     }
 
     /// Starts one exact first-class iterative task.
@@ -304,6 +308,24 @@ impl RuntimeReporter {
     pub fn mark_reused(&self, key: &TaskKey) -> Result<(), ReportingError> {
         let slot = managed_slot(&self.inner.slots, key)?;
         mark_slot_reused(&slot)
+    }
+
+    pub(crate) fn mark_skipped(&self, key: &TaskKey) -> Result<(), ReportingError> {
+        let slot = managed_slot(&self.inner.slots, key)?;
+        mark_pending_terminal(&slot, TaskStatus::Skipped, "skipped")
+    }
+
+    pub(crate) fn mark_cancelled(&self, key: &TaskKey) -> Result<(), ReportingError> {
+        let slot = managed_slot(&self.inner.slots, key)?;
+        mark_pending_terminal(&slot, TaskStatus::Cancelled, "cancelled")
+    }
+
+    pub(crate) fn request_cancellation(&self) {
+        self.inner.cancelled.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.inner.cancelled.load(Ordering::Acquire)
     }
 
     /// Returns a non-blocking snapshot of all task lifecycle counts.
@@ -558,6 +580,14 @@ impl TaskProgress {
             .store(TaskStatus::Failed.encode(), Ordering::Release);
         self.active = false;
     }
+
+    pub(crate) fn cancel(mut self, reason: impl Into<String>) {
+        *lock(&self.slot.detail) = reason.into().into_boxed_str();
+        self.slot
+            .status
+            .store(TaskStatus::Cancelled.encode(), Ordering::Release);
+        self.active = false;
+    }
 }
 
 impl fmt::Debug for TaskProgress {
@@ -640,6 +670,14 @@ impl ActivityTask {
         self.slot
             .status
             .store(TaskStatus::Failed.encode(), Ordering::Release);
+        self.active = false;
+    }
+
+    pub(crate) fn cancel(mut self, reason: impl Into<String>) {
+        *lock(&self.slot.detail) = reason.into().into_boxed_str();
+        self.slot
+            .status
+            .store(TaskStatus::Cancelled.encode(), Ordering::Release);
         self.active = false;
     }
 }
@@ -796,6 +834,25 @@ fn mark_slot_reused(slot: &ProgressSlot) -> Result<(), ReportingError> {
     Ok(())
 }
 
+fn mark_pending_terminal(
+    slot: &ProgressSlot,
+    status: TaskStatus,
+    detail: &'static str,
+) -> Result<(), ReportingError> {
+    slot.status
+        .compare_exchange(
+            TaskStatus::Pending.encode(),
+            status.encode(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| ReportingError::TaskAlreadyStarted {
+            identity: slot.identity.label().to_owned(),
+        })?;
+    *lock(&slot.detail) = detail.into();
+    Ok(())
+}
+
 fn start_slot(
     inner: &ReporterInner,
     slot: Arc<ProgressSlot>,
@@ -882,7 +939,8 @@ fn build_phase_slots(
             slots.push(Arc::new(ProgressSlot {
                 identity: TaskIdentity {
                     label: task.label().into(),
-                    task: task.clone(),
+                    key: task.key().clone(),
+                    configuration: task.configuration().clone(),
                 },
                 phase_label: Some(Arc::clone(&phase_label)),
                 display_kind: task.display_kind(),
@@ -906,6 +964,8 @@ fn summarize(slots: &[Arc<ProgressSlot>]) -> ProgressSummary {
         completed: 0,
         reused: 0,
         failed: 0,
+        cancelled: 0,
+        skipped: 0,
     };
     for slot in slots {
         match TaskStatus::decode(slot.status.load(Ordering::Acquire)) {
@@ -914,6 +974,8 @@ fn summarize(slots: &[Arc<ProgressSlot>]) -> ProgressSummary {
             TaskStatus::Completed => summary.completed += 1,
             TaskStatus::Reused => summary.reused += 1,
             TaskStatus::Failed => summary.failed += 1,
+            TaskStatus::Cancelled => summary.cancelled += 1,
+            TaskStatus::Skipped => summary.skipped += 1,
         }
     }
     summary
@@ -1236,12 +1298,14 @@ fn write_final(output: OutputMode, slots: &[Arc<ProgressSlot>], success: bool, m
         }
     }
     eprintln!(
-        "[workflow] status={} tasks={} completed={} reused={} failed={} pending={} message={}",
+        "[workflow] status={} tasks={} completed={} reused={} failed={} cancelled={} skipped={} pending={} message={}",
         if success { "completed" } else { "failed" },
         summary.total,
         summary.completed,
         summary.reused,
         summary.failed,
+        summary.cancelled,
+        summary.skipped,
         summary.pending,
         message
     );
@@ -1262,6 +1326,8 @@ fn terminal_status(status: TaskStatus) -> String {
         TaskStatus::Completed => console::Style::new().green(),
         TaskStatus::Reused => console::Style::new().blue(),
         TaskStatus::Failed => console::Style::new().red(),
+        TaskStatus::Cancelled => console::Style::new().yellow(),
+        TaskStatus::Skipped => console::Style::new().dim(),
     }
     .force_styling(true);
     style.apply_to(status.label()).to_string()

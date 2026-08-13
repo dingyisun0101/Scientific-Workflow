@@ -1,14 +1,15 @@
-//! Integrated coverage for phase scheduling and runtime-owned display.
+//! Integrated coverage for configuration-backed phase scheduling and display.
 
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::runtime::*;
 
 static RUNTIME_TEST: Mutex<()> = Mutex::new(());
 
@@ -18,13 +19,20 @@ fn fixture_project(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn activity(id: &str) -> Task {
-    Task::activity(id, "activity").workload(|_| Ok(()))
+fn project() -> ScientificProject {
+    ScientificProject::load(fixture_project("cartesian_project")).unwrap()
 }
 
-fn phase(id: u64, task: Task) -> Phase {
+fn config(project: &ScientificProject, ordinal: usize) -> TaskConfig {
+    project.task_configs().nth(ordinal).unwrap()
+}
+
+fn activity_phase<W>(project: &ScientificProject, id: u64, kind: &str, workload: W) -> Phase
+where
+    W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
+{
     Phase::builder(id, format!("phase-{id}"))
-        .task(task)
+        .activity_workload(config(project, 0), kind, workload)
         .build()
         .unwrap()
 }
@@ -32,6 +40,7 @@ fn phase(id: u64, task: Task) -> Phase {
 #[test]
 fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
     let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
     assert!(matches!(
         WorkflowRuntime::builder().hidden().build(),
         Err(RuntimeError::EmptyPhaseSet)
@@ -40,18 +49,11 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
         Phase::builder(1, "empty").build(),
         Err(RuntimeError::EmptyPhase { phase: 1 })
     ));
+    let duplicate_a = activity_phase(&project, 1, "one", |_| Ok(()));
+    let duplicate_b = activity_phase(&project, 1, "two", |_| Ok(()));
     assert!(matches!(
         WorkflowRuntime::builder()
-            .phase(phase(1, Task::activity("missing", "activity")))
-            .hidden()
-            .build(),
-        Err(RuntimeError::MissingTaskWorkload { .. })
-    ));
-
-    let duplicate = phase(1, activity("one"));
-    assert!(matches!(
-        WorkflowRuntime::builder()
-            .phases([duplicate.clone(), duplicate])
+            .phases([duplicate_a, duplicate_b])
             .hidden()
             .build(),
         Err(RuntimeError::DuplicatePhaseId { phase: 1 })
@@ -59,7 +61,7 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
 
     let unknown = Phase::builder(2, "unknown")
         .depends_on(99)
-        .task(activity("unknown"))
+        .activity_workload(config(&project, 0), "unknown", |_| Ok(()))
         .build()
         .unwrap();
     assert!(matches!(
@@ -72,12 +74,12 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
 
     let first = Phase::builder(1, "first")
         .depends_on(2)
-        .task(activity("first"))
+        .activity_workload(config(&project, 0), "first", |_| Ok(()))
         .build()
         .unwrap();
     let second = Phase::builder(2, "second")
         .depends_on(1)
-        .task(activity("second"))
+        .activity_workload(config(&project, 0), "second", |_| Ok(()))
         .build()
         .unwrap();
     assert!(matches!(
@@ -92,36 +94,42 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
 #[test]
 fn exact_and_dependency_inclusive_selection_are_deterministic() {
     let _guard = RUNTIME_TEST.lock().unwrap();
-    let order = Arc::new(Mutex::new(Vec::new()));
-    let make = |phase_id: u64, dependency: Option<u64>| {
-        let observed = Arc::clone(&order);
-        let mut builder = Phase::builder(phase_id, format!("phase-{phase_id}")).task(
-            Task::activity(format!("task-{phase_id}"), "activity").workload(move |_| {
-                observed.lock().unwrap().push(phase_id);
-                Ok(())
-            }),
-        );
-        if let Some(dependency) = dependency {
-            builder = builder.depends_on(dependency);
-        }
-        builder.build().unwrap()
+    let project = project();
+    let build = |order: Arc<Mutex<Vec<u64>>>| {
+        [1_u64, 2, 4].map(|id| {
+            let observed = Arc::clone(&order);
+            let mut builder = Phase::builder(id, format!("phase-{id}")).activity_workload(
+                config(&project, 0),
+                format!("task-{id}"),
+                move |_| {
+                    observed.lock().unwrap().push(id);
+                    Ok(())
+                },
+            );
+            if id == 2 {
+                builder = builder.depends_on(1);
+            } else if id == 4 {
+                builder = builder.depends_on(2);
+            }
+            builder.build().unwrap()
+        })
     };
-    let phases = [make(1, None), make(2, Some(1)), make(4, Some(2))];
-    let runtime = WorkflowRuntime::builder()
-        .phases(phases.clone())
-        .hidden()
-        .build()
-        .unwrap();
     assert!(matches!(
-        runtime.run_phases_exact([4]),
+        WorkflowRuntime::builder()
+            .phases(build(Arc::new(Mutex::new(Vec::new()))))
+            .hidden()
+            .build()
+            .unwrap()
+            .run_phases_exact([4]),
         Err(RuntimeError::UnsatisfiedPhaseDependency {
             phase: 4,
             dependency: 2
         })
     ));
 
+    let order = Arc::new(Mutex::new(Vec::new()));
     WorkflowRuntime::builder()
-        .phases(phases)
+        .phases(build(Arc::clone(&order)))
         .hidden()
         .build()
         .unwrap()
@@ -129,10 +137,10 @@ fn exact_and_dependency_inclusive_selection_are_deterministic() {
         .unwrap();
     assert_eq!(*order.lock().unwrap(), [1, 2, 4]);
 
-    let verified = phase(2, activity("verified-dependent"));
+    let verified = activity_phase(&project, 2, "verified", |_| Ok(()));
     let selected = Phase::builder(4, "selected")
         .depends_on(2)
-        .task(activity("selected"))
+        .activity_workload(config(&project, 0), "selected", |_| Ok(()))
         .build()
         .unwrap();
     assert!(
@@ -149,9 +157,9 @@ fn exact_and_dependency_inclusive_selection_are_deterministic() {
 }
 
 #[test]
-fn phase_scheduler_bounds_active_work_and_supports_config_tasks() {
+fn fn_once_scheduler_bounds_work_and_supports_reuse() {
     let _guard = RUNTIME_TEST.lock().unwrap();
-    let project = ScientificProject::load(fixture_project("cartesian_project")).unwrap();
+    let project = project();
     let active = Arc::new(AtomicUsize::new(0));
     let maximum = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicUsize::new(0));
@@ -159,13 +167,14 @@ fn phase_scheduler_bounds_active_work_and_supports_config_tasks() {
     let maximum_factory = Arc::clone(&maximum);
     let completed_factory = Arc::clone(&completed);
     let simulation = Phase::builder(2, "simulation")
-        .progress_workloads_from_project(&project, "simulation", move |config| {
+        .progress_workloads_from_project(&project, "simulation", move |task_config| {
+            struct NonCloneResource(u64);
+            let resource = NonCloneResource(task_config.task_ordinal());
             let active = Arc::clone(&active_factory);
             let maximum = Arc::clone(&maximum_factory);
             let completed = Arc::clone(&completed_factory);
-            let ordinal = config.task_ordinal();
             move |context: &TaskContext| {
-                assert_eq!(context.configuration().unwrap().task_ordinal(), ordinal);
+                assert_eq!(context.configuration().task_ordinal(), resource.0);
                 assert!(context.value("temperature").is_some());
                 let progress = context.progress_handle().unwrap();
                 progress.set_target_iteration(2)?;
@@ -178,7 +187,7 @@ fn phase_scheduler_bounds_active_work_and_supports_config_tasks() {
                 Ok(())
             }
         })
-        .task(Task::activity("cached", "cache").reused())
+        .reused_activity(config(&project, 0), "cache")
         .max_concurrent_workloads(2)
         .queue_capacity(1)
         .build()
@@ -195,24 +204,100 @@ fn phase_scheduler_bounds_active_work_and_supports_config_tasks() {
     assert_eq!(completed.load(Ordering::Acquire), 6);
     assert!(maximum.load(Ordering::Acquire) <= 2);
     assert_eq!(summary.total_tasks(), 7);
+    assert_eq!(summary.phases()[0].progress().reused(), 1);
 }
 
 #[test]
-fn one_active_runtime_is_enforced_and_released_after_every_terminal_path() {
+fn failure_policy_controls_active_work_and_stops_admission() {
     let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
+    let run = |policy| {
+        let active = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let finished_active = Arc::new(AtomicBool::new(false));
+        let active_factory = Arc::clone(&active);
+        let cancelled_factory = Arc::clone(&cancelled);
+        let finished_factory = Arc::clone(&finished_active);
+        let phase = Phase::builder(3, "failure policy")
+            .activity_workloads_from_project(&project, "policy", move |task_config| {
+                let ordinal = task_config.task_ordinal();
+                let active = Arc::clone(&active_factory);
+                let cancelled = Arc::clone(&cancelled_factory);
+                let finished = Arc::clone(&finished_factory);
+                move |context| {
+                    active.fetch_add(1, Ordering::AcqRel);
+                    if ordinal == 0 {
+                        while active.load(Ordering::Acquire) < 2 {
+                            thread::yield_now();
+                        }
+                        Err(std::io::Error::other("first failure").into())
+                    } else {
+                        for _ in 0..50_000 {
+                            if context.is_cancelled() {
+                                cancelled.store(true, Ordering::Release);
+                                return Err(std::io::Error::other("cancelled").into());
+                            }
+                            thread::yield_now();
+                        }
+                        finished.store(true, Ordering::Release);
+                        Ok(())
+                    }
+                }
+            })
+            .failure_policy(policy)
+            .max_concurrent_workloads(2)
+            .queue_capacity(1)
+            .build()
+            .unwrap();
+        let result = WorkflowRuntime::builder()
+            .phase(phase)
+            .hidden()
+            .build()
+            .unwrap()
+            .run_phases([3]);
+        (result, active, cancelled, finished_active)
+    };
+
+    let (result, active, cancelled, _) = run(PhaseFailurePolicy::FailFast);
+    let error = result.unwrap_err();
+    assert!(matches!(
+        error.execution_cause(),
+        Some(RuntimeError::TaskWorkload { .. })
+    ));
+    let progress = error.runtime_summary().unwrap().phases()[0].progress();
+    assert_eq!(progress.failed(), 1);
+    assert!(progress.cancelled() >= 1);
+    assert!(progress.skipped() >= 1);
+    assert!(active.load(Ordering::Acquire) <= 2);
+    assert!(cancelled.load(Ordering::Acquire));
+
+    let (result, active, cancelled, finished) = run(PhaseFailurePolicy::FinishActive);
+    let error = result.unwrap_err();
+    assert!(matches!(
+        error.execution_cause(),
+        Some(RuntimeError::TaskWorkload { .. })
+    ));
+    let progress = error.runtime_summary().unwrap().phases()[0].progress();
+    assert_eq!(progress.failed(), 1);
+    assert_eq!(progress.cancelled(), 0);
+    assert!(progress.skipped() >= 1);
+    assert!(active.load(Ordering::Acquire) <= 2);
+    assert!(!cancelled.load(Ordering::Acquire));
+    assert!(finished.load(Ordering::Acquire));
+}
+
+#[test]
+fn one_active_runtime_is_enforced_and_released() {
+    let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
     let barrier = Arc::new(Barrier::new(2));
     let (release_sender, release_receiver) = mpsc::channel();
-    let release_receiver = Arc::new(Mutex::new(release_receiver));
     let worker_barrier = Arc::clone(&barrier);
-    let receiver = Arc::clone(&release_receiver);
-    let blocking = phase(
-        1,
-        Task::activity("blocking", "activity").workload(move |_| {
-            worker_barrier.wait();
-            receiver.lock().unwrap().recv().unwrap();
-            Ok(())
-        }),
-    );
+    let blocking = activity_phase(&project, 1, "blocking", move |_| {
+        worker_barrier.wait();
+        release_receiver.recv().unwrap();
+        Ok(())
+    });
     let runner = thread::spawn(move || {
         WorkflowRuntime::builder()
             .phase(blocking)
@@ -224,7 +309,7 @@ fn one_active_runtime_is_enforced_and_released_after_every_terminal_path() {
     barrier.wait();
     assert!(matches!(
         WorkflowRuntime::builder()
-            .phase(phase(9, activity("second")))
+            .phase(activity_phase(&project, 9, "second", |_| Ok(())))
             .hidden()
             .build()
             .unwrap()
@@ -234,11 +319,9 @@ fn one_active_runtime_is_enforced_and_released_after_every_terminal_path() {
     release_sender.send(()).unwrap();
     assert!(runner.join().unwrap().unwrap().is_success());
 
-    let failing = phase(
-        2,
-        Task::activity("failure", "activity")
-            .workload(|_| Err(std::io::Error::other("intentional failure").into())),
-    );
+    let failing = activity_phase(&project, 2, "failure", |_| {
+        Err(std::io::Error::other("intentional failure").into())
+    });
     assert!(matches!(
         WorkflowRuntime::builder()
             .phase(failing)
@@ -246,11 +329,11 @@ fn one_active_runtime_is_enforced_and_released_after_every_terminal_path() {
             .build()
             .unwrap()
             .run_phases([2]),
-        Err(RuntimeError::TaskWorkload { .. })
+        Err(RuntimeError::PhaseExecutionFailed { .. })
     ));
     assert!(
         WorkflowRuntime::builder()
-            .phase(phase(3, activity("after-failure")))
+            .phase(activity_phase(&project, 3, "after", |_| Ok(())))
             .hidden()
             .build()
             .unwrap()
@@ -263,19 +346,18 @@ fn one_active_runtime_is_enforced_and_released_after_every_terminal_path() {
 #[test]
 fn failure_blocks_dependents_and_task_owned_io_is_preserved() {
     let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
     let dependent_ran = Arc::new(AtomicUsize::new(0));
     let dependent_counter = Arc::clone(&dependent_ran);
-    let first = phase(
-        1,
-        Task::activity("failure", "activity")
-            .workload(|_| Err(std::io::Error::other("stop phase").into())),
-    );
+    let first = activity_phase(&project, 1, "failure", |_| {
+        Err(std::io::Error::other("stop phase").into())
+    });
     let second = Phase::builder(2, "dependent")
         .depends_on(1)
-        .task(Task::activity("dependent", "activity").workload(move |_| {
+        .activity_workload(config(&project, 0), "dependent", move |_| {
             dependent_counter.fetch_add(1, Ordering::AcqRel);
             Ok(())
-        }))
+        })
         .build()
         .unwrap();
     assert!(
@@ -294,12 +376,12 @@ fn failure_blocks_dependents_and_task_owned_io_is_preserved() {
         std::process::id()
     ));
     let owned_path = path.clone();
-    let io_task = Task::activity("io", "activity").workload(move |_| {
+    let io_phase = activity_phase(&project, 4, "io", move |_| {
         std::fs::write(&owned_path, b"task-owned")?;
         Ok(())
     });
     WorkflowRuntime::builder()
-        .phase(phase(4, io_task))
+        .phase(io_phase)
         .hidden()
         .build()
         .unwrap()
@@ -310,22 +392,12 @@ fn failure_blocks_dependents_and_task_owned_io_is_preserved() {
 }
 
 #[test]
-fn structured_selectors_remain_independent_of_generated_labels() {
+fn structured_selectors_use_complete_configuration_identity() {
     let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
     let phase = Phase::builder(2, "simulation")
-        .task(
-            Task::activity("low", "simulation")
-                .with_parameter("mu", 0.25)
-                .unwrap()
-                .workload(|_| Ok(())),
-        )
-        .task(
-            Task::activity("high", "simulation")
-                .with_parameter("mu", 0.5)
-                .unwrap()
-                .workload(|_| Ok(())),
-        )
-        .display_tasks_by("simulation", ["mu"])
+        .activity_workloads_from_project(&project, "simulation", |_| |_| Ok(()))
+        .display_tasks_by("simulation", ["temperature", "seed"])
         .build()
         .unwrap();
     let runtime = WorkflowRuntime::builder()
@@ -334,47 +406,55 @@ fn structured_selectors_remain_independent_of_generated_labels() {
         .build()
         .unwrap();
     let selected = runtime
-        .unique_task_matching(&TaskSelector::new().parameter("mu", 0.25))
+        .unique_task_matching(
+            &TaskSelector::new()
+                .parameter("temperature", 280.0)
+                .parameter("seed", 7),
+        )
         .unwrap();
-    assert_eq!(selected.id().as_str(), "low");
+    assert_eq!(selected.configuration_ordinal(), 0);
     assert!(runtime.run_phases([2]).unwrap().is_success());
 }
 
 #[test]
-fn message_bursts_and_large_pending_sets_remain_bounded_and_responsive() {
+fn message_bursts_remain_bounded_and_responsive() {
     let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
     let completed = Arc::new(AtomicUsize::new(0));
-    let mut builder = Phase::builder(7, "many rows")
-        .max_concurrent_workloads(2)
-        .queue_capacity(1);
-    for index in 0..96 {
-        let completed = Arc::clone(&completed);
-        builder = builder.task(Task::activity(format!("task-{index:03}"), "many").workload(
+    let factory_completed = Arc::clone(&completed);
+    let phase = Phase::builder(7, "messages")
+        .activity_workloads_from_project(&project, "many", move |task_config| {
+            let ordinal = task_config.task_ordinal();
+            let completed = Arc::clone(&factory_completed);
             move |context| {
-                if index == 0 {
+                if ordinal == 0 {
                     for message in 0..512 {
                         context.report(format!("burst-{message}"))?;
                     }
                 }
                 completed.fetch_add(1, Ordering::AcqRel);
                 Ok(())
-            },
-        ));
-    }
+            }
+        })
+        .max_concurrent_workloads(2)
+        .queue_capacity(1)
+        .build()
+        .unwrap();
     let summary = WorkflowRuntime::builder()
-        .phase(builder.build().unwrap())
+        .phase(phase)
         .hidden()
         .build()
         .unwrap()
         .run_phases([7])
         .unwrap();
     assert!(summary.is_success());
-    assert_eq!(completed.load(Ordering::Acquire), 96);
+    assert_eq!(completed.load(Ordering::Acquire), 6);
 }
 
 #[test]
 fn cancellation_does_not_publish_task_owned_recording_failure() {
     let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
     let root = std::env::temp_dir().join(format!(
         "scientific-workflow-runtime-cancel-{}",
         std::process::id()
@@ -387,7 +467,7 @@ fn cancellation_does_not_publish_task_owned_recording_failure() {
     .unwrap();
     let (started_sender, started_receiver) = mpsc::channel();
     let task_recording = recording.clone();
-    let task = Task::activity("recording", "activity").workload(move |context| {
+    let phase = activity_phase(&project, 8, "recording", move |context| {
         let _writer = SystemStateWriter::builder(&task_recording, &schema)
             .with_shared_stream_limits(
                 NonZeroU64::new(1_000_000).unwrap(),
@@ -407,7 +487,7 @@ fn cancellation_does_not_publish_task_owned_recording_failure() {
         Err(std::io::Error::other("cancelled by runtime").into())
     });
     let runtime = WorkflowRuntime::builder()
-        .phase(phase(8, task))
+        .phase(phase)
         .hidden()
         .build()
         .unwrap();
@@ -417,7 +497,7 @@ fn cancellation_does_not_publish_task_owned_recording_failure() {
     cancellation.cancel();
     assert!(matches!(
         runner.join().unwrap(),
-        Err(RuntimeError::Cancelled)
+        Err(RuntimeError::PhaseExecutionFailed { .. })
     ));
     let metadata: serde_json::Value =
         serde_json::from_slice(&std::fs::read(recording.join("metadata.json")).unwrap()).unwrap();
@@ -429,16 +509,14 @@ fn cancellation_does_not_publish_task_owned_recording_failure() {
 fn plain_and_hidden_public_output_modes_are_stable() {
     const CHILD_MODE: &str = "SCIENTIFIC_WORKFLOW_RUNTIME_OUTPUT_CHILD";
     if let Ok(mode) = std::env::var(CHILD_MODE) {
-        let first = Phase::builder(2, "first")
-            .task(Task::activity("message", "activity").workload(|context| {
-                context.report("phase-local-message")?;
-                Ok(())
-            }))
-            .build()
-            .unwrap();
+        let project = project();
+        let first = activity_phase(&project, 2, "message", |context| {
+            context.report("phase-local-message")?;
+            Ok(())
+        });
         let second = Phase::builder(4, "second")
             .depends_on(2)
-            .task(activity("complete"))
+            .activity_workload(config(&project, 0), "complete", |_| Ok(()))
             .build()
             .unwrap();
         let builder = WorkflowRuntime::builder().phases([first, second]);
@@ -468,7 +546,7 @@ fn plain_and_hidden_public_output_modes_are_stable() {
     assert!(plain.status.success());
     let stderr = String::from_utf8(plain.stderr).unwrap();
     assert!(stderr.contains("[phase-start] position=1/2 phase=2"));
-    assert!(stderr.contains("[task] identity=2/message status=completed"));
+    assert!(stderr.contains("[task] identity=2/message:0 status=completed"));
     assert!(stderr.contains("[phase-complete] phase=4"));
     assert!(stderr.contains("[runtime] status=completed phases=2 tasks=2"));
     assert!(!stderr.contains('\u{1b}'));

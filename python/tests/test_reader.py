@@ -56,21 +56,39 @@ class ReaderTests(unittest.TestCase):
 
     def test_completed_fixture_reconstructs_exact_series_and_latest_state(self) -> None:
         reader = open_completed_recording(FIXTURE)
-        self.assertEqual(reader.format_version, 4)
+        self.assertEqual(reader.format_version, 5)
         self.assertEqual(reader.stream_names, ("signal",))
         self.assertEqual(reader.user_metadata["study"], "python-reader-conformance")
         self.assertEqual(
             reader.terminal_metadata["termination_reason"], "fixture_complete"
         )
         self.assertEqual(reader.stream_record_count("signal"), 2)
-        self.assertEqual(reader.stream_encoded_bytes("signal"), 172)
-
+        self.assertEqual(reader.stream_encoded_bytes("signal"), 130)
         series = reader.read_stream("signal")
         self.assertEqual(series.iterations, (0, 2))
         self.assertEqual(series[0].physical_time, 0.0)
         self.assertEqual(series[0].values["population"], [2.0, 1.0])
         self.assertEqual(series[-1], reader.read_latest("signal"))
         self.assertEqual(reader.read_all_streams(), (("signal", series),))
+
+    def test_object_valued_v4_record_is_rejected(self) -> None:
+        temporary, recording = self.copied_fixture()
+        self.addCleanup(temporary.cleanup)
+        chunk = recording / "streams" / "signal" / "chunk-000000.jsonl"
+        records = [json.loads(line) for line in chunk.read_text().splitlines()]
+        records[0]["values"] = {"population": [2.0, 1.0], "label": "start"}
+        data = "".join(
+            json.dumps(record, separators=(",", ":")) + "\n" for record in records
+        ).encode()
+        chunk.write_bytes(data)
+        metadata_path = recording / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        descriptor = metadata["streams"][0]["chunks"][0]
+        descriptor["bytes"] = len(data)
+        descriptor["checksum"] = "sha256:" + hashlib.sha256(data).hexdigest()
+        metadata_path.write_text(json.dumps(metadata))
+        with self.assertRaises(RecordError):
+            open_completed_recording(recording).read_stream("signal")
 
     def test_field_decoders_are_explicit_and_fail_closed(self) -> None:
         reader = open_completed_recording(

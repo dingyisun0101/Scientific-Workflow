@@ -1,6 +1,6 @@
 //! Runtime-level phase headings and line-oriented lifecycle records.
 
-use super::phase::Phase;
+use super::phase::{Phase, PhaseId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RuntimeOutput {
@@ -22,34 +22,36 @@ pub(crate) fn phase_heading(phase: &Phase, position: usize, total: usize) -> Str
             .join(",")
     };
     format!(
-        "Phase {position} of {total} — [{}] {} · tasks={} · active≤{} · queue={} · dependencies={dependencies}",
+        "Phase {position} of {total} — [{}] {} · tasks={} · active≤{} · queue={} · failure={} · dependencies={dependencies}",
         phase.id(),
         phase.label(),
         phase.tasks().len(),
         phase.max_concurrent_workloads(),
         phase.queue_capacity(),
+        phase.failure_policy().as_str(),
     )
 }
 
 pub(crate) fn phase_start(output: RuntimeOutput, phase: &Phase, position: usize, total: usize) {
     if output == RuntimeOutput::Plain {
         eprintln!(
-            "[phase-start] position={position}/{total} phase={} label={} tasks={} active_limit={} queue_capacity={}",
+            "[phase-start] position={position}/{total} phase={} label={} tasks={} active_limit={} queue_capacity={} failure_policy={}",
             phase.id(),
             phase.label(),
             phase.tasks().len(),
             phase.max_concurrent_workloads(),
             phase.queue_capacity(),
+            phase.failure_policy().as_str(),
         );
     }
 }
 
-pub(crate) fn phase_complete(output: RuntimeOutput, phase: &Phase, success: bool) {
+pub(crate) fn phase_complete(output: RuntimeOutput, phase: PhaseId, label: &str, success: bool) {
     if output == RuntimeOutput::Plain {
         eprintln!(
             "[phase-complete] phase={} label={} status={}",
-            phase.id(),
-            phase.label(),
+            phase,
+            label,
             if success { "completed" } else { "failed" },
         );
     }

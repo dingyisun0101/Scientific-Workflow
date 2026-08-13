@@ -7,7 +7,8 @@ alternatives are intentionally absent.
 
 Current scope:
 
-- Rust only; Python and bridging are later modules.
+- Rust owns execution and persistence; the Python package is the official
+  read-only format-v5 analysis bridge.
 - JSON persistence only; protobuf is out of scope.
 - No backward compatibility or legacy support.
 - Payloads may be any `Serialize + Clone + Send + 'static` Rust value.
@@ -23,16 +24,18 @@ Implemented and verified:
 - `project`: conventional four-file `ScientificProject` loading including
   `config/state.json`;
 - `execution`: automatic generated/named execution scopes and task paths;
-- `reporting`: parameter-identified atomic progress tracking and exclusive
-  centralized terminal rendering for parallel tasks;
+- `runtime`: configuration-generated first-class tasks, phase-bounded
+  scheduling, cooperative cancellation, and centralized terminal rendering;
 - `system_state`: mutable simulation-owned heterogeneous state;
 - `time_series`: eager in-memory analysis collection;
 - storage format, borrowed encoder, bounded writer, decoder registry, two
   default decoders, and eager reader.
 
 The run-level storage facade is implemented and public. It connects private
-encoders and writers, owns the sole `metadata.json` lifecycle, and is available
-together with every supported crate API through `scientific_workflow::prelude`.
+encoders and writers and owns the sole `metadata.json` lifecycle. End-user
+imports are divided between `scientific_workflow::prelude::basics` and
+`scientific_workflow::prelude::runtime` so task management is explicitly
+opt-in.
 
 ## End-to-end workflow
 
@@ -47,8 +50,9 @@ together with every supported crate API through `scientific_workflow::prelude`.
 
     completed metadata.json and immutable chunks
         -> StoredStateSeriesReader validates metadata and selects a stream
-        -> each JSONL record is read into borrowed raw field slices
-        -> reader looks up the decoder registered for each exact key
+        -> each JSONL record is read into borrowed positional raw values
+        -> reader pairs values with the stream's ordered fields in metadata.json
+        -> reader looks up the decoder registered for each reconstructed key
         -> decoder converts only that raw field into its concrete payload
         -> reader assembles SystemState values
         -> reader returns one complete StateSeries
@@ -58,7 +62,7 @@ stream is the authoritative sampled history.
 
 ## Parameter configuration
 
-The next proposed module reads two conventional JSON files: `fixed.json`
+The configuration module reads two conventional JSON files: `fixed.json`
 declares values shared by every task, while `sweep.json` declares values that
 vary across tasks. This module defines and resolves parameter combinations; it
 does not execute tasks, allocate output directories, write recording metadata,
@@ -1280,8 +1284,10 @@ infrastructure.
 The runtime follows a declare-select-run lifecycle:
 
 1. The application constructs at least one nonempty `Phase`.
-2. Tasks are added to a `PhaseBuilder`, never directly to
-   `WorkflowRuntimeBuilder` or a live runtime.
+2. A `PhaseBuilder` generates tasks from `ScientificProject`, `ProjectConfig`,
+   or existing `TaskConfig` values and attaches one workload to each resolved
+   configuration. Tasks are never constructed independently or added directly
+   to `WorkflowRuntimeBuilder` or a live runtime.
 3. `WorkflowRuntimeBuilder::build` validates phase IDs, task identities,
    dependencies, display projections, queue/concurrency limits, and display
    policy.
@@ -1293,8 +1299,9 @@ The runtime follows a declare-select-run lifecycle:
 6. Within an eligible phase, the runtime prepares work through a bounded queue
    and executes tasks concurrently up to the phase-local limit.
 7. Successful runtime completion requires every selected task to be completed
-   or explicitly reused. Failure preserves observed states, prevents dependent
-   phases from starting, and shuts down owned infrastructure in order.
+   or explicitly reused. Phase failure follows an explicit policy whose
+   default is fail-fast, preserves observed states, prevents dependent phases
+   from starting, and shuts down owned infrastructure in order.
 
 The runtime implements only the generic scheduling implied by declared phases,
 dependencies, and limits. It never derives a dependency from parameter values,
@@ -1347,14 +1354,14 @@ The intended construction and selection shape is:
 
 ```rust,ignore
 let simulation = Phase::builder(2, "simulation")
-    .progress_tasks_from_project(&project, "simulation")
+    .progress_workloads_from_project(&project, "simulation", simulation_workload)
     .display_tasks_by("simulation", ["mu"])
     .max_concurrent_workloads(4)
     .queue_capacity(8)
     .build()?;
 
 let validation = Phase::builder(4, "validation")
-    .activity(validation_task)
+    .activity_workloads_from_project(&project, "validation", validation_workload)
     .depends_on(2)
     .max_concurrent_workloads(1)
     .queue_capacity(1)
@@ -1367,10 +1374,9 @@ let runtime = WorkflowRuntime::builder()
 runtime.run_phases([2, 4])?;
 ```
 
-This is directional API design rather than a commitment to the exact nested
-builder syntax. The semantic commitments are mandatory phase ownership,
-configuration-driven task generation, bounded work preparation/concurrency,
-and explicit phase selection.
+This is the implemented public construction shape. Its semantic commitments
+are mandatory phase ownership, configuration-driven task generation, bounded
+work preparation/concurrency, and explicit phase selection.
 
 ### First-class tasks and identity
 
@@ -1386,36 +1392,55 @@ Task
 ├── display kind
 │   ├── Progress { initial_iteration, target_iteration? }
 │   └── Activity
-└── workload factory
+└── single-use workload
 ```
 
 `TaskKey` is the exact runtime lookup key. `TaskId` must be unique within its
 phase; qualifying it with `PhaseId` permits the same scientific configuration
 to participate in simulation, validation, and processing phases without an
 identity collision. Labels are generated presentation and never serve as
-lookup keys. Duplicate labels are valid when exact task keys differ.
+lookup keys. Generated labels must remain unambiguous within their task kind;
+exact `TaskKey` values remain the authoritative identity.
 
 `Progress` is used for iterative work. `Activity` is used for work that runs
 once and only changes lifecycle state, such as creating an artifact, validating
 a recording, or executing a processor. Activity rows never invent an iteration
 counter or progress bar.
 
-The lightweight task declaration exists before rendering. Its workload factory
-materializes expensive executable state only after the task enters the phase's
-bounded prepared-work queue. The runtime invokes work with a `TaskContext`
-containing the appropriate progress/activity handle, cancellation observation,
-and retained task configuration. The workload itself owns every read, write,
-recording, artifact, network operation, and subprocess needed by that task.
+`Task` remains publicly inspectable for identity, parameters, selection, and
+display, but it has no public constructor and cannot be injected through a
+generic `PhaseBuilder::task` method. The phase builder is the construction
+boundary and always derives a task from an existing configuration handle. No
+narrow `ConfiguredTask` wrapper is introduced: the existing `Task` retains the
+`TaskConfig` that generated it.
+
+The lightweight task declaration exists before rendering. For each resolved
+configuration, the application factory may create one executable workload that
+implements `FnOnce(&TaskContext) -> TaskResult + Send + 'static`. The runtime
+consumes that workload exactly once after it enters the phase's bounded
+prepared-work queue. This permits scientific models, writers, and other
+single-owner resources to move directly into work without `Arc<Mutex<_>>`,
+cloning, or a `Mutex<Option<FnOnce>>` adapter. `Task` and `Phase` need not be
+`Clone`; runtime execution consumes the validated plan. The workload itself
+owns every read, write, recording, artifact, network operation, and subprocess
+needed by that task.
 
 ### Automatic configuration task generation
 
 `ProjectConfig` remains the sole authority for fixed/sweep parsing and
-deterministic task expansion. The concise
-`PhaseBuilder::{progress,activity}_tasks_from_{project,configuration}` helpers
-adapt each existing cheap `TaskConfig` into one managed task; the runtime does
-not implement a second Cartesian product, merged parameter map, or cloned JSON
-identity. This avoids a second task-set registration builder while preserving
-the central `config -> tasks -> phase -> runtime` procedure.
+deterministic task expansion. The
+`PhaseBuilder::{progress,activity}_workloads_from_{project,configuration}`
+helpers adapt each existing cheap `TaskConfig` into one executable managed
+task; the runtime does not implement a second Cartesian product, merged
+parameter map, or cloned JSON identity. This avoids a second task-set
+registration builder while preserving the central
+`config -> tasks -> phases -> runtime` procedure.
+
+The same builder boundary accepts an already selected `TaskConfig` when a phase
+intentionally contains only part of a project expansion. It still does not
+permit an identity-only task unrelated to configuration. Fixed-only projects
+naturally generate one task, so one-off scientific activities need no separate
+task representation.
 
 Each generated task retains:
 
@@ -1434,7 +1459,8 @@ and phase-level inspection but are not repeated on every row. Arrays and
 objects use compact shape/length plus short-digest labels rather than expanding
 their complete contents into terminal output.
 
-Callers may request a shorter display projection such as `display_by(["mu"])`.
+Callers may request a shorter display projection such as
+`display_tasks_by("simulation", ["mu"])`.
 Startup accepts it only when that exact parameter subset uniquely distinguishes
 the applicable tasks. A collision reports the conflicting exact task keys; it
 never produces indistinguishable rows.
@@ -1539,6 +1565,23 @@ launcher, an IPC protocol, or OS-isolation configuration. Applications such as
 Dispatcher retain ownership of Python invocation, systemd integration, worker
 protocols, and result verification.
 
+### Phase failure policy
+
+Every phase has an explicit failure policy. `FailFast` is the default: after
+the first task failure the scheduler stops preparing and dequeuing new work,
+marks tasks that never started as skipped, signals the shared cancellation
+token to active workloads, waits for those workloads to return, and records an
+active workload as cancelled only when it cooperatively aborts. It prevents all
+later selected phases from starting. Cancellation is cooperative and never
+gives the runtime authority to finalize task-owned recordings.
+
+`FinishActive` is the alternative initial policy. It likewise admits no new
+work after the first failure but allows workloads that were already active to
+finish without issuing failure-triggered cancellation. Both policies stop the
+selected run after the failed phase; continuing with independent later phases
+is outside the initial contract. Runtime and phase summaries distinguish
+completed, reused, failed, cancelled, and never-started/skipped outcomes.
+
 ### Implementation sequence
 
 1. Introduce first-class phase/task identity, configuration-driven task
@@ -1549,9 +1592,17 @@ protocols, and result verification.
    and explicit phase selection.
 3. Harden the runtime display, cancellation, scheduler shutdown, and public
    documentation while retaining the strict no-I/O boundary.
-4. Migrate examples and dependent model runners so they accept only task-local
-   handles and never construct runtime schedulers or machine-resource scopes.
-5. Remove superseded reporting entry points after all in-repository consumers
+4. Tighten workloads to `FnOnce`, make failure policy explicit with fail-fast
+   as the default, restrict task construction to configuration-backed phase
+   builders, and split the end-user preludes.
+5. Change format-v5 records to positional payload values interpreted by the
+   ordered stream fields already stored in `metadata.json`.
+6. Update the full-stack example to demonstrate
+   `config -> tasks -> phases -> runtime`, selection, task-owned I/O, and
+   post-run reconstruction through only the public API.
+7. Migrate dependent model runners so they accept only task-local handles and
+   never construct runtime schedulers or machine-resource scopes.
+8. Remove superseded reporting entry points after all in-repository consumers
    use `WorkflowRuntime`; no compatibility layer is required.
 
 State and series equality are not part of this plan. Type-erased scientific
@@ -1713,9 +1764,11 @@ ExecutionScope::create_generated -> compact_timestamp
     of 1,024 accepted but uncommitted records.
 11. Full queues block the simulation until capacity becomes available.
 12. A run directory contains exactly one structural metadata file.
-13. Chunk files contain only compact records with readable field keys.
+13. Chunk files contain compact positional records; readable ordered field
+    names occur once per stream in `metadata.json`.
 14. A reader returns a complete series or an error, never a partial series.
-15. Reader key lookup and decoder conversion are separate responsibilities.
+15. Reader position-to-name reconstruction and decoder conversion are separate
+    responsibilities.
 
 ## Intended file tree
 
@@ -1741,6 +1794,9 @@ workflow/
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── prelude.rs
+│   │   ├── prelude/
+│   │   │   ├── basics.rs
+│   │   │   └── runtime.rs
 │   │   ├── clock.rs
 │   │   ├── artifact.rs
 │   │   ├── project.rs
@@ -2549,9 +2605,10 @@ Returns `(StateSeriesError, SystemState)` without cloning.
 
 ## Storage format
 
-Format version 4 stores typed `sampling_interval` scheduling, structurally
-separate initial/terminal metadata, and automatic operational timing. Earlier format
-versions are intentionally unsupported in this clean-slate stage.
+Format version 5 stores typed `sampling_interval` scheduling, structurally
+separate initial/terminal metadata, automatic operational timing, and
+positional per-record payload values. Earlier format versions are intentionally
+unsupported in this clean-slate stage.
 
 ### On-disk layout
 
@@ -2563,13 +2620,19 @@ versions are intentionally unsupported in this clean-slate stage.
     └── space/
         └── chunk-000000.jsonl
 
-One compact record:
+One compact record whose two payload positions correspond exactly to the
+stream's ordered `fields` declarations in `metadata.json`:
 
-    {"iteration":12,"physical_time":0.25,"values":{"values":[1.0,2.0],"label":"sample"}}
+    {"iteration":12,"physical_time":0.25,"values":[[1.0,2.0],"sample"]}
 
-`physical_time` is omitted when absent. Field keys remain for readability and exact
-decoder orchestrating. Metadata stores schemas, run facts, byte limits, lifecycle,
-and chunk descriptors once; no sidecar metadata exists.
+`physical_time` is omitted when absent. The record contains no repeated
+top-level field keys. Readers require its value count to equal the stream field
+count, pair values with names by position, and then expose the same
+name-addressable reconstructed state API. A payload's own JSON representation
+remains opaque and may contain internal object keys. Metadata stores ordered
+field declarations, run facts, byte limits, lifecycle, and chunk descriptors
+once; there is no `keys.json`, schema sidecar, renamed schema concept, or other
+metadata file.
 
 ### RecordingMetadata
 
@@ -2821,8 +2884,10 @@ Private borrowing-only Serde adapters used during encoding.
 
 #### ValuesRef::serialize / ErasedRef::serialize
 
-Serialize selected values in canonical order and delegate to each payload's
-existing `Serialize` implementation.
+Serialize selected values as a JSON array in canonical stream-field order and
+delegate each array element to the payload's existing `Serialize`
+implementation. Field names are written once in `metadata.json`, not once per
+record.
 
 ##### Reference
 
@@ -3337,19 +3402,22 @@ JSONL boundary. Earlier chunks remain outside the operation.
 ### BorrowedRecord, BorrowedValues, and BorrowedValuesVisitor
 
 Private record representation borrowing each `RawValue` from one line buffer.
-Only small field keys are owned. Duplicate payload keys are rejected.
+The values array contains exactly one raw element per ordered stream field;
+field names are borrowed from validated metadata and are not parsed from every
+record.
 
 #### BorrowedValues::deserialize
 
-Starts strict borrowed object parsing.
+Starts strict borrowed array parsing and validates its width against the
+selected stream declaration.
 
 ##### Reference
 
     serde_json::from_slice in StoredStateSeriesReader::read_chunk
 
-#### BorrowedValuesVisitor::expecting / visit_map
+#### BorrowedValuesVisitor::expecting / visit_seq
 
-Describe and collect unique keys with borrowed raw value boundaries.
+Describe and collect positional values with borrowed raw JSON boundaries.
 
 ##### Reference
 
@@ -3961,17 +4029,19 @@ previous complete metadata document or the next complete document.
 
 ## Public API and prelude
 
-The crate provides `scientific_workflow::prelude`, allowing consumer code to
-import the complete intended end-user API with:
+The crate divides end-user imports by responsibility:
 
 ```rust
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::runtime::*;
 ```
 
-The prelude is an explicit, curated list of crate-owned public types and
-traits. It must not use wildcard re-exports from internal modules and must not
-re-export general external traits such as `serde::Serialize`. This keeps
-compiler errors, generated documentation, and future API reviews precise.
+`basics` contains scientific configuration, project, state, series, execution,
+storage, artifact, and decoding APIs. `runtime` contains the complete opt-in
+task/phase/runtime management API. The parent `prelude` does not repeat both
+sets through an omnibus wildcard surface. Each sub-prelude is an explicit,
+curated list of crate-owned public types and traits; neither re-exports general
+external traits such as `serde::Serialize`.
 
 The state and analysis portion includes:
 
@@ -3985,11 +4055,11 @@ The configuration portion includes:
   `TaskConfig`, `TaskConfigIter`, and `MatchingTaskConfigIter`;
 - `ProjectPaths` and `ConfigurationError`.
 
-The runtime portion includes:
+The `runtime` sub-prelude includes:
 
 - `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeSummary`, and
   `PhaseSummary`;
-- `Phase`, `Task`, `TaskContext`, `TaskProgress`, `ActivityTask`,
+- `Phase`, `PhaseFailurePolicy`, `Task`, `TaskContext`, `TaskProgress`, `ActivityTask`,
   `TaskIdentity`, `TaskStatus`, `ProgressSummary`, and `RuntimeError`.
 
 The storage portion includes:
@@ -4007,8 +4077,9 @@ an omitted or accidentally private supported type is detected by compilation.
 
 ##### Reference
 
-    consumer simulation and analysis modules -> use scientific_workflow::prelude::*
-    public API integration tests -> use scientific_workflow::prelude::*
+    consumer simulation and analysis modules -> use scientific_workflow::prelude::basics::*
+    scheduling entry points -> use scientific_workflow::prelude::runtime::*
+    public API integration tests -> import the narrow sub-prelude under test
     crate root -> pub mod prelude
 
 ## Runtime model integration audit
@@ -4475,14 +4546,14 @@ global queue, worker pool, or aggregate backpressure policy.
 The one-state/one-writer boundary keeps failures, queue pressure, output paths,
 and lifecycle transitions local to their scientific recording. Per-stream byte
 limits bound only that recording. Applications running many simulations
-control aggregate memory and writer count through `WorkflowRuntime`
-task/resource limits. Storage does not infer relationships among independent
+control aggregate memory and writer count through `WorkflowRuntime` phase-local
+scheduling limits. Storage does not infer relationships among independent
 runs, and the runtime does not merge their writers or queues.
 
 This remains the final storage architecture: no central-writer manager or
 process-global storage queue is planned. The separate `WorkflowRuntime`
-coordinates execution resources outside storage without changing writer
-ownership or the on-disk format.
+schedules declared tasks outside storage without changing writer ownership or
+the on-disk format.
 
 #### Naming refactor completed
 
@@ -4745,15 +4816,16 @@ Required method allocation:
 | `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `TaskConfig`, `TaskConfigIter`, `MatchingTaskConfigIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, complete task generation, exact filtering, unique selection, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
 | `runtime_workflow` | `WorkflowRuntime`, phases, executable tasks, structured selectors, configuration workload generation, `TaskContext`, task-local handles, summaries, and `RuntimeError`; plan validation, dependency selection, bounded scheduling, active-phase display, cancellation, exclusive ownership, task-owned I/O, and failure barriers |
 
-The finished source reads as seven coherent workflows rather than an API census.
+The finished source reads as ten focused integration targets rather than an API
+census.
 The old aggregators and focused subdirectories have been removed.
 
-Current test architecture: seven logged integration files plus production
-doctests. Each workflow passes independently and the consolidated all-target
-suite passes. Formatting and Clippy across all targets pass with warnings
-denied. Archive preparation also succeeds. The manifest declares the published
-development dependency `physics_in_parallel = "3.0.4"`, resolved directly from
-crates.io without a local path override.
+Current test architecture: ten integration files plus production doctests.
+Each target passes independently and the consolidated all-target suite passes.
+Formatting and Clippy across all targets pass with warnings denied. Archive
+preparation also succeeds. The manifest declares the published development
+dependency `physics_in_parallel = "3.2.2"`, resolved directly from crates.io
+without a local path override.
 
 ## Example architecture
 
@@ -4761,7 +4833,7 @@ Full-stack examples are repository-level consumer applications, not Cargo
 example targets embedded in the publishable library crate. This keeps the
 library package focused while allowing each scientific project to own its
 manifest, source tree, input assets, documentation, and output policy. The
-first proposed application is a complete two-dimensional Hopf-normal-form
+canonical application is a complete two-dimensional Hopf-normal-form
 workflow:
 
 ```text
@@ -4778,10 +4850,11 @@ examples/
     │   └── state.json
     └── src/
         ├── main.rs
-        ├── project_setup.rs
+        ├── cross_check.rs
         ├── hopf_model.rs
-        ├── state_recording.rs
-        └── recording_validation.rs
+        ├── recording.rs
+        ├── task_execution.rs
+        └── validation.rs
 ```
 
 From the repository root, Cargo runs it with:
@@ -4791,7 +4864,7 @@ cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
 The standalone manifest depends on the local library through
-`scientific-workflow = { version = "0.1.0", path = "../../rust" }`. The version
+`scientific-workflow = { version = "0.3.0", path = "../../rust" }`. The version
 constraint documents compatibility while the path keeps repository development
 joint and offline. A root Cargo workspace is not required for the first
 example; adding one should be a separate repository-wide decision if multiple
@@ -4810,25 +4883,33 @@ names the state template and output root. The schema declares the evolving
 `point` payload (`Vec<f64>`) and retained scalar `radius` diagnostic. The immutable model settings remain in fixed
 configuration and are recorded once in task metadata.
 
-The example demonstrates one coherent full-stack happy path:
+The example is Workflow's canonical full-procedure demonstration, not only a
+state/storage sample. It demonstrates one coherent full-stack happy path:
 
 1. load the project configuration, resolve paths, inspect declared parameters,
-   and enumerate deterministic parameter-sweep tasks;
-2. load one shared `SystemStateSchema`, create one owned mutable state per task,
+   and let phase builders generate deterministic parameter-sweep tasks without
+   constructing `Task` directly;
+2. place generated tasks into at least two first-class phases with stable IDs,
+   an explicit dependency, bounded concurrency/queue settings, and the default
+   fail-fast policy;
+3. build one `WorkflowRuntime` and run an explicit phase selection, showing
+   dependency-inclusive selection where appropriate;
+4. inside each `FnOnce` task workload, load one shared `SystemStateSchema`,
+   create one owned mutable state per task,
    insert the initial point and radius payloads, and evolve them directly in
    that state;
-3. configure a bounded asynchronous `SystemStateWriter` with time-axis and task
+5. configure a bounded asynchronous `SystemStateWriter` with time-axis and task
    metadata plus independently sampled `trajectory`, `radius`, and `checkpoint`
    streams;
-4. borrow and encode the current state at each stream's sampling interval, allowing the
+6. borrow and encode the current state at each stream's sampling interval, allowing the
    writer to apply byte-bounded backpressure and whole-record chunking;
-5. finish each recording, register direct Serde JSON decoding for `Vec<f64>`
+7. finish each recording, register direct Serde JSON decoding for `Vec<f64>`
    and `f64`, and read only the complete checkpoint stream's latest state with
    `StoredStateSeriesReader`;
-6. verify that the reconstructed checkpoint matches the live final state
-   exactly;
-   and
-7. leave the generated recording directory under the example's ignored
+8. execute verification as its own phase/task workload, reporting through only
+   its task-local context while retaining all filesystem and recording I/O in
+   application code; and
+9. leave the generated recording directory under the example's ignored
    `target/recordings` area for inspection beneath a timestamp-and-process-based
    execution directory.
 
@@ -4837,7 +4918,8 @@ state, recording storage, and decoding. It should
 not mechanically call every accessor or manufacture every error variant;
 dedicated integration tests remain responsible for exhaustive API and failure
 coverage. Small modules keep simulation, writer construction, and validation
-legible while all crate interaction goes through the public prelude.
+legible while crate interaction uses the narrow `basics` and `runtime`
+sub-preludes.
 
 Normal output is deliberately one validation line:
 
@@ -4973,18 +5055,17 @@ suite, rather than this tutorial application, carries exhaustive validation
 and failure coverage.
 
 Example source modules use descriptive snake-case nouns consistently:
-`project_setup.rs`, `hopf_model.rs`, `state_recording.rs`, and
-`recording_validation.rs`. These names identify either the primary domain object
-or the module's exact application responsibility and avoid ambiguous generic
-labels such as `project`, `simulation`, or `storage`. `main.rs` remains the
-conventional orchestrator entry point.
+`hopf_model.rs`, `recording.rs`, `task_execution.rs`, `validation.rs`, and
+`cross_check.rs`. These names identify either the primary domain object or the
+module's exact application responsibility. `main.rs` remains the conventional
+orchestrator entry point.
 
 The library baseline was cleaned and verified immediately before example
-implementation: formatting passes, all 11 integration tests pass, Clippy passes
-across every target and feature with warnings denied, all 6 doctests pass with
-rustdoc warnings denied, documentation builds without warnings, and isolated
-`cargo package` verification succeeds. The archive contains 44 files and
-excludes the repository-level example and generated output.
+implementation: formatting passes, all ten integration targets pass, Clippy
+passes across every target and feature with warnings denied, all six doctests
+pass with rustdoc warnings denied, documentation builds without warnings, and
+isolated `cargo package` verification succeeds. The archive excludes the
+repository-level example and generated output.
 
 ### Finalized two-dimensional ODE
 
@@ -4994,7 +5075,7 @@ a stable origin while `mu > 0` produces a stable limit cycle of radius
 `sqrt(mu)`. This gives the parameter sweep a clear qualitative transition and
 an analytic expectation for later verification.
 
-Evolution uses fixed-step explicit Euler. The planned values are
+Evolution uses fixed-step explicit Euler. The configured values are
 `omega = 1.0`, `dt = 0.01`, initial point `[0.25, 0.0]`, and
 `mu = [-0.25, 0.25, 1.0]`. Every derivative is evaluated from the same old
 point before both coordinates are updated. The method is intentionally simple,
@@ -5012,8 +5093,8 @@ trajectory sampling interval of 10 iterations, radius interval of 5 iterations,
 checkpoint interval of 1000 iterations, an 8192-byte chunk target, and a
 65536-byte writer queue.
 Together with `dt = 0.01`, one task evolves to physical time `50.0`. These are
-example-local defaults and will be validated by the consumer application
-before recording begins.
+example-local defaults validated by the consumer application before recording
+begins.
 
 The configuration set is complete. `config/sweep.json` defines the ordered
 Cartesian `mu` axis `[-0.25, 0.25, 1.0]`, producing three tasks across the Hopf
@@ -5028,7 +5109,7 @@ radial amplitude. Although derivable, radius is the model's primary diagnostic:
 it tends to zero for negative `mu` and to `sqrt(mu)` for positive `mu`, and it
 provides a cheap invariant against the point payload.
 
-The planned partial streams are `trajectory` (`point` at a 10-iteration interval) and
+The configured partial streams are `trajectory` (`point` at a 10-iteration interval) and
 `radius` (`radius` at a 5-iteration interval). The complete `checkpoint` stream records both
 payloads at a 1000-iteration interval. Including endpoints yields respectively 501, 1001,
 and 6 records per task. The approved configuration now uses
@@ -5151,7 +5232,7 @@ paths JSON; it does not include the separately owned state template.
 
 ### PiP serialization audit
 
-The published `physics_in_parallel` 3.0.4 crate has the correct primary
+The published `physics_in_parallel` 3.2.2 crate has the correct primary
 integration boundary for ordinary Scientific Workflow payloads: dense tensors,
 vector lists, matrices, and square lattices implement Serde `Serialize`, and
 the state writer invokes that borrowed implementation directly. Dense tensor,
@@ -5210,7 +5291,7 @@ including checkpoint continuation. PiP's wire-level `version` and `scalar`
 metadata remain opaque payload content here; validating them belongs to PiP's
 own `Deserialize` implementations.
 
-Scientific Workflow resolves PiP 3.0.4 from crates.io as a development-only
+Scientific Workflow resolves PiP 3.2.2 from crates.io as a development-only
 integration dependency. There is no local path override, compatibility adapter,
 or PiP-specific decoder.
 
@@ -5300,7 +5381,7 @@ completed results through the storage reader. Exact matching can select a
 subset while retaining the Cartesian product of every unconstrained axis.
 Scoped execution policy and richer logging remain orchestration layer-level work rather
 than prerequisites missing from this crate. Migration should preserve the new
-storage-format version 4 contract and should not introduce compatibility
+storage-format version 5 contract and should not introduce compatibility
 aliases for the former step-based counter or sampling names.
 
 ## dependent-model crate migration audit
@@ -5440,7 +5521,7 @@ the completed-recording result should be one lifecycle refactor.
 
 #### Latest-record reading
 
-`recording_validation::validate_recording` uses
+`validation::read_final_checkpoint` uses
 `read_latest_state_from_stream` to reconstruct
 the latest state of one completed stream without scanning or retaining the
 entire series. It returns that stream's partial state schema; callers decide

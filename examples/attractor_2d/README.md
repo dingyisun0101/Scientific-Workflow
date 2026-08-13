@@ -25,10 +25,10 @@ library abstraction answer a question already raised by the preceding file:
 3. [`src/main.rs`](src/main.rs): follow the complete application flow:
    project setup, task orchestration, and delegation to focused modules.
 4. [`src/task_execution.rs`](src/task_execution.rs): inspect per-task setup,
-   progress tracking, and delegated recording/validation calls.
+   progress tracking and delegated recording calls.
 5. [`src/recording.rs`](src/recording.rs): inspect cadence, stream, and
    writer setup.
-6. [`src/validation.rs`](src/validation.rs): inspect checkpoint round-trip checks.
+6. [`src/validation.rs`](src/validation.rs): inspect dependent-phase checkpoint reconstruction.
 7. [`src/cross_check.rs`](src/cross_check.rs): numerical correctness check
    correctness check.
 8. [`src/hopf_model.rs`](src/hopf_model.rs): see the scientific core that
@@ -95,10 +95,12 @@ cheap owned handles over shared fixed, sweep, and path data. The main loop can
 therefore pass each complete configuration through model assembly and recording
 without separately carrying `TaskParameters` and `ProjectPaths`.
 
-The phase builder adapts that iterator directly into executable tasks. The
-runtime prepares them through its bounded queue and executes up to the phase's
-concurrency limit, while each workload owns an independent model and recording
-writer. The schema and execution scope are shared immutably.
+Two phase builders adapt that iterator directly into executable tasks. The
+simulation phase owns independent models and recording writers; the dependent
+validation phase reopens each completed recording and performs its numerical
+cross-check. The runtime prepares work through phase-local bounded queues and
+executes up to each phase's concurrency limit. The schema and execution scope
+are shared immutably.
 
 For a reusable explanation of this organization, see [steps.md](steps.md).
 
@@ -229,27 +231,31 @@ directory and exposes its creation timestamp. Existing recordings are not
 deleted or deliberately reused. Each task recording automatically persists its
 UTC creation/finalization timestamps and monotonic active duration.
 
-The phase's `max_concurrent_workloads` bounds simultaneous task-owned model
-execution. Successful runtime return means every task also completed typed
-checkpoint round-trip validation; an error prevents the final success line.
+Each phase's `max_concurrent_workloads` bounds simultaneous task-owned work.
+The application selects validation phase 2 with dependency expansion, so
+simulation phase 1 runs first. Successful runtime return means all three
+recordings were completed and all three validation tasks reconstructed and
+cross-checked their final checkpoints.
 
-`WorkflowRuntime` is the only human-facing terminal writer while the registered
-phase runs. It creates all three `mu` rows before workloads start. Running rows
-show elapsed execution time and ETA. In a redirected or CI run, output is
-append-only and the final line has this form:
+`WorkflowRuntime` is the only human-facing terminal writer while registered
+phases run. Each phase refreshes the display with its own three `mu` rows.
+Running simulation rows show elapsed execution time and ETA; validation rows
+show lifecycle detail. In a redirected or CI run, output is append-only and
+the final line has this form:
 
 ```text
-[runtime] status=completed phases=1 tasks=3
+[runtime] status=completed phases=2 tasks=6
 ```
 
 ## Readback validation
 
-After each writer reaches completed status, the application:
+After every writer reaches completed status, dependent validation tasks:
 
 - registers direct Serde JSON decoding for `Vec<f64>` under `point` and `f64`
   under `radius`;
 - reads only the latest complete checkpoint; and
-- requires exact final time and payload equality with the live state.
+- compare the reconstructed final state against an independent numerical
+  reference generated from the same retained `TaskConfig`.
 
 Plotting and numerical analysis are deliberately absent. They are consumer
 consumers of valid recordings, not part of the minimum evolution workflow.

@@ -1,7 +1,6 @@
 //! Task-local execution context and workload contract.
 
 use std::error::Error;
-use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -14,7 +13,7 @@ use crate::configuration::TaskConfig;
 /// Error-erased result returned by one task-owned workload.
 pub type TaskResult = Result<(), Box<dyn Error + Send + Sync + 'static>>;
 
-pub(crate) type Workload = Arc<dyn Fn(&TaskContext) -> TaskResult + Send + Sync + 'static>;
+pub(crate) type Workload = Box<dyn FnOnce(&TaskContext) -> TaskResult + Send + 'static>;
 
 enum TaskHandle {
     Progress(TaskProgress),
@@ -66,8 +65,8 @@ impl TaskContext {
         self.task.kind()
     }
 
-    /// Borrows retained configuration when this task was generated from one.
-    pub fn configuration(&self) -> Option<&TaskConfig> {
+    /// Borrows the configuration from which this task was generated.
+    pub fn configuration(&self) -> &TaskConfig {
         self.task.configuration()
     }
 
@@ -141,6 +140,14 @@ impl TaskContext {
         match self.handle {
             TaskHandle::Progress(progress) => progress.fail(reason),
             TaskHandle::Activity(activity) => activity.fail(reason),
+        }
+    }
+
+    pub(crate) fn cancel(self, reason: impl Into<String>) {
+        let reason = reason.into();
+        match self.handle {
+            TaskHandle::Progress(progress) => progress.cancel(reason),
+            TaskHandle::Activity(activity) => activity.cancel(reason),
         }
     }
 }

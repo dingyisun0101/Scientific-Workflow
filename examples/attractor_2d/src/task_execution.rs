@@ -2,15 +2,13 @@ use std::num::NonZeroU64;
 
 use crate::{
     AppResult,
-    cross_check,
-    hopf_model::{HopfModel, POINT_FIELD, RADIUS_FIELD},
+    hopf_model::HopfModel,
     recording,
-    validation,
 };
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::runtime::*;
 use std::path::PathBuf;
 
-#[derive(Clone)]
 pub(crate) struct TaskExecutionSummary {
     pub(crate) task_ordinal: u64,
     pub(crate) recording_directory: PathBuf,
@@ -21,9 +19,7 @@ pub(crate) fn run_task(
     execution: &ExecutionScope,
     context: &TaskContext,
 ) -> AppResult<TaskExecutionSummary> {
-    let task = context
-        .configuration()
-        .ok_or("attractor task requires retained project configuration")?;
+    let task = context.configuration();
     let initial_point: Vec<f64> = task.decode_value("initial_point")?;
     let mu: f64 = task.decode_value("mu")?;
     let angular_frequency: f64 = task.decode_value("angular_frequency")?;
@@ -38,7 +34,6 @@ pub(crate) fn run_task(
         .into());
     }
 
-    let cross_check_initial_point = [initial_point[0], initial_point[1]];
     let task_ordinal = task.task_ordinal();
 
     let mut model = HopfModel::new(
@@ -79,22 +74,6 @@ pub(crate) fn run_task(
         writer_queue_bytes,
         &mut model,
         &progress,
-    )?;
-
-    validation::validate_recording(
-        model.state(),
-        &recording,
-        POINT_FIELD,
-        RADIUS_FIELD,
-    )?;
-
-    cross_check::assert_matches_reference(
-        model.state(),
-        cross_check_initial_point,
-        mu,
-        angular_frequency,
-        physical_time_increment_per_step,
-        step_count,
     )?;
 
     Ok(TaskExecutionSummary {

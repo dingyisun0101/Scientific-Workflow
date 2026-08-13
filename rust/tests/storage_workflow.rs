@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use physics_in_parallel::engines::soa::{AttrsCore, AttrsMeta, PhysObj};
 use physics_in_parallel::math::{Dense, Tensor};
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -290,7 +290,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let metadata_bytes = fs::read(run_path.join("metadata.json")).unwrap();
     let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
     assert_eq!(metadata["status"]["state"], "complete");
-    assert_eq!(metadata["version"], 4);
+    assert_eq!(metadata["version"], 5);
     assert!(
         metadata["timing"]["created_at_utc"]
             .as_str()
@@ -416,7 +416,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         ["signal", "space"]
     );
     assert!(format!("{reader:?}").contains("StoredStateSeriesReader"));
-    assert_eq!(reader.format_version(), 4);
+    assert_eq!(reader.format_version(), 5);
     assert_eq!(reader.user_metadata()["seed"], 42);
     assert_eq!(
         reader.terminal_metadata()["termination_reason"],
@@ -526,7 +526,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         task_metadata["user_metadata"]["experiment"],
         "metadata-merge"
     );
-    assert_eq!(task_metadata["version"], 4);
+    assert_eq!(task_metadata["version"], 5);
     assert_eq!(
         task_metadata["streams"][0]["sampling_interval"],
         serde_json::json!({"iterations": 1})

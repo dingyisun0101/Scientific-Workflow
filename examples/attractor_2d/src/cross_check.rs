@@ -3,7 +3,7 @@ use crate::{
     task_execution::TaskExecutionSummary,
     AppResult,
 };
-use scientific_workflow::prelude::SystemState;
+use scientific_workflow::prelude::basics::SystemState;
 
 const CROSS_CHECK_TOLERANCE: f64 = 1e-12;
 
@@ -89,7 +89,7 @@ pub(crate) fn assert_matches_reference(
 
 /// Prints the deterministic final example report for completed tasks.
 pub(crate) fn print_example_report(task_summaries: &[TaskExecutionSummary]) {
-    let mut summaries = task_summaries.to_vec();
+    let mut summaries = task_summaries.iter().collect::<Vec<_>>();
     summaries.sort_by_key(|summary| summary.task_ordinal);
 
     for summary in &summaries {

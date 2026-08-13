@@ -20,13 +20,14 @@
 //! One logical partial state occupies exactly one line:
 //!
 //! ```json
-//! {"iteration":12,"physical_time":0.25,"values":{"population":[1,2,3]}}
+//! {"iteration":12,"physical_time":0.25,"values":[[1,2,3]]}
 //! ```
 //!
-//! `physical_time` is omitted when absent. `values` retains field keys for readable
-//! raw output and decoder dispatch. [`EncodedStateRecord`] owns the complete framed
-//! line including its trailing newline, so writer byte accounting is exact and
-//! no downstream layer can accidentally split a record.
+//! `physical_time` is omitted when absent. Each `values` position corresponds
+//! to the same-position field declared once in the stream metadata.
+//! [`EncodedStateRecord`] owns the complete framed line including its trailing
+//! newline, so writer byte accounting is exact and no downstream layer can
+//! accidentally split a record.
 //!
 //! # Validation
 //!
@@ -54,7 +55,7 @@ use super::error::StorageError;
 pub(crate) const FORMAT_NAME: &str = "scientific-workflow-jsonl";
 
 /// Current metadata and record schema version.
-pub(crate) const FORMAT_VERSION: u32 = 4;
+pub(crate) const FORMAT_VERSION: u32 = 5;
 
 /// Payload encoding supported by the current storage stage.
 pub(crate) const PAYLOAD_ENCODING: &str = "json";
@@ -459,7 +460,7 @@ impl StateStreamMetadata {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StateFieldMetadata {
-    /// Exact SystemState key serialized into each record's `values` object.
+    /// Exact SystemState key corresponding to this position in `values`.
     pub(crate) name: String,
     /// Optional natural-language payload description; never a Rust type tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]

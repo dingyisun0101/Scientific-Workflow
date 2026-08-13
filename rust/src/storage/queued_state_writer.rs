@@ -1060,11 +1060,11 @@ fn scan_open_chunk(
             });
         }
         let values = record.values.get().trim();
-        if !(values.starts_with('{') && values.ends_with('}')) {
+        if !(values.starts_with('[') && values.ends_with(']')) {
             return Err(StorageError::InvalidRecord {
                 path: path.clone(),
                 line: line_number,
-                reason: "record values must be a JSON object".to_owned(),
+                reason: "record values must be a JSON array".to_owned(),
             });
         }
         if let Some(previous) = last_iteration

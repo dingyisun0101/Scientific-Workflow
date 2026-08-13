@@ -10,9 +10,9 @@
 //!
 //! Field selection is validated once against the program's [`SystemStateSchema`]. The
 //! caller may list keys in any order; the encoder stores them in canonical
-//! template order so equivalent selections always produce the same JSON key
-//! order and metadata schema. Empty selections are valid and produce
-//! time-bearing records with an empty `values` object.
+//! template order so equivalent selections always produce the same positional
+//! order and metadata declaration. Empty selections are valid and produce
+//! time-bearing records with an empty `values` array.
 //!
 //! # Sampling
 //!
@@ -35,7 +35,7 @@
 use std::cell::Cell;
 use std::collections::HashSet;
 
-use serde::ser::SerializeMap;
+use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 
 use crate::system_state::{SystemState, SystemStateSchema};
@@ -141,12 +141,12 @@ impl JsonStateRecordEncoder {
     /// framing newline:
     ///
     /// ```json
-    /// {"iteration":12,"physical_time":0.25,"values":{"population":[1,2,3]}}
+    /// {"iteration":12,"physical_time":0.25,"values":[[1,2,3]]}
     /// ```
     ///
-    /// `physical_time` is omitted when absent. `values` keys follow canonical
-    /// template order. The payload objects are borrowed for serialization and
-    /// every borrow ends before this method returns.
+    /// `physical_time` is omitted when absent. `values` positions follow
+    /// canonical template order. The payload objects are borrowed for
+    /// serialization and every borrow ends before this method returns.
     ///
     /// # Errors
     ///
@@ -211,7 +211,7 @@ struct RecordRef<'a> {
     values: ValuesRef<'a>,
 }
 
-/// Serializes pre-resolved selected values beside their canonical field keys.
+/// Serializes pre-resolved selected values in canonical field order.
 struct ValuesRef<'a> {
     fields: &'a [Box<str>],
     payloads: &'a [&'a dyn erased_serde::Serialize],
@@ -219,19 +219,19 @@ struct ValuesRef<'a> {
 }
 
 impl Serialize for ValuesRef<'_> {
-    /// Emits string keys and erased borrowed values in canonical field order.
+    /// Emits erased borrowed values in canonical field order.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         debug_assert_eq!(self.fields.len(), self.payloads.len());
-        let mut map = serializer.serialize_map(Some(self.fields.len()))?;
-        for (index, (field, payload)) in self.fields.iter().zip(self.payloads).enumerate() {
+        let mut sequence = serializer.serialize_seq(Some(self.fields.len()))?;
+        for (index, payload) in self.payloads.iter().enumerate() {
             self.active_field.set(Some(index));
-            map.serialize_entry(field, &ErasedRef(*payload))?;
+            sequence.serialize_element(&ErasedRef(*payload))?;
             self.active_field.set(None);
         }
-        map.end()
+        sequence.end()
     }
 }
 

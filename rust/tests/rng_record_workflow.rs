@@ -3,7 +3,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use serde_json::{Map, Value, json};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

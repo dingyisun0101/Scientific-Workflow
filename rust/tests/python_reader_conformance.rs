@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::{
+use scientific_workflow::prelude::basics::{
     JsonPayloadDecoderRegistry, SamplingInterval, SimulationTime, StateStreamConfig,
     StoredStateSeriesReader, SystemStateSchema, SystemStateWriterBuilder, TimeAxisMetadata,
 };
@@ -109,9 +109,9 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
 }
 
 #[test]
-fn rust_and_python_readers_share_one_format_v4_fixture() {
+fn rust_and_python_readers_share_one_format_v5_fixture() {
     let reader = StoredStateSeriesReader::open_completed_recording(fixture(), decoders()).unwrap();
-    assert_eq!(reader.format_version(), 4);
+    assert_eq!(reader.format_version(), 5);
     assert_eq!(reader.stream_names().collect::<Vec<_>>(), ["signal"]);
     assert_eq!(reader.stream_record_count("signal").unwrap(), 2);
 

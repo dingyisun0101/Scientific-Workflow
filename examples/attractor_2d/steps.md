@@ -27,19 +27,22 @@ The model offers its current state after every evolution step; the writer owns
 the configured stream sampling intervals and decides whether to encode, queue, chunk, or
 ignore each observation.
 
-The normal runtime flow is:
+The normal end-user flow is:
 
 ```text
 project configuration
         |
         v
-resolved task + state schema
+configuration-generated tasks
         |
         v
-owned mutable SystemState
+phases with dependencies and bounded scheduling
         |
         v
-evolve -> sample -> writer -> recording chunks
+WorkflowRuntime selects and executes phases
+        |
+        v
+task-owned state -> evolve -> writer -> recording chunks
                               |
                               v
                     reader + payload decoders
@@ -269,12 +272,25 @@ selection, sampling-interval assumptions, and decoder registration.
 **Ready when:** recorded states reconstruct with the correct types, times, and
 values, and the analysis consumes only the data it actually needs.
 
-## Step 12: Expand to the parameter sweep
+## Step 12: Generate tasks, build phases, and run the sweep
 
 Only after one task completes the entire evolution-to-analysis round trip
 should the application execute every resolved task.
 
-For each task, create a separate:
+Use `PhaseBuilder::{progress,activity}_workloads_from_project` to turn every
+resolved `TaskConfig` into an executable `FnOnce` workload. The factory may
+move a non-Clone model, writer input, or validation resource into each
+workload. Tasks are never constructed independently or added directly to the
+runtime.
+
+Group those tasks into stable phases. Declare dependencies explicitly, set a
+phase-local `max_concurrent_workloads`, and bound prepared work with
+`queue_capacity`. Build one `WorkflowRuntime` from at least one phase, then use
+`run_phases_exact` or `run_phases_with_dependencies` to state which phases the
+invocation should execute. Failure is fail-fast by default; choose
+`FinishActive` only when already-running work should be allowed to finish.
+
+For each generated task workload, create a separate:
 
 - resolved parameter handle;
 - owned state;
@@ -284,8 +300,10 @@ For each task, create a separate:
 Begin with a phase concurrency limit of one. Once that path is validated,
 increase `max_concurrent_workloads` while retaining the same configuration-
 generated tasks. Parallel workloads still own independent models and writers,
-so storage queues, rates, and failures remain isolated. `queue_capacity` bounds
-prepared but not yet running workloads.
+so storage queues, rates, and failures remain isolated. The runtime schedules
+and displays registered work only; each task remains responsible for all of
+its own I/O and recording lifecycle. Machine resource limits belong to the
+external service or systemd scope containing the complete application.
 
 **Ready when:** task identity maps unambiguously to parameters, metadata,
 recording directory, and final result.
@@ -324,5 +342,10 @@ Before treating a scientific project as ready:
 - every writer lifecycle is closed explicitly;
 - decoder coverage is complete;
 - at least one live-to-recorded round trip is verified;
-- generated output cannot overwrite prior runs accidentally; and
-- one-task correctness is established before parallel sweep execution.
+- generated output cannot overwrite prior runs accidentally;
+- one-task correctness is established before parallel sweep execution;
+- every task is configuration-generated and belongs to exactly one phase;
+- phase dependencies, selection, concurrency, and failure policy are explicit;
+  and
+- runtime summaries distinguish completed, reused, failed, cancelled, and
+  skipped tasks.

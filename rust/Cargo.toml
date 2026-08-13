@@ -1,10 +1,10 @@
 [package]
 name = "scientific-workflow"
-version = "0.2.8"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.97"
 authors = ["Dingyi Sun"]
-description = "Typed scientific states, project configuration, artifacts, and durable recording"
+description = "Configuration-driven scientific tasks, typed state, and durable recordings"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/dingyisun0101/Scientific-Workflow"

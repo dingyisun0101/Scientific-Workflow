@@ -47,15 +47,15 @@
 //! [`storage`] provides named partial-state streams with writer-owned sampling
 //! intervals, borrowed JSON encoding only when due, bounded asynchronous
 //! persistence through one worker per recording, byte-targeted chunking, atomic recording
-//! metadata, automatic operational timing, terminal summaries, per-key payload
+//! metadata, automatic operational timing, terminal summaries, name-selected payload
 //! decoders, and verified full-series or latest-state reconstruction.
-//! Import [`prelude`] when an application wants the complete supported API in
-//! scope without listing each module separately.
+//! Import [`prelude::basics`] for these scientific primitives and
+//! [`prelude::runtime`] only at orchestration boundaries.
 //!
 //! # Basic use
 //!
 //! ```no_run
-//! use scientific_workflow::prelude::*;
+//! use scientific_workflow::prelude::basics::*;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let spec = SystemStateSchema::load_json_template("state.json")?;

@@ -10,6 +10,16 @@ use crate::configuration::ConfigurationError;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// A selected phase failed after producing a structured runtime snapshot.
+    #[error("workflow phase execution failed: {source}")]
+    PhaseExecutionFailed {
+        /// All phase outcomes observed through the failed phase.
+        summary: super::RuntimeSummary,
+        /// Exact scheduling, cancellation, panic, or workload cause.
+        #[source]
+        source: Box<RuntimeError>,
+    },
+
     /// Project configuration could not supply a required task or identity value.
     #[error(transparent)]
     Configuration(#[from] ConfigurationError),
@@ -298,6 +308,24 @@ pub enum RuntimeError {
         /// Tasks that failed or dropped before completion.
         failed: u64,
     },
+}
+
+impl RuntimeError {
+    /// Returns structured outcomes when execution reached a failing phase.
+    pub fn runtime_summary(&self) -> Option<&super::RuntimeSummary> {
+        match self {
+            Self::PhaseExecutionFailed { summary, .. } => Some(summary),
+            _ => None,
+        }
+    }
+
+    /// Returns the underlying execution cause when a phase failed.
+    pub fn execution_cause(&self) -> Option<&RuntimeError> {
+        match self {
+            Self::PhaseExecutionFailed { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) use RuntimeError as ReportingError;

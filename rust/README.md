@@ -2,8 +2,8 @@
 
 This README is the public API documentation for the crates.io publication of
 `scientific-workflow`.
-For repository context, private crate boundaries, and runnable example guidance,
-see [`../README.md`](../README.md).
+For repository context, private crate boundaries, and runnable example
+guidance, see the [repository README](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/README.md).
 
 `scientific-workflow` provides Rust primitives for representing scientific
 system states and building reproducible simulation workflows.
@@ -71,9 +71,10 @@ making them suitable for large arrays and tensors.
 
 This is the exhaustive supported API allowlist for `scientific-workflow`.
 Users may rely on these items, their public enum variants, and their documented
-public methods. Importing `scientific_workflow::prelude::*` brings the complete
-allowlist into scope. Compiler-visible implementation paths not listed here are
-not compatibility promises.
+public methods. `prelude::basics::*` imports scientific configuration, state,
+storage, execution, and artifact APIs; `prelude::runtime::*` imports the opt-in
+task/phase/runtime surface. Compiler-visible implementation paths not listed
+here are not compatibility promises.
 
 - Artifacts: `ArtifactDescriptor`, `ArtifactDisposition`, `ArtifactError`,
   `ArtifactLoadError`, `PersistedArtifact`, `VerifiedArtifact`,
@@ -84,7 +85,8 @@ not compatibility promises.
 - Projects and execution: `ScientificProject`, `ScientificProjectError`,
   `ExecutionScope`, and `ExecutionScopeError`.
 - Runtime: `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeError`,
-  `RuntimeSummary`, `PhaseSummary`, `Phase`, `PhaseBuilder`, `PhaseId`, `Task`,
+  `RuntimeSummary`, `PhaseSummary`, `Phase`, `PhaseBuilder`,
+  `PhaseFailurePolicy`, `PhaseId`, `Task`,
   `TaskId`, `TaskKey`, `TaskSelector`, `TaskDisplayKind`, `TaskContext`,
   `TaskResult`, `ProgressSummary`, `TaskIdentity`, `TaskProgress`,
   `ActivityTask`, `CancellationToken`, and `TaskStatus`.
@@ -112,14 +114,15 @@ retain all fixed and selected sweep values, and receive automatic labels from
 the parameters that vary:
 
 ```rust,no_run
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::runtime::*;
 
 # fn example(project: &ScientificProject) -> Result<(), RuntimeError> {
 let phase = Phase::builder(2, "simulation")
     .progress_workloads_from_project(project, "simulation", |config| {
         let ordinal = config.task_ordinal();
         move |context: &TaskContext| {
-            assert_eq!(context.configuration().unwrap().task_ordinal(), ordinal);
+            assert_eq!(context.configuration().task_ordinal(), ordinal);
             let progress = context.progress_handle().unwrap();
             progress.set_target_iteration(1_000)?;
             progress.set_iteration(1_000)?;
@@ -169,7 +172,7 @@ any RNG behavior. Workflow does not generate keys, derive streams, choose
 algorithms or distributions, sample values, or maintain cursors.
 
 ```rust
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use serde_json::{Map, json};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -205,7 +208,7 @@ mapping into Workflow remains explicit and lightweight:
 
 ```rust,ignore
 use physics_in_parallel::prelude::*;
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use serde_json::{Map, json};
 
 let resolved = generator.rng_config();
@@ -236,7 +239,7 @@ metadata: they serialize their document, call `persist_artifact`, and embed the
 returned descriptor in each recording that consumed it.
 
 ```rust,no_run
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let scope = ExecutionScope::create_named("recordings", "example")?;
@@ -271,8 +274,10 @@ model itself.
 
 The public `SystemStateWriter` facade owns multi-stream metadata, one bounded
 queue and worker, and the recording's completion or failure lifecycle.
-Workflow orchestration-layer support remains a later
-development stage.
+Format version 5 writes each record's top-level `values` as a positional array
+whose names and order come from that stream's `fields` in `metadata.json`.
+Readers require an exact width and reconstruct the existing name-addressable
+state API; nested payload JSON remains opaque.
 
 ## Installation
 
@@ -280,7 +285,7 @@ Add the crate to a Rust project:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.2"
+scientific-workflow = "0.3"
 ```
 
 The crate uses Rust edition 2024 and requires Rust 1.97 or newer.
@@ -364,7 +369,7 @@ Load the project and consume exact JSON names through each resolved task's
 read-only dictionary:
 
 ```rust,no_run
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project = ScientificProject::load("project-root")?;
@@ -390,7 +395,7 @@ owned handle over shared fixed, sweep, and path storage, so it can move into a
 worker queue without cloning merged JSON dictionaries:
 
 ```rust,no_run
-# use scientific_workflow::prelude::*;
+# use scientific_workflow::prelude::basics::*;
 # fn submit(_: TaskConfig) -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let project = ScientificProject::load("project-root")?;
@@ -427,7 +432,7 @@ A fixed-model crate should instead load its one canonical schema and pass it to
 `ScientificProject::load_with_state_schema`:
 
 ```rust,no_run
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let schema = SystemStateSchema::load_json_template("model/schemas/state.json")?;
@@ -472,7 +477,7 @@ Descriptions remain documentation only.
 ## Basic Usage
 
 ```rust,no_run
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
@@ -505,7 +510,7 @@ temporary extraction, locks, or application-side selector structures. Supply
 the expected concrete types and field names in matching tuple order:
 
 ```rust,no_run
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 # fn evolve(position: &mut Vec<f64>, velocity: &mut Vec<f64>) {
 #     position[0] += velocity[0];
@@ -536,7 +541,7 @@ state shares the series' exact specification allocation and that simulation
 indices increase strictly. Index gaps are allowed.
 
 ```rust,no_run
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
@@ -572,7 +577,7 @@ tensor:
 
 ```rust,ignore
 use physics_in_parallel::math::{Dense, Tensor};
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 let spec = SystemStateSchema::load_json_template("state.json")?;
 let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
@@ -590,7 +595,7 @@ The tensor crate is not a required runtime dependency of
 `scientific-workflow`; applications use their own concrete serializable
 scientific payload types without registering codecs.
 
-The PiP 3.0.4 integration uses versioned Serde schemas for dense and
+The PiP 3.2.2 integration uses versioned Serde schemas for dense and
 sparse tensors, matrices, vector lists, square lattices, and heterogeneous
 `PhysObj` values. They reconstruct through the same generic registry path:
 
@@ -610,7 +615,7 @@ decoder API into scope:
 
 ```rust,no_run
 use std::num::NonZeroU64;
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
@@ -673,7 +678,7 @@ concrete payload type. A closure is sufficient for stateless conversion; a
 named decoder can carry configuration or shared resources:
 
 ```rust
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -714,8 +719,8 @@ From the package directory:
 cargo test --all-targets --no-fail-fast --locked
 ```
 
-The permanent suite contains seven logged integration workflows. Run each with
-`--nocapture` to display its stable semantic report.
+The permanent suite contains ten integration targets. Run the core workflow
+targets with `--nocapture` to display their stable semantic reports.
 
 Project configuration and task expansion:
 
@@ -753,6 +758,15 @@ Interrupted-run recovery, checkpoint reconstruction, and append:
 cargo test --test resume_workflow -- --nocapture
 ```
 
+Configuration-generated runtime scheduling and display:
+
+```bash
+cargo test --test runtime_workflow -- --nocapture
+```
+
+Artifact, RNG-record, and Rust/Python format conformance coverage runs as part
+of `cargo test --all-targets --no-fail-fast --locked`.
+
 Doctests and lint gate:
 
 ```bash
@@ -760,8 +774,9 @@ cargo test --doc --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
-The repository-level `tests.md` documents complete method allocation, indirect
-private coverage, logging rules, and completion criteria.
+The repository's [test architecture](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/docs/tests.md)
+documents complete method allocation, indirect private coverage, logging
+rules, and completion criteria.
 
 ## License
 

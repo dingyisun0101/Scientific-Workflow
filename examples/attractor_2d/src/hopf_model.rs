@@ -1,4 +1,4 @@
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
 use std::thread;
 use std::time::Duration;
 

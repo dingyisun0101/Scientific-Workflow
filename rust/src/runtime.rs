@@ -5,15 +5,21 @@
 //! displays their lifecycle, and provides cooperative cancellation. Each task
 //! workload owns all scientific I/O, artifacts, recordings, and subprocesses.
 //!
-//! ```
-//! use scientific_workflow::prelude::*;
+//! ```no_run
+//! use scientific_workflow::prelude::basics::*;
+//! use scientific_workflow::prelude::runtime::*;
 //!
 //! # fn main() -> Result<(), RuntimeError> {
+//! let project = ScientificProject::load("my-project")
+//!     .map_err(|error| RuntimeError::TaskWorkload {
+//!         task: "load-project".to_owned(),
+//!         source: Box::new(error),
+//!     })?;
 //! let phase = Phase::builder(2, "simulation")
-//!     .task(Task::activity("prepare", "prepare").workload(|context| {
+//!     .activity_workloads_from_project(&project, "prepare", |_| |context| {
 //!         context.set_detail("ready");
 //!         Ok(())
-//!     }))
+//!     })
 //!     .max_concurrent_workloads(1)
 //!     .queue_capacity(1)
 //!     .build()?;
@@ -41,7 +47,8 @@ mod task;
 
 pub use error::RuntimeError;
 pub use phase::{
-    Phase, PhaseBuilder, PhaseId, Task, TaskDisplayKind, TaskId, TaskKey, TaskSelector,
+    Phase, PhaseBuilder, PhaseFailurePolicy, PhaseId, Task, TaskDisplayKind, TaskId, TaskKey,
+    TaskSelector,
 };
 pub use reporting::{
     ActivityTask, CancellationToken, ProgressSummary, TaskIdentity, TaskProgress, TaskStatus,
@@ -115,7 +122,7 @@ impl WorkflowRuntimeBuilder {
     pub fn build(self) -> Result<WorkflowRuntime, RuntimeError> {
         validate_plan(&self.phases)?;
         Ok(WorkflowRuntime {
-            phases: self.phases.into(),
+            phases: self.phases,
             output: self.output,
             satisfied_phase: self.satisfied_phase,
             cancellation: CancellationToken::new(),
@@ -139,7 +146,7 @@ impl fmt::Debug for WorkflowRuntimeBuilder {
 
 /// Non-clone scheduler and display owner for one declared workflow plan.
 pub struct WorkflowRuntime {
-    phases: Arc<[Phase]>,
+    phases: Vec<Phase>,
     output: RuntimeOutput,
     satisfied_phase: Option<SatisfiedPhaseVerifier>,
     cancellation: CancellationToken,
@@ -292,13 +299,15 @@ impl WorkflowRuntime {
             .map(|position| self.phases[*position].tasks().len())
             .sum();
         let mut summaries = Vec::with_capacity(total_phases);
+        let mut phases = self.phases.into_iter().map(Some).collect::<Vec<_>>();
 
         for (selection_position, phase_position) in selected.into_iter().enumerate() {
-            let phase = &self.phases[phase_position];
-            renderer::phase_start(self.output, phase, selection_position + 1, total_phases);
-            let heading = renderer::phase_heading(phase, selection_position + 1, total_phases);
-            let builder = RuntimeReporter::for_phases([phase])
-                .phase_heading(heading)
+            let phase = phases[phase_position]
+                .take()
+                .expect("selected phase positions are unique");
+            renderer::phase_start(self.output, &phase, selection_position + 1, total_phases);
+            let heading = renderer::phase_heading(&phase, selection_position + 1, total_phases);
+            let builder = RuntimeReporter::for_phase(&phase, &heading)?
                 .cancellation_token(self.cancellation.clone());
             let reporter = match self.output {
                 RuntimeOutput::Auto => builder,
@@ -307,22 +316,29 @@ impl WorkflowRuntime {
                 RuntimeOutput::Hidden => builder.hidden(),
             }
             .start()?;
+            let phase_id = phase.id();
+            let phase_label: Arc<str> = phase.label().into();
             let result = scheduler::execute_phase(phase, &reporter);
             let progress = if result.is_ok() {
-                reporter.complete(format!("phase {} completed", phase.id()))?
+                reporter.complete(format!("phase {phase_id} completed"))?
             } else {
-                reporter.fail(format!("phase {} failed", phase.id()))?
+                reporter.fail(format!("phase {phase_id} failed"))?
             };
             let success = result.is_ok() && progress.is_success();
-            renderer::phase_complete(self.output, phase, success);
+            renderer::phase_complete(self.output, phase_id, &phase_label, success);
             summaries.push(PhaseSummary {
-                id: phase.id(),
-                label: phase.label().into(),
+                id: phase_id,
+                label: phase_label,
                 progress,
             });
             if let Err(error) = result {
                 renderer::runtime_complete(self.output, summaries.len(), total_tasks, false);
-                return Err(error);
+                return Err(RuntimeError::PhaseExecutionFailed {
+                    summary: RuntimeSummary {
+                        phases: summaries.into(),
+                    },
+                    source: Box::new(error),
+                });
             }
         }
 
@@ -450,7 +466,7 @@ fn validate_plan(phases: &[Phase]) -> Result<(), RuntimeError> {
             }
         }
         for task in phase.tasks() {
-            if task.executable().is_none() && !task.is_reused() {
+            if !task.has_workload() && !task.is_reused() {
                 return Err(RuntimeError::MissingTaskWorkload {
                     task: task.key().to_string(),
                 });

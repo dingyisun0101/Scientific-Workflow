@@ -1,7 +1,8 @@
 use std::num::NonZeroU64;
 
 use crate::AppResult;
-use scientific_workflow::prelude::*;
+use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::runtime::TaskProgress;
 
 use crate::hopf_model::{POINT_FIELD, RADIUS_FIELD};
 

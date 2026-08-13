@@ -69,7 +69,7 @@ exception chained as their cause.
 - typed exceptions rooted at `RecordingError`
 
 The initial release supports only
-`scientific-workflow-jsonl` format version 4, JSON payload encoding, JSON Lines
+`scientific-workflow-jsonl` format version 5, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
 

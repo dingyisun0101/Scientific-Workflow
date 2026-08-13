@@ -1,49 +1,8 @@
-//! Convenient import of the complete supported end-user API.
+//! Narrow end-user imports grouped by responsibility.
 //!
-//! Importing this module brings every crate-owned public structure, error, and
-//! extension trait into scope:
-//!
-//! ```
-//! use scientific_workflow::prelude::*;
-//!
-//! let time = SimulationTime::from_iteration(0);
-//! assert_eq!(time.iteration(), 0);
-//! let decoders = JsonPayloadDecoderRegistry::new();
-//! assert!(decoders.is_empty());
-//! let _: Option<ProjectConfig> = None;
-//! ```
-//!
-//! The prelude is explicit rather than a wildcard re-export of internal
-//! modules. General-purpose external traits, including Serde traits, remain the
-//! responsibility of the application that uses them.
+//! Scientific configuration, state, storage, and artifact APIs live in
+//! [`basics`]. Task, phase, scheduling, display, and cancellation APIs live in
+//! [`runtime`]. Import runtime management only at orchestration boundaries.
 
-pub use crate::artifact::{
-    ArtifactDescriptor, ArtifactDisposition, ArtifactError, ArtifactLoadError, PersistedArtifact,
-    VerifiedArtifact, load_verified_artifact, persist_artifact,
-};
-pub use crate::configuration::{
-    ConfigurationError, MatchingTaskConfigIter, ParameterSpace, ProjectConfig, ProjectPaths,
-    TaskConfig, TaskConfigIter, TaskParameters, TaskParametersIter,
-};
-pub use crate::execution::{ExecutionScope, ExecutionScopeError};
-pub use crate::project::{ScientificProject, ScientificProjectError};
-pub use crate::rng_record::{RNG_RECORDS_METADATA_KEY, RngRecord, RngRecordError};
-pub use crate::runtime::{
-    ActivityTask, CancellationToken, Phase, PhaseBuilder, PhaseId, PhaseSummary, ProgressSummary,
-    RuntimeError, RuntimeSummary, Task, TaskContext, TaskDisplayKind, TaskId, TaskIdentity,
-    TaskKey, TaskProgress, TaskResult, TaskSelector, TaskStatus, WorkflowRuntime,
-    WorkflowRuntimeBuilder,
-};
-pub use crate::storage::{
-    CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
-    JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, SamplingInterval, StateStreamConfig,
-    StorageError, StoredStateSeriesReader, SystemStateWriter, SystemStateWriterBuilder,
-    TimeAxisMetadata,
-};
-pub use crate::system_state::{
-    PayloadInsertError, SimulationTime, StateError, StateFieldSchema, SystemState,
-    SystemStateSchema,
-};
-pub use crate::time_series::{
-    StateSeries, StateSeriesError, StateSeriesPushError, StateSeriesView,
-};
+pub mod basics;
+pub mod runtime;
