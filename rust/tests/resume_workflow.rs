@@ -123,29 +123,29 @@ fn mark_manifest_running(metadata: &mut Value) {
 }
 
 #[test]
-fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
+fn unpublished_tail_is_discarded_and_resume_uses_latest_sealed_checkpoint() {
     let workspace = TempWorkspace::new("unprepared-resume");
     let run = workspace.run();
     let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
 
-    let mut output = builder(&run, &spec).create_new_recording().unwrap();
+    let recording_builder = || builder_with_chunk_limit(&run, &spec, 1);
+    let mut output = recording_builder().create_new_recording().unwrap();
     output.observe_state(&state(&spec, 0)).unwrap();
     output.observe_state(&state(&spec, 1)).unwrap();
     let completed = output.complete_recording().unwrap();
     assert_eq!(completed.timing().continuation_count(), 0);
 
-    // Reproduce a crash before descriptor preparation: the real payload keeps
-    // its open name, metadata contains no descriptor, and its final bytes end
-    // in one incomplete record fragment.
+    // Reproduce a crash while publishing chunk 1, before descriptor
+    // preparation. Chunk 0 remains the latest authoritative checkpoint.
     let mut manifest = metadata(&run);
     mark_manifest_running(&mut manifest);
-    manifest["streams"][0]
-        .as_object_mut()
+    manifest["streams"][0]["chunks"]
+        .as_array_mut()
         .unwrap()
-        .remove("chunks");
+        .pop();
     write_metadata(&run, &manifest);
-    let sealed = run.join("checkpoint/chunk-000000.jsonl");
-    let open = run.join("checkpoint/chunk-000000.jsonl.tmp");
+    let sealed = run.join("checkpoint/chunk-000001.jsonl");
+    let open = run.join("checkpoint/chunk-000001.jsonl.tmp");
     fs::rename(&sealed, &open).unwrap();
     OpenOptions::new()
         .append(true)
@@ -154,25 +154,25 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
         .write_all(br#"{"iteration":2,"physical_time":"#)
         .unwrap();
 
-    let (mut output, mut resumed) = builder(&run, &spec)
+    let (mut output, resumed) = recording_builder()
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .unwrap();
-    assert_eq!(resumed.simulation_time().iteration(), 1);
-    assert_eq!(resumed.simulation_time().physical_time(), Some(0.5));
+    assert_eq!(resumed.simulation_time().iteration(), 0);
+    assert_eq!(resumed.simulation_time().physical_time(), Some(0.0));
     assert_eq!(
         resumed.payload::<Vec<f64>>("population").unwrap(),
-        &[1.0, 1.25]
+        &[0.0, 0.25]
     );
     assert_eq!(
         resumed.payload::<String>("activity").unwrap(),
-        "iteration-1"
+        "iteration-0"
     );
     assert_eq!(
         resumed
             .payload::<Tensor<u64, Dense>>("space")
             .unwrap()
             .get(&[1]),
-        21
+        20
     );
     assert_eq!(
         resumed.populated_field_count(),
@@ -185,29 +185,35 @@ fn unprepared_tail_reconstructs_complete_state_and_continues_the_same_chunk() {
         resumed.populated_field_count()
     );
 
-    resumed = state(&spec, 2);
-    output.observe_state(&resumed).unwrap();
+    output.observe_state(&state(&spec, 2)).unwrap();
     output.flush_stream_to_storage("checkpoint").unwrap();
     assert!(sealed.is_file());
     assert!(!open.exists());
     let running = metadata(&run);
     assert_eq!(running["status"]["state"], "running");
-    assert_eq!(running["streams"][0]["chunks"][0]["records"], 3);
+    assert_eq!(running["streams"][0]["chunks"].as_array().unwrap().len(), 2);
     println!(
-        "[recovery] incomplete_tail_truncated=true continued_open_chunk=true records=3 durable_barrier=true"
+        "[recovery] unpublished_tail_discarded=true resumed_sealed_chunk=true durable_barrier=true"
     );
     let completed = output.complete_recording().unwrap();
     assert_eq!(completed.timing().continuation_count(), 1);
 
     let reader = StoredStateSeriesReader::open_completed_recording(&run, decoders()).unwrap();
     let series = reader.read_stream_as_state_series("checkpoint").unwrap();
-    assert_eq!(series.len(), 3);
+    assert_eq!(series.len(), 2);
     assert_eq!(
         series.last_state().unwrap().simulation_time().iteration(),
         2
     );
+    assert_eq!(
+        series
+            .iter()
+            .map(|state| state.simulation_time().iteration())
+            .collect::<Vec<_>>(),
+        [0, 2]
+    );
     println!(
-        "[result] unprepared_resume=passed final_states={}",
+        "[result] buffered_resume=passed final_states={}",
         series.len()
     );
 }
@@ -360,7 +366,7 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
 }
 
 #[test]
-fn earlier_sealed_chunks_are_not_scanned_when_resuming_from_an_open_tail() {
+fn earlier_sealed_chunks_are_not_scanned_when_discarding_an_unpublished_tail() {
     let workspace = TempWorkspace::new("multi-chunk-resume");
     let run = workspace.run();
     let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
@@ -388,11 +394,11 @@ fn earlier_sealed_chunks_are_not_scanned_when_resuming_from_an_open_tail() {
 
     let (mut output, resumed) = recording_builder()
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
-        .expect("resume must decode the recovery-validated open tail");
-    assert_eq!(resumed.simulation_time().iteration(), 2);
+        .expect("resume must discard the open tail and decode the latest sealed chunk");
+    assert_eq!(resumed.simulation_time().iteration(), 1);
     assert_eq!(
         resumed.payload::<String>("activity").unwrap(),
-        "iteration-2"
+        "iteration-1"
     );
 
     output.observe_state(&state(&spec, 3)).unwrap();
@@ -400,22 +406,22 @@ fn earlier_sealed_chunks_are_not_scanned_when_resuming_from_an_open_tail() {
 
     let completed = metadata(&run);
     let chunks = completed["streams"][0]["chunks"].as_array().unwrap();
-    assert_eq!(chunks.len(), 4);
+    assert_eq!(chunks.len(), 3);
     assert_eq!(
         chunks
             .iter()
             .map(|chunk| chunk["ordinal"].as_u64().unwrap())
             .collect::<Vec<_>>(),
-        [0, 1, 2, 3]
+        [0, 1, 2]
     );
-    assert!((0..4).all(|ordinal| {
+    assert!((0..3).all(|ordinal| {
         stream_directory
             .join(format!("chunk-{ordinal:06}.jsonl"))
             .is_file()
     }));
     assert!(!open_two.exists());
     println!(
-        "[multi-chunk] sealed_history_trusted=true open_tail_scanned=true resumed_index=2 next_ordinal=3"
+        "[multi-chunk] sealed_history_trusted=true unpublished_tail_discarded=true resumed_index=1 next_ordinal=2"
     );
 }
 

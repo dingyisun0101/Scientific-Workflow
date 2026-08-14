@@ -28,7 +28,7 @@
 
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::de::{SeqAccess, Visitor};
@@ -43,7 +43,6 @@ use super::RecordingTiming;
 use super::error::StorageError;
 use super::json_payload_decoder::JsonPayloadDecoderRegistry;
 use super::jsonl_format::{ChunkMetadata, RecordingMetadata, RecordingStatus, StateStreamMetadata};
-use super::queued_state_writer::RecoveredUnsealedRecord;
 
 /// Name of the only metadata document in one recording directory.
 const METADATA_FILE: &str = "metadata.json";
@@ -437,31 +436,18 @@ impl fmt::Debug for StoredStateSeriesReader {
 
 /// Reconstructs the newest complete state used by coordinated run resume.
 ///
-/// `open_record` is the final complete JSONL object already obtained while the
-/// progress checker examined the sole unsealed chunk. When absent, this helper
-/// verifies the newest sealed chunk's declared byte count and SHA-256 checksum,
-/// then decodes its final record. Earlier sealed chunks are not opened.
+/// The newest sealed chunk's declared byte count and SHA-256 checksum are
+/// verified before its final record is decoded. Earlier sealed chunks are not
+/// opened, and unpublished buffered chunks are never checkpoint state.
 pub(crate) fn decode_resume_state(
     root: &Path,
     metadata_path: &Path,
     stream: &StateStreamMetadata,
     full_spec: &SystemStateSchema,
     decoders: &JsonPayloadDecoderRegistry,
-    open_record: Option<&RecoveredUnsealedRecord>,
 ) -> Result<SystemState, StorageError> {
     validate_complete_resume_schema(stream, full_spec)?;
     decoders.require(full_spec.field_schemas().iter().map(|field| field.name()))?;
-
-    if let Some(record) = open_record {
-        let bytes = read_open_record(record, &stream.name)?;
-        return decode_state_record_with_decoders(
-            &bytes,
-            record.path(),
-            stream,
-            full_spec,
-            decoders,
-        );
-    }
 
     let chunk = stream
         .chunks
@@ -485,35 +471,6 @@ pub(crate) fn decode_resume_state(
         ));
     }
     Ok(state)
-}
-
-/// Reads one recovery-selected open record without rescanning its chunk.
-fn read_open_record(
-    record: &RecoveredUnsealedRecord,
-    stream: &str,
-) -> Result<Vec<u8>, StorageError> {
-    let length = usize::try_from(record.bytes()).map_err(|_| StorageError::ByteCountOverflow {
-        stream: stream.to_owned(),
-    })?;
-    let mut file = File::open(record.path()).map_err(|source| StorageError::Io {
-        operation: "open latest recoverable record",
-        path: record.path().to_path_buf(),
-        source,
-    })?;
-    file.seek(SeekFrom::Start(record.offset()))
-        .map_err(|source| StorageError::Io {
-            operation: "seek latest recoverable record",
-            path: record.path().to_path_buf(),
-            source,
-        })?;
-    let mut bytes = vec![0_u8; length];
-    file.read_exact(&mut bytes)
-        .map_err(|source| StorageError::Io {
-            operation: "read latest recoverable record",
-            path: record.path().to_path_buf(),
-            source,
-        })?;
-    Ok(bytes)
 }
 
 /// Requires exact key order and descriptions for a full-state checkpoint.

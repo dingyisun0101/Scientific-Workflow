@@ -147,7 +147,7 @@ pub enum StorageError {
     },
 
     /// Chunk filenames do not describe one recoverable committed prefix and
-    /// at most one highest open chunk.
+    /// at most one highest temporary publication.
     #[error("cannot recover stream output at `{path}`: {reason}")]
     RecoveryConflict {
         /// Stream directory or conflicting payload path.

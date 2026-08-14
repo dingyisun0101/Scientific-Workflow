@@ -42,9 +42,10 @@ making them suitable for large arrays and tensors.
 - Automatic exactly-once final-state sampling across sampling-interval boundaries.
 - Exact finite-`f64` JSON reconstruction through Serde JSON's round-trip parser.
 - Finite byte- and record-bounded asynchronous writers.
-- Exact-byte automatic chunking with indivisible JSONL records.
-- Durable chunk publication through open-file sync, incremental descriptor
-  preparation, atomic lifecycle rename, and stream-directory sync.
+- Exact-byte automatic chunking with indivisible JSONL records and reusable
+  userspace accumulation buffers.
+- Durable whole-chunk publication through one payload write, file sync,
+  descriptor preparation, atomic lifecycle rename, and stream-directory sync.
 - Explicit interrupted-run append and complete typed checkpoint recovery.
 - RNG-agnostic method, version, key-encoding, key, and parameter provenance.
 - SHA-256-verified eager reconstruction through per-key payload decoders.
@@ -672,11 +673,11 @@ a stream-directory sync. `flush_stream_to_storage(stream)` exposes this as an
 ordered durability barrier. `continue_existing_recording` recovers append
 position without reconstructing state, while
 `continue_recording_from_latest_checkpoint` also returns a complete typed
-checkpoint through registered decoders. When the selected checkpoint is in a
-sealed chunk, Workflow verifies that chunk's declared byte count and SHA-256
-checksum before decoding the final record or returning an append-capable
-writer. A recovery-selected open tail is decoded only after the recovery scan
-has validated its complete JSONL prefix.
+checkpoint through registered decoders. Workflow verifies the selected sealed
+chunk's declared byte count and SHA-256 checksum before decoding its final
+record or returning an append-capable writer. A descriptor-prepared temporary
+chunk completes its rename during recovery; an unpublished temporary chunk is
+discarded and is not scientific checkpoint state.
 
 ### Custom Payload Decoders
 

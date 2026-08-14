@@ -383,7 +383,7 @@ impl TimeAxisMetadata {
     }
 }
 
-/// Metadata and incrementally prepared chunk inventory for one logical stream.
+/// Metadata and prepared chunk inventory for one logical stream.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StateStreamMetadata {

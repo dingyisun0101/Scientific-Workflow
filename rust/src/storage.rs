@@ -6,8 +6,9 @@
 //! [`SystemStateWriter::observe_state`] after each evolution step. The writer
 //! checks time before accessing any payload and encodes only streams whose
 //! sampling interval includes the current iteration. One bounded queue
-//! and worker serve every configured stream, while each stream retains an
-//! independent byte-targeted chunk sequence. The recording owns exactly one
+//! and worker serve every configured stream. Each stream accumulates an
+//! independent byte-targeted chunk entirely in reusable userspace memory and
+//! performs filesystem IO only when publishing that chunk. The recording owns exactly one
 //! authoritative `metadata.json` lifecycle.
 //!
 //! # Ownership and backpressure
@@ -23,8 +24,8 @@
 //!
 //! [`SystemStateWriterBuilder::create_new_recording`] refuses an existing output root, validates every
 //! stream against one shared state specification, publishes initial `running`
-//! metadata, and then starts the recording writer. Each chunk descriptor is committed
-//! incrementally before that payload receives its sealed filename.
+//! metadata, and then starts the recording writer. A complete buffered chunk is
+//! written once, synchronized, described in metadata, and atomically sealed.
 //! [`SystemStateWriter::complete_recording`] drains the writer, atomically commits
 //! completion timing and terminal metadata, and returns [`CompletedRecording`];
 //! [`SystemStateWriter::mark_recording_failed`] records an explicit failed
@@ -34,8 +35,9 @@
 //! [`SystemStateWriterBuilder::continue_existing_recording`] explicitly validates and appends an
 //! existing running run. [`SystemStateWriterBuilder::continue_recording_from_latest_checkpoint`]
 //! additionally reconstructs a complete owned checkpoint state through
-//! caller-supplied payload decoders. Recovery examines only the highest
-//! unsealed chunk per stream. Checkpoint-aware continuation also verifies the
+//! caller-supplied payload decoders. Recovery discards an unpublished temporary
+//! chunk, while completing the rename of a descriptor-prepared chunk.
+//! Checkpoint-aware continuation verifies the
 //! selected latest sealed checkpoint chunk's exact byte count and SHA-256
 //! checksum before decoding it or returning an append-capable writer.
 //!
@@ -572,8 +574,8 @@ impl SystemStateWriterBuilder {
     /// Continues append writing in an existing running recording directory.
     ///
     /// The complete builder configuration is compared with authoritative
-    /// metadata before any chunk is recovered. Only the highest open chunk in
-    /// each stream may be examined. This append-only entry point does not
+    /// metadata before temporary publication state is reconciled. Only the
+    /// highest temporary chunk in each stream may be examined. This append-only entry point does not
     /// reconstruct scientific state; callers requiring a verified checkpoint
     /// must use [`Self::continue_recording_from_latest_checkpoint`].
     pub fn continue_existing_recording(self) -> Result<SystemStateWriter, StorageError> {
@@ -677,8 +679,8 @@ impl SystemStateWriter {
     /// Durably seals every record accepted earlier by one logical stream.
     ///
     /// This is an ordered per-stream checkpoint barrier, not merely a buffered
-    /// file flush. A non-empty open chunk is synchronized, prepared in the sole
-    /// metadata document, renamed to its sealed filename, and directory-synced
+    /// file flush. A non-empty userspace chunk is written once, synchronized,
+    /// prepared in the sole metadata document, renamed to its sealed filename, and directory-synced
     /// before this method returns.
     pub fn flush_stream_to_storage(&self, stream: &str) -> Result<(), StorageError> {
         if !self.streams.contains_key(stream) {
@@ -862,18 +864,12 @@ impl SystemStateWriter {
                     stream: checkpoint_stream.to_owned(),
                 }
             })?;
-            let seed = recovered
-                .iter()
-                .find(|(stream, _)| stream.name == checkpoint_stream)
-                .map(|(_, seed)| seed)
-                .expect("matched stream has one recovered seed");
             Some(stored_state_series_reader::decode_resume_state(
                 &prepared.root,
                 &prepared.metadata_path,
                 declaration,
                 &prepared.spec,
                 &decoders,
-                seed.latest_open_record(),
             )?)
         } else {
             None

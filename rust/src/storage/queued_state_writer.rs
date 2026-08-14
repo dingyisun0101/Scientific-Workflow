@@ -2,15 +2,16 @@
 //!
 //! [`StateWriterWorker`] accepts complete [`EncodedStateRecord`] values, applies strict
 //! byte/count backpressure, and moves every stream through one FIFO worker.
-//! Each private stream sink owns at most one open payload. The worker prepares
-//! descriptors through the recording-level [`RecordingManifest`] and
-//! atomically renames each payload into its immutable final name. No payload is
-//! copied during this lifecycle.
+//! Each private stream sink owns one reusable userspace byte buffer. Records
+//! cause no filesystem operation until the buffer reaches its chunk target.
+//! The worker then writes the complete payload once, prepares its descriptor
+//! through the recording-level [`RecordingManifest`], and atomically renames
+//! it into its immutable final name.
 //!
 //! # Filename lifecycle
 //!
-//! `chunk-NNNNNN.jsonl.tmp` is the real open payload. After its bytes and open
-//! directory entry are synchronized, its descriptor is committed to the sole
+//! `chunk-NNNNNN.jsonl.tmp` exists only during whole-chunk publication. After
+//! its bytes and directory entry are synchronized, its descriptor is committed to the sole
 //! `metadata.json`; only then is it renamed to `chunk-NNNNNN.jsonl`. The final
 //! name is the authoritative seal marker. This ordering ensures recovery never
 //! needs to inspect sealed payload contents to rebuild missing metadata.
@@ -19,10 +20,9 @@
 //!
 //! Resume checks filenames for the committed ordinal prefix but never opens a
 //! final `.jsonl` file. At most the highest `.jsonl.tmp` payload is opened. A
-//! prepared open chunk is verified against its existing descriptor and renamed;
-//! an unprepared open chunk retains its complete JSONL prefix, truncates only a
-//! non-newline-terminated crash fragment, and is moved directly into the new
-//! worker as its active chunk.
+//! prepared chunk is verified against its existing descriptor and renamed. An
+//! unprepared chunk was never published and is discarded; continuation resumes
+//! from the newest sealed checkpoint.
 //!
 //! # Backpressure and durability barriers
 //!
@@ -104,16 +104,10 @@ impl StateStreamStorageConfig {
     }
 }
 
-/// Recovered worker position and optional active payload.
-///
-/// The type owns the open file handle when an unprepared chunk survived. It is
-/// intentionally opaque outside this module so callers cannot append around
-/// writer ordering or publish a chunk without the manifest transaction.
+/// Recovered worker position after temporary-file reconciliation.
 pub(crate) struct RecoveredStateStream {
     next_ordinal: u64,
     last_iteration: Option<u64>,
-    active: Option<ActiveChunk>,
-    latest_open_record: Option<RecoveredUnsealedRecord>,
 }
 
 impl RecoveredStateStream {
@@ -122,47 +116,12 @@ impl RecoveredStateStream {
         Self {
             next_ordinal: 0,
             last_iteration: None,
-            active: None,
-            latest_open_record: None,
         }
-    }
-
-    /// Borrows the final complete record recovered from an unprepared chunk.
-    pub(crate) fn latest_open_record(&self) -> Option<&RecoveredUnsealedRecord> {
-        self.latest_open_record.as_ref()
     }
 
     /// Returns the newest recovered iteration, if the stream is nonempty.
     pub(crate) fn last_iteration(&self) -> Option<u64> {
         self.last_iteration
-    }
-}
-
-/// File range of the latest complete record in a recovered open payload.
-///
-/// The locator avoids copying potentially large encoded state bytes out of the
-/// recovery scan buffer. Checkpoint reconstruction seeks to this range and
-/// allocates decoder input exactly once.
-pub(crate) struct RecoveredUnsealedRecord {
-    path: PathBuf,
-    offset: u64,
-    bytes: u64,
-}
-
-impl RecoveredUnsealedRecord {
-    /// Borrows the open payload path for reading and contextual errors.
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Returns the encoded JSON object's byte offset.
-    pub(crate) fn offset(&self) -> u64 {
-        self.offset
-    }
-
-    /// Returns its byte length without the framing newline.
-    pub(crate) fn bytes(&self) -> u64 {
-        self.bytes
     }
 }
 
@@ -330,7 +289,7 @@ impl StateWriterWorker {
         let mut queue_streams = HashMap::with_capacity(streams.len());
         let mut sinks = BTreeMap::new();
         let mut error_path = None;
-        for (config, mut recovered) in streams {
+        for (config, recovered) in streams {
             error_path.get_or_insert_with(|| config.directory.clone());
             queue_streams.insert(
                 config.stream.clone(),
@@ -340,7 +299,6 @@ impl StateWriterWorker {
                     last_accepted_iteration: recovered.last_iteration,
                 },
             );
-            drop(recovered.latest_open_record.take());
             let sink = StateStreamSink::new(config, recovered);
             let replaced = sinks.insert(sink.stream.clone(), sink);
             debug_assert!(replaced.is_none());
@@ -454,7 +412,8 @@ struct StateStreamSink {
     directory: PathBuf,
     max_chunk_bytes: u64,
     next_ordinal: u64,
-    active: Option<ActiveChunk>,
+    buffer: Vec<u8>,
+    active: Option<BufferedChunkState>,
 }
 
 impl StateStreamSink {
@@ -465,7 +424,8 @@ impl StateStreamSink {
             directory: config.directory,
             max_chunk_bytes: config.max_chunk_bytes.get(),
             next_ordinal: recovered.next_ordinal,
-            active: recovered.active,
+            buffer: Vec::new(),
+            active: None,
         }
     }
 
@@ -489,17 +449,17 @@ impl StateStreamSink {
             self.flush(manifest)?;
         }
         if self.active.is_none() {
-            self.active = Some(ActiveChunk::create(
-                &self.directory,
+            self.active = Some(BufferedChunkState::new(
                 self.next_ordinal,
                 record.simulation_time().iteration(),
-            )?);
+            ));
             self.next_ordinal = self.next_ordinal.checked_add(1).ok_or_else(|| {
                 StorageError::ByteCountOverflow {
                     stream: self.stream.clone(),
                 }
             })?;
         }
+        self.buffer.extend_from_slice(record.bytes());
         self.active
             .as_mut()
             .expect("active chunk was initialized")
@@ -516,11 +476,117 @@ impl StateStreamSink {
 
     /// Durably seals the current non-empty chunk, if one exists.
     fn flush(&mut self, manifest: &RecordingManifest) -> Result<(), StorageError> {
-        seal_active(&mut self.active, &self.stream, manifest)
+        let Some(chunk) = self.active.take() else {
+            return Ok(());
+        };
+        chunk.seal(&self.directory, &self.stream, &self.buffer, manifest)?;
+        self.buffer.clear();
+        Ok(())
     }
 }
 
-/// Worker-owned open payload and its incremental descriptor facts.
+/// Descriptor state for one chunk accumulated entirely in userspace memory.
+struct BufferedChunkState {
+    ordinal: u64,
+    hasher: Sha256,
+    records: u64,
+    bytes: u64,
+    first_iteration: u64,
+    last_iteration: u64,
+}
+
+impl BufferedChunkState {
+    fn new(ordinal: u64, iteration: u64) -> Self {
+        Self {
+            ordinal,
+            hasher: Sha256::new(),
+            records: 0,
+            bytes: 0,
+            first_iteration: iteration,
+            last_iteration: iteration,
+        }
+    }
+
+    fn append(&mut self, stream: &str, record: &EncodedStateRecord) -> Result<(), StorageError> {
+        self.hasher.update(record.bytes());
+        let record_bytes =
+            u64::try_from(record.len()).map_err(|_| StorageError::ByteCountOverflow {
+                stream: stream.to_owned(),
+            })?;
+        self.bytes = self.bytes.checked_add(record_bytes).ok_or_else(|| {
+            StorageError::ByteCountOverflow {
+                stream: stream.to_owned(),
+            }
+        })?;
+        self.records =
+            self.records
+                .checked_add(1)
+                .ok_or_else(|| StorageError::ByteCountOverflow {
+                    stream: stream.to_owned(),
+                })?;
+        self.last_iteration = record.simulation_time().iteration();
+        Ok(())
+    }
+
+    fn descriptor(&self) -> ChunkMetadata {
+        let digest = lowercase_hex(&self.hasher.clone().finalize());
+        ChunkMetadata {
+            ordinal: self.ordinal,
+            file: chunk_filename(self.ordinal),
+            records: self.records,
+            bytes: self.bytes,
+            checksum: format!("sha256:{digest}"),
+            first_iteration: self.first_iteration,
+            last_iteration: self.last_iteration,
+        }
+    }
+
+    /// Publishes one complete buffered payload with a single file write.
+    fn seal(
+        self,
+        directory: &Path,
+        stream: &str,
+        bytes: &[u8],
+        manifest: &RecordingManifest,
+    ) -> Result<(), StorageError> {
+        debug_assert_eq!(self.bytes, bytes.len() as u64);
+        let final_path = directory.join(chunk_filename(self.ordinal));
+        if final_path.exists() {
+            return Err(StorageError::RecordingDirectoryExists { path: final_path });
+        }
+        let temporary_path = directory.join(chunk_temp_filename(self.ordinal));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+            .map_err(|source| StorageError::Io {
+                operation: "create buffered chunk",
+                path: temporary_path.clone(),
+                source,
+            })?;
+        file.write_all(bytes).map_err(|source| StorageError::Io {
+            operation: "write buffered chunk",
+            path: temporary_path.clone(),
+            source,
+        })?;
+        file.sync_all().map_err(|source| StorageError::Io {
+            operation: "synchronize buffered chunk",
+            path: temporary_path.clone(),
+            source,
+        })?;
+        sync_directory(directory, "synchronize buffered chunk directory entry")?;
+        manifest.prepare_chunk(stream, self.descriptor())?;
+        drop(file);
+        fs::rename(&temporary_path, &final_path).map_err(|source| StorageError::Io {
+            operation: "seal buffered chunk",
+            path: final_path.clone(),
+            source,
+        })?;
+        sync_directory(directory, "synchronize sealed chunk filename")
+    }
+}
+
+/// Recovery-only owner for a descriptor-prepared temporary payload.
 struct ActiveChunk {
     ordinal: u64,
     temporary_path: PathBuf,
@@ -534,35 +600,6 @@ struct ActiveChunk {
 }
 
 impl ActiveChunk {
-    /// Exclusively creates one new open payload under its lifecycle name.
-    fn create(directory: &Path, ordinal: u64, iteration: u64) -> Result<Self, StorageError> {
-        let final_path = directory.join(chunk_filename(ordinal));
-        if final_path.exists() {
-            return Err(StorageError::RecordingDirectoryExists { path: final_path });
-        }
-        let temporary_path = directory.join(chunk_temp_filename(ordinal));
-        let file = OpenOptions::new()
-            .append(true)
-            .create_new(true)
-            .open(&temporary_path)
-            .map_err(|source| StorageError::Io {
-                operation: "create open chunk",
-                path: temporary_path.clone(),
-                source,
-            })?;
-        Ok(Self {
-            ordinal,
-            temporary_path,
-            final_path,
-            file,
-            hasher: Sha256::new(),
-            records: 0,
-            bytes: 0,
-            first_iteration: iteration,
-            last_iteration: iteration,
-        })
-    }
-
     /// Reopens the valid complete prefix found by recovery without copying it.
     fn recovered(
         directory: &Path,
@@ -595,35 +632,6 @@ impl ActiveChunk {
         })
     }
 
-    /// Appends one indivisible record and advances descriptor facts.
-    fn append(&mut self, stream: &str, record: &EncodedStateRecord) -> Result<(), StorageError> {
-        self.file
-            .write_all(record.bytes())
-            .map_err(|source| StorageError::Io {
-                operation: "append chunk",
-                path: self.temporary_path.clone(),
-                source,
-            })?;
-        self.hasher.update(record.bytes());
-        let record_bytes =
-            u64::try_from(record.len()).map_err(|_| StorageError::ByteCountOverflow {
-                stream: stream.to_owned(),
-            })?;
-        self.bytes = self.bytes.checked_add(record_bytes).ok_or_else(|| {
-            StorageError::ByteCountOverflow {
-                stream: stream.to_owned(),
-            }
-        })?;
-        self.records =
-            self.records
-                .checked_add(1)
-                .ok_or_else(|| StorageError::ByteCountOverflow {
-                    stream: stream.to_owned(),
-                })?;
-        self.last_iteration = record.simulation_time().iteration();
-        Ok(())
-    }
-
     /// Builds the authoritative descriptor without consuming the open owner.
     fn descriptor(&self) -> ChunkMetadata {
         let digest = lowercase_hex(&self.hasher.clone().finalize());
@@ -636,29 +644,6 @@ impl ActiveChunk {
             first_iteration: self.first_iteration,
             last_iteration: self.last_iteration,
         }
-    }
-
-    /// Prepares metadata and then atomically changes the seal filename.
-    fn seal(self, stream: &str, manifest: &RecordingManifest) -> Result<(), StorageError> {
-        self.file.sync_all().map_err(|source| StorageError::Io {
-            operation: "synchronize open chunk",
-            path: self.temporary_path.clone(),
-            source,
-        })?;
-        let directory = self
-            .temporary_path
-            .parent()
-            .expect("every chunk has its configured stream directory");
-        sync_directory(directory, "synchronize open chunk directory entry")?;
-        let descriptor = self.descriptor();
-        manifest.prepare_chunk(stream, descriptor)?;
-        drop(self.file);
-        fs::rename(&self.temporary_path, &self.final_path).map_err(|source| StorageError::Io {
-            operation: "seal chunk",
-            path: self.final_path.clone(),
-            source,
-        })?;
-        sync_directory(directory, "synchronize sealed chunk filename")
     }
 
     /// Completes a crash-interrupted rename for an already prepared descriptor.
@@ -695,10 +680,9 @@ struct ChunkNames {
     open: bool,
 }
 
-/// Scanned complete prefix of one open payload.
+/// Scanned contents of one descriptor-prepared temporary payload.
 struct OpenScan {
     active: Option<ActiveChunk>,
-    latest_record: Option<RecoveredUnsealedRecord>,
 }
 
 /// Runs the append/barrier loop and publishes one terminal outcome.
@@ -805,18 +789,6 @@ fn complete_flush(shared: &Shared, id: u64) {
     shared.changed.notify_all();
 }
 
-/// Seals a present chunk through the shared manifest transaction.
-fn seal_active(
-    active: &mut Option<ActiveChunk>,
-    stream: &str,
-    manifest: &RecordingManifest,
-) -> Result<(), StorageError> {
-    if let Some(chunk) = active.take() {
-        chunk.seal(stream, manifest)?;
-    }
-    Ok(())
-}
-
 /// Reconciles one stream directory without inspecting sealed contents.
 fn recover_stream(
     config: &StateStreamStorageConfig,
@@ -902,8 +874,6 @@ fn recover_stream(
         return Ok(RecoveredStateStream {
             next_ordinal: committed,
             last_iteration: previous,
-            active: None,
-            latest_open_record: None,
         });
     };
     if !names.open || names.sealed {
@@ -913,33 +883,20 @@ fn recover_stream(
         });
     }
 
-    let scan = scan_open_chunk(config, committed, previous)?;
-    let Some(active) = scan.active else {
-        let path = config.directory.join(chunk_temp_filename(committed));
-        fs::remove_file(&path).map_err(|source| StorageError::Io {
-            operation: "remove empty recovered chunk",
-            path: path.clone(),
-            source,
-        })?;
-        sync_directory(&config.directory, "synchronize empty chunk removal")?;
-        return Ok(RecoveredStateStream {
-            next_ordinal: committed,
-            last_iteration: previous,
-            active: None,
-            latest_open_record: None,
-        });
-    };
-    let next_ordinal = committed
-        .checked_add(1)
-        .ok_or_else(|| StorageError::ByteCountOverflow {
-            stream: config.stream.clone(),
-        })?;
-    let last_iteration = Some(active.last_iteration);
+    // An unprepared temporary payload was never published and therefore is
+    // not part of the recording. Buffered writers may leave one only while a
+    // whole-chunk publication is interrupted. Discard it rather than exposing
+    // a partially durable userspace chunk as scientific state.
+    let path = config.directory.join(chunk_temp_filename(committed));
+    fs::remove_file(&path).map_err(|source| StorageError::Io {
+        operation: "discard unpublished buffered chunk",
+        path: path.clone(),
+        source,
+    })?;
+    sync_directory(&config.directory, "synchronize unpublished chunk removal")?;
     Ok(RecoveredStateStream {
-        next_ordinal,
-        last_iteration,
-        active: Some(active),
-        latest_open_record: scan.latest_record,
+        next_ordinal: committed,
+        last_iteration: previous,
     })
 }
 
@@ -998,7 +955,7 @@ fn parse_chunk_name(name: &str) -> Option<(u64, bool)> {
     (name == expected).then_some((ordinal, open))
 }
 
-/// Scans, validates, and reopens the complete prefix of the sole open chunk.
+/// Scans, validates, and reopens the sole descriptor-prepared temporary chunk.
 fn scan_open_chunk(
     config: &StateStreamStorageConfig,
     ordinal: u64,
@@ -1017,7 +974,6 @@ fn scan_open_chunk(
     let mut records = 0_u64;
     let mut first_iteration = None;
     let mut last_iteration = previous_iteration;
-    let mut latest_record = None;
     let mut hasher = Sha256::new();
 
     loop {
@@ -1090,7 +1046,6 @@ fn scan_open_chunk(
             u64::try_from(line.len()).map_err(|_| StorageError::ByteCountOverflow {
                 stream: config.stream.clone(),
             })?;
-        let record_offset = valid_bytes;
         valid_bytes =
             valid_bytes
                 .checked_add(line_bytes)
@@ -1098,11 +1053,6 @@ fn scan_open_chunk(
                     stream: config.stream.clone(),
                 })?;
         hasher.update(&line);
-        latest_record = Some(RecoveredUnsealedRecord {
-            path: path.clone(),
-            offset: record_offset,
-            bytes: line_bytes - 1,
-        });
     }
     drop(input);
 
@@ -1124,10 +1074,7 @@ fn scan_open_chunk(
     drop(writable);
 
     let Some(first_iteration) = first_iteration else {
-        return Ok(OpenScan {
-            active: None,
-            latest_record: None,
-        });
+        return Ok(OpenScan { active: None });
     };
     let last_iteration = last_iteration.expect("a recovered first record has a final iteration");
     let active = ActiveChunk::recovered(
@@ -1141,7 +1088,6 @@ fn scan_open_chunk(
     )?;
     Ok(OpenScan {
         active: Some(active),
-        latest_record,
     })
 }
 
