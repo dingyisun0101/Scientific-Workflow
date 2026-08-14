@@ -625,7 +625,12 @@ use scientific_workflow::prelude::basics::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = SystemStateSchema::load_json_template("state.json")?;
-    let mut writer = SystemStateWriter::builder("output/recording-001", &spec)
+    let mut state = spec.create_empty_state(
+        SimulationTime::from_iteration_and_physical_time(0, 0.0).unwrap(),
+    );
+    drop(state.insert_payload("population", vec![10.0_f64, 20.0, 30.0])?);
+
+    let mut writer = SystemStateWriter::builder("output/recording-001", &state)
         .with_time_axis_metadata(
             TimeAxisMetadata::new("iteration")
                 .with_iteration_unit("iteration")
@@ -643,10 +648,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .create_new_recording()?;
 
-    let mut state = spec.create_empty_state(
-        SimulationTime::from_iteration_and_physical_time(0, 0.0).unwrap(),
-    );
-    drop(state.insert_payload("population", vec![10.0_f64, 20.0, 30.0])?);
     writer.observe_state(&state)?;
     writer.complete_recording_with_final_state(&state)?;
 

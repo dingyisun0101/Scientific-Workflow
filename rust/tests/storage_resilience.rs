@@ -109,7 +109,8 @@ fn decoders() -> JsonPayloadDecoderRegistry {
 /// Produces a completed public run with two strictly ordered records.
 fn write_valid_run(workspace: &TempWorkspace) {
     let spec = spec();
-    let mut output = SystemStateWriter::builder(workspace.run(), &spec)
+    let initial_state = populated_state(&spec, 0);
+    let mut output = SystemStateWriter::builder(workspace.run(), &initial_state)
         .add_state_stream(stream(4_096))
         .create_new_recording()
         .unwrap();
@@ -149,11 +150,12 @@ fn replace_first_chunk(run: &Path, bytes: &[u8], records: u64, first: u64, last:
 #[test]
 fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let state_spec = spec();
+    let writer_state = populated_state(&state_spec, 0);
 
     let existing = TempWorkspace::new("existing");
     fs::create_dir(existing.run()).unwrap();
     assert!(matches!(
-        SystemStateWriter::builder(existing.run(), &state_spec)
+        SystemStateWriter::builder(existing.run(), &writer_state)
             .add_state_stream(stream(4_096))
             .create_new_recording(),
         Err(StorageError::RecordingDirectoryExists { path }) if path == existing.run()
@@ -161,7 +163,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let invalid = TempWorkspace::new("invalid");
     assert!(matches!(
-        SystemStateWriter::builder(invalid.run(), &state_spec)
+        SystemStateWriter::builder(invalid.run(), &writer_state)
             .add_state_stream(StateStreamConfig::new(
                 "signal",
                 ["absent"],
@@ -178,7 +180,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let duplicate = TempWorkspace::new("duplicate");
     assert!(matches!(
-        SystemStateWriter::builder(duplicate.run(), &state_spec)
+        SystemStateWriter::builder(duplicate.run(), &writer_state)
             .add_state_stream(stream(4_096))
             .add_state_stream(stream(4_096))
             .create_new_recording(),
@@ -187,7 +189,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let invalid_time = TempWorkspace::new("time");
     assert!(matches!(
-        SystemStateWriter::builder(invalid_time.run(), &state_spec)
+        SystemStateWriter::builder(invalid_time.run(), &writer_state)
             .with_time_axis_metadata(
                 TimeAxisMetadata::new("iteration").with_physical_time_unit("s"),
             )
@@ -198,7 +200,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     println!("[configuration] existing=true fields=true duplicate=true time=true");
 
     let oversized = TempWorkspace::new("oversized");
-    let mut output = SystemStateWriter::builder(oversized.run(), &state_spec)
+    let mut output = SystemStateWriter::builder(oversized.run(), &writer_state)
         .add_state_stream(stream(64))
         .create_new_recording()
         .unwrap();
@@ -214,7 +216,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         .unwrap();
 
     let ordering = TempWorkspace::new("ordering");
-    let mut output = SystemStateWriter::builder(ordering.run(), &state_spec)
+    let mut output = SystemStateWriter::builder(ordering.run(), &writer_state)
         .add_state_stream(stream(4_096))
         .create_new_recording()
         .unwrap();
@@ -233,7 +235,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     output.complete_recording().unwrap();
 
     let terminal = TempWorkspace::new("terminal");
-    let mut output = SystemStateWriter::builder(terminal.run(), &state_spec)
+    let mut output = SystemStateWriter::builder(terminal.run(), &writer_state)
         .add_state_stream(stream(4_096))
         .create_new_recording()
         .unwrap();
@@ -250,7 +252,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     );
 
     let encoding = TempWorkspace::new("encoding");
-    let mut output = SystemStateWriter::builder(encoding.run(), &state_spec)
+    let mut output = SystemStateWriter::builder(encoding.run(), &writer_state)
         .add_state_stream(StateStreamConfig::new(
             "signal",
             ["population", "activity"],
@@ -292,7 +294,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         .unwrap();
 
     let running = TempWorkspace::new("running");
-    let output = SystemStateWriter::builder(running.run(), &state_spec)
+    let output = SystemStateWriter::builder(running.run(), &writer_state)
         .add_state_stream(stream(4_096))
         .create_new_recording()
         .unwrap();

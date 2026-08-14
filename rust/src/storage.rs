@@ -62,7 +62,7 @@ use serde_json::{Map, Value};
 
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
 use crate::configuration::TaskParameters;
-use crate::system_state::{SystemState, SystemStateSchema};
+use crate::system_state::{StateSchemaSource, SystemState, SystemStateSchema};
 
 mod error;
 mod json_payload_decoder;
@@ -473,12 +473,16 @@ pub struct SystemStateWriterBuilder {
 impl SystemStateWriterBuilder {
     /// Creates an empty run configuration using [`TimeAxisMetadata::default`].
     ///
-    /// `spec` is cloned only as an `Arc`-backed metadata handle. No scientific
-    /// state or payload exists in this builder.
-    pub fn new(root: impl Into<PathBuf>, spec: &SystemStateSchema) -> Self {
+    /// The schema is derived from a live [`SystemState`] or supplied directly
+    /// as a [`SystemStateSchema`]. It is cloned only as an `Arc`-backed metadata
+    /// handle; no scientific payload is cloned or retained.
+    pub fn new<S>(root: impl Into<PathBuf>, source: &S) -> Self
+    where
+        S: StateSchemaSource + ?Sized,
+    {
         Self {
             root: root.into(),
-            spec: spec.clone(),
+            spec: source.state_schema().clone(),
             time: TimeAxisMetadata::default(),
             user_metadata: Map::new(),
             shared_stream_limits: None,
@@ -616,9 +620,12 @@ pub struct SystemStateWriter {
 }
 
 impl SystemStateWriter {
-    /// Begins configuring a new exclusive state-recording directory.
-    pub fn builder(root: impl Into<PathBuf>, spec: &SystemStateSchema) -> SystemStateWriterBuilder {
-        SystemStateWriterBuilder::new(root, spec)
+    /// Begins configuring a state recording from a live state or schema.
+    pub fn builder<S>(root: impl Into<PathBuf>, source: &S) -> SystemStateWriterBuilder
+    where
+        S: StateSchemaSource + ?Sized,
+    {
+        SystemStateWriterBuilder::new(root, source)
     }
 
     /// Returns the recording directory exactly as configured.

@@ -16,7 +16,6 @@ pub(crate) const RADIUS_STREAM: &str = "radius";
 pub(crate) const CHECKPOINT_STREAM: &str = "checkpoint";
 
 pub(crate) fn record_task(
-    schema: &SystemStateSchema,
     directory: &std::path::Path,
     task: &TaskConfig,
     model: &mut crate::hopf_model::HopfModel,
@@ -25,7 +24,7 @@ pub(crate) fn record_task(
     // Operational policy is decoded from the same resolved TaskConfig as model
     // parameters. There is intentionally no parallel recording-settings type.
     let step_count: u64 = task.decode_value("step_count")?;
-    let mut writer = build_writer(schema, directory, task)?;
+    let mut writer = build_writer(model.state(), directory, task)?;
 
     // TaskContext updates drive the terminal display only. SystemState is the
     // scientific record, and SystemStateWriter alone decides when to sample it.
@@ -48,7 +47,7 @@ pub(crate) fn record_task(
 }
 
 fn build_writer(
-    schema: &SystemStateSchema,
+    state: &SystemState,
     directory: &std::path::Path,
     task: &TaskConfig,
 ) -> AppResult<SystemStateWriter> {
@@ -75,7 +74,7 @@ fn build_writer(
 
     // Writer construction is also where the task takes ownership of its I/O
     // lifecycle. Merely constructing a Phase or ExecutionScope writes no data.
-    let writer = SystemStateWriter::builder(directory, schema)
+    let writer = SystemStateWriter::builder(directory, state)
         .with_time_axis_metadata(time_axis)
         // Persisting resolved parameters makes each task output independently
         // interpretable without duplicating them in every state record.

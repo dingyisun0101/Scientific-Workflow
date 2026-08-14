@@ -75,7 +75,9 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
     .with_relative_directory("streams/signal");
     let mut user_metadata = Map::new();
     user_metadata.insert("producer".to_owned(), Value::from("rust-public-writer"));
-    let mut writer = SystemStateWriterBuilder::new(root, &schema)
+    let mut state = schema
+        .create_empty_state(SimulationTime::from_iteration_and_physical_time(0, 0.0).unwrap());
+    let mut writer = SystemStateWriterBuilder::new(root, &state)
         .with_time_axis_metadata(
             TimeAxisMetadata::new("iteration").with_physical_axis("physical_time", "s"),
         )
@@ -84,8 +86,6 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
         .create_new_recording()
         .unwrap();
 
-    let mut state = schema
-        .create_empty_state(SimulationTime::from_iteration_and_physical_time(0, 0.0).unwrap());
     state
         .insert_payload("population", vec![sensitive, 1.25])
         .unwrap();

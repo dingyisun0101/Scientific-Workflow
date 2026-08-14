@@ -26,7 +26,6 @@ pub(crate) fn run_task(
     // Task ordinal is stable across equally generated phase task sets. It is
     // therefore sufficient to derive the same durable directory in validation.
     recording::record_task(
-        schema,
         &execution.task_recording_directory(task.task_ordinal()),
         task,
         &mut model,

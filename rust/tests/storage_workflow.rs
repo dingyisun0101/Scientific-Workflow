@@ -206,7 +206,8 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let mut annotations = Map::new();
     annotations.insert("seed".to_owned(), Value::from(42));
     annotations.insert("program".to_owned(), Value::from("public-api-demo"));
-    let mut output = SystemStateWriterBuilder::new(&run_path, &spec)
+    let schema_state = spec.create_empty_state(SimulationTime::from_iteration(0));
+    let mut output = SystemStateWriterBuilder::new(&run_path, &schema_state)
         .with_time_axis_metadata(
             TimeAxisMetadata::new("simulation_iteration")
                 .with_iteration_unit("iteration")
@@ -496,7 +497,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     .unwrap();
     let task = project.parameters().task(0).unwrap();
     let task_metadata_run = workspace.root.join("task-metadata-run");
-    SystemStateWriter::builder(&task_metadata_run, &spec)
+    SystemStateWriter::builder(&task_metadata_run, &live)
         .with_user_metadata(Map::from_iter([(
             "experiment".to_owned(),
             Value::from("metadata-merge"),
@@ -558,7 +559,7 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
     state.insert_payload("particles", particles).unwrap();
 
     let run = workspace.root.join("phys-obj-run");
-    let writer = SystemStateWriter::builder(&run, &spec)
+    let writer = SystemStateWriter::builder(&run, &state)
         .with_shared_stream_limits(
             NonZeroU64::new(16_384).unwrap(),
             NonZeroU64::new(65_536).unwrap(),

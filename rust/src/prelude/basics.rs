@@ -18,8 +18,8 @@ pub use crate::storage::{
     TimeAxisMetadata,
 };
 pub use crate::system_state::{
-    PayloadInsertError, SimulationTime, StateError, StateFieldSchema, SystemState,
-    SystemStateSchema,
+    PayloadInsertError, SimulationTime, StateError, StateFieldSchema, StateSchemaSource,
+    SystemState, SystemStateSchema,
 };
 pub use crate::time_series::{
     StateSeries, StateSeriesError, StateSeriesPushError, StateSeriesView,

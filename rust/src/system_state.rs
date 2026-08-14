@@ -91,3 +91,26 @@ pub use schema::{StateFieldSchema, SystemStateSchema};
 #[doc(hidden)]
 pub use state::PayloadTuple;
 pub use state::{SimulationTime, SystemState};
+
+/// A state-bearing value from which persistent-recording layout can be derived.
+///
+/// Both [`SystemState`] and [`SystemStateSchema`] implement this trait. Passing
+/// a live state is the natural choice for a new recording; passing a schema is
+/// useful when a continuation writer must be configured before checkpoint
+/// reconstruction. Writer builders retain only the cheap shared schema handle.
+pub trait StateSchemaSource {
+    /// Returns the immutable schema that defines the state's field layout.
+    fn state_schema(&self) -> &SystemStateSchema;
+}
+
+impl StateSchemaSource for SystemState {
+    fn state_schema(&self) -> &SystemStateSchema {
+        self.schema()
+    }
+}
+
+impl StateSchemaSource for SystemStateSchema {
+    fn state_schema(&self) -> &SystemStateSchema {
+        self
+    }
+}
