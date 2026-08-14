@@ -1,4 +1,4 @@
-"""Verified eager reader for Scientific Workflow JSONL format version 5."""
+"""Verified eager reader for Scientific Workflow JSONL format version 6."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from .errors import (
 from .model import StateField, StateRecord, StateSeries
 
 FORMAT_NAME = "scientific-workflow-jsonl"
-FORMAT_VERSION = 5
+FORMAT_VERSION = 6
 METADATA_FILE = "metadata.json"
 
 Decoder = Callable[[Any], Any]
@@ -148,7 +148,7 @@ def _validate_metadata(document: Any, path: Path) -> dict[str, Any]:
     version = _uint(metadata["version"], "metadata.version")
     if version != FORMAT_VERSION:
         raise MetadataError(
-            f"unsupported metadata version {metadata['version']!r}; supported version is 5"
+            f"unsupported metadata version {metadata['version']!r}; supported version is 6"
         )
 
     status = _mapping(metadata["status"], "status")
@@ -225,8 +225,7 @@ def _validate_metadata(document: Any, path: Path) -> dict[str, Any]:
                 "directory",
                 "sampling_interval",
                 "fields",
-                "max_chunk_bytes",
-                "queue_bytes",
+                "storage",
             },
             {"chunks"},
             f"streams[{index}]",
@@ -244,8 +243,17 @@ def _validate_metadata(document: Any, path: Path) -> dict[str, Any]:
         interval = _mapping(stream["sampling_interval"], f"stream {name} interval")
         _exact_keys(interval, {"iterations"}, set(), f"stream {name} interval")
         _uint(interval["iterations"], f"stream {name} interval", positive=True)
-        _uint(stream["max_chunk_bytes"], f"stream {name} max_chunk_bytes", positive=True)
-        _uint(stream["queue_bytes"], f"stream {name} queue_bytes", positive=True)
+        storage = _mapping(stream["storage"], f"stream {name} storage")
+        _exact_keys(storage, {"layout", "queue_bytes"}, set(), f"stream {name} storage")
+        _uint(storage["queue_bytes"], f"stream {name} queue_bytes", positive=True)
+        layout = _mapping(storage["layout"], f"stream {name} layout")
+        if layout.get("kind") == "chunked":
+            _exact_keys(layout, {"kind", "target_bytes"}, set(), f"stream {name} layout")
+            _uint(layout["target_bytes"], f"stream {name} target_bytes", positive=True)
+        elif layout.get("kind") == "individual_files":
+            _exact_keys(layout, {"kind"}, set(), f"stream {name} layout")
+        else:
+            raise MetadataError(f"stream {name!r} has unsupported storage layout")
 
         fields = _list(stream["fields"], f"stream {name} fields")
         field_names: set[str] = set()
@@ -283,7 +291,11 @@ def _validate_metadata(document: Any, path: Path) -> dict[str, Any]:
             expected_file = f"chunk-{ordinal:06}.jsonl"
             if _safe_relative(chunk["file"], "chunk file") != expected_file:
                 raise MetadataError(f"chunk {ordinal} filename must be {expected_file!r}")
-            _uint(chunk["records"], "chunk records", positive=True)
+            records = _uint(chunk["records"], "chunk records", positive=True)
+            if layout["kind"] == "individual_files" and records != 1:
+                raise MetadataError(
+                    f"individual-files stream {name!r} chunk {ordinal} must contain one record"
+                )
             _uint(chunk["bytes"], "chunk bytes", positive=True)
             first = _uint(chunk["first_iteration"], "chunk first_iteration")
             last = _uint(chunk["last_iteration"], "chunk last_iteration")

@@ -37,7 +37,6 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -46,11 +45,11 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
-use super::RecordingManifest;
 use super::error::StorageError;
 use super::jsonl_format::{
     ChunkMetadata, EncodedStateRecord, StateStreamMetadata, chunk_filename, chunk_temp_filename,
 };
+use super::{RecordingManifest, StateStreamLayout, StateStreamStorage};
 
 /// Maximum accepted records not yet appended by one stream worker.
 ///
@@ -64,8 +63,7 @@ pub(crate) const MAX_OUTSTANDING_RECORDS: usize = 1_024;
 pub(crate) struct StateStreamStorageConfig {
     stream: String,
     directory: PathBuf,
-    max_chunk_bytes: NonZeroU64,
-    queue_bytes: NonZeroU64,
+    storage: StateStreamStorage,
 }
 
 impl StateStreamStorageConfig {
@@ -73,8 +71,7 @@ impl StateStreamStorageConfig {
     pub(crate) fn new(
         stream: impl Into<String>,
         directory: impl Into<PathBuf>,
-        max_chunk_bytes: NonZeroU64,
-        queue_bytes: NonZeroU64,
+        storage: StateStreamStorage,
     ) -> Result<Self, StorageError> {
         let stream = stream.into();
         if stream.trim().is_empty() {
@@ -93,8 +90,7 @@ impl StateStreamStorageConfig {
         Ok(Self {
             stream,
             directory,
-            max_chunk_bytes,
-            queue_bytes,
+            storage,
         })
     }
 
@@ -294,7 +290,7 @@ impl StateWriterWorker {
             queue_streams.insert(
                 config.stream.clone(),
                 StreamQueueState {
-                    queue_bytes: config.queue_bytes.get(),
+                    queue_bytes: config.storage.queue_bytes().get(),
                     outstanding_bytes: 0,
                     last_accepted_iteration: recovered.last_iteration,
                 },
@@ -410,7 +406,7 @@ struct StreamQueueState {
 struct StateStreamSink {
     stream: String,
     directory: PathBuf,
-    max_chunk_bytes: u64,
+    layout: StateStreamLayout,
     next_ordinal: u64,
     buffer: Vec<u8>,
     active: Option<BufferedChunkState>,
@@ -422,7 +418,7 @@ impl StateStreamSink {
         Self {
             stream: config.stream,
             directory: config.directory,
-            max_chunk_bytes: config.max_chunk_bytes.get(),
+            layout: config.storage.layout(),
             next_ordinal: recovered.next_ordinal,
             buffer: Vec::new(),
             active: None,
@@ -439,13 +435,15 @@ impl StateStreamSink {
             u64::try_from(record.len()).map_err(|_| StorageError::ByteCountOverflow {
                 stream: self.stream.clone(),
             })?;
-        if self.active.as_ref().is_some_and(|chunk| {
-            chunk.records > 0
-                && chunk
-                    .bytes
-                    .checked_add(record_bytes)
-                    .is_none_or(|bytes| bytes > self.max_chunk_bytes)
-        }) {
+        if let StateStreamLayout::Chunked { target_bytes } = self.layout
+            && self.active.as_ref().is_some_and(|chunk| {
+                chunk.records > 0
+                    && chunk
+                        .bytes
+                        .checked_add(record_bytes)
+                        .is_none_or(|bytes| bytes > target_bytes.get())
+            })
+        {
             self.flush(manifest)?;
         }
         if self.active.is_none() {
@@ -464,11 +462,14 @@ impl StateStreamSink {
             .as_mut()
             .expect("active chunk was initialized")
             .append(&self.stream, record)?;
-        if self
-            .active
-            .as_ref()
-            .is_some_and(|chunk| chunk.bytes >= self.max_chunk_bytes)
-        {
+        let should_seal = match self.layout {
+            StateStreamLayout::Chunked { target_bytes } => self
+                .active
+                .as_ref()
+                .is_some_and(|chunk| chunk.bytes >= target_bytes.get()),
+            StateStreamLayout::IndividualFiles => true,
+        };
+        if should_seal {
             self.flush(manifest)?;
         }
         Ok(())
@@ -716,10 +717,11 @@ fn write_records(
     shared: &Shared,
 ) -> Result<(), StorageError> {
     for stream in streams.values_mut() {
-        if stream
-            .active
-            .as_ref()
-            .is_some_and(|chunk| chunk.bytes >= stream.max_chunk_bytes)
+        if let StateStreamLayout::Chunked { target_bytes } = stream.layout
+            && stream
+                .active
+                .as_ref()
+                .is_some_and(|chunk| chunk.bytes >= target_bytes.get())
         {
             stream.flush(manifest)?;
         }

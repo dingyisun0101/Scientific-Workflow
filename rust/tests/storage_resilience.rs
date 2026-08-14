@@ -77,7 +77,7 @@ fn stream(queue_bytes: u64) -> StateStreamConfig {
         "signal",
         ["population", "activity"],
         SamplingInterval::iterations(1).unwrap(),
-        Some((
+        Some(StateStreamStorage::chunked(
             NonZeroU64::new(128).unwrap(),
             NonZeroU64::new(queue_bytes).unwrap(),
         )),
@@ -168,7 +168,10 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
                 "signal",
                 ["absent"],
                 SamplingInterval::iterations(1).unwrap(),
-                Some((NonZeroU64::new(1).unwrap(), NonZeroU64::new(1).unwrap())),
+                Some(StateStreamStorage::chunked(
+                    NonZeroU64::new(1).unwrap(),
+                    NonZeroU64::new(1).unwrap()
+                )),
             ))
             .create_new_recording(),
         Err(StorageError::InvalidConfiguration {
@@ -257,7 +260,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
             "signal",
             ["population", "activity"],
             SamplingInterval::iterations(2).unwrap(),
-            Some((
+            Some(StateStreamStorage::chunked(
                 NonZeroU64::new(128).unwrap(),
                 NonZeroU64::new(4_096).unwrap(),
             )),

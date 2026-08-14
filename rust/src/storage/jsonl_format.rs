@@ -48,14 +48,14 @@ use serde_json::{Map, Value};
 use crate::clock::is_utc_rfc3339;
 use crate::system_state::SimulationTime;
 
-use super::SamplingInterval;
 use super::error::StorageError;
+use super::{SamplingInterval, StateStreamLayout, StateStreamStorage};
 
 /// Stable name written into every metadata file owned by this format.
 pub(crate) const FORMAT_NAME: &str = "scientific-workflow-jsonl";
 
 /// Current metadata and record schema version.
-pub(crate) const FORMAT_VERSION: u32 = 5;
+pub(crate) const FORMAT_VERSION: u32 = 6;
 
 /// Payload encoding supported by the current storage stage.
 pub(crate) const PAYLOAD_ENCODING: &str = "json";
@@ -395,10 +395,8 @@ pub(crate) struct StateStreamMetadata {
     pub(crate) sampling_interval: SamplingInterval,
     /// Ordered partial-state schema persisted once for this stream.
     pub(crate) fields: Vec<StateFieldMetadata>,
-    /// Soft maximum chunk size; complete oversized records remain indivisible.
-    pub(crate) max_chunk_bytes: u64,
-    /// Strict maximum number of accepted but uncommitted encoded bytes.
-    pub(crate) queue_bytes: u64,
+    /// Filesystem layout and strict queue-byte budget.
+    pub(crate) storage: StateStreamStorage,
     /// Prepared chunks in monotonically increasing ordinal order.
     ///
     /// In a running run, only the final descriptor may still correspond to its
@@ -415,13 +413,6 @@ impl StateStreamMetadata {
             return Err(invalid_metadata(path, "stream name must not be empty"));
         }
         validate_relative_path(path, "stream directory", &self.directory)?;
-        if self.max_chunk_bytes == 0 || self.queue_bytes == 0 {
-            return Err(invalid_metadata(
-                path,
-                format!("stream `{}` has a zero storage limit", self.name),
-            ));
-        }
-
         let mut fields = HashSet::with_capacity(self.fields.len());
         for field in &self.fields {
             field.validate(path, &self.name)?;
@@ -439,6 +430,17 @@ impl StateStreamMetadata {
         let mut previous_last = None;
         for (expected_ordinal, chunk) in self.chunks.iter().enumerate() {
             chunk.validate(path, &self.name, expected_ordinal as u64)?;
+            if matches!(self.storage.layout(), StateStreamLayout::IndividualFiles)
+                && chunk.records != 1
+            {
+                return Err(invalid_metadata(
+                    path,
+                    format!(
+                        "individual-files stream `{}` has {} records in chunk {}",
+                        self.name, chunk.records, chunk.ordinal
+                    ),
+                ));
+            }
             if let Some(previous) = previous_last
                 && chunk.first_iteration <= previous
             {

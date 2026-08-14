@@ -478,10 +478,10 @@ fn cancellation_does_not_publish_task_owned_recording_failure() {
     let phase = activity_phase(&project, 8, "recording", move |context| {
         let state = schema.create_empty_state(SimulationTime::from_iteration(0));
         let _writer = SystemStateWriter::builder(&task_recording, &state)
-            .with_shared_stream_limits(
+            .with_shared_stream_storage(StateStreamStorage::chunked(
                 NonZeroU64::new(1_000_000).unwrap(),
                 NonZeroU64::new(1_000_000).unwrap(),
-            )
+            ))
             .add_state_stream(StateStreamConfig::new(
                 "population",
                 ["population"],

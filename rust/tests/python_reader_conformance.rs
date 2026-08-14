@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use scientific_workflow::prelude::basics::{
     JsonPayloadDecoderRegistry, SamplingInterval, SimulationTime, StateStreamConfig,
-    StoredStateSeriesReader, SystemStateSchema, SystemStateWriterBuilder, TimeAxisMetadata,
+    StateStreamStorage, StoredStateSeriesReader, SystemStateSchema, SystemStateWriterBuilder,
+    TimeAxisMetadata,
 };
 use serde_json::{Map, Value};
 
@@ -70,7 +71,10 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
         "signal",
         ["population", "label"],
         SamplingInterval::iterations(1).unwrap(),
-        Some((NonZeroU64::new(96).unwrap(), NonZeroU64::new(4096).unwrap())),
+        Some(StateStreamStorage::chunked(
+            NonZeroU64::new(96).unwrap(),
+            NonZeroU64::new(4096).unwrap(),
+        )),
     )
     .with_relative_directory("streams/signal");
     let mut user_metadata = Map::new();
@@ -109,9 +113,9 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
 }
 
 #[test]
-fn rust_and_python_readers_share_one_format_v5_fixture() {
+fn rust_and_python_readers_share_one_format_v6_fixture() {
     let reader = StoredStateSeriesReader::open_completed_recording(fixture(), decoders()).unwrap();
-    assert_eq!(reader.format_version(), 5);
+    assert_eq!(reader.format_version(), 6);
     assert_eq!(reader.stream_names().collect::<Vec<_>>(), ["signal"]);
     assert_eq!(reader.stream_record_count("signal").unwrap(), 2);
 

@@ -279,7 +279,7 @@ model itself.
 
 The public `SystemStateWriter` facade owns multi-stream metadata, one bounded
 queue and worker, and the recording's completion or failure lifecycle.
-Format version 5 writes each record's top-level `values` as a positional array
+Format version 6 writes each record's top-level `values` as a positional array
 whose names and order come from that stream's `fields` in `metadata.json`.
 Readers require an exact width and reconstruct the existing name-addressable
 state API; nested payload JSON remains opaque.

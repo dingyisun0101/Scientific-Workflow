@@ -172,7 +172,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         "signal",
         ["activity", "population"],
         SamplingInterval::iterations(1).unwrap(),
-        Some((
+        Some(StateStreamStorage::chunked(
             NonZeroU64::new(SIGNAL_CHUNK_BYTES).unwrap(),
             NonZeroU64::new(QUEUE_BYTES).unwrap(),
         )),
@@ -184,7 +184,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     assert_eq!(signal.name(), "signal");
     assert_eq!(signal.relative_directory(), "streams/signals");
     assert_eq!(signal.fields(), ["activity", "population"]);
-    assert!(signal.storage_limits().is_some());
+    assert!(signal.storage().is_some());
     let concise: StateStreamConfig = serde_json::from_value(serde_json::json!({
         "name": "checkpoint",
         "sampling_interval": 5,
@@ -192,12 +192,12 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     }))
     .unwrap();
     assert_eq!(concise.relative_directory(), "checkpoint");
-    assert_eq!(concise.storage_limits(), None);
+    assert_eq!(concise.storage(), None);
     let space = StateStreamConfig::new(
         "space",
         ["space"],
         SamplingInterval::iterations(2).unwrap(),
-        Some((
+        Some(StateStreamStorage::chunked(
             NonZeroU64::new(SPACE_CHUNK_BYTES).unwrap(),
             NonZeroU64::new(QUEUE_BYTES).unwrap(),
         )),
@@ -291,7 +291,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let metadata_bytes = fs::read(run_path.join("metadata.json")).unwrap();
     let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
     assert_eq!(metadata["status"]["state"], "complete");
-    assert_eq!(metadata["version"], 5);
+    assert_eq!(metadata["version"], 6);
     assert!(
         metadata["timing"]["created_at_utc"]
             .as_str()
@@ -417,7 +417,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         ["signal", "space"]
     );
     assert!(format!("{reader:?}").contains("StoredStateSeriesReader"));
-    assert_eq!(reader.format_version(), 5);
+    assert_eq!(reader.format_version(), 6);
     assert_eq!(reader.user_metadata()["seed"], 42);
     assert_eq!(
         reader.terminal_metadata()["termination_reason"],
@@ -503,10 +503,10 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             Value::from("metadata-merge"),
         )]))
         .with_task_parameters(&task)
-        .with_shared_stream_limits(
+        .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(4_096).unwrap(),
             NonZeroU64::new(16_384).unwrap(),
-        )
+        ))
         .add_state_stream(StateStreamConfig::new(
             "checkpoint",
             ["population", "space", "activity"],
@@ -527,13 +527,71 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         task_metadata["user_metadata"]["experiment"],
         "metadata-merge"
     );
-    assert_eq!(task_metadata["version"], 5);
+    assert_eq!(task_metadata["version"], 6);
     assert_eq!(
         task_metadata["streams"][0]["sampling_interval"],
         serde_json::json!({"iterations": 1})
     );
     println!("[task-metadata] task_ordinal=0 temperature=280 seed=7");
     println!("[result] storage_workflow=passed");
+}
+
+#[test]
+fn storage_layout_separates_buffered_chunks_from_individual_record_files() {
+    let workspace = TempWorkspace::new();
+    let run = workspace.run();
+    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
+    state
+        .insert_payload("activity", String::from("initial"))
+        .unwrap();
+
+    let queue_bytes = NonZeroU64::new(1_048_576).unwrap();
+    let mut writer = SystemStateWriter::builder(&run, &state)
+        .add_state_stream(StateStreamConfig::new(
+            "signal",
+            ["activity"],
+            SamplingInterval::iterations(1).unwrap(),
+            Some(StateStreamStorage::chunked(
+                NonZeroU64::new(1_048_576).unwrap(),
+                queue_bytes,
+            )),
+        ))
+        .add_state_stream(StateStreamConfig::new(
+            "checkpoint",
+            ["activity"],
+            SamplingInterval::iterations(1).unwrap(),
+            Some(StateStreamStorage::individual_files(queue_bytes)),
+        ))
+        .create_new_recording()
+        .unwrap();
+
+    for iteration in 0..3 {
+        writer.observe_state(&state).unwrap();
+        if iteration < 2 {
+            state.advance_simulation_time(None).unwrap();
+            *state.payload_mut::<String>("activity").unwrap() = format!("step-{iteration}");
+        }
+    }
+    writer.complete_recording().unwrap();
+
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(run.join("metadata.json")).unwrap()).unwrap();
+    let signal = stream_metadata(&metadata, "signal");
+    assert_eq!(signal["storage"]["layout"]["kind"], "chunked");
+    assert_eq!(signal["chunks"].as_array().unwrap().len(), 1);
+    assert_eq!(signal["chunks"][0]["records"], 3);
+
+    let checkpoint = stream_metadata(&metadata, "checkpoint");
+    assert_eq!(checkpoint["storage"]["layout"]["kind"], "individual_files");
+    assert_eq!(checkpoint["chunks"].as_array().unwrap().len(), 3);
+    assert!(
+        checkpoint["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|chunk| chunk["records"] == 1)
+    );
 }
 
 #[test]
@@ -560,10 +618,10 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
 
     let run = workspace.root.join("phys-obj-run");
     let writer = SystemStateWriter::builder(&run, &state)
-        .with_shared_stream_limits(
+        .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(16_384).unwrap(),
             NonZeroU64::new(65_536).unwrap(),
-        )
+        ))
         .add_state_stream(StateStreamConfig::new(
             "checkpoint",
             ["particles"],

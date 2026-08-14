@@ -64,10 +64,10 @@ fn writer_builder(
 ) -> SystemStateWriterBuilder {
     SystemStateWriter::builder(run, schema)
         .with_user_metadata(metadata)
-        .with_shared_stream_limits(
+        .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(1_024).unwrap(),
             NonZeroU64::new(4_096).unwrap(),
-        )
+        ))
         .add_state_stream(StateStreamConfig::new(
             "signal",
             ["population"],

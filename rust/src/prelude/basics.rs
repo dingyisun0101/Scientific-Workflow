@@ -14,8 +14,8 @@ pub use crate::rng_record::{RNG_RECORDS_METADATA_KEY, RngRecord, RngRecordError}
 pub use crate::storage::{
     CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
     JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, SamplingInterval, StateStreamConfig,
-    StorageError, StoredStateSeriesReader, SystemStateWriter, SystemStateWriterBuilder,
-    TimeAxisMetadata,
+    StateStreamLayout, StateStreamStorage, StorageError, StoredStateSeriesReader,
+    SystemStateWriter, SystemStateWriterBuilder, TimeAxisMetadata,
 };
 pub use crate::system_state::{
     PayloadInsertError, SimulationTime, StateError, StateFieldSchema, StateSchemaSource,

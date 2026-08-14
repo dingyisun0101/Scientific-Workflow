@@ -56,7 +56,7 @@ class ReaderTests(unittest.TestCase):
 
     def test_completed_fixture_reconstructs_exact_series_and_latest_state(self) -> None:
         reader = open_completed_recording(FIXTURE)
-        self.assertEqual(reader.format_version, 5)
+        self.assertEqual(reader.format_version, 6)
         self.assertEqual(reader.stream_names, ("signal",))
         self.assertEqual(reader.user_metadata["study"], "python-reader-conformance")
         self.assertEqual(

@@ -1,7 +1,7 @@
 """Test-only Python half of the bidirectional Rust/Python round trip.
 
 This is deliberately not a package writer API. It produces one closed
-format-v5 conformance recording so Workflow's Rust reader can verify bytes
+format-v6 conformance recording so Workflow's Rust reader can verify bytes
 reconstructed by the official Python reader and re-encoded by Python.
 """
 
@@ -55,7 +55,7 @@ def _write_python_recording(destination: Path, source_reader: Any) -> None:
 
     metadata = {
         "format": "scientific-workflow-jsonl",
-        "version": 5,
+        "version": 6,
         "status": {"state": "complete"},
         "timing": {
             "created_at_utc": "2026-08-12T00:00:00Z",
@@ -85,8 +85,10 @@ def _write_python_recording(destination: Path, source_reader: Any) -> None:
                     {"name": "population", "description": "Exact float payload"},
                     {"name": "label", "description": "Unicode round-trip label"},
                 ],
-                "max_chunk_bytes": 256,
-                "queue_bytes": 4096,
+                "storage": {
+                    "layout": {"kind": "chunked", "target_bytes": 256},
+                    "queue_bytes": 4096,
+                },
                 "chunks": chunks,
             }
         ],

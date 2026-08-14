@@ -372,14 +372,56 @@ impl SamplingInterval {
     }
 }
 
+/// Filesystem layout for one logical state stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StateStreamLayout {
+    /// Accumulate encoded records in memory until the rollover target is met.
+    Chunked { target_bytes: NonZeroU64 },
+    /// Publish every encoded record as its own immutable file.
+    IndividualFiles,
+}
+
+/// Persistence and backpressure policy for one logical state stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateStreamStorage {
+    layout: StateStreamLayout,
+    queue_bytes: NonZeroU64,
+}
+
+impl StateStreamStorage {
+    /// Creates an in-memory chunking policy with a strict queue-byte budget.
+    pub const fn chunked(target_bytes: NonZeroU64, queue_bytes: NonZeroU64) -> Self {
+        Self {
+            layout: StateStreamLayout::Chunked { target_bytes },
+            queue_bytes,
+        }
+    }
+
+    /// Creates a one-file-per-record policy with a strict queue-byte budget.
+    pub const fn individual_files(queue_bytes: NonZeroU64) -> Self {
+        Self {
+            layout: StateStreamLayout::IndividualFiles,
+            queue_bytes,
+        }
+    }
+
+    pub const fn layout(self) -> StateStreamLayout {
+        self.layout
+    }
+
+    pub const fn queue_bytes(self) -> NonZeroU64 {
+        self.queue_bytes
+    }
+}
+
 /// Configuration for one independently sampled logical output stream.
 ///
 /// Field names are exact keys from the run's [`SystemStateSchema`]. Their input order
-/// is irrelevant: the encoder writes them in canonical template order. The
-/// chunk byte limit is a rollover target, so a single larger record remains
-/// intact in its own oversized chunk. The queue byte limit is strict; a record
-/// larger than the complete queue budget is rejected because it can never be
-/// admitted.
+/// is irrelevant: the encoder writes them in canonical template order. Chunk
+/// targets are rollover thresholds, while individual-file streams seal every
+/// record immediately. The queue byte limit is strict in either layout.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateStreamConfig {
@@ -389,22 +431,22 @@ pub struct StateStreamConfig {
     sampling_interval: SamplingInterval,
     fields: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    storage_limits: Option<(NonZeroU64, NonZeroU64)>,
+    storage: Option<StateStreamStorage>,
 }
 
 impl StateStreamConfig {
     /// Creates a stream whose relative output directory initially equals its
     /// logical name.
     ///
-    /// `storage_limits == None` inherits writer-wide limits. Non-zero types
-    /// make explicit limits valid by construction. Names, paths, duplicate
+    /// `storage == None` inherits writer-wide storage. Non-zero types make
+    /// explicit limits valid by construction. Names, paths, duplicate
     /// fields, and state-key membership are validated together by
     /// [`SystemStateWriterBuilder::create_new_recording`].
     pub fn new<I, K>(
         name: impl Into<String>,
         fields: I,
         sampling_interval: SamplingInterval,
-        storage_limits: Option<(NonZeroU64, NonZeroU64)>,
+        storage: Option<StateStreamStorage>,
     ) -> Self
     where
         I: IntoIterator<Item = K>,
@@ -416,7 +458,7 @@ impl StateStreamConfig {
             name,
             sampling_interval,
             fields: fields.into_iter().map(Into::into).collect(),
-            storage_limits,
+            storage,
         }
     }
 
@@ -450,9 +492,9 @@ impl StateStreamConfig {
         &self.fields
     }
 
-    /// Returns stream-specific limits, or `None` when writer limits apply.
-    pub const fn storage_limits(&self) -> Option<(NonZeroU64, NonZeroU64)> {
-        self.storage_limits
+    /// Returns stream-specific storage, or `None` when writer storage applies.
+    pub const fn storage(&self) -> Option<StateStreamStorage> {
+        self.storage
     }
 }
 
@@ -468,7 +510,7 @@ pub struct SystemStateWriterBuilder {
     spec: SystemStateSchema,
     time: TimeAxisMetadata,
     user_metadata: Map<String, Value>,
-    shared_stream_limits: Option<(NonZeroU64, NonZeroU64)>,
+    shared_stream_storage: Option<StateStreamStorage>,
     streams: Vec<StateStreamConfig>,
 }
 
@@ -487,7 +529,7 @@ impl SystemStateWriterBuilder {
             spec: source.state_schema().clone(),
             time: TimeAxisMetadata::default(),
             user_metadata: Map::new(),
-            shared_stream_limits: None,
+            shared_stream_storage: None,
             streams: Vec::new(),
         }
     }
@@ -510,18 +552,14 @@ impl SystemStateWriterBuilder {
         self
     }
 
-    /// Uses one chunk target and one bounded-queue budget for concise stream declarations.
+    /// Uses one persistence policy for concise stream declarations.
     ///
-    /// Limits supplied directly through [`StateStreamConfig::new`] remain
-    /// stream-specific and take precedence. Streams constructed with
-    /// `storage_limits == None` require these shared limits.
+    /// Storage supplied directly through [`StateStreamConfig::new`] remains
+    /// stream-specific and takes precedence. Streams constructed with
+    /// `storage == None` require this shared policy.
     #[must_use]
-    pub fn with_shared_stream_limits(
-        mut self,
-        max_chunk_bytes: NonZeroU64,
-        queue_bytes: NonZeroU64,
-    ) -> Self {
-        self.shared_stream_limits = Some((max_chunk_bytes, queue_bytes));
+    pub fn with_shared_stream_storage(mut self, storage: StateStreamStorage) -> Self {
+        self.shared_stream_storage = Some(storage);
         self
     }
 
@@ -1075,13 +1113,13 @@ impl PreparedRecording {
                 });
             }
 
-            let (max_chunk_bytes, queue_bytes) = config
-                .storage_limits
-                .or(builder.shared_stream_limits)
+            let storage = config
+                .storage
+                .or(builder.shared_stream_storage)
                 .ok_or_else(|| StorageError::InvalidConfiguration {
-                    setting: "stream.storage_limits",
+                    setting: "stream.storage",
                     reason: format!(
-                        "stream `{}` has no explicit limits and the writer has no shared limits",
+                        "stream `{}` has no explicit storage and the writer has no shared storage",
                         config.name
                     ),
                 })?;
@@ -1104,8 +1142,7 @@ impl PreparedRecording {
                 directory: directory.clone(),
                 sampling_interval: config.sampling_interval,
                 fields,
-                max_chunk_bytes: max_chunk_bytes.get(),
-                queue_bytes: queue_bytes.get(),
+                storage,
                 chunks: Vec::new(),
             });
             streams.push(PreparedStateStream {
@@ -1115,8 +1152,7 @@ impl PreparedRecording {
                 writer: StateStreamStorageConfig::new(
                     &config.name,
                     builder.root.join(&directory),
-                    max_chunk_bytes,
-                    queue_bytes,
+                    storage,
                 )?,
             });
         }

@@ -60,10 +60,10 @@ fn builder_with_chunk_limit(
     max_chunk_bytes: u64,
 ) -> SystemStateWriterBuilder {
     SystemStateWriter::builder(run, spec)
-        .with_shared_stream_limits(
+        .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(max_chunk_bytes).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
-        )
+        ))
         .add_state_stream(StateStreamConfig::new(
             "checkpoint",
             ["population", "space", "activity"],
@@ -328,7 +328,7 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
             "signal",
             ["population"],
             SamplingInterval::iterations(1).unwrap(),
-            Some((
+            Some(StateStreamStorage::chunked(
                 NonZeroU64::new(1_000_000).unwrap(),
                 NonZeroU64::new(1_000_000).unwrap(),
             )),
