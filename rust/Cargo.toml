@@ -1,6 +1,6 @@
 [package]
 name = "scientific-workflow"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.97"
 authors = ["Dingyi Sun"]
@@ -33,4 +33,4 @@ thiserror = "2"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-physics_in_parallel = { version = "3.3.0", git = "https://github.com/dingyisun0101/Physics-in-Parallel.git", rev = "704f797" }
+physics_in_parallel = "3.3.0"

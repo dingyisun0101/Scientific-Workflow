@@ -483,7 +483,8 @@ dependencies = [
 [[package]]
 name = "physics_in_parallel"
 version = "3.3.0"
-source = "git+https://github.com/dingyisun0101/Physics-in-Parallel.git?rev=704f797#704f797c2c5892ada30f7a33c178f3fec3a70a86"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5436a339019f9564b8ee55a53916cbdace6c53c46dfe64e33d1c8a8c3475ce17"
 dependencies = [
  "ahash",
  "erased-serde",
@@ -676,7 +677,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "scientific-workflow"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "console",
  "crossterm",
