@@ -101,7 +101,7 @@ fn build_writer(
             checkpoint_interval,
             None,
         ))
-        .with_shared_stream_limits(chunk_bytes, queue_bytes)
+        .with_shared_stream_storage(StateStreamStorage::chunked(chunk_bytes, queue_bytes))
         .create_new_recording()?;
 
     Ok(writer)
