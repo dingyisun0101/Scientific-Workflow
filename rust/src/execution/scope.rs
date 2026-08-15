@@ -16,6 +16,24 @@ pub struct ExecutionScope {
 }
 
 impl ExecutionScope {
+    /// Uses the recording root itself as the deterministic execution scope.
+    ///
+    /// This is intended for application-owned semantic task names where a
+    /// repeated configuration must resolve to the same output path instead of
+    /// receiving a timestamped execution wrapper.
+    pub fn open_or_create(recording_root: impl AsRef<Path>) -> Result<Self, ExecutionScopeError> {
+        let directory = recording_root.as_ref().to_path_buf();
+        fs::create_dir_all(&directory).map_err(|source| ExecutionScopeError::Io {
+            operation: "create deterministic",
+            path: directory.clone(),
+            source,
+        })?;
+        Ok(Self {
+            directory,
+            created_at_utc: None,
+        })
+    }
+
     /// Creates a uniquely named scope beneath `recording_root`.
     ///
     /// The readable UTC component is supplemented by process and sequence
@@ -130,6 +148,15 @@ impl ExecutionScope {
     /// retain exclusive creation and overwrite protection.
     pub fn task_recording_directory(&self, task_ordinal: u64) -> PathBuf {
         self.directory.join(format!("task-{task_ordinal:06}"))
+    }
+
+    /// Derives the absent recording path reserved for one semantic task name.
+    pub fn named_task_recording_directory(
+        &self,
+        name: &str,
+    ) -> Result<PathBuf, ExecutionScopeError> {
+        validate_name(name)?;
+        Ok(self.directory.join(name))
     }
 }
 

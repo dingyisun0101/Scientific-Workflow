@@ -444,6 +444,14 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     let task_recording = generated_scope.task_recording_directory(12);
     assert!(task_recording.ends_with("task-000012"));
     assert!(!task_recording.exists());
+    let semantic_recording = generated_scope
+        .named_task_recording_directory("K=600-mode=default-mu=0.20-sys=0")
+        .unwrap();
+    assert!(semantic_recording.ends_with("K=600-mode=default-mu=0.20-sys=0"));
+    assert!(matches!(
+        generated_scope.named_task_recording_directory("../unsafe"),
+        Err(ExecutionScopeError::InvalidName { .. })
+    ));
     let reopened = ExecutionScope::open_existing(generated_scope.directory()).unwrap();
     assert_eq!(reopened.directory(), generated_scope.directory());
     assert_eq!(reopened.created_at_utc(), None);
@@ -454,6 +462,14 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         ExecutionScope::create_named(workspace.project("recordings"), "../unsafe"),
         Err(ExecutionScopeError::InvalidName { .. })
     ));
+    let deterministic =
+        ExecutionScope::open_or_create(workspace.project("deterministic-recordings")).unwrap();
+    assert!(
+        deterministic
+            .directory()
+            .ends_with("deterministic-recordings")
+    );
+    assert_eq!(deterministic.created_at_utc(), None);
     println!(
         "[execution-scope] generated={} named={} task_path={} timestamp_managed=true",
         generated_scope.directory().display(),

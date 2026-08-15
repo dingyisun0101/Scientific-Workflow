@@ -1687,6 +1687,18 @@ orchestration layer-owned run identity -> ExecutionScope::create_named
 reproducible reference run -> ExecutionScope::create_named
 ```
 
+### ExecutionScope::open_or_create
+
+Creates the supplied recording root when absent and uses that root itself as a
+deterministic execution scope. This supports application-owned semantic task
+names that must resolve to the same path on every run.
+
+#### Reference
+
+```text
+compiled study with semantic recording identities -> ExecutionScope::open_or_create
+```
+
 ### ExecutionScope::open_existing
 
 Read-only opens an existing directory. It does not invent a historical
@@ -1729,6 +1741,19 @@ is automatic ordering, not scientific identity.
 ```text
 per-task writer setup -> ExecutionScope::task_recording_directory
 attractor_2d::record_model -> ExecutionScope::task_recording_directory
+```
+
+### ExecutionScope::named_task_recording_directory
+
+Validates one safe semantic path component and derives that task recording
+path without creating it. Applications use names such as
+`K=600-mode=default-mu=0.20-sys=0`; writers retain exclusive creation and
+collision protection.
+
+#### Reference
+
+```text
+application-owned semantic identity -> ExecutionScope::named_task_recording_directory
 ```
 
 ### ExecutionScope::clone / Debug
