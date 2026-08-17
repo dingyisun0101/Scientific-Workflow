@@ -150,12 +150,12 @@ impl ExecutionScope {
         self.directory.join(format!("task-{task_ordinal:06}"))
     }
 
-    /// Derives the absent recording path reserved for one semantic task name.
+    /// Derives the absent recording path reserved for one semantic relative path.
     pub fn named_task_recording_directory(
         &self,
         name: &str,
     ) -> Result<PathBuf, ExecutionScopeError> {
-        validate_name(name)?;
+        validate_relative_name(name)?;
         Ok(self.directory.join(name))
     }
 }
@@ -167,6 +167,23 @@ fn validate_name(name: &str) -> Result<(), ExecutionScopeError> {
     let valid = !name.trim().is_empty()
         && matches!(components.next(), Some(Component::Normal(_)))
         && components.next().is_none();
+    if valid {
+        Ok(())
+    } else {
+        Err(ExecutionScopeError::InvalidName {
+            name: name.to_owned(),
+        })
+    }
+}
+
+/// Requires a nonempty relative path made only from normal components.
+fn validate_relative_name(name: &str) -> Result<(), ExecutionScopeError> {
+    let path = Path::new(name);
+    let valid = !name.trim().is_empty()
+        && path.components().next().is_some()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)));
     if valid {
         Ok(())
     } else {

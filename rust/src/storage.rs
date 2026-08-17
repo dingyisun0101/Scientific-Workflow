@@ -1398,6 +1398,13 @@ fn ensure_absent(root: &Path) -> Result<(), StorageError> {
 
 /// Exclusively creates the run root, closing the check/create race safely.
 fn create_root(root: &Path) -> Result<(), StorageError> {
+    if let Some(parent) = root.parent() {
+        fs::create_dir_all(parent).map_err(|source| StorageError::Io {
+            operation: "create recording parent directories",
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
     match fs::create_dir(root) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {

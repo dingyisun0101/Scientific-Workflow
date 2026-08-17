@@ -163,7 +163,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     println!("[sampling-interval] coordinate=iterations interval=2 zero_rejected=true");
 
     let workspace = TempWorkspace::new();
-    let run_path = workspace.run();
+    let run_path = workspace.root.join("K=128/kernel=flat_scale=0.25");
     let spec = SystemStateSchema::load_json_template(fixture_path())
         .expect("checked-in template must load");
     let clones = Arc::new(AtomicUsize::new(0));

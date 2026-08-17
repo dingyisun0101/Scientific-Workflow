@@ -448,6 +448,10 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         .named_task_recording_directory("K=600-mode=default-mu=0.20-sys=0")
         .unwrap();
     assert!(semantic_recording.ends_with("K=600-mode=default-mu=0.20-sys=0"));
+    let nested_recording = generated_scope
+        .named_task_recording_directory("K=600/kernel=flat_scale=0.25")
+        .unwrap();
+    assert!(nested_recording.ends_with("K=600/kernel=flat_scale=0.25"));
     assert!(matches!(
         generated_scope.named_task_recording_directory("../unsafe"),
         Err(ExecutionScopeError::InvalidName { .. })
