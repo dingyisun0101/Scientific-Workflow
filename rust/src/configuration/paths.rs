@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::error::ConfigurationError;
-use super::parameters::{
+use super::source::{
     StrictValue, invalid, parse_strict_json, read_source, require_object, validate_name,
 };
 

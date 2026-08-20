@@ -23,7 +23,7 @@ pub(crate) fn record_task(
 ) -> AppResult<()> {
     // Operational policy is decoded from the same resolved TaskConfig as model
     // parameters. There is intentionally no parallel recording-settings type.
-    let step_count: u64 = task.decode_value("step_count")?;
+    let step_count: u64 = task.decode_value("/step_count")?;
     let mut writer = build_writer(model.state(), directory, task)?;
 
     // TaskContext updates drive the terminal display only. SystemState is the
@@ -60,11 +60,11 @@ fn build_writer(
         NonZeroU64,
         NonZeroU64,
     ) = task.decode_values((
-        "trajectory_sampling_interval",
-        "radius_sampling_interval",
-        "checkpoint_sampling_interval",
-        "maximum_chunk_bytes",
-        "writer_queue_bytes",
+        "/trajectory_sampling_interval",
+        "/radius_sampling_interval",
+        "/checkpoint_sampling_interval",
+        "/maximum_chunk_bytes",
+        "/writer_queue_bytes",
     ))?;
     // Iteration and physical time belong to the scientific record. Operational
     // UTC timestamps and active duration are added by the writer itself.

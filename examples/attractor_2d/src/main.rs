@@ -46,7 +46,7 @@ fn main() -> AppResult<()> {
         })
         // `mu` is a concise display selector, not a second task identity. The
         // generated task id and complete resolved parameters remain canonical.
-        .display_tasks_by("attractor", ["mu"])
+        .display_tasks_by("attractor", ["/mu"])
         // These are phase-local scheduling bounds. Machine-level CPU and memory
         // policy belongs to the external service manager running this process.
         .max_concurrent_workloads(3)
@@ -61,7 +61,7 @@ fn main() -> AppResult<()> {
             pause_for_display(context, "validation starts in 3 seconds");
             validation::validate_recording(&execution, context)
         })
-        .display_tasks_by("validate", ["mu"])
+        .display_tasks_by("validate", ["/mu"])
         .depends_on(1)
         .max_concurrent_workloads(3)
         .queue_capacity(2)

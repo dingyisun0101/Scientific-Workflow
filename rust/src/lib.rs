@@ -10,9 +10,10 @@
 //! # Current modules
 //!
 //! [`configuration`] provides the standard `config/{fixed,sweep,paths}.json`
-//! project layout, deterministic Cartesian or explicit-case task expansion,
-//! complete cheap task-configuration handles, exact sweep-value selection,
-//! named path resolution, and byte-exact source export.
+//! project layout, arbitrary nested fixed/sweep separation, deterministic
+//! Cartesian or explicit-case task expansion, complete task-configuration
+//! handles, exact sweep-value selection, named path resolution, and byte-exact
+//! source export.
 //! [`project`] combines task configuration with either a project-owned
 //! `config/state.json` schema or a canonical schema supplied by a fixed-model
 //! crate as one immutable [`project::ScientificProject`]. [`execution`] creates

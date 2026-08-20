@@ -337,19 +337,29 @@ project-root/
 }
 ```
 
-`sweep.json` supports ordered Cartesian axes:
+Objects may be nested arbitrarily. Workflow identifies every terminal value by
+its JSON path, so a fixed subtree and a sweep can contribute different leaves
+to the same resolved object without repeating their shared structure.
+
+`sweep.json` supports nested ordered Cartesian axes. Every axis terminates in
+an explicit `values` descriptor, which distinguishes sweep candidates from
+literal JSON arrays:
 
 ```json
 {
   "mode": "cartesian",
-  "axes": [
-    {"name": "temperature", "values": [280.0, 300.0]},
-    {"name": "seed", "values": [7, 11, 13]}
-  ]
+  "axes": {
+    "environment": {
+      "temperature": {"values": [280.0, 300.0]}
+    },
+    "rng": {
+      "seed": {"values": [7, 11, 13]}
+    }
+  }
 }
 ```
 
-or correlated explicit cases:
+Use correlated explicit cases when several parameter values must vary together:
 
 ```json
 {
@@ -380,9 +390,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project = ScientificProject::load("project-root")?;
     for task in project.task_configs() {
         let physical_time_increment =
-            task.decode_value::<f64>("physical_time_increment")?;
-        let temperature = task.decode_value::<f64>("temperature")?;
-        let seed = task.decode_value::<u64>("seed")?;
+            task.decode_value::<f64>("/physical_time_increment")?;
+        let temperature = task.decode_value::<f64>("/environment/temperature")?;
+        let seed = task.decode_value::<u64>("/rng/seed")?;
         let output_root = task.resolve_path("output_root")?;
         println!(
             "task={} dt={physical_time_increment} temperature={temperature} seed={seed} output={}",
@@ -405,7 +415,7 @@ worker queue without cloning merged JSON dictionaries:
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let project = ScientificProject::load("project-root")?;
 
-for task in project.task_configs_matching("temperature", 300.0)? {
+for task in project.task_configs_matching("/environment/temperature", 300.0)? {
     submit(task)?;
 }
 # Ok(())
@@ -419,12 +429,14 @@ and path keys cannot be used as sweep selectors. Use
 `unique_task_config_matching(key, value)` only when that one sweep dimension is
 known to identify exactly one task, as is common for an explicit case ID.
 
-Task handles share the parsed source allocations and do not clone values or
-construct merged maps. `value` and `require_value` borrow raw JSON;
-`decode_value` explicitly constructs one requested Rust value, while
-`decode_values` decodes a heterogeneous tuple of two through twelve values
-without an application configuration struct or merged JSON map. The final
-sweep axis changes fastest. Fixed and swept names must be disjoint.
+Task handles share parsed terminal values. All parameter lookup uses canonical
+JSON Pointers, including top-level values. Exact leaf lookup borrows those
+values directly. A request such as `decode_value("/kernel")` transparently
+rehydrates only that nested subtree when fixed and sweep files contribute
+different descendants. `decode_values` decodes heterogeneous tuples of two
+through twelve requested values. The final sweep axis changes fastest. Fixed
+and swept leaf paths must be disjoint; scalar/array ancestors cannot contain a
+swept descendant.
 
 `ProjectConfig::write_source_config(destination)` reproduces the three
 parameter/path files byte for byte beneath a new destination project. It never overwrites an

@@ -27,10 +27,10 @@ erased-serde = "0.4.10"
 fs2 = "0.4"
 indicatif = "0.18.6"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = "0.11"
 thiserror = "2"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-physics_in_parallel = "3.3.0"
+physics_in_parallel = { path = "../../pip", version = "3.3.0" }

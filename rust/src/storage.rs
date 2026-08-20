@@ -572,11 +572,8 @@ impl SystemStateWriterBuilder {
     /// preserved. On a key collision, the most recently supplied source wins.
     #[must_use]
     pub fn with_task_parameters(mut self, parameters: &TaskParameters) -> Self {
-        self.user_metadata.extend(
-            parameters
-                .iter()
-                .map(|(key, value)| (key.to_owned(), value.clone())),
-        );
+        self.user_metadata
+            .extend(parameters.resolved_object().clone());
         self.user_metadata.insert(
             "task_ordinal".to_owned(),
             Value::from(parameters.task_ordinal()),

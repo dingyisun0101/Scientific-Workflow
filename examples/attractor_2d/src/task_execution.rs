@@ -13,10 +13,10 @@ pub(crate) fn run_task(
     // back to repeated untyped JSON access throughout the model.
     let task = context.configuration();
     let (initial_point, mu, omega, dt): ([f64; 2], f64, f64, f64) = task.decode_values((
-        "initial_point",
-        "mu",
-        "angular_frequency",
-        "physical_time_increment_per_step",
+        "/initial_point",
+        "/mu",
+        "/angular_frequency",
+        "/physical_time_increment_per_step",
     ))?;
 
     // The model owns scientific state; the recording function owns evolution

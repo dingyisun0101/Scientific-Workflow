@@ -177,7 +177,7 @@ fn fn_once_scheduler_bounds_work_and_supports_reuse() {
             let completed = Arc::clone(&completed_factory);
             move |context: &TaskContext| {
                 assert_eq!(context.configuration().task_ordinal(), resource.0);
-                assert!(context.value("temperature").is_some());
+                assert!(context.value("/temperature").is_some());
                 context.set_target_iteration(2)?;
                 let current = active.fetch_add(1, Ordering::AcqRel) + 1;
                 maximum.fetch_max(current, Ordering::AcqRel);
@@ -405,7 +405,7 @@ fn structured_selectors_use_complete_configuration_identity() {
             ));
             Ok(())
         })
-        .display_tasks_by("simulation", ["temperature", "seed"])
+        .display_tasks_by("simulation", ["/temperature", "/seed"])
         .build()
         .unwrap();
     let runtime = WorkflowRuntime::builder()
@@ -416,8 +416,8 @@ fn structured_selectors_use_complete_configuration_identity() {
     let selected = runtime
         .unique_task_matching(
             &TaskSelector::new()
-                .parameter("temperature", 280.0)
-                .parameter("seed", 7),
+                .parameter("/temperature", 280.0)
+                .parameter("/seed", 7),
         )
         .unwrap();
     assert_eq!(selected.configuration_ordinal(), 0);

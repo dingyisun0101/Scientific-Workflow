@@ -86,7 +86,8 @@ pub enum ConfigurationError {
         key: String,
     },
 
-    /// A parameter was declared as both fixed and swept.
+    /// A terminal parameter path was declared as both fixed and swept, or a
+    /// scalar/array leaf structurally conflicts with a descendant path.
     ///
     /// Fixed values are never defaults or override targets. Keeping the two key
     /// sets disjoint makes every resolved lookup unambiguous.
@@ -94,7 +95,7 @@ pub enum ConfigurationError {
         "parameter `{key}` appears in both fixed configuration `{fixed_path}` and sweep configuration `{sweep_path}`"
     )]
     FixedSweepKeyConflict {
-        /// Exact colliding parameter name.
+        /// Canonical colliding parameter path or conflicting path pair.
         key: String,
         /// Standard fixed-parameter source path.
         fixed_path: PathBuf,

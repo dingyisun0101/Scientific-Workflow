@@ -12,9 +12,9 @@
 //!     └── paths.json
 //! ```
 //!
-//! - `fixed.json` is an object of parameter values shared by every generated
-//!   task.
-//! - `sweep.json` is a tagged Cartesian-axis or explicit-case definition.
+//! - `fixed.json` is an arbitrarily nested object of leaves shared by every
+//!   generated task.
+//! - `sweep.json` is a tagged nested Cartesian-axis or explicit-case definition.
 //! - `paths.json` is an object of named project-wide path strings.
 //!
 //! [`ProjectConfig`] loads all three files and lazily produces cheap owned
@@ -32,7 +32,7 @@
 //! let project = ProjectConfig::load("scientific-project")?;
 //! for task in project.task_configs() {
 //!     let (temperature, seed): (f64, u64) =
-//!         task.decode_values(("temperature", "seed"))?;
+//!         task.decode_values(("/temperature", "/seed"))?;
 //!     let output_root = task.resolve_path("output_root")?;
 //!     println!(
 //!         "task={} temperature={temperature} seed={seed} output={}",
@@ -48,9 +48,9 @@
 //!
 //! Configuration is immutable after loading. `ParameterSpace`,
 //! `TaskParameters`, `TaskConfig`, their iterators, and `ProjectPaths` retain
-//! shared parsed allocations; task generation does not clone JSON values or
-//! allocate merged maps. Typed decoding is the explicit point at which an
-//! application creates an owned Rust value.
+//! shared parsed leaf allocations. Exact leaf lookup does not clone JSON.
+//! Nested subtrees spanning fixed and swept leaves are reconstructed lazily and
+//! remain ordinary nested JSON to callers.
 //!
 //! The three original validated source byte sequences are retained unchanged.
 //! [`ProjectConfig::write_source_config`] can therefore reproduce the complete
@@ -67,13 +67,18 @@
 
 mod error;
 mod parameter_key_tuple;
+mod parameter_path;
+mod parameter_tree;
 mod parameters;
 mod paths;
 mod project_config;
+mod source;
+mod sweep;
 
 pub use error::ConfigurationError;
 #[doc(hidden)]
 pub use parameter_key_tuple::ParameterKeyTuple;
+pub use parameter_path::ParameterPath;
 pub use parameters::{ParameterSpace, TaskParameters, TaskParametersIter};
 pub use paths::ProjectPaths;
 pub use project_config::{MatchingTaskConfigIter, ProjectConfig, TaskConfig, TaskConfigIter};

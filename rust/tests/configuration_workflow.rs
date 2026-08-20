@@ -81,7 +81,7 @@ fn model_owned_schema_removes_the_project_state_file() {
     write_project(
         &root,
         br#"{"iterations":10}"#,
-        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{"mode":"cartesian","axes":{}}"#,
         br#"{"recordings":"recordings"}"#,
     );
     let schema_path = fixture_project("cartesian_project").join("config/state.json");
@@ -103,6 +103,106 @@ fn model_owned_schema_removes_the_project_state_file() {
         root.join("recordings")
     );
     assert!(!root.join("config/state.json").exists());
+}
+
+#[test]
+fn nested_fixed_and_sweep_documents_merge_at_unique_leaf_paths() {
+    let workspace = TempWorkspace::new();
+    let root = workspace.project("nested-parameters");
+    write_project(
+        &root,
+        br#"{
+            "kernel":{"kind":"power_law","cutoff":1.0},
+            "pairing_rng":{"seed":17},
+            "literal_shape":[4,8]
+        }"#,
+        br#"{
+            "mode":"cartesian",
+            "axes":{
+                "kernel":{"mu":{"values":[0.2,0.8]}},
+                "matrix":{"scale":{"values":[0.25,0.5]}}
+            }
+        }"#,
+        br#"{}"#,
+    );
+
+    let project = ProjectConfig::load(&root).unwrap();
+    assert_eq!(project.task_count(), 4);
+    assert_eq!(project.parameters().fixed_parameter_count(), 4);
+    assert_eq!(project.parameters().sweep_parameter_count(), 2);
+    assert_eq!(
+        project.parameters().fixed_keys().collect::<Vec<_>>(),
+        [
+            "/kernel/kind",
+            "/kernel/cutoff",
+            "/pairing_rng/seed",
+            "/literal_shape"
+        ]
+    );
+    assert_eq!(
+        project.parameters().sweep_keys().collect::<Vec<_>>(),
+        ["/kernel/mu", "/matrix/scale"]
+    );
+
+    let combinations = project
+        .task_configs()
+        .map(|task| {
+            (
+                task.decode_value::<f64>("/kernel/mu").unwrap(),
+                task.decode_value::<f64>("/matrix/scale").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        combinations,
+        [(0.2, 0.25), (0.2, 0.5), (0.8, 0.25), (0.8, 0.5)]
+    );
+
+    let task = project.task_config(2).unwrap();
+    let kernel: Value = task.decode_value("/kernel").unwrap();
+    assert_eq!(kernel["kind"], "power_law");
+    assert_eq!(kernel["cutoff"], 1.0);
+    assert_eq!(kernel["mu"], 0.8);
+    assert!(task.value("kernel.mu").is_none());
+    assert!(task.value("kernel").is_none());
+    let resolved: Value = serde_json::from_str(&task.parameters().to_json().unwrap()).unwrap();
+    assert_eq!(resolved["kernel"], kernel);
+    assert!(resolved.get("/kernel/mu").is_none());
+
+    let composite_root = workspace.project("composite-axis");
+    write_project(
+        &composite_root,
+        br#"{}"#,
+        br#"{
+            "mode":"cases",
+            "cases":[
+                {"species":{"num_taxa":128,"interaction":{"path_key":"interaction_K_128"}}},
+                {"species":{"num_taxa":256,"interaction":{"path_key":"interaction_K_256"}}}
+            ]
+        }"#,
+        br#"{}"#,
+    );
+    let composite = ProjectConfig::load(&composite_root).unwrap();
+    assert_eq!(composite.task_count(), 2);
+    let species: Value = composite
+        .task_config(1)
+        .unwrap()
+        .decode_value("/species")
+        .unwrap();
+    assert_eq!(species["num_taxa"], 256);
+    assert_eq!(species["interaction"]["path_key"], "interaction_K_256");
+
+    let conflict_root = workspace.project("nested-conflict");
+    write_project(
+        &conflict_root,
+        br#"{"kernel":{"mu":0.4}}"#,
+        br#"{"mode":"cartesian","axes":{"kernel":{"mu":{"values":[0.2,0.8]}}}}"#,
+        br#"{}"#,
+    );
+    assert!(matches!(
+        ProjectConfig::load(&conflict_root),
+        Err(ConfigurationError::FixedSweepKeyConflict { key, .. }) if key == "/kernel/mu"
+    ));
 }
 
 #[test]
@@ -132,15 +232,15 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_eq!(scientific_project.task_config(5).unwrap().task_ordinal(), 5);
     assert_eq!(
         scientific_project
-            .task_configs_matching("temperature", 300.0)
+            .task_configs_matching("/temperature", 300.0)
             .unwrap()
             .count(),
         3
     );
     assert!(matches!(
-        scientific_project.unique_task_config_matching("temperature", 300.0),
+        scientific_project.unique_task_config_matching("/temperature", 300.0),
         Err(ConfigurationError::AmbiguousTaskConfiguration { key })
-            if key == "temperature"
+            if key == "/temperature"
     ));
     assert_eq!(
         scientific_project.resolve_path("output_root").unwrap(),
@@ -159,19 +259,24 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         parameters.configuration_directory(),
         cartesian_root.join("config")
     );
-    assert_eq!(parameters.fixed_parameter_count(), 3);
+    assert_eq!(parameters.fixed_parameter_count(), 4);
     assert_eq!(parameters.sweep_parameter_count(), 2);
-    assert_eq!(parameters.parameter_count(), 5);
+    assert_eq!(parameters.parameter_count(), 6);
     assert_eq!(parameters.task_count(), 6);
-    assert!(parameters.contains_parameter("temperature"));
+    assert!(parameters.contains_parameter("/temperature"));
     assert!(!parameters.contains_parameter("missing"));
     assert_eq!(
         parameters.fixed_keys().collect::<Vec<_>>(),
-        ["physical_time_increment", "lattice_shape", "solver"]
+        [
+            "/physical_time_increment",
+            "/lattice_shape",
+            "/solver/method",
+            "/solver/tolerance"
+        ]
     );
     assert_eq!(
         parameters.sweep_keys().collect::<Vec<_>>(),
-        ["temperature", "seed"]
+        ["/temperature", "/seed"]
     );
     assert_eq!(
         parameters.fixed_source_json(),
@@ -199,8 +304,8 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         .map(|task| {
             (
                 task.task_ordinal(),
-                task.decode_value::<f64>("temperature").unwrap(),
-                task.decode_value::<u64>("seed").unwrap(),
+                task.decode_value::<f64>("/temperature").unwrap(),
+                task.decode_value::<u64>("/seed").unwrap(),
             )
         })
         .collect::<Vec<_>>();
@@ -221,8 +326,8 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         .map(|task| {
             (
                 task.task_ordinal(),
-                task.decode_value::<f64>("temperature").unwrap(),
-                task.decode_value::<u64>("seed").unwrap(),
+                task.decode_value::<f64>("/temperature").unwrap(),
+                task.decode_value::<u64>("/seed").unwrap(),
                 task.resolve_path("output_root").unwrap(),
             )
         })
@@ -238,33 +343,35 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             .all(|task| task.3 == cartesian_root.join("results"))
     );
 
-    let matching = project.task_configs_matching("temperature", 280.0).unwrap();
+    let matching = project
+        .task_configs_matching("/temperature", 280.0)
+        .unwrap();
     assert_eq!(matching.size_hint(), (0, Some(6)));
     let selected = matching
-        .map(|task| task.decode_value::<u64>("seed").unwrap())
+        .map(|task| task.decode_value::<u64>("/seed").unwrap())
         .collect::<Vec<_>>();
     assert_eq!(selected, [7, 11, 13]);
     assert!(matches!(
-        project.unique_task_config_matching("temperature", 280.0),
+        project.unique_task_config_matching("/temperature", 280.0),
         Err(ConfigurationError::AmbiguousTaskConfiguration { key })
-            if key == "temperature"
+            if key == "/temperature"
     ));
     assert!(matches!(
-        project.unique_task_config_matching("temperature", 999.0),
+        project.unique_task_config_matching("/temperature", 999.0),
         Err(ConfigurationError::NoMatchingTaskConfiguration { key })
-            if key == "temperature"
+            if key == "/temperature"
     ));
     assert!(matches!(
-        project.task_configs_matching("solver", "euler"),
-        Err(ConfigurationError::UnknownSweepParameter { key }) if key == "solver"
+        project.task_configs_matching("/solver", "euler"),
+        Err(ConfigurationError::UnknownSweepParameter { key }) if key == "/solver"
     ));
     let selector_error = project
-        .task_configs_matching("temperature", UnencodableSelector)
+        .task_configs_matching("/temperature", UnencodableSelector)
         .unwrap_err();
     assert!(matches!(
         selector_error,
         ConfigurationError::EncodeTaskSelection { ref key, .. }
-            if key == "temperature"
+            if key == "/temperature"
     ));
     assert!(selector_error.source().unwrap().is::<serde_json::Error>());
 
@@ -273,10 +380,14 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_eq!(complete.task_ordinal(), 4);
     assert_eq!(complete.parameters().task_ordinal(), 4);
     assert_eq!(complete.paths().len(), 3);
-    assert_eq!(complete.require_value("temperature").unwrap(), 300.0);
+    assert_eq!(complete.require_value("/temperature").unwrap(), 300.0);
+    assert_eq!(
+        complete.value("/solver").unwrap(),
+        complete_clone.value("/solver").unwrap()
+    );
     assert!(std::ptr::eq(
-        complete.value("solver").unwrap(),
-        complete_clone.value("solver").unwrap()
+        complete.value("/solver/method").unwrap(),
+        complete_clone.value("/solver/method").unwrap()
     ));
     assert!(std::ptr::eq(
         complete.paths().path("output_root").unwrap(),
@@ -292,9 +403,11 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert!(
         format!(
             "{:?}",
-            project.task_configs_matching("temperature", 300.0).unwrap()
+            project
+                .task_configs_matching("/temperature", 300.0)
+                .unwrap()
         )
-        .contains("temperature")
+        .contains("/temperature")
     );
     println!(
         "[task-config] all={} selected={} shared_paths=true exact_match=true ambiguity_rejected=true",
@@ -314,11 +427,11 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     let second = parameters.task(1).unwrap();
     let (dt, shape, solver, temperature, seed): (f64, Vec<u64>, Value, f64, u64) = first
         .decode_values((
-            "physical_time_increment",
-            "lattice_shape",
-            "solver",
-            "temperature",
-            "seed",
+            "/physical_time_increment",
+            "/lattice_shape",
+            "/solver",
+            "/temperature",
+            "/seed",
         ))
         .unwrap();
     assert_eq!(dt, 0.125);
@@ -327,46 +440,47 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_eq!((temperature, seed), (280.0, 7));
     let twelve: (u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) = first
         .decode_values((
-            "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed", "seed",
-            "seed",
+            "/seed", "/seed", "/seed", "/seed", "/seed", "/seed", "/seed", "/seed", "/seed",
+            "/seed", "/seed", "/seed",
         ))
         .unwrap();
     assert_eq!(twelve, (7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7));
     let copied = first.clone();
     assert_eq!(first.task_ordinal(), 0);
-    assert_eq!(first.len(), 5);
+    assert_eq!(first.len(), 6);
     assert!(!first.is_empty());
-    assert!(first.contains("solver"));
+    assert!(first.contains("/solver"));
     assert!(!first.contains("unknown"));
     assert_eq!(
         first.keys().collect::<Vec<_>>(),
         [
-            "physical_time_increment",
-            "lattice_shape",
-            "solver",
-            "temperature",
-            "seed"
+            "/physical_time_increment",
+            "/lattice_shape",
+            "/solver/method",
+            "/solver/tolerance",
+            "/temperature",
+            "/seed"
         ]
     );
-    assert_eq!(first.iter().count(), 5);
+    assert_eq!(first.iter().count(), 6);
     assert!(std::ptr::eq(
-        first.value("physical_time_increment").unwrap(),
-        second.value("physical_time_increment").unwrap()
+        first.value("/physical_time_increment").unwrap(),
+        second.value("/physical_time_increment").unwrap()
     ));
     assert!(std::ptr::eq(
-        first.value("temperature").unwrap(),
-        second.value("temperature").unwrap()
+        first.value("/temperature").unwrap(),
+        second.value("/temperature").unwrap()
     ));
     assert!(std::ptr::eq(
-        first.value("seed").unwrap(),
-        copied.value("seed").unwrap()
+        first.value("/seed").unwrap(),
+        copied.value("/seed").unwrap()
     ));
     assert_eq!(
-        first.require_value("lattice_shape").unwrap(),
+        first.require_value("/lattice_shape").unwrap(),
         &serde_json::json!([4, 8])
     );
     assert_eq!(
-        first.decode_value::<Vec<usize>>("lattice_shape").unwrap(),
+        first.decode_value::<Vec<usize>>("/lattice_shape").unwrap(),
         [4, 8]
     );
     let resolved_json = first.to_json().unwrap();
@@ -384,9 +498,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert!(key_positions.windows(2).all(|pair| pair[0] < pair[1]));
     assert!(format!("{parameters:?}").contains("task_count"));
     assert!(format!("{first:?}").contains("task_ordinal"));
-    println!(
-        "[ownership] fixed_shared=true selected_shared=true task_clone_shared=true merged_map_allocated=false"
-    );
+    println!("[ownership] leaf_values_shared=true nested_documents_rehydrated_lazily=true");
 
     let mut owning_iter = parameters.tasks();
     assert_eq!(owning_iter.size_hint(), (6, Some(6)));
@@ -518,15 +630,15 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
         }
     ));
     assert!(matches!(
-        first.require_value("unknown"),
+        first.require_value("/unknown"),
         Err(ConfigurationError::UnknownTaskParameter { task_ordinal: 0, key })
-            if key == "unknown"
+            if key == "/unknown"
     ));
-    let decode = first.decode_value::<String>("temperature").unwrap_err();
+    let decode = first.decode_value::<String>("/temperature").unwrap_err();
     assert!(matches!(
         decode,
         ConfigurationError::DecodeTaskParameter { task_ordinal: 0, ref key, .. }
-            if key == "temperature"
+            if key == "/temperature"
     ));
     assert!(decode.source().unwrap().is::<serde_json::Error>());
     assert!(matches!(
@@ -540,26 +652,27 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     assert_eq!(cases.parameters().task_count(), 3);
     assert_eq!(
         cases.parameters().sweep_keys().collect::<Vec<_>>(),
-        ["temperature", "physical_time_increment"]
+        ["/temperature", "/physical_time_increment"]
     );
     let correlated = cases
         .parameters()
         .tasks()
         .map(|task| {
             (
-                task.decode_value::<f64>("temperature").unwrap(),
-                task.decode_value::<f64>("physical_time_increment").unwrap(),
+                task.decode_value::<f64>("/temperature").unwrap(),
+                task.decode_value::<f64>("/physical_time_increment")
+                    .unwrap(),
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(correlated, [(275.0, 0.2), (290.0, 0.1), (310.0, 0.05)]);
     let unique = cases
-        .unique_task_config_matching("temperature", 290.0)
+        .unique_task_config_matching("/temperature", 290.0)
         .unwrap();
     assert_eq!(unique.task_ordinal(), 1);
     assert_eq!(
         unique
-            .decode_value::<f64>("physical_time_increment")
+            .decode_value::<f64>("/physical_time_increment")
             .unwrap(),
         0.1
     );
@@ -571,10 +684,10 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             .keys()
             .collect::<Vec<_>>(),
         [
-            "lattice_shape",
-            "integrator",
-            "temperature",
-            "physical_time_increment"
+            "/lattice_shape",
+            "/integrator",
+            "/temperature",
+            "/physical_time_increment"
         ]
     );
     println!(
@@ -586,7 +699,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     write_project(
         &fixed_only_root,
         br#"{}"#,
-        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{"mode":"cartesian","axes":{}}"#,
         br#"{}"#,
     );
     let fixed_only = ProjectConfig::load(&fixed_only_root).unwrap();
@@ -600,7 +713,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     write_project(
         &duplicate_root,
         br#"{"solver":{"method":"rk4","method":"euler"}}"#,
-        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{"mode":"cartesian","axes":{}}"#,
         br#"{}"#,
     );
     assert!(matches!(
@@ -612,13 +725,26 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     write_project(
         &overlap_root,
         br#"{"temperature":300}"#,
-        br#"{"mode":"cartesian","axes":[{"name":"temperature","values":[280,300]}]}"#,
+        br#"{"mode":"cartesian","axes":{"temperature":{"values":[280,300]}}}"#,
         br#"{}"#,
     );
     assert!(matches!(
         ProjectConfig::load(&overlap_root),
         Err(ConfigurationError::FixedSweepKeyConflict { key, .. })
-            if key == "temperature"
+            if key == "/temperature"
+    ));
+
+    let legacy_axes_root = workspace.project("legacy-axes");
+    write_project(
+        &legacy_axes_root,
+        br#"{}"#,
+        br#"{"mode":"cartesian","axes":[{"name":"temperature","values":[280,300]}]}"#,
+        br#"{}"#,
+    );
+    assert!(matches!(
+        ProjectConfig::load(&legacy_axes_root),
+        Err(ConfigurationError::InvalidConfigurationDocument { ref path, .. })
+            if path == &legacy_axes_root.join("config/sweep.json")
     ));
 
     let inconsistent_root = workspace.project("inconsistent");
@@ -638,7 +764,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     write_project(
         &invalid_path_root,
         br#"{}"#,
-        br#"{"mode":"cartesian","axes":[]}"#,
+        br#"{"mode":"cartesian","axes":{}}"#,
         br#"{"output_root":42}"#,
     );
     assert!(matches!(
@@ -647,7 +773,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             if path == &invalid_path_root.join("config/paths.json")
     ));
     println!(
-        "[validation] fixed_only=true nested_duplicate=true overlap=true inconsistent_cases=true invalid_path=true"
+        "[validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true inconsistent_cases=true invalid_path=true"
     );
     println!("[result] configuration_workflow=passed");
 }

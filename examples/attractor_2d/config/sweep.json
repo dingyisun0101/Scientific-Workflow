@@ -1,9 +1,6 @@
 {
   "mode": "cartesian",
-  "axes": [
-    {
-      "name": "mu",
-      "values": [-0.25, 0.25, 1.0]
-    }
-  ]
+  "axes": {
+    "mu": {"values": [-0.25, 0.25, 1.0]}
+  }
 }

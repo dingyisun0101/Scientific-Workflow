@@ -1,13 +1,7 @@
 {
   "mode": "cartesian",
-  "axes": [
-    {
-      "name": "temperature",
-      "values": [280.0, 300.0]
-    },
-    {
-      "name": "seed",
-      "values": [7, 11, 13]
-    }
-  ]
+  "axes": {
+    "temperature": {"values": [280.0, 300.0]},
+    "seed": {"values": [7, 11, 13]}
+  }
 }

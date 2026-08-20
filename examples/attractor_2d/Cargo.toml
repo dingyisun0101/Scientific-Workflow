@@ -15,4 +15,4 @@ name = "attractor-2d"
 path = "src/main.rs"
 
 [dependencies]
-scientific-workflow = "0.6.1"
+scientific-workflow = { path = "../../rust", version = "0.6.1" }
