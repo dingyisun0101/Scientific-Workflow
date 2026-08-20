@@ -751,14 +751,68 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
     write_project(
         &object_candidate_root,
         br#"{}"#,
-        br#"{"mode":"cartesian","axes":{"species":{"values":[{"num_taxa":128}]}}}"#,
+        br#"{
+            "mode":"cartesian",
+            "axes":{
+                "species":{"values":[
+                    {"num_taxa":128,"interaction":{"path_key":"K_128"}},
+                    {"interaction":{"path_key":"K_256"},"num_taxa":256}
+                ]},
+                "scale":{"values":[0.5,1.0]}
+            }
+        }"#,
+        br#"{}"#,
+    );
+    let object_candidates = ProjectConfig::load(&object_candidate_root).unwrap();
+    assert_eq!(object_candidates.task_count(), 4);
+    assert_eq!(
+        object_candidates
+            .parameters()
+            .sweep_keys()
+            .collect::<Vec<_>>(),
+        ["/species", "/scale"]
+    );
+    let species: Value = object_candidates
+        .task_config(2)
+        .unwrap()
+        .decode_value("/species")
+        .unwrap();
+    assert_eq!(species["num_taxa"], 256);
+    assert_eq!(species["interaction"]["path_key"], "K_256");
+    assert_eq!(
+        object_candidates
+            .task_config(2)
+            .unwrap()
+            .decode_value::<f64>("/scale")
+            .unwrap(),
+        0.5
+    );
+    assert_eq!(
+        object_candidates
+            .task_configs_matching(
+                "/species",
+                serde_json::json!({
+                    "num_taxa": 256,
+                    "interaction": {"path_key": "K_256"}
+                }),
+            )
+            .unwrap()
+            .count(),
+        2
+    );
+
+    let inconsistent_object_root = workspace.project("inconsistent-cartesian-object-candidate");
+    write_project(
+        &inconsistent_object_root,
+        br#"{}"#,
+        br#"{"mode":"cartesian","axes":{"species":{"values":[{"num_taxa":128},{"num_taxa":256,"label":"K=256"}]}}}"#,
         br#"{}"#,
     );
     assert!(matches!(
-        ProjectConfig::load(&object_candidate_root),
+        ProjectConfig::load(&inconsistent_object_root),
         Err(ConfigurationError::InvalidConfigurationDocument { ref path, ref reason })
-            if path == &object_candidate_root.join("config/sweep.json")
-                && reason.contains("use explicit `cases`")
+            if path == &inconsistent_object_root.join("config/sweep.json")
+                && reason.contains("same flattened key set")
     ));
 
     let inconsistent_root = workspace.project("inconsistent");
@@ -787,7 +841,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             if path == &invalid_path_root.join("config/paths.json")
     ));
     println!(
-        "[validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true object_candidates_rejected=true inconsistent_cases=true invalid_path=true"
+        "[validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true object_candidates=true inconsistent_object_candidates_rejected=true inconsistent_cases=true invalid_path=true"
     );
     println!("[result] configuration_workflow=passed");
 }

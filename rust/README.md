@@ -375,10 +375,13 @@ literal JSON arrays:
 }
 ```
 
-Cartesian candidates are individual JSON values and cannot be objects. Use
-explicit `cases` whenever several parameter leaves must vary together.
+Cartesian candidates may be any JSON value, including an object. A structured
+candidate is flattened beneath its axis path and selected atomically. Every
+candidate on that axis must have the same flattened leaf structure, allowing a
+complete configuration such as `{kind, mu, dimension}` to act as one sweep
+parameter.
 
-Use correlated explicit cases when several parameter values must vary together:
+Use correlated explicit cases when separate sweep parameters must vary together:
 
 ```json
 {

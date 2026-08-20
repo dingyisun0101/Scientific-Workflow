@@ -179,15 +179,17 @@ Explicit correlated cases use:
 }
 ```
 
-Arrays, scalars, null, and other non-object JSON values are literal Cartesian
-candidates. Object candidates are rejected because correlated parameter leaves
-belong exclusively in explicit `cases`. No Cartesian axes means one fixed-only
-task; an individual axis with no candidates is rejected. Explicit cases must
-share one flattened leaf-path set. Fixed and swept terminal paths must be
-disjoint and structurally non-overlapping, while each file may contribute
-different leaves to one reconstructed parent object. Public parameter lookup
-uses canonical JSON Pointers, including top-level values. Duplicate object keys
-and structurally invalid roots are rejected with path and key context.
+Every JSON value is a valid Cartesian candidate. Object candidates are flattened
+beneath their axis path and selected atomically; all candidates on one axis must
+share the same flattened leaf-path set. Explicit `cases` remain available when
+separate sweep parameters must vary together. No Cartesian axes means one
+fixed-only task; an individual axis with no candidates is rejected. Explicit
+cases must also share one flattened leaf-path set. Fixed and swept terminal
+paths must be disjoint and structurally non-overlapping, while each file may
+contribute different leaves to one reconstructed parent object. Public
+parameter lookup uses canonical JSON Pointers, including top-level values.
+Duplicate object keys and structurally invalid roots are rejected with path and
+key context.
 
 `paths.json` is a separate plain object whose values are path strings. It
 contains shared named input roots, data locations, and output roots; it does not

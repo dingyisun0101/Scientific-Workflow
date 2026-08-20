@@ -137,25 +137,56 @@ fn parse_dimension_values(
             format!("cartesian axis `{axis_path}` has no candidates"),
         );
     }
-    if values
-        .iter()
-        .any(|candidate| matches!(candidate, StrictValue::Object(_)))
-    {
-        return invalid(
-            path,
-            format!(
-                "cartesian axis `{axis_path}` candidates cannot be objects; use explicit `cases` for correlated parameters"
-            ),
-        );
-    }
+    let mut candidates = values
+        .into_iter()
+        .map(|candidate| flatten_candidate(&axis_path, candidate))
+        .collect::<Vec<_>>();
+    normalize_candidate_paths(path, &axis_path, &mut candidates)?;
     Ok(SweepDimension {
-        candidates: values
-            .into_iter()
-            .map(|candidate| flatten_candidate(&axis_path, candidate))
-            .collect(),
+        candidates,
         path: axis_path,
         stride: 0,
     })
+}
+
+fn normalize_candidate_paths(
+    path: &Path,
+    axis_path: &ParameterPath,
+    candidates: &mut [Vec<ParameterLeaf>],
+) -> Result<(), ConfigurationError> {
+    let order = candidates[0]
+        .iter()
+        .map(|leaf| leaf.path.clone())
+        .collect::<Vec<_>>();
+    let expected = order.iter().collect::<HashSet<_>>();
+    for candidate in candidates.iter_mut().skip(1) {
+        if candidate
+            .iter()
+            .map(|leaf| &leaf.path)
+            .collect::<HashSet<_>>()
+            != expected
+        {
+            return invalid(
+                path,
+                format!(
+                    "cartesian axis `{axis_path}` candidates do not contain the same flattened key set"
+                ),
+            );
+        }
+        let mut by_path = candidate
+            .drain(..)
+            .map(|leaf| (leaf.path.clone(), leaf))
+            .collect::<HashMap<_, _>>();
+        *candidate = order
+            .iter()
+            .map(|parameter_path| {
+                by_path
+                    .remove(parameter_path)
+                    .expect("validated candidate contains every ordered path")
+            })
+            .collect();
+    }
+    Ok(())
 }
 
 fn validate_dimension_paths(
