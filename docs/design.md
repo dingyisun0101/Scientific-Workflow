@@ -8,7 +8,7 @@ alternatives are intentionally absent.
 Current scope:
 
 - Rust owns execution and persistence; the Python package is the official
-  read-only format-v5 analysis bridge.
+  read-only format-v6 analysis bridge.
 - JSON persistence only; protobuf is out of scope.
 - No backward compatibility or legacy support.
 - Payloads may be any `Serialize + Clone + Send + 'static` Rust value.
@@ -25,7 +25,8 @@ Implemented and verified:
   `config/state.json`;
 - `execution`: automatic generated/named execution scopes and task paths;
 - `runtime`: configuration-generated first-class tasks, phase-bounded
-  scheduling, cooperative cancellation, and centralized terminal rendering;
+  scheduling, optional delayed admission/timeouts/deadlines, cooperative
+  cancellation, and centralized terminal rendering;
 - `system_state`: mutable simulation-owned heterogeneous state;
 - `time_series`: eager in-memory analysis collection;
 - storage format, borrowed encoder, bounded writer, decoder registry, two
@@ -1618,7 +1619,7 @@ completed, reused, failed, cancelled, and never-started/skipped outcomes.
 4. Tighten workloads to `FnOnce`, make failure policy explicit with fail-fast
    as the default, restrict task construction to configuration-backed phase
    builders, and split the end-user preludes.
-5. Change format-v5 records to positional payload values interpreted by the
+5. Change format-v6 records to positional payload values interpreted by the
    ordered stream fields already stored in `metadata.json`.
 6. Update the full-stack example to demonstrate
    `config -> tasks -> phases -> runtime`, selection, task-owned I/O, and
@@ -2651,7 +2652,7 @@ Returns `(StateSeriesError, SystemState)` without cloning.
 
 ## Storage format
 
-Format version 5 stores typed `sampling_interval` scheduling, structurally
+Format version 6 stores typed `sampling_interval` scheduling, structurally
 separate initial/terminal metadata, automatic operational timing, and
 positional per-record payload values. Earlier format versions are intentionally
 unsupported in this clean-slate stage.
@@ -5421,7 +5422,7 @@ completed results through the storage reader. Exact matching can select a
 subset while retaining the Cartesian product of every unconstrained axis.
 Scoped execution policy and richer logging remain orchestration layer-level work rather
 than prerequisites missing from this crate. Migration should preserve the new
-storage-format version 5 contract and should not introduce compatibility
+storage-format version 6 contract and should not introduce compatibility
 aliases for the former step-based counter or sampling names.
 
 ## dependent-model crate migration audit

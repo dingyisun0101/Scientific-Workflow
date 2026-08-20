@@ -320,12 +320,27 @@ impl RuntimeReporter {
         mark_pending_terminal(&slot, TaskStatus::Cancelled, "cancelled")
     }
 
+    pub(crate) fn mark_delayed(&self, key: &TaskKey, rank: usize) -> Result<(), ReportingError> {
+        let slot = managed_slot(&self.inner.slots, key)?;
+        if TaskStatus::decode(slot.status.load(Ordering::Acquire)) != TaskStatus::Pending {
+            return Err(ReportingError::TaskAlreadyStarted {
+                identity: slot.identity.label().to_owned(),
+            });
+        }
+        *lock(&slot.detail) = format!("delayed start (rank {rank})").into_boxed_str();
+        Ok(())
+    }
+
     pub(crate) fn request_cancellation(&self) {
         self.inner.cancelled.store(true, Ordering::Release);
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
         self.inner.cancelled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn cancellation_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.inner.cancelled)
     }
 
     /// Returns a non-blocking snapshot of all task lifecycle counts.

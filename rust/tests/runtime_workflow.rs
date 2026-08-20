@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use scientific_workflow::prelude::basics::*;
 use scientific_workflow::prelude::runtime::*;
@@ -51,6 +51,35 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
         Err(RuntimeError::EmptyPhase { phase: 1 })
     ));
     assert!(!activity_phase(&project, 1, "default", |_| Ok(())).requires_confirmation());
+    let default_timing = activity_phase(&project, 2, "default-timing", |_| Ok(()));
+    assert_eq!(default_timing.delay_per_task(), None);
+    assert_eq!(default_timing.task_timeout(), None);
+    assert_eq!(default_timing.deadline_after(), None);
+    for (setting, builder) in [
+        (
+            "delay_per_task",
+            Phase::builder(3, "invalid delay")
+                .activity_workload(config(&project, 0), "delay", |_| Ok(()))
+                .delay_per_task(Duration::ZERO),
+        ),
+        (
+            "task_timeout",
+            Phase::builder(4, "invalid timeout")
+                .activity_workload(config(&project, 0), "timeout", |_| Ok(()))
+                .task_timeout(Duration::ZERO),
+        ),
+        (
+            "deadline_after",
+            Phase::builder(5, "invalid deadline")
+                .activity_workload(config(&project, 0), "deadline", |_| Ok(()))
+                .deadline_after(Duration::ZERO),
+        ),
+    ] {
+        assert!(matches!(
+            builder.build(),
+            Err(RuntimeError::InvalidPhaseTiming { setting: actual, .. }) if actual == setting
+        ));
+    }
     let duplicate_a = activity_phase(&project, 1, "one", |_| Ok(()));
     let duplicate_b = activity_phase(&project, 1, "two", |_| Ok(()));
     assert!(matches!(
@@ -91,6 +120,109 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
             .build(),
         Err(RuntimeError::PhaseDependencyCycle { .. })
     ));
+}
+
+#[test]
+fn optional_phase_timing_staggers_starts_and_expires_cooperatively() {
+    let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
+
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let observed_starts = Arc::clone(&starts);
+    let delayed = Phase::builder(20, "delayed starts")
+        .activity_workloads_from_project(&project, "delayed", move |task| {
+            let ordinal = task.task_ordinal();
+            let starts = Arc::clone(&observed_starts);
+            move |_| {
+                starts.lock().unwrap().push((ordinal, Instant::now()));
+                Ok(())
+            }
+        })
+        .max_concurrent_workloads(3)
+        .queue_capacity(3)
+        .delay_per_task(Duration::from_millis(20))
+        .build()
+        .unwrap();
+    assert_eq!(delayed.delay_per_task(), Some(Duration::from_millis(20)));
+    WorkflowRuntime::builder()
+        .phase(delayed)
+        .hidden()
+        .build()
+        .unwrap()
+        .run_phases([20])
+        .unwrap();
+    let starts = starts.lock().unwrap();
+    assert_eq!(
+        starts
+            .iter()
+            .map(|(ordinal, _)| *ordinal)
+            .collect::<Vec<_>>(),
+        [0, 1, 2, 3, 4, 5]
+    );
+    assert!(
+        starts
+            .windows(2)
+            .all(|pair| pair[1].1.duration_since(pair[0].1) >= Duration::from_millis(15))
+    );
+    drop(starts);
+
+    let timeout_observed = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&timeout_observed);
+    let timed = Phase::builder(21, "task timeout")
+        .activity_workload(config(&project, 0), "timed", move |context| {
+            while !context.is_cancelled() {
+                thread::yield_now();
+            }
+            observed.store(true, Ordering::Release);
+            Err(std::io::Error::other("cooperative timeout").into())
+        })
+        .task_timeout(Duration::from_millis(20))
+        .build()
+        .unwrap();
+    assert_eq!(timed.task_timeout(), Some(Duration::from_millis(20)));
+    let timeout = WorkflowRuntime::builder()
+        .phase(timed)
+        .hidden()
+        .build()
+        .unwrap()
+        .run_phases([21])
+        .unwrap_err();
+    assert!(matches!(
+        timeout.execution_cause(),
+        Some(RuntimeError::TaskTimedOut { timeout, .. })
+            if *timeout == Duration::from_millis(20)
+    ));
+    assert!(timeout_observed.load(Ordering::Acquire));
+
+    let deadline_observed = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&deadline_observed);
+    let deadline = Phase::builder(22, "phase deadline")
+        .activity_workload(config(&project, 0), "deadline", move |context| {
+            while !context.is_cancelled() {
+                thread::yield_now();
+            }
+            observed.store(true, Ordering::Release);
+            Err(std::io::Error::other("cooperative deadline").into())
+        })
+        .deadline_after(Duration::from_millis(20))
+        .build()
+        .unwrap();
+    assert_eq!(deadline.deadline_after(), Some(Duration::from_millis(20)));
+    let deadline = WorkflowRuntime::builder()
+        .phase(deadline)
+        .hidden()
+        .build()
+        .unwrap()
+        .run_phases([22])
+        .unwrap_err();
+    assert!(matches!(
+        deadline.execution_cause(),
+        Some(RuntimeError::PhaseDeadlineExceeded {
+            phase: 22,
+            deadline_after,
+        }) if *deadline_after == Duration::from_millis(20)
+    ));
+    assert!(deadline_observed.load(Ordering::Acquire));
 }
 
 #[test]

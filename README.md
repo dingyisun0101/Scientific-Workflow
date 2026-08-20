@@ -30,7 +30,7 @@ Recordings are written beneath the example's ignored `target/recordings`
 directory. `ExecutionScope` selects a new timestamped, collision-resistant run directory, so rerunning the
 example does not overwrite prior results. The executable covers configuration,
 task expansion, dependency-aware phase selection, state evolution, bounded
-recording, format-v5 positional chunks, explicit recording completion,
+recording, format-v6 positional chunks, explicit recording completion,
 latest-state reconstruction, and numerical verification. It prints validation
 status through the runtime display.
 
@@ -58,7 +58,7 @@ those are separate provenance concerns.
 ## Official Python reader
 
 The repository's [`python`](python) package provides the official eager Python
-reader for completed format-v5 recordings. It validates the same lifecycle,
+reader for completed format-v6 recordings. It validates the same lifecycle,
 metadata, framing, schema, ordering, byte-count, and SHA-256 rules as Rust's
 `StoredStateSeriesReader`. Both readers consume one checked-in conformance
 fixture, preventing the Python implementation from becoming an undocumented
@@ -103,6 +103,13 @@ be configured to finish already active work without admitting more tasks.
 their human-facing display. Each task remains responsible for its own files,
 recordings, artifacts, networking, and subprocesses. Hard process resources are
 contained by the externally configured systemd/service scope, not by Workflow.
+
+Phase timing is opt-in. `delay_per_task` spaces actual task admission in dense
+phase-local executable-task order while delayed rows remain visibly pending.
+`task_timeout` limits elapsed execution per task, and `deadline_after` limits
+the phase from its execution start. Omitting all three preserves immediate
+admission. Expiration requests cooperative cancellation; workloads blocked in
+user or system code must yield before the runtime can finish shutting down.
 
 Phases advance automatically by default. A phase configured with
 `.require_confirm(true)` pauses after successful completion and requires the
@@ -193,7 +200,8 @@ cargo test --test runtime_workflow -- --nocapture
 
 Validates phase dependencies and selection, bounded parallel scheduling,
 configuration-generated workloads, exact selectors, exclusive runtime
-ownership, task-owned I/O, lifecycle summaries, and failure barriers.
+ownership, task-owned I/O, lifecycle summaries, failure barriers, delayed
+pending admission, task timeouts, and phase deadlines.
 
 ## Complete verification
 

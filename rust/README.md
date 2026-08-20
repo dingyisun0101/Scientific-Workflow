@@ -117,6 +117,7 @@ the parameters that vary:
 ```rust,no_run
 use scientific_workflow::prelude::basics::*;
 use scientific_workflow::prelude::runtime::*;
+use std::time::Duration;
 
 # fn example(project: &ScientificProject) -> Result<(), RuntimeError> {
 let phase = Phase::builder(2, "simulation")
@@ -125,16 +126,19 @@ let phase = Phase::builder(2, "simulation")
         context.set_iteration(1_000)?;
         Ok(())
     })
-    .display_tasks_by("simulation", ["temperature", "seed"])
+    .display_tasks_by("simulation", ["/temperature", "/seed"])
     .max_concurrent_workloads(4)
     .queue_capacity(8)
+    .delay_per_task(Duration::from_secs(2))
+    .task_timeout(Duration::from_secs(30 * 60))
+    .deadline_after(Duration::from_secs(4 * 60 * 60))
     .build()?;
 
 let selected = phase.unique_task_matching(
     &TaskSelector::new()
         .kind("simulation")
-        .parameter("temperature", serde_json::json!(300.0))
-        .parameter("seed", serde_json::json!(11)),
+        .parameter("/temperature", serde_json::json!(300.0))
+        .parameter("/seed", serde_json::json!(11)),
 )?;
 assert_eq!(selected.kind(), "simulation");
 let summary = WorkflowRuntime::builder()
@@ -155,6 +159,18 @@ identity/configuration, progress or activity reporting, and cancellation.
 The corresponding `progress_workloads_from_project` and
 `activity_workloads_from_project` factory methods remain available when each
 task must capture a distinct owned, possibly non-Clone resource.
+
+Phase timing is entirely optional; omitting all timing methods preserves the
+ordinary immediate-admission behavior. `delay_per_task` applies a minimum
+start-to-start interval in deterministic phase-local executable-task order.
+The first task starts immediately, reused tasks consume no rank, and delayed
+tasks remain visibly `pending: delayed start` until admitted. `task_timeout`
+starts when each workload actually starts. `deadline_after` starts when the
+phase begins and prevents new work after the phase-wide limit. Timeouts and
+deadlines request cooperative cancellation: workloads should observe
+`TaskContext::is_cancelled` or `should_continue`. Rust cannot safely terminate
+a workload blocked inside user code or a system call, so phase return waits for
+that workload to yield or finish.
 
 Phase transitions are automatic by default. Calling
 `require_confirm(true)` on a phase makes a successful non-final transition
@@ -290,7 +306,7 @@ Add the crate to a Rust project:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.3"
+scientific-workflow = "0.6.2"
 ```
 
 The crate uses Rust edition 2024 and requires Rust 1.97 or newer.

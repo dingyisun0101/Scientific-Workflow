@@ -496,7 +496,7 @@ the copy, and reject meaningful ambiguous or invalid inputs.
     [round-trip] fixed_bytes=true sweep_bytes=true paths_bytes=true reload=true overwrite_rejected=true
     [lookup-errors] bounds=true missing=true type=true path=true
     [cases] tasks=... correlated=true key_order_normalized=true
-    [validation] fixed_only=true nested_duplicate=true overlap=true inconsistent_cases=true invalid_path=true
+    [validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true inconsistent_cases=true invalid_path=true
     [result] configuration_workflow=passed
 
 ## Test 7: runtime_workflow.rs
@@ -522,6 +522,10 @@ test harness terminal; a bounded plain-output check covers renderer output.
   advanced factories retain distinct single-use workload ownership.
 - Single-use workloads can move non-Clone resources directly into execution.
 - Phase concurrency and prepared-work queue capacity remain bounded.
+- Timing settings default to absent. Optional delayed admission preserves
+  deterministic executable-task rank and pending status, while task timeout
+  and phase deadline expiration request cooperative cancellation and return
+  distinct structured errors.
 - Progress, activity, and verified reused tasks share one phase lifecycle.
 - Confirmation defaults off, accepts `yes` case-insensitively after rejecting
   other input, blocks the next phase until accepted, reports EOF context, and
@@ -548,7 +552,7 @@ test harness terminal; a bounded plain-output check covers renderer output.
 
 ### Log contract
 
-    test result: ok. 10 passed; 0 failed
+    test result: ok. 11 passed; 0 failed
 
 ## Logging rules
 

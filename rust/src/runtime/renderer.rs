@@ -23,8 +23,9 @@ pub(crate) fn phase_heading(phase: &Phase, position: usize, total: usize) -> Str
             .collect::<Vec<_>>()
             .join(",")
     };
+    let timing = timing_heading(phase);
     format!(
-        "Phase {position} of {total} — [{}] {} · tasks={} · active≤{} · queue={} · failure={} · confirm={} · dependencies={dependencies}",
+        "Phase {position} of {total} — [{}] {} · tasks={} · active≤{} · queue={}{timing} · failure={} · confirm={} · dependencies={dependencies}",
         phase.id(),
         phase.label(),
         phase.tasks().len(),
@@ -41,8 +42,9 @@ pub(crate) fn phase_heading(phase: &Phase, position: usize, total: usize) -> Str
 
 pub(crate) fn phase_start(output: RuntimeOutput, phase: &Phase, position: usize, total: usize) {
     if output == RuntimeOutput::Plain {
+        let timing = timing_plain(phase);
         eprintln!(
-            "[phase-start] position={position}/{total} phase={} label={} tasks={} active_limit={} queue_capacity={} failure_policy={} require_confirm={}",
+            "[phase-start] position={position}/{total} phase={} label={} tasks={} active_limit={} queue_capacity={}{timing} failure_policy={} require_confirm={}",
             phase.id(),
             phase.label(),
             phase.tasks().len(),
@@ -51,6 +53,38 @@ pub(crate) fn phase_start(output: RuntimeOutput, phase: &Phase, position: usize,
             phase.failure_policy().as_str(),
             phase.requires_confirmation(),
         );
+    }
+}
+
+fn timing_heading(phase: &Phase) -> String {
+    if phase.delay_per_task().is_none()
+        && phase.task_timeout().is_none()
+        && phase.deadline_after().is_none()
+    {
+        String::new()
+    } else {
+        format!(
+            " · delay={:?} · task-timeout={:?} · deadline={:?}",
+            phase.delay_per_task(),
+            phase.task_timeout(),
+            phase.deadline_after(),
+        )
+    }
+}
+
+fn timing_plain(phase: &Phase) -> String {
+    if phase.delay_per_task().is_none()
+        && phase.task_timeout().is_none()
+        && phase.deadline_after().is_none()
+    {
+        String::new()
+    } else {
+        format!(
+            " delay_per_task={:?} task_timeout={:?} deadline_after={:?}",
+            phase.delay_per_task(),
+            phase.task_timeout(),
+            phase.deadline_after(),
+        )
     }
 }
 

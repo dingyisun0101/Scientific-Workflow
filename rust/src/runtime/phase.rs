@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -254,6 +255,9 @@ pub struct Phase {
     tasks: Vec<Task>,
     max_concurrent_workloads: usize,
     queue_capacity: usize,
+    delay_per_task: Option<Duration>,
+    task_timeout: Option<Duration>,
+    deadline_after: Option<Duration>,
     dependencies: Vec<PhaseId>,
     failure_policy: PhaseFailurePolicy,
     require_confirm: bool,
@@ -290,6 +294,9 @@ impl Phase {
             display_by_kind: HashMap::new(),
             max_concurrent_workloads: 1,
             queue_capacity: 1,
+            delay_per_task: None,
+            task_timeout: None,
+            deadline_after: None,
             dependencies: Vec::new(),
             failure_policy: PhaseFailurePolicy::FailFast,
             require_confirm: false,
@@ -319,6 +326,21 @@ impl Phase {
     /// Returns the prepared-but-not-running workload ceiling.
     pub const fn queue_capacity(&self) -> usize {
         self.queue_capacity
+    }
+
+    /// Returns the optional minimum interval between consecutive task starts.
+    pub const fn delay_per_task(&self) -> Option<Duration> {
+        self.delay_per_task
+    }
+
+    /// Returns the optional elapsed-time limit for each running task.
+    pub const fn task_timeout(&self) -> Option<Duration> {
+        self.task_timeout
+    }
+
+    /// Returns the optional phase deadline measured from phase execution start.
+    pub const fn deadline_after(&self) -> Option<Duration> {
+        self.deadline_after
     }
 
     /// Returns declared predecessor phases in declaration order.
@@ -373,6 +395,9 @@ pub struct PhaseBuilder {
     display_by_kind: HashMap<String, Vec<String>>,
     max_concurrent_workloads: usize,
     queue_capacity: usize,
+    delay_per_task: Option<Duration>,
+    task_timeout: Option<Duration>,
+    deadline_after: Option<Duration>,
     dependencies: Vec<PhaseId>,
     failure_policy: PhaseFailurePolicy,
     require_confirm: bool,
@@ -593,6 +618,33 @@ impl PhaseBuilder {
         self
     }
 
+    /// Sets a minimum start-to-start interval for executable tasks.
+    ///
+    /// This policy is optional. Without this call, tasks are admitted exactly
+    /// as before. Reused tasks do not consume a delay rank.
+    pub fn delay_per_task(mut self, delay: Duration) -> Self {
+        self.delay_per_task = Some(delay);
+        self
+    }
+
+    /// Sets the maximum elapsed time for each task after it starts.
+    ///
+    /// Expiration requests cooperative cancellation; Rust workloads cannot be
+    /// forcibly terminated while they are blocked in user or system code.
+    pub fn task_timeout(mut self, timeout: Duration) -> Self {
+        self.task_timeout = Some(timeout);
+        self
+    }
+
+    /// Sets a phase-wide deadline relative to the phase execution start.
+    ///
+    /// Once reached, no additional tasks start and active tasks receive a
+    /// cooperative cancellation request.
+    pub fn deadline_after(mut self, deadline: Duration) -> Self {
+        self.deadline_after = Some(deadline);
+        self
+    }
+
     /// Declares one phase that must be satisfied before this phase starts.
     pub fn depends_on(mut self, dependency: impl Into<PhaseId>) -> Self {
         self.dependencies.push(dependency.into());
@@ -627,6 +679,20 @@ impl PhaseBuilder {
         }
         if self.queue_capacity == 0 {
             return Err(ReportingError::InvalidPhaseQueueCapacity { phase: self.id.0 });
+        }
+        for (setting, duration) in [
+            ("delay_per_task", self.delay_per_task),
+            ("task_timeout", self.task_timeout),
+            ("deadline_after", self.deadline_after),
+        ] {
+            if duration.is_some_and(|duration| {
+                duration.is_zero() || Instant::now().checked_add(duration).is_none()
+            }) {
+                return Err(ReportingError::InvalidPhaseTiming {
+                    phase: self.id.0,
+                    setting,
+                });
+            }
         }
 
         let mut ids = HashSet::with_capacity(self.tasks.len());
@@ -677,6 +743,9 @@ impl PhaseBuilder {
             tasks: self.tasks,
             max_concurrent_workloads: self.max_concurrent_workloads,
             queue_capacity: self.queue_capacity,
+            delay_per_task: self.delay_per_task,
+            task_timeout: self.task_timeout,
+            deadline_after: self.deadline_after,
             dependencies: self.dependencies,
             failure_policy: self.failure_policy,
             require_confirm: self.require_confirm,
@@ -789,6 +858,9 @@ impl fmt::Debug for Phase {
             .field("tasks", &self.tasks.len())
             .field("max_concurrent_workloads", &self.max_concurrent_workloads)
             .field("queue_capacity", &self.queue_capacity)
+            .field("delay_per_task", &self.delay_per_task)
+            .field("task_timeout", &self.task_timeout)
+            .field("deadline_after", &self.deadline_after)
             .field("dependencies", &self.dependencies)
             .field("failure_policy", &self.failure_policy)
             .field("require_confirm", &self.require_confirm)
@@ -805,6 +877,9 @@ impl fmt::Debug for PhaseBuilder {
             .field("tasks", &self.tasks.len())
             .field("max_concurrent_workloads", &self.max_concurrent_workloads)
             .field("queue_capacity", &self.queue_capacity)
+            .field("delay_per_task", &self.delay_per_task)
+            .field("task_timeout", &self.task_timeout)
+            .field("deadline_after", &self.deadline_after)
             .field("dependencies", &self.dependencies)
             .field("require_confirm", &self.require_confirm)
             .finish_non_exhaustive()

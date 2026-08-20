@@ -1,6 +1,7 @@
 //! Errors produced by runtime planning, scheduling, and rendering.
 
 use std::io;
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -55,6 +56,10 @@ pub enum RuntimeError {
     #[error("phase {phase} queue_capacity must be greater than zero")]
     InvalidPhaseQueueCapacity { phase: u64 },
 
+    /// One optional phase timing duration is zero or cannot be represented.
+    #[error("phase {phase} timing setting `{setting}` must be nonzero and representable")]
+    InvalidPhaseTiming { phase: u64, setting: &'static str },
+
     /// A reporter phase list repeats one phase ID.
     #[error("phase ID {phase} appears more than once")]
     DuplicatePhaseId { phase: u64 },
@@ -99,6 +104,17 @@ pub enum RuntimeError {
         task: String,
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    /// One task exceeded its configured elapsed-time limit.
+    #[error("task `{task}` exceeded its timeout of {timeout:?}")]
+    TaskTimedOut { task: String, timeout: Duration },
+
+    /// One phase exceeded its configured execution deadline.
+    #[error("phase {phase} exceeded its deadline of {deadline_after:?}")]
+    PhaseDeadlineExceeded {
+        phase: u64,
+        deadline_after: Duration,
     },
 
     /// A scheduler worker panicked.

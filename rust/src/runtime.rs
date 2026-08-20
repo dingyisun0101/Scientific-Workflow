@@ -44,6 +44,7 @@ mod renderer;
 mod reporting;
 mod scheduler;
 mod task;
+mod timing;
 
 pub use error::RuntimeError;
 pub use phase::{
