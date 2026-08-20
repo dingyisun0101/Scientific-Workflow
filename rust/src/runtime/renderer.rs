@@ -29,8 +29,8 @@ pub(crate) fn phase_heading(phase: &Phase, position: usize, total: usize) -> Str
         phase.id(),
         phase.label(),
         phase.tasks().len(),
-        phase.max_concurrent_workloads(),
-        phase.queue_capacity(),
+        phase.max_active_tasks(),
+        phase.prepared_task_queue_capacity(),
         phase.failure_policy().as_str(),
         if phase.requires_confirmation() {
             "yes"
@@ -44,12 +44,12 @@ pub(crate) fn phase_start(output: RuntimeOutput, phase: &Phase, position: usize,
     if output == RuntimeOutput::Plain {
         let timing = timing_plain(phase);
         eprintln!(
-            "[phase-start] position={position}/{total} phase={} label={} tasks={} active_limit={} queue_capacity={}{timing} failure_policy={} require_confirm={}",
+            "[phase-start] position={position}/{total} phase={} label={} tasks={} max_active_tasks={} prepared_task_queue_capacity={}{timing} failure_policy={} require_confirm={}",
             phase.id(),
             phase.label(),
             phase.tasks().len(),
-            phase.max_concurrent_workloads(),
-            phase.queue_capacity(),
+            phase.max_active_tasks(),
+            phase.prepared_task_queue_capacity(),
             phase.failure_policy().as_str(),
             phase.requires_confirmation(),
         );

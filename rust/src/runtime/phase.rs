@@ -253,8 +253,8 @@ pub struct Phase {
     id: PhaseId,
     label: Arc<str>,
     tasks: Vec<Task>,
-    max_concurrent_workloads: usize,
-    queue_capacity: usize,
+    max_active_tasks: usize,
+    prepared_task_queue_capacity: usize,
     delay_per_task: Option<Duration>,
     task_timeout: Option<Duration>,
     deadline_after: Option<Duration>,
@@ -292,8 +292,8 @@ impl Phase {
             label: label.into(),
             tasks: Vec::new(),
             display_by_kind: HashMap::new(),
-            max_concurrent_workloads: 1,
-            queue_capacity: 1,
+            max_active_tasks: 1,
+            prepared_task_queue_capacity: 1,
             delay_per_task: None,
             task_timeout: None,
             deadline_after: None,
@@ -319,13 +319,13 @@ impl Phase {
     }
 
     /// Returns the phase-local concurrent workload ceiling.
-    pub const fn max_concurrent_workloads(&self) -> usize {
-        self.max_concurrent_workloads
+    pub const fn max_active_tasks(&self) -> usize {
+        self.max_active_tasks
     }
 
     /// Returns the prepared-but-not-running workload ceiling.
-    pub const fn queue_capacity(&self) -> usize {
-        self.queue_capacity
+    pub const fn prepared_task_queue_capacity(&self) -> usize {
+        self.prepared_task_queue_capacity
     }
 
     /// Returns the optional minimum interval between consecutive task starts.
@@ -393,8 +393,8 @@ pub struct PhaseBuilder {
     label: String,
     tasks: Vec<Task>,
     display_by_kind: HashMap<String, Vec<String>>,
-    max_concurrent_workloads: usize,
-    queue_capacity: usize,
+    max_active_tasks: usize,
+    prepared_task_queue_capacity: usize,
     delay_per_task: Option<Duration>,
     task_timeout: Option<Duration>,
     deadline_after: Option<Duration>,
@@ -607,14 +607,14 @@ impl PhaseBuilder {
     }
 
     /// Sets the later scheduler's phase-local active workload ceiling.
-    pub fn max_concurrent_workloads(mut self, maximum: usize) -> Self {
-        self.max_concurrent_workloads = maximum;
+    pub fn max_active_tasks(mut self, maximum: usize) -> Self {
+        self.max_active_tasks = maximum;
         self
     }
 
     /// Sets the later scheduler's prepared-work queue capacity.
-    pub fn queue_capacity(mut self, capacity: usize) -> Self {
-        self.queue_capacity = capacity;
+    pub fn prepared_task_queue_capacity(mut self, capacity: usize) -> Self {
+        self.prepared_task_queue_capacity = capacity;
         self
     }
 
@@ -674,10 +674,10 @@ impl PhaseBuilder {
         if self.tasks.is_empty() {
             return Err(ReportingError::EmptyPhase { phase: self.id.0 });
         }
-        if self.max_concurrent_workloads == 0 {
+        if self.max_active_tasks == 0 {
             return Err(ReportingError::InvalidPhaseWorkloadLimit { phase: self.id.0 });
         }
-        if self.queue_capacity == 0 {
+        if self.prepared_task_queue_capacity == 0 {
             return Err(ReportingError::InvalidPhaseQueueCapacity { phase: self.id.0 });
         }
         for (setting, duration) in [
@@ -741,8 +741,8 @@ impl PhaseBuilder {
             id: self.id,
             label: self.label.into(),
             tasks: self.tasks,
-            max_concurrent_workloads: self.max_concurrent_workloads,
-            queue_capacity: self.queue_capacity,
+            max_active_tasks: self.max_active_tasks,
+            prepared_task_queue_capacity: self.prepared_task_queue_capacity,
             delay_per_task: self.delay_per_task,
             task_timeout: self.task_timeout,
             deadline_after: self.deadline_after,
@@ -856,8 +856,11 @@ impl fmt::Debug for Phase {
             .field("id", &self.id)
             .field("label", &self.label)
             .field("tasks", &self.tasks.len())
-            .field("max_concurrent_workloads", &self.max_concurrent_workloads)
-            .field("queue_capacity", &self.queue_capacity)
+            .field("max_active_tasks", &self.max_active_tasks)
+            .field(
+                "prepared_task_queue_capacity",
+                &self.prepared_task_queue_capacity,
+            )
             .field("delay_per_task", &self.delay_per_task)
             .field("task_timeout", &self.task_timeout)
             .field("deadline_after", &self.deadline_after)
@@ -875,8 +878,11 @@ impl fmt::Debug for PhaseBuilder {
             .field("id", &self.id)
             .field("label", &self.label)
             .field("tasks", &self.tasks.len())
-            .field("max_concurrent_workloads", &self.max_concurrent_workloads)
-            .field("queue_capacity", &self.queue_capacity)
+            .field("max_active_tasks", &self.max_active_tasks)
+            .field(
+                "prepared_task_queue_capacity",
+                &self.prepared_task_queue_capacity,
+            )
             .field("delay_per_task", &self.delay_per_task)
             .field("task_timeout", &self.task_timeout)
             .field("deadline_after", &self.deadline_after)

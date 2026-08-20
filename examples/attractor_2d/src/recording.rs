@@ -64,7 +64,7 @@ fn build_writer(
         "/radius_sampling_interval",
         "/checkpoint_sampling_interval",
         "/maximum_chunk_bytes",
-        "/writer_queue_bytes",
+        "/storage_queue_bytes",
     ))?;
     // Iteration and physical time belong to the scientific record. Operational
     // UTC timestamps and active duration are added by the writer itself.

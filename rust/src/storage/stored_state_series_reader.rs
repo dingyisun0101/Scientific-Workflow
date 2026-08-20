@@ -509,6 +509,21 @@ fn validate_complete_resume_schema(
     Ok(())
 }
 
+pub(crate) fn is_complete_checkpoint_stream(
+    stream: &StateStreamMetadata,
+    full_spec: &SystemStateSchema,
+) -> bool {
+    stream.fields.len() == full_spec.len()
+        && stream
+            .fields
+            .iter()
+            .zip(full_spec.field_schemas())
+            .all(|(stored, expected)| {
+                stored.name == expected.name()
+                    && stored.description.as_deref() == expected.description()
+            })
+}
+
 /// Parses one record and dispatches each raw field into its owned final type.
 fn decode_state_record_with_decoders(
     record: &[u8],
@@ -645,7 +660,7 @@ fn verify_file_size(path: &Path, expected: u64) -> Result<(), StorageError> {
 }
 
 /// Reads one immutable chunk only after enforcing its authoritative descriptor.
-fn read_verified_chunk(
+pub(crate) fn read_verified_chunk(
     metadata_path: &Path,
     path: &Path,
     chunk: &ChunkMetadata,

@@ -52,13 +52,16 @@ use crate::time_series::StateSeriesError;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// Existing incomplete output contains no full-state checkpoint.
+    #[error("recording contains no complete-state checkpoint from which execution can resume")]
+    NoCompleteCheckpoint,
     // ---------------------------------------------------------------------
     // Configuration and lifecycle
     // ---------------------------------------------------------------------
     /// A new recording refused to replace an existing path.
     ///
     /// Storage never silently overwrites a previous recording. Existing
-    /// running recordings are accepted only through explicit continuation.
+    /// Running recordings are accepted only through continuation APIs.
     #[error("recording directory `{path}` already exists")]
     RecordingDirectoryExists {
         /// Existing path that prevented recording creation.

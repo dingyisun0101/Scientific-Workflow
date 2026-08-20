@@ -20,10 +20,10 @@
 //!         context.set_detail("ready");
 //!         Ok(())
 //!     })
-//!     .max_concurrent_workloads(1)
-//!     .queue_capacity(1)
+//!     .max_active_tasks(1)
+//!     .prepared_task_queue_capacity(1)
 //!     .build()?;
-//! let summary = WorkflowRuntime::builder()
+//! let summary = WorkflowRuntime::builder("execution-record.json")
 //!     .phase(phase)
 //!     .hidden()
 //!     .build()?
@@ -39,6 +39,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod error;
+mod execution_plan;
+mod execution_record;
 mod phase;
 mod renderer;
 mod reporting;
@@ -47,6 +49,8 @@ mod task;
 mod timing;
 
 pub use error::RuntimeError;
+pub use execution_plan::ExecutionPlan;
+pub use execution_record::{ExecutionRecord, PhaseExecutionRecord, TaskExecutionRecord};
 pub use phase::{
     Phase, PhaseBuilder, PhaseFailurePolicy, PhaseId, Task, TaskDisplayKind, TaskId, TaskKey,
     TaskSelector,
@@ -68,6 +72,7 @@ pub struct WorkflowRuntimeBuilder {
     phases: Vec<Phase>,
     output: RuntimeOutput,
     satisfied_phase: Option<SatisfiedPhaseVerifier>,
+    execution_record_path: std::path::PathBuf,
 }
 
 impl WorkflowRuntimeBuilder {
@@ -127,6 +132,7 @@ impl WorkflowRuntimeBuilder {
             output: self.output,
             satisfied_phase: self.satisfied_phase,
             cancellation: CancellationToken::new(),
+            execution_record_path: self.execution_record_path,
         })
     }
 }
@@ -137,6 +143,7 @@ impl fmt::Debug for WorkflowRuntimeBuilder {
             .debug_struct("WorkflowRuntimeBuilder")
             .field("phases", &self.phases.len())
             .field("output", &self.output)
+            .field("execution_record_path", &self.execution_record_path)
             .field(
                 "has_satisfied_phase_verifier",
                 &self.satisfied_phase.is_some(),
@@ -151,21 +158,39 @@ pub struct WorkflowRuntime {
     output: RuntimeOutput,
     satisfied_phase: Option<SatisfiedPhaseVerifier>,
     cancellation: CancellationToken,
+    execution_record_path: std::path::PathBuf,
 }
 
 impl WorkflowRuntime {
-    /// Starts an empty builder. At least one phase is mandatory.
-    pub fn builder() -> WorkflowRuntimeBuilder {
+    /// Starts an empty builder with the mandatory execution-record destination.
+    pub fn builder(execution_record_path: impl Into<std::path::PathBuf>) -> WorkflowRuntimeBuilder {
         WorkflowRuntimeBuilder {
             phases: Vec::new(),
             output: RuntimeOutput::Auto,
             satisfied_phase: None,
+            execution_record_path: execution_record_path.into(),
         }
     }
 
     /// Borrows all registered phases in deterministic declaration order.
     pub fn phases(&self) -> &[Phase] {
         &self.phases
+    }
+
+    /// Materializes a deterministic, side-effect-free description of every
+    /// registered phase and task.
+    pub fn execution_plan(&self) -> ExecutionPlan {
+        ExecutionPlan::from_phases(&self.phases)
+    }
+
+    /// Writes the complete registered plan as pretty JSON without running it.
+    /// An existing byte-identical file is accepted. Different existing
+    /// content is rejected and never overwritten.
+    pub fn write_execution_plan_json(
+        &self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<(), RuntimeError> {
+        self.execution_plan().write_json(path)
     }
 
     /// Borrows one registered phase by stable ID.
@@ -299,6 +324,16 @@ impl WorkflowRuntime {
             .iter()
             .map(|position| self.phases[*position].tasks().len())
             .sum();
+        let execution = {
+            let selected_phases = selected
+                .iter()
+                .map(|position| &self.phases[*position])
+                .collect::<Vec<_>>();
+            execution_record::ExecutionRecorder::start(
+                self.execution_record_path.clone(),
+                &selected_phases,
+            )?
+        };
         let mut summaries = Vec::with_capacity(total_phases);
         let mut phases = self.phases.into_iter().map(Some).collect::<Vec<_>>();
 
@@ -306,6 +341,7 @@ impl WorkflowRuntime {
             let phase = phases[phase_position]
                 .take()
                 .expect("selected phase positions are unique");
+            execution.phase_started(phase.id())?;
             renderer::phase_start(self.output, &phase, selection_position + 1, total_phases);
             let heading = renderer::phase_heading(&phase, selection_position + 1, total_phases);
             let builder = RuntimeReporter::for_phase(&phase, &heading)?
@@ -320,13 +356,15 @@ impl WorkflowRuntime {
             let phase_id = phase.id();
             let phase_label: Arc<str> = phase.label().into();
             let require_confirm = phase.requires_confirmation();
-            let result = scheduler::execute_phase(phase, &reporter);
+            let result = scheduler::execute_phase(phase, &reporter, &execution);
+            let task_execution = reporter.task_execution_snapshots();
             let progress = if result.is_ok() {
                 reporter.complete(format!("phase {phase_id} completed"))?
             } else {
                 reporter.fail(format!("phase {phase_id} failed"))?
             };
             let success = result.is_ok() && progress.is_success();
+            execution.phase_finished(phase_id, success, &progress, task_execution)?;
             renderer::phase_complete(self.output, phase_id, &phase_label, success);
             summaries.push(PhaseSummary {
                 id: phase_id,
@@ -335,9 +373,11 @@ impl WorkflowRuntime {
             });
             if let Err(error) = result {
                 renderer::runtime_complete(self.output, summaries.len(), total_tasks, false);
+                let execution_record = execution.finish(false)?;
                 return Err(RuntimeError::PhaseExecutionFailed {
                     summary: RuntimeSummary {
                         phases: summaries.into(),
+                        execution_record: Box::new(execution_record),
                     },
                     source: Box::new(error),
                 });
@@ -355,9 +395,11 @@ impl WorkflowRuntime {
                             total_tasks,
                             false,
                         );
+                        let execution_record = execution.finish(false)?;
                         return Err(RuntimeError::PhaseExecutionFailed {
                             summary: RuntimeSummary {
                                 phases: summaries.into(),
+                                execution_record: Box::new(execution_record),
                             },
                             source: Box::new(RuntimeError::PhaseConfirmationInput {
                                 phase: phase_id.get(),
@@ -368,9 +410,11 @@ impl WorkflowRuntime {
                 };
                 if !confirmed {
                     renderer::runtime_complete(self.output, summaries.len(), total_tasks, false);
+                    let execution_record = execution.finish(false)?;
                     return Err(RuntimeError::PhaseExecutionFailed {
                         summary: RuntimeSummary {
                             phases: summaries.into(),
+                            execution_record: Box::new(execution_record),
                         },
                         source: Box::new(RuntimeError::PhaseConfirmationEof {
                             phase: phase_id.get(),
@@ -381,8 +425,10 @@ impl WorkflowRuntime {
         }
 
         renderer::runtime_complete(self.output, summaries.len(), total_tasks, true);
+        let execution_record = execution.finish(true)?;
         Ok(RuntimeSummary {
             phases: summaries.into(),
+            execution_record: Box::new(execution_record),
         })
     }
 }
@@ -431,11 +477,17 @@ impl PhaseSummary {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeSummary {
     phases: Arc<[PhaseSummary]>,
+    execution_record: Box<ExecutionRecord>,
 }
 
 impl RuntimeSummary {
     pub fn phases(&self) -> &[PhaseSummary] {
         &self.phases
+    }
+
+    /// Borrows the always-on durable record for this runtime invocation.
+    pub fn execution_record(&self) -> &ExecutionRecord {
+        self.execution_record.as_ref()
     }
 
     pub fn total_tasks(&self) -> u64 {

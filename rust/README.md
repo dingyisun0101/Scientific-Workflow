@@ -46,7 +46,7 @@ making them suitable for large arrays and tensors.
   userspace accumulation buffers.
 - Durable whole-chunk publication through one payload write, file sync,
   descriptor preparation, atomic lifecycle rename, and stream-directory sync.
-- Explicit interrupted-run append and complete typed checkpoint recovery.
+- Automatic complete-checkpoint recovery with cross-stream rewind.
 - RNG-agnostic method, version, key-encoding, key, and parameter provenance.
 - SHA-256-verified eager reconstruction through per-key payload decoders.
 - Efficient latest-state reconstruction without loading earlier chunks.
@@ -85,7 +85,8 @@ here are not compatibility promises.
   `TaskConfigIter`, `TaskParameters`, and `TaskParametersIter`.
 - Projects and execution: `ScientificProject`, `ScientificProjectError`,
   `ExecutionScope`, and `ExecutionScopeError`.
-- Runtime: `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeError`,
+- Runtime: `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `ExecutionPlan`,
+  `ExecutionRecord`, `PhaseExecutionRecord`, `TaskExecutionRecord`, `RuntimeError`,
   `RuntimeSummary`, `PhaseSummary`, `Phase`, `PhaseBuilder`,
   `PhaseFailurePolicy`, `PhaseId`, `Task`,
   `TaskId`, `TaskKey`, `TaskSelector`, `TaskDisplayKind`, `TaskContext`,
@@ -96,7 +97,8 @@ here are not compatibility promises.
 - Persistent storage: `CompletedRecording`, `CompletedStreamSummary`,
   `JsonPayloadDecoder`, `JsonPayloadDecoderRegistry`, `JsonStringDecoder`,
   `JsonVecF64Decoder`, `RecordingTiming`, `SamplingInterval`,
-  `StateStreamConfig`, `StorageError`, `StoredStateSeriesReader`,
+  `StateStreamConfig`, `StateStreamLayout`, `StateStreamStorage`, `StorageError`,
+  `StoredStateSeriesReader`,
   `SystemStateWriter`, `SystemStateWriterBuilder`, and `TimeAxisMetadata`.
 - State: `PayloadInsertError`, `SimulationTime`, `StateError`,
   `StateFieldSchema`, `SystemState`, and `SystemStateSchema`.
@@ -127,8 +129,8 @@ let phase = Phase::builder(2, "simulation")
         Ok(())
     })
     .display_tasks_by("simulation", ["/temperature", "/seed"])
-    .max_concurrent_workloads(4)
-    .queue_capacity(8)
+    .max_active_tasks(4)
+    .prepared_task_queue_capacity(8)
     .delay_per_task(Duration::from_secs(2))
     .task_timeout(Duration::from_secs(30 * 60))
     .deadline_after(Duration::from_secs(4 * 60 * 60))
@@ -141,7 +143,7 @@ let selected = phase.unique_task_matching(
         .parameter("/seed", serde_json::json!(11)),
 )?;
 assert_eq!(selected.kind(), "simulation");
-let summary = WorkflowRuntime::builder()
+let summary = WorkflowRuntime::builder("execution-record.json")
     .phase(phase)
     .hidden()
     .build()?
@@ -151,7 +153,7 @@ assert!(summary.is_success());
 # }
 ```
 
-`max_concurrent_workloads` and `queue_capacity` bound scheduling within each
+`max_active_tasks` and `prepared_task_queue_capacity` bound scheduling within each
 phase. They are not CPU, memory, process, or I/O limits. Each workload owns all
 scientific I/O and any subprocesses; the externally configured systemd/service
 scope contains the complete application. `TaskContext` exposes only retained
@@ -159,6 +161,13 @@ identity/configuration, progress or activity reporting, and cancellation.
 The corresponding `progress_workloads_from_project` and
 `activity_workloads_from_project` factory methods remain available when each
 task must capture a distinct owned, possibly non-Clone resource.
+
+These are Workflow task-scheduler controls only. `max_active_tasks` is the
+number of task closures that may run simultaneously, and
+`prepared_task_queue_capacity` bounds closures waiting for those task slots.
+Workflow has no ensemble-member concurrency setting and does not configure
+Rayon. An application task that launches a parallel ensemble runs all of its
+members according to that application's own process-wide Rayon pool.
 
 Phase timing is entirely optional; omitting all timing methods preserves the
 ordinary immediate-admission behavior. `delay_per_task` applies a minimum
@@ -171,6 +180,42 @@ deadlines request cooperative cancellation: workloads should observe
 `TaskContext::is_cancelled` or `should_continue`. Rust cannot safely terminate
 a workload blocked inside user code or a system call, so phase return waits for
 that workload to yield or finish.
+
+### JSON execution plans
+
+The complete registered graph can be written without executing any workload:
+
+```rust,no_run
+# use scientific_workflow::prelude::runtime::*;
+# fn inspect(runtime: &WorkflowRuntime) -> Result<(), RuntimeError> {
+runtime.write_execution_plan_json("execution-plan.json")?;
+# Ok(())
+# }
+```
+
+The deterministic, versioned JSON contains phases, dependencies, tasks,
+resolved task configurations, timing-derived release offsets, and scheduler
+limits. Export creates no recording directories, leases, subprocesses, or
+execution state. A byte-identical existing file is accepted; different
+existing content is rejected rather than overwritten. Workflow intentionally
+provides no text, CSV, or terminal representation of this plan.
+
+### Always-on execution records
+
+`WorkflowRuntime::builder(execution_record_path)` requires the destination for
+one versioned, pretty JSON execution record. Every selected run writes it; this
+is not an optional reporting mode. The record contains runtime, phase, and task
+UTC start/end timestamps, monotonic durations, statuses, phase/task counts,
+task identity and configuration ordinal, final/target progress, and each task's
+start offset from its phase. It deliberately excludes CPU, memory, I/O, and
+scientific result metrics.
+
+Workflow replaces the JSON atomically at lifecycle boundaries. Task timing is
+collected in memory while a phase is active and persisted with the phase result,
+avoiding file writes from every worker. Consequently, a process killed midway
+through a phase may leave the last durable record at `running`; completed phase
+and final runtime records are exact. Successful callers can also borrow the
+same final value through `RuntimeSummary::execution_record()`.
 
 Phase transitions are automatic by default. Calling
 `require_confirm(true)` on a phase makes a successful non-final transition
@@ -295,7 +340,7 @@ model itself.
 
 The public `SystemStateWriter` facade owns multi-stream metadata, one bounded
 queue and worker, and the recording's completion or failure lifecycle.
-Format version 6 writes each record's top-level `values` as a positional array
+Format version 7 writes each record's top-level `values` as a positional array
 whose names and order come from that stream's `fields` in `metadata.json`.
 Readers require an exact width and reconstruct the existing name-addressable
 state API; nested payload JSON remains opaque.
@@ -306,7 +351,7 @@ Add the crate to a Rust project:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.6.2"
+scientific-workflow = "0.7.0"
 ```
 
 The crate uses Rust edition 2024 and requires Rust 1.97 or newer.
@@ -463,7 +508,12 @@ swept descendant.
 `ProjectConfig::write_source_config(destination)` reproduces the three
 parameter/path files byte for byte beneath a new destination project. It never overwrites an
 existing `config/` directory. `TaskParameters::to_json` instead serializes one
-deterministic derived fixed-plus-sweep dictionary.
+deterministic derived fixed-plus-sweep dictionary. A complete `TaskConfig`
+provides `resolved_json()` and `write_resolved_json(path)`, which include the
+nested resolved parameters and declared project paths without requiring a
+wrapper struct. Resolved export accepts byte-identical existing content and
+rejects different content. Project loading validates parameters first and then
+paths, returning the first deterministic error and never a partial facade.
 
 `ScientificProject::load` requires `config/state.json` and exposes its shared
 schema through `state_schema()`. This is appropriate when the project itself
@@ -671,10 +721,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_iteration_unit("iteration")
                 .with_physical_axis("physical_time", "s"),
         )
-        .with_shared_stream_limits(
+        .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(64 * 1024 * 1024).unwrap(),
             NonZeroU64::new(256 * 1024 * 1024).unwrap(),
-        )
+        ))
         .add_state_stream(StateStreamConfig::new(
             "signal",
             ["population"],
@@ -712,6 +762,26 @@ chunk's declared byte count and SHA-256 checksum before decoding its final
 record or returning an append-capable writer. A descriptor-prepared temporary
 chunk completes its rename during recovery; an unpublished temporary chunk is
 discarded and is not scientific checkpoint state.
+
+`open_or_resume_from_latest_checkpoint(decoders)` is the concise normal entry
+point when restart is allowed. It creates absent output, but when matching
+incomplete output exists it infers the newest full-state checkpoint stream,
+restores that state, and rewinds every stream to the checkpoint iteration.
+All records produced after that checkpoint are removed and later output may
+replace them without a runtime warning or prompt. This overwrite-on-resume
+behavior is intentional. Existing incomplete output with no complete
+checkpoint, mismatched configuration, or a corrupt newest checkpoint is a
+hard error; Workflow never silently restarts such a run from the beginning or
+falls back to an older checkpoint.
+
+Recording `metadata.json` is Workflow's authority for managed chunk membership
+and descriptors. Rewind first stages any retained prefix, atomically commits
+the replacement metadata, and only then replaces or removes chunk files. If
+interrupted, the next resume compares staged/sealed candidates with metadata
+and completes the same cleanup idempotently. Do not manually edit, rename, or
+delete Workflow-managed metadata, chunk, or temporary files: recovery assumes
+they were produced by this protocol and treats unexplained discrepancies as
+corruption.
 
 ### Custom Payload Decoders
 

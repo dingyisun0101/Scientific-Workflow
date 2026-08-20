@@ -13,16 +13,17 @@
 //! `chunk-NNNNNN.jsonl.tmp` exists only during whole-chunk publication. After
 //! its bytes and directory entry are synchronized, its descriptor is committed to the sole
 //! `metadata.json`; only then is it renamed to `chunk-NNNNNN.jsonl`. The final
-//! name is the authoritative seal marker. This ordering ensures recovery never
-//! needs to inspect sealed payload contents to rebuild missing metadata.
+//! name is the ordinary seal marker. The metadata inventory remains authoritative
+//! about which chunks belong to the recording and, during checkpoint rewind,
+//! which of a sealed/staged pair contains the committed retained prefix.
 //!
 //! # Recovery boundary
 //!
-//! Resume checks filenames for the committed ordinal prefix but never opens a
-//! final `.jsonl` file. At most the highest `.jsonl.tmp` payload is opened. A
-//! prepared chunk is verified against its existing descriptor and renamed. An
-//! unprepared chunk was never published and is discarded; continuation resumes
-//! from the newest sealed checkpoint.
+//! Resume normally checks sealed filenames without opening their payloads. It
+//! opens the highest staged payload when publication was interrupted. Rewind
+//! recovery may also compare that staged payload and its obsolete sealed
+//! predecessor with the newly committed descriptor, then keeps the matching
+//! bytes. Chunks omitted by committed metadata are removed idempotently.
 //!
 //! # Backpressure and durability barriers
 //!
@@ -149,9 +150,9 @@ impl StateWriterWorker {
     }
 
     /// Reconciles filenames and reconstructs only the highest open chunk.
-    ///
-    /// Sealed files are checked by name and ordinal only. Their contents,
-    /// lengths, and checksums are deliberately not opened or recomputed.
+    /// Ordinary sealed files are checked by name and ordinal only; an
+    /// interrupted staged replacement requires comparing both candidate files
+    /// with the authoritative descriptor.
     pub(crate) fn recover_state_stream(
         config: &StateStreamStorageConfig,
         declaration: &StateStreamMetadata,
@@ -290,7 +291,7 @@ impl StateWriterWorker {
             queue_streams.insert(
                 config.stream.clone(),
                 StreamQueueState {
-                    queue_bytes: config.storage.queue_bytes().get(),
+                    queue_bytes: config.storage.storage_queue_bytes().get(),
                     outstanding_bytes: 0,
                     last_accepted_iteration: recovered.last_iteration,
                 },
@@ -826,6 +827,10 @@ fn recover_stream(
         if names.sealed && !names.open {
             continue;
         }
+        if is_last && names.sealed && names.open {
+            reconcile_staged_replacement(config, descriptor)?;
+            continue;
+        }
         if is_last && names.open && !names.sealed {
             let prior = descriptor
                 .ordinal
@@ -857,48 +862,95 @@ fn recover_stream(
         });
     }
 
+    let mut removed_extra = false;
     for (&ordinal, names) in &inventory {
         if ordinal < committed {
             continue;
         }
-        if ordinal > committed || names.sealed || !names.open {
-            return Err(StorageError::RecoveryConflict {
-                path: config.directory.clone(),
-                reason: format!(
-                    "unexpected chunk lifecycle entry at ordinal {ordinal}; next open ordinal is {committed}"
-                ),
-            });
+        if names.open {
+            remove_recovery_file(
+                &config.directory.join(chunk_temp_filename(ordinal)),
+                "discard metadata-omitted temporary chunk",
+            )?;
+            removed_extra = true;
         }
+        if names.sealed {
+            remove_recovery_file(
+                &config.directory.join(chunk_filename(ordinal)),
+                "discard metadata-omitted sealed chunk",
+            )?;
+            removed_extra = true;
+        }
+    }
+    if removed_extra {
+        sync_directory(
+            &config.directory,
+            "synchronize metadata-authoritative cleanup",
+        )?;
     }
 
     let previous = declaration.chunks.last().map(|chunk| chunk.last_iteration);
-    let Some(names) = inventory.get(&committed) else {
-        return Ok(RecoveredStateStream {
-            next_ordinal: committed,
-            last_iteration: previous,
-        });
-    };
-    if !names.open || names.sealed {
-        return Err(StorageError::RecoveryConflict {
-            path: config.directory.clone(),
-            reason: format!("ordinal {committed} is not one unsealed chunk"),
-        });
-    }
-
-    // An unprepared temporary payload was never published and therefore is
-    // not part of the recording. Buffered writers may leave one only while a
-    // whole-chunk publication is interrupted. Discard it rather than exposing
-    // a partially durable userspace chunk as scientific state.
-    let path = config.directory.join(chunk_temp_filename(committed));
-    fs::remove_file(&path).map_err(|source| StorageError::Io {
-        operation: "discard unpublished buffered chunk",
-        path: path.clone(),
-        source,
-    })?;
-    sync_directory(&config.directory, "synchronize unpublished chunk removal")?;
     Ok(RecoveredStateStream {
         next_ordinal: committed,
         last_iteration: previous,
+    })
+}
+
+fn reconcile_staged_replacement(
+    config: &StateStreamStorageConfig,
+    descriptor: &super::jsonl_format::ChunkMetadata,
+) -> Result<(), StorageError> {
+    let sealed = config.directory.join(chunk_filename(descriptor.ordinal));
+    let staged = config
+        .directory
+        .join(chunk_temp_filename(descriptor.ordinal));
+    if chunk_matches_descriptor(&staged, descriptor)? {
+        fs::rename(&staged, &sealed).map_err(|source| StorageError::Io {
+            operation: "publish metadata-authorized chunk replacement",
+            path: sealed.clone(),
+            source,
+        })?;
+    } else if chunk_matches_descriptor(&sealed, descriptor)? {
+        remove_recovery_file(&staged, "discard uncommitted chunk replacement")?;
+    } else {
+        return Err(StorageError::RecoveryConflict {
+            path: config.directory.clone(),
+            reason: format!(
+                "neither sealed nor staged bytes match metadata for chunk {}",
+                descriptor.ordinal
+            ),
+        });
+    }
+    sync_directory(
+        &config.directory,
+        "synchronize metadata-authorized chunk reconciliation",
+    )
+}
+
+fn chunk_matches_descriptor(
+    path: &Path,
+    descriptor: &super::jsonl_format::ChunkMetadata,
+) -> Result<bool, StorageError> {
+    let bytes = fs::read(path).map_err(|source| StorageError::Io {
+        operation: "read staged chunk during recovery",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let length = u64::try_from(bytes.len()).map_err(|_| StorageError::ByteCountOverflow {
+        stream: descriptor.file.clone(),
+    })?;
+    if length != descriptor.bytes {
+        return Ok(false);
+    }
+    let digest = Sha256::digest(&bytes);
+    Ok(descriptor.checksum == format!("sha256:{}", lowercase_hex(&digest)))
+}
+
+fn remove_recovery_file(path: &Path, operation: &'static str) -> Result<(), StorageError> {
+    fs::remove_file(path).map_err(|source| StorageError::Io {
+        operation,
+        path: path.to_path_buf(),
+        source,
     })
 }
 

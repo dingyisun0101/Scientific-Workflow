@@ -1,6 +1,6 @@
 {
   "format": "scientific-workflow-jsonl",
-  "version": 6,
+  "version": 7,
   "status": {"state": "complete"},
   "timing": {
     "created_at_utc": "2026-01-01T00:00:00Z",
@@ -26,7 +26,7 @@
       ],
       "storage": {
         "layout": {"kind": "chunked", "target_bytes": 1024},
-        "queue_bytes": 4096
+        "storage_queue_bytes": 4096
       },
       "chunks": [
         {

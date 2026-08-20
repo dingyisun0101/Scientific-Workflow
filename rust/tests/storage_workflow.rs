@@ -291,7 +291,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let metadata_bytes = fs::read(run_path.join("metadata.json")).unwrap();
     let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
     assert_eq!(metadata["status"]["state"], "complete");
-    assert_eq!(metadata["version"], 6);
+    assert_eq!(metadata["version"], 7);
     assert!(
         metadata["timing"]["created_at_utc"]
             .as_str()
@@ -417,7 +417,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         ["signal", "space"]
     );
     assert!(format!("{reader:?}").contains("StoredStateSeriesReader"));
-    assert_eq!(reader.format_version(), 6);
+    assert_eq!(reader.format_version(), 7);
     assert_eq!(reader.user_metadata()["seed"], 42);
     assert_eq!(
         reader.terminal_metadata()["termination_reason"],
@@ -527,7 +527,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         task_metadata["user_metadata"]["experiment"],
         "metadata-merge"
     );
-    assert_eq!(task_metadata["version"], 6);
+    assert_eq!(task_metadata["version"], 7);
     assert_eq!(
         task_metadata["streams"][0]["sampling_interval"],
         serde_json::json!({"iterations": 1})

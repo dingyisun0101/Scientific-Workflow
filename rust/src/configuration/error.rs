@@ -185,6 +185,13 @@ pub enum ConfigurationError {
         source: serde_json::Error,
     },
 
+    /// Resolved-task export found different existing content.
+    #[error("resolved task configuration destination `{path}` already contains different data")]
+    ResolvedTaskConfigConflict {
+        /// Existing destination that was preserved.
+        path: PathBuf,
+    },
+
     /// A project path lookup addressed an undeclared exact key.
     #[error("project paths do not contain key `{key}`")]
     UnknownProjectPath {

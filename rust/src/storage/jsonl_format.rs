@@ -55,7 +55,7 @@ use super::{SamplingInterval, StateStreamLayout, StateStreamStorage};
 pub(crate) const FORMAT_NAME: &str = "scientific-workflow-jsonl";
 
 /// Current metadata and record schema version.
-pub(crate) const FORMAT_VERSION: u32 = 6;
+pub(crate) const FORMAT_VERSION: u32 = 7;
 
 /// Payload encoding supported by the current storage stage.
 pub(crate) const PAYLOAD_ENCODING: &str = "json";

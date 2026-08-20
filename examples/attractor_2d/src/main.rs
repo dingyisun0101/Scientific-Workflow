@@ -26,6 +26,7 @@ fn main() -> AppResult<()> {
     // does not create task recordings: each simulation task remains responsible
     // for opening, writing, and completing its own recording.
     let execution = ExecutionScope::create_generated(project.resolve_path("recording_root")?)?;
+    let execution_record = execution.directory().join("execution-record.json");
 
     // Phase workloads are stored by the runtime and may execute on worker
     // threads, so their closures are `move` closures with a `'static` lifetime.
@@ -47,8 +48,8 @@ fn main() -> AppResult<()> {
         .display_tasks_by("attractor", ["/mu"])
         // These are phase-local scheduling bounds. Machine-level CPU and memory
         // policy belongs to the external service manager running this process.
-        .max_concurrent_workloads(3)
-        .queue_capacity(2)
+        .max_active_tasks(3)
+        .prepared_task_queue_capacity(2)
         // Admission remains pending until each dense phase-local rank starts.
         // This staggers recording creation without sleeping inside workloads.
         .delay_per_task(TASK_START_DELAY)
@@ -63,15 +64,15 @@ fn main() -> AppResult<()> {
         })
         .display_tasks_by("validate", ["/mu"])
         .depends_on(1)
-        .max_concurrent_workloads(3)
-        .queue_capacity(2)
+        .max_active_tasks(3)
+        .prepared_task_queue_capacity(2)
         .delay_per_task(TASK_START_DELAY)
         .build()?;
 
     // Requesting phase 2 with dependency expansion runs phase 1 first. Runtime
     // coordinates phase order, bounded scheduling, cancellation, and display;
     // it never owns the model's scientific I/O.
-    WorkflowRuntime::builder()
+    WorkflowRuntime::builder(execution_record)
         .phases([simulation, validation])
         .build()?
         .run_phases_with_dependencies([2])?;

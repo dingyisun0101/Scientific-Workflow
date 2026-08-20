@@ -13,6 +13,15 @@ use scientific_workflow::prelude::basics::*;
 use scientific_workflow::prelude::runtime::*;
 
 static RUNTIME_TEST: Mutex<()> = Mutex::new(());
+static EXECUTION_RECORD_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+fn execution_record_path() -> PathBuf {
+    let sequence = EXECUTION_RECORD_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "scientific-workflow-runtime-record-{}-{sequence}.json",
+        std::process::id()
+    ))
+}
 
 fn fixture_project(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -43,7 +52,9 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
     let _guard = RUNTIME_TEST.lock().unwrap();
     let project = project();
     assert!(matches!(
-        WorkflowRuntime::builder().hidden().build(),
+        WorkflowRuntime::builder(execution_record_path())
+            .hidden()
+            .build(),
         Err(RuntimeError::EmptyPhaseSet)
     ));
     assert!(matches!(
@@ -83,7 +94,7 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
     let duplicate_a = activity_phase(&project, 1, "one", |_| Ok(()));
     let duplicate_b = activity_phase(&project, 1, "two", |_| Ok(()));
     assert!(matches!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phases([duplicate_a, duplicate_b])
             .hidden()
             .build(),
@@ -96,7 +107,10 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
         .build()
         .unwrap();
     assert!(matches!(
-        WorkflowRuntime::builder().phase(unknown).hidden().build(),
+        WorkflowRuntime::builder(execution_record_path())
+            .phase(unknown)
+            .hidden()
+            .build(),
         Err(RuntimeError::UnknownPhaseDependency {
             phase: 2,
             dependency: 99
@@ -114,12 +128,114 @@ fn plan_validation_rejects_invalid_hierarchies_and_dependencies() {
         .build()
         .unwrap();
     assert!(matches!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phases([first, second])
             .hidden()
             .build(),
         Err(RuntimeError::PhaseDependencyCycle { .. })
     ));
+}
+
+#[test]
+fn execution_plan_export_is_complete_deterministic_and_never_executes() {
+    let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
+    let executed = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&executed);
+    let first = Phase::builder(1, "prepare")
+        .activity_workload(config(&project, 0), "prepare", move |_| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+        .max_active_tasks(2)
+        .prepared_task_queue_capacity(3)
+        .delay_per_task(Duration::from_millis(5))
+        .build()
+        .unwrap();
+    let second = Phase::builder(2, "simulate")
+        .depends_on(1)
+        .reused_activity(config(&project, 1), "simulate")
+        .build()
+        .unwrap();
+    let runtime = WorkflowRuntime::builder(execution_record_path())
+        .phases([first, second])
+        .hidden()
+        .build()
+        .unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "scientific-workflow-plan-{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    runtime.write_execution_plan_json(&path).unwrap();
+    let first_bytes = std::fs::read(&path).unwrap();
+    runtime.write_execution_plan_json(&path).unwrap();
+    assert_eq!(first_bytes, std::fs::read(&path).unwrap());
+    assert_eq!(executed.load(Ordering::Relaxed), 0);
+    let plan: serde_json::Value = serde_json::from_slice(&first_bytes).unwrap();
+    assert_eq!(plan["format"], "scientific-workflow.execution-plan.v1");
+    assert_eq!(plan["phases"][0]["max_active_tasks"], 2);
+    assert_eq!(plan["phases"][0]["prepared_task_queue_capacity"], 3);
+    assert_eq!(plan["phases"][0]["tasks"][0]["status"], "pending");
+    assert_eq!(plan["phases"][1]["tasks"][0]["status"], "reused");
+    assert!(plan["phases"][0]["tasks"][0]["configuration"]["parameters"].is_object());
+    std::fs::write(&path, b"{}\n").unwrap();
+    assert!(matches!(
+        runtime.write_execution_plan_json(&path),
+        Err(RuntimeError::ExecutionPlanConflict { .. })
+    ));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn execution_record_is_always_written_for_success_and_failure() {
+    let _guard = RUNTIME_TEST.lock().unwrap();
+    let project = project();
+
+    let success_path = execution_record_path();
+    let success = WorkflowRuntime::builder(&success_path)
+        .phase(activity_phase(&project, 1, "success", |_| Ok(())))
+        .hidden()
+        .build()
+        .unwrap()
+        .run_phases([1])
+        .unwrap();
+    let success_record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&success_path).unwrap()).unwrap();
+    assert_eq!(
+        success_record["format"],
+        "scientific-workflow.execution-record.v1"
+    );
+    assert_eq!(success_record["status"], "completed");
+    assert_eq!(success_record["phase_count"], 1);
+    assert_eq!(success_record["task_count"], 1);
+    assert_eq!(success_record["phases"][0]["status"], "completed");
+    assert_eq!(
+        success_record["phases"][0]["tasks"][0]["status"],
+        "completed"
+    );
+    assert!(success_record["duration_ns"].is_u64());
+    assert!(success_record["phases"][0]["tasks"][0]["duration_ns"].is_u64());
+    assert_eq!(
+        serde_json::to_value(success.execution_record()).unwrap(),
+        success_record
+    );
+
+    let failure_path = execution_record_path();
+    let failure = WorkflowRuntime::builder(&failure_path)
+        .phase(activity_phase(&project, 2, "failure", |_| {
+            Err(std::io::Error::other("expected failure").into())
+        }))
+        .hidden()
+        .build()
+        .unwrap()
+        .run_phases([2]);
+    assert!(failure.is_err());
+    let failure_record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&failure_path).unwrap()).unwrap();
+    assert_eq!(failure_record["status"], "failed");
+    assert_eq!(failure_record["phases"][0]["status"], "failed");
+    assert_eq!(failure_record["phases"][0]["tasks"][0]["status"], "failed");
 }
 
 #[test]
@@ -138,13 +254,13 @@ fn optional_phase_timing_staggers_starts_and_expires_cooperatively() {
                 Ok(())
             }
         })
-        .max_concurrent_workloads(3)
-        .queue_capacity(3)
+        .max_active_tasks(3)
+        .prepared_task_queue_capacity(3)
         .delay_per_task(Duration::from_millis(20))
         .build()
         .unwrap();
     assert_eq!(delayed.delay_per_task(), Some(Duration::from_millis(20)));
-    WorkflowRuntime::builder()
+    WorkflowRuntime::builder(execution_record_path())
         .phase(delayed)
         .hidden()
         .build()
@@ -180,7 +296,7 @@ fn optional_phase_timing_staggers_starts_and_expires_cooperatively() {
         .build()
         .unwrap();
     assert_eq!(timed.task_timeout(), Some(Duration::from_millis(20)));
-    let timeout = WorkflowRuntime::builder()
+    let timeout = WorkflowRuntime::builder(execution_record_path())
         .phase(timed)
         .hidden()
         .build()
@@ -208,7 +324,7 @@ fn optional_phase_timing_staggers_starts_and_expires_cooperatively() {
         .build()
         .unwrap();
     assert_eq!(deadline.deadline_after(), Some(Duration::from_millis(20)));
-    let deadline = WorkflowRuntime::builder()
+    let deadline = WorkflowRuntime::builder(execution_record_path())
         .phase(deadline)
         .hidden()
         .build()
@@ -249,7 +365,7 @@ fn exact_and_dependency_inclusive_selection_are_deterministic() {
         })
     };
     assert!(matches!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phases(build(Arc::new(Mutex::new(Vec::new()))))
             .hidden()
             .build()
@@ -262,7 +378,7 @@ fn exact_and_dependency_inclusive_selection_are_deterministic() {
     ));
 
     let order = Arc::new(Mutex::new(Vec::new()));
-    WorkflowRuntime::builder()
+    WorkflowRuntime::builder(execution_record_path())
         .phases(build(Arc::clone(&order)))
         .hidden()
         .build()
@@ -278,7 +394,7 @@ fn exact_and_dependency_inclusive_selection_are_deterministic() {
         .build()
         .unwrap();
     assert!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phases([verified, selected])
             .satisfied_phase_verifier(|id| id == PhaseId::new(2))
             .hidden()
@@ -322,12 +438,12 @@ fn fn_once_scheduler_bounds_work_and_supports_reuse() {
             }
         })
         .reused_activity(config(&project, 0), "cache")
-        .max_concurrent_workloads(2)
-        .queue_capacity(1)
+        .max_active_tasks(2)
+        .prepared_task_queue_capacity(1)
         .build()
         .unwrap();
     assert_eq!(simulation.tasks().len(), 7);
-    let summary = WorkflowRuntime::builder()
+    let summary = WorkflowRuntime::builder(execution_record_path())
         .phase(simulation)
         .hidden()
         .build()
@@ -379,11 +495,11 @@ fn failure_policy_controls_active_work_and_stops_admission() {
                 }
             })
             .failure_policy(policy)
-            .max_concurrent_workloads(2)
-            .queue_capacity(1)
+            .max_active_tasks(2)
+            .prepared_task_queue_capacity(1)
             .build()
             .unwrap();
-        let result = WorkflowRuntime::builder()
+        let result = WorkflowRuntime::builder(execution_record_path())
             .phase(phase)
             .hidden()
             .build()
@@ -433,7 +549,7 @@ fn one_active_runtime_is_enforced_and_released() {
         Ok(())
     });
     let runner = thread::spawn(move || {
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phase(blocking)
             .hidden()
             .build()
@@ -442,7 +558,7 @@ fn one_active_runtime_is_enforced_and_released() {
     });
     barrier.wait();
     assert!(matches!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phase(activity_phase(&project, 9, "second", |_| Ok(())))
             .hidden()
             .build()
@@ -457,7 +573,7 @@ fn one_active_runtime_is_enforced_and_released() {
         Err(std::io::Error::other("intentional failure").into())
     });
     assert!(matches!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phase(failing)
             .hidden()
             .build()
@@ -466,7 +582,7 @@ fn one_active_runtime_is_enforced_and_released() {
         Err(RuntimeError::PhaseExecutionFailed { .. })
     ));
     assert!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phase(activity_phase(&project, 3, "after", |_| Ok(())))
             .hidden()
             .build()
@@ -495,7 +611,7 @@ fn failure_blocks_dependents_and_task_owned_io_is_preserved() {
         .build()
         .unwrap();
     assert!(
-        WorkflowRuntime::builder()
+        WorkflowRuntime::builder(execution_record_path())
             .phases([first, second])
             .hidden()
             .build()
@@ -514,7 +630,7 @@ fn failure_blocks_dependents_and_task_owned_io_is_preserved() {
         std::fs::write(&owned_path, b"task-owned")?;
         Ok(())
     });
-    WorkflowRuntime::builder()
+    WorkflowRuntime::builder(execution_record_path())
         .phase(io_phase)
         .hidden()
         .build()
@@ -540,7 +656,7 @@ fn structured_selectors_use_complete_configuration_identity() {
         .display_tasks_by("simulation", ["/temperature", "/seed"])
         .build()
         .unwrap();
-    let runtime = WorkflowRuntime::builder()
+    let runtime = WorkflowRuntime::builder(execution_record_path())
         .phase(phase)
         .hidden()
         .build()
@@ -576,11 +692,11 @@ fn message_bursts_remain_bounded_and_responsive() {
                 Ok(())
             }
         })
-        .max_concurrent_workloads(2)
-        .queue_capacity(1)
+        .max_active_tasks(2)
+        .prepared_task_queue_capacity(1)
         .build()
         .unwrap();
-    let summary = WorkflowRuntime::builder()
+    let summary = WorkflowRuntime::builder(execution_record_path())
         .phase(phase)
         .hidden()
         .build()
@@ -627,7 +743,7 @@ fn cancellation_does_not_publish_task_owned_recording_failure() {
         }
         Err(std::io::Error::other("cancelled by runtime").into())
     });
-    let runtime = WorkflowRuntime::builder()
+    let runtime = WorkflowRuntime::builder(execution_record_path())
         .phase(phase)
         .hidden()
         .build()
@@ -666,7 +782,7 @@ fn plain_and_hidden_public_output_modes_are_stable() {
             .require_confirm(confirm)
             .build()
             .unwrap();
-        let builder = WorkflowRuntime::builder().phases([first, second]);
+        let builder = WorkflowRuntime::builder(execution_record_path()).phases([first, second]);
         let runtime = match mode.as_str() {
             "plain" | "confirm-yes" | "confirm-eof" => builder.plain().build().unwrap(),
             "terminal" => builder.terminal().build().unwrap(),

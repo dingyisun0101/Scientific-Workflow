@@ -1,8 +1,9 @@
 //! Configuration-backed task, phase, scheduling, display, and cancellation APIs.
 
 pub use crate::runtime::{
-    ActivityTask, CancellationToken, Phase, PhaseBuilder, PhaseFailurePolicy, PhaseId,
-    PhaseSummary, ProgressSummary, RuntimeError, RuntimeSummary, Task, TaskContext,
-    TaskDisplayKind, TaskId, TaskIdentity, TaskKey, TaskProgress, TaskResult, TaskSelector,
-    TaskStatus, WorkflowRuntime, WorkflowRuntimeBuilder,
+    ActivityTask, CancellationToken, ExecutionPlan, ExecutionRecord, Phase, PhaseBuilder,
+    PhaseExecutionRecord, PhaseFailurePolicy, PhaseId, PhaseSummary, ProgressSummary, RuntimeError,
+    RuntimeSummary, Task, TaskContext, TaskDisplayKind, TaskExecutionRecord, TaskId, TaskIdentity,
+    TaskKey, TaskProgress, TaskResult, TaskSelector, TaskStatus, WorkflowRuntime,
+    WorkflowRuntimeBuilder,
 };

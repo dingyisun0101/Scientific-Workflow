@@ -169,6 +169,18 @@ fn nested_fixed_and_sweep_documents_merge_at_unique_leaf_paths() {
     assert_eq!(resolved["kernel"], kernel);
     assert!(resolved.get("/kernel/mu").is_none());
 
+    let resolved_path = workspace.root.join("resolved-task.json");
+    task.write_resolved_json(&resolved_path).unwrap();
+    task.write_resolved_json(&resolved_path).unwrap();
+    let complete: Value = serde_json::from_slice(&fs::read(&resolved_path).unwrap()).unwrap();
+    assert_eq!(complete["parameters"]["kernel"], kernel);
+    assert_eq!(complete["paths"], serde_json::json!({}));
+    fs::write(&resolved_path, b"{}\n").unwrap();
+    assert!(matches!(
+        task.write_resolved_json(&resolved_path),
+        Err(ConfigurationError::ResolvedTaskConfigConflict { .. })
+    ));
+
     let composite_root = workspace.project("composite-axis");
     write_project(
         &composite_root,

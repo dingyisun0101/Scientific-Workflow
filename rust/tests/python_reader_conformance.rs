@@ -113,9 +113,9 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
 }
 
 #[test]
-fn rust_and_python_readers_share_one_format_v6_fixture() {
+fn rust_and_python_readers_share_one_format_v7_fixture() {
     let reader = StoredStateSeriesReader::open_completed_recording(fixture(), decoders()).unwrap();
-    assert_eq!(reader.format_version(), 6);
+    assert_eq!(reader.format_version(), 7);
     assert_eq!(reader.stream_names().collect::<Vec<_>>(), ["signal"]);
     assert_eq!(reader.stream_record_count("signal").unwrap(), 2);
 

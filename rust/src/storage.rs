@@ -37,6 +37,10 @@
 //! additionally reconstructs a complete owned checkpoint state through
 //! caller-supplied payload decoders. Recovery discards an unpublished temporary
 //! chunk, while completing the rename of a descriptor-prepared chunk.
+//! [`SystemStateWriterBuilder::open_or_resume_from_latest_checkpoint`] is the
+//! concise create-or-continue entry point: it infers the newest complete-state
+//! checkpoint and removes every stream record later than that checkpoint
+//! before writing resumes.
 //! Checkpoint-aware continuation verifies the
 //! selected latest sealed checkpoint chunk's exact byte count and SHA-256
 //! checksum before decoding it or returning an append-capable writer.
@@ -71,6 +75,7 @@ mod json_payload_decoder;
 mod json_state_record_encoder;
 mod jsonl_format;
 mod queued_state_writer;
+mod resume;
 mod stored_state_series_reader;
 
 pub use error::StorageError;
@@ -387,23 +392,23 @@ pub enum StateStreamLayout {
 #[serde(deny_unknown_fields)]
 pub struct StateStreamStorage {
     layout: StateStreamLayout,
-    queue_bytes: NonZeroU64,
+    storage_queue_bytes: NonZeroU64,
 }
 
 impl StateStreamStorage {
     /// Creates an in-memory chunking policy with a strict queue-byte budget.
-    pub const fn chunked(target_bytes: NonZeroU64, queue_bytes: NonZeroU64) -> Self {
+    pub const fn chunked(target_bytes: NonZeroU64, storage_queue_bytes: NonZeroU64) -> Self {
         Self {
             layout: StateStreamLayout::Chunked { target_bytes },
-            queue_bytes,
+            storage_queue_bytes,
         }
     }
 
     /// Creates a one-file-per-record policy with a strict queue-byte budget.
-    pub const fn individual_files(queue_bytes: NonZeroU64) -> Self {
+    pub const fn individual_files(storage_queue_bytes: NonZeroU64) -> Self {
         Self {
             layout: StateStreamLayout::IndividualFiles,
-            queue_bytes,
+            storage_queue_bytes,
         }
     }
 
@@ -411,8 +416,9 @@ impl StateStreamStorage {
         self.layout
     }
 
-    pub const fn queue_bytes(self) -> NonZeroU64 {
-        self.queue_bytes
+    /// Returns the strict byte capacity shared by queued records.
+    pub const fn storage_queue_bytes(self) -> NonZeroU64 {
+        self.storage_queue_bytes
     }
 }
 
@@ -606,6 +612,31 @@ impl SystemStateWriterBuilder {
         SystemStateWriter::create_new_recording(self)
     }
 
+    /// Creates a new recording or automatically resumes matching incomplete
+    /// output from its newest complete-state checkpoint.
+    ///
+    /// The checkpoint stream is inferred from the declared stream schemas.
+    /// On continuation, records later than the restored checkpoint are removed
+    /// from every stream before writing restarts. Existing output without a
+    /// complete checkpoint is rejected.
+    pub fn open_or_resume_from_latest_checkpoint(
+        self,
+        decoders: JsonPayloadDecoderRegistry,
+    ) -> Result<(SystemStateWriter, Option<SystemState>), StorageError> {
+        match self.root.try_exists() {
+            Ok(false) => Self::create_new_recording(self).map(|writer| (writer, None)),
+            Ok(true) => SystemStateWriter::continue_recording(
+                self,
+                Some(CheckpointRequest::LatestComplete(decoders)),
+            ),
+            Err(source) => Err(StorageError::Io {
+                operation: "inspect recording root for automatic resume",
+                path: self.root.clone(),
+                source,
+            }),
+        }
+    }
+
     /// Continues append writing in an existing running recording directory.
     ///
     /// The complete builder configuration is compared with authoritative
@@ -623,19 +654,27 @@ impl SystemStateWriterBuilder {
     /// `decoders` must cover every field. The returned state owns all decoded
     /// payloads. When reconstruction selects a sealed chunk, its exact byte
     /// count and SHA-256 checksum are verified before its final record is
-    /// decoded. Writer threads begin only after reconstruction succeeds.
+    /// decoded. Every stream is rewound to that checkpoint iteration. Writer
+    /// threads begin only after reconstruction and rewind succeed.
     pub fn continue_recording_from_latest_checkpoint(
         self,
         stream: &str,
         decoders: JsonPayloadDecoderRegistry,
     ) -> Result<(SystemStateWriter, SystemState), StorageError> {
-        let (writer, state) =
-            SystemStateWriter::continue_recording(self, Some((stream, decoders)))?;
+        let (writer, state) = SystemStateWriter::continue_recording(
+            self,
+            Some(CheckpointRequest::Named(stream.to_owned(), decoders)),
+        )?;
         Ok((
             writer,
             state.expect("checkpoint-aware resume always reconstructs one state"),
         ))
     }
+}
+
+enum CheckpointRequest {
+    Named(String, JsonPayloadDecoderRegistry),
+    LatestComplete(JsonPayloadDecoderRegistry),
 }
 
 /// Exclusive queued writer for all persistent streams in one recording.
@@ -871,7 +910,7 @@ impl SystemStateWriter {
     /// Validates, recovers, optionally reconstructs, and starts an append run.
     fn continue_recording(
         builder: SystemStateWriterBuilder,
-        checkpoint: Option<(&str, JsonPayloadDecoderRegistry)>,
+        checkpoint: Option<CheckpointRequest>,
     ) -> Result<(Self, Option<SystemState>), StorageError> {
         let prepared = PreparedRecording::from_builder(builder)?;
         let lease = RecordingLease::acquire(&prepared.root)?;
@@ -884,6 +923,58 @@ impl SystemStateWriter {
         }
         ensure_resume_match(&prepared.metadata_path, &prepared.metadata, &existing)?;
 
+        if checkpoint.is_some() {
+            for stream in &prepared.streams {
+                let declaration = existing
+                    .stream(&stream.name)
+                    .expect("matched metadata contains every prepared stream");
+                StateWriterWorker::recover_state_stream(&stream.writer, declaration)?;
+            }
+        }
+
+        let state = if let Some(checkpoint) = checkpoint {
+            let (checkpoint_stream, decoders) = match checkpoint {
+                CheckpointRequest::Named(stream, decoders) => (stream, decoders),
+                CheckpointRequest::LatestComplete(decoders) => {
+                    let stream = existing
+                        .streams
+                        .iter()
+                        .filter(|stream| {
+                            stored_state_series_reader::is_complete_checkpoint_stream(
+                                stream,
+                                &prepared.spec,
+                            ) && !stream.chunks.is_empty()
+                        })
+                        .max_by_key(|stream| stream.chunks.last().map(|chunk| chunk.last_iteration))
+                        .map(|stream| stream.name.clone())
+                        .ok_or(StorageError::NoCompleteCheckpoint)?;
+                    (stream, decoders)
+                }
+            };
+            let declaration = existing.stream(&checkpoint_stream).ok_or_else(|| {
+                StorageError::UnknownStateStream {
+                    stream: checkpoint_stream.clone(),
+                }
+            })?;
+            let state = stored_state_series_reader::decode_resume_state(
+                &prepared.root,
+                &prepared.metadata_path,
+                declaration,
+                &prepared.spec,
+                &decoders,
+            )?;
+            resume::prepare_rewind_after_checkpoint(
+                &prepared.root,
+                &prepared.metadata_path,
+                &mut existing,
+                state.simulation_time().iteration(),
+            )?;
+            commit_metadata(&prepared.root, &prepared.metadata_path, &existing)?;
+            Some(state)
+        } else {
+            None
+        };
+
         let mut recovered = Vec::with_capacity(prepared.streams.len());
         for stream in prepared.streams {
             let declaration = existing
@@ -892,23 +983,6 @@ impl SystemStateWriter {
             let seed = StateWriterWorker::recover_state_stream(&stream.writer, declaration)?;
             recovered.push((stream, seed));
         }
-
-        let state = if let Some((checkpoint_stream, decoders)) = checkpoint {
-            let declaration = existing.stream(checkpoint_stream).ok_or_else(|| {
-                StorageError::UnknownStateStream {
-                    stream: checkpoint_stream.to_owned(),
-                }
-            })?;
-            Some(stored_state_series_reader::decode_resume_state(
-                &prepared.root,
-                &prepared.metadata_path,
-                declaration,
-                &prepared.spec,
-                &decoders,
-            )?)
-        } else {
-            None
-        };
 
         existing.timing.continuation_count = existing
             .timing

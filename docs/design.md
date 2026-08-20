@@ -9,7 +9,7 @@ authoritative when older implementation notes in this document differ.
 Current scope:
 
 - Rust owns execution and persistence; the Python package is the official
-  read-only format-v6 analysis bridge.
+  read-only format-v7 analysis bridge.
 - JSON persistence only; protobuf is out of scope.
 - No backward compatibility or legacy support.
 - Payloads may be any `Serialize + Clone + Send + 'static` Rust value.
@@ -814,8 +814,10 @@ into task parameters or perform task execution.
 #### ProjectConfig::load
 
 Loads and validates `fixed.json`, `sweep.json`, and `paths.json` as one complete
-read-only operation. Failure drops any earlier validated component and never
-returns a partial facade.
+read-only operation. It validates the parameter space first and paths second,
+returning the first error in that deterministic order. Failure drops any
+earlier validated component and never returns a partial facade; Workflow does
+not add a separate multi-error aggregation layer.
 
 ##### Reference
 
@@ -1338,6 +1340,26 @@ paths, output names, or scientific results. Flat parameter sweeps, compiled
 study graphs, nested ensembles, and one-off programs can all declare the same
 runtime hierarchy.
 
+`WorkflowRuntime::execution_plan` materializes this registered hierarchy as a
+deterministic versioned value. `write_execution_plan_json(path)` publishes its
+pretty JSON without acquiring the runtime lease or running task workloads. The
+document includes resolved `TaskConfig` JSON, dependency and registration
+order, timing-derived release offsets, and the unambiguous
+`max_active_tasks`/`prepared_task_queue_capacity` limits. Identical existing
+bytes are accepted and different existing content is preserved as a conflict.
+There is intentionally no text, CSV, or terminal plan representation.
+
+Every executable runtime additionally requires one execution-record path at
+construction. The always-on versioned JSON is the compact durable lifecycle
+counterpart to the prospective execution plan: runtime, phases, and tasks carry
+UTC start/end timestamps, monotonic durations, status, counts, task identity,
+configuration ordinal, progress endpoints, and phase-relative task start
+offsets. It contains no CPU, memory, I/O, or scientific metrics. Publication is
+atomic at runtime and phase boundaries; task timers update memory only while
+workers run so lifecycle recording does not add per-task filesystem contention.
+An abrupt process exit may therefore leave the durable phase marked `running`,
+while an ordinarily returned success or failure has a finalized record.
+
 ### First-class phases
 
 `Phase` is the mandatory top-level work unit beneath a runtime:
@@ -1350,7 +1372,7 @@ WorkflowRuntime
 
 A phase has a stable `PhaseId`, an automatically generated or caller-supplied
 human label, one or more tasks, zero or more declared predecessor `PhaseId`
-values, `max_concurrent_workloads`, `queue_capacity`, and a `require_confirm`
+values, `max_active_tasks`, `prepared_task_queue_capacity`, and a `require_confirm`
 transition flag that defaults to `false`. Empty runtimes, empty phase
 selections, empty phases, duplicate phase IDs, unknown dependencies, and
 dependency cycles are rejected before execution.
@@ -1360,6 +1382,10 @@ starts only after all required predecessors are verified as satisfied. Tasks
 within one eligible phase execute concurrently. The initial implementation uses
 phase barriers; concurrent independent phases require a future explicit policy
 rather than occurring implicitly.
+
+The phase limits govern Workflow tasks only. Workflow has no ensemble-level
+concurrency control and does not configure Rayon. Parallel work performed
+inside one task belongs to that application and its process-wide thread pool.
 
 Phase selection has two explicit modes:
 
@@ -1386,18 +1412,18 @@ The intended construction and selection shape is:
 let simulation = Phase::builder(2, "simulation")
     .progress_tasks_from_project(&project, "simulation", simulation_workload)
     .display_tasks_by("simulation", ["mu"])
-    .max_concurrent_workloads(4)
-    .queue_capacity(8)
+    .max_active_tasks(4)
+    .prepared_task_queue_capacity(8)
     .build()?;
 
 let validation = Phase::builder(4, "validation")
     .activity_tasks_from_project(&project, "validation", validation_workload)
     .depends_on(2)
-    .max_concurrent_workloads(1)
-    .queue_capacity(1)
+    .max_active_tasks(1)
+    .prepared_task_queue_capacity(1)
     .build()?;
 
-let runtime = WorkflowRuntime::builder()
+let runtime = WorkflowRuntime::builder("execution-record.json")
     .phases([simulation, validation])
     .build()?;
 
@@ -1567,8 +1593,8 @@ task-local handles.
 
 ### Scheduling boundary, task I/O, and resource containment
 
-`max_concurrent_workloads` limits running workloads within a phase, while
-`queue_capacity` limits prepared but not running workloads. Neither limit
+`max_active_tasks` limits running workloads within a phase, while
+`prepared_task_queue_capacity` limits prepared but not running workloads. Neither limit
 describes CPU, memory, process, thread, file, or network resources. Complete
 lightweight task declarations remain preregistered so display identity and
 ordering are stable even when expensive workload preparation is bounded.
@@ -1629,7 +1655,7 @@ completed, reused, failed, cancelled, and never-started/skipped outcomes.
 4. Tighten workloads to `FnOnce`, make failure policy explicit with fail-fast
    as the default, restrict task construction to configuration-backed phase
    builders, and split the end-user preludes.
-5. Change format-v6 records to positional payload values interpreted by the
+5. Change format-v7 records to positional payload values interpreted by the
    ordered stream fields already stored in `metadata.json`.
 6. Update the full-stack example to demonstrate
    `config -> tasks -> phases -> runtime`, selection, task-owned I/O, and
@@ -2662,7 +2688,7 @@ Returns `(StateSeriesError, SystemState)` without cloning.
 
 ## Storage format
 
-Format version 6 stores typed `sampling_interval` scheduling, structurally
+Format version 7 stores typed `sampling_interval` scheduling, structurally
 separate initial/terminal metadata, automatic operational timing, and
 positional per-record payload values. Earlier format versions are intentionally
 unsupported in this clean-slate stage.
@@ -3734,10 +3760,21 @@ never makes `start` silently reuse existing output.
 Coordinates recovery with typed checkpoint reconstruction and returns
 `(SystemStateWriter, SystemState)`. The selected stream must exactly cover the complete
 builder `SystemStateSchema`; decoder outputs populate every slot before writers start.
+Every stream is rewound to the selected checkpoint iteration.
 
 ##### Reference
 
     runtime model restart -> SystemStateWriterBuilder::continue_recording_from_latest_checkpoint
+
+#### `SystemStateWriterBuilder::open_or_resume_from_latest_checkpoint`
+
+Creates absent output or resumes matching running output. It infers the
+full-state stream containing the latest checkpoint, returns that restored state
+when resuming, and errors when existing incomplete output has no checkpoint.
+
+##### Reference
+
+    concise restartable task -> SystemStateWriterBuilder::open_or_resume_from_latest_checkpoint
 
 ### `RecordingTiming`
 
@@ -4373,10 +4410,11 @@ three conflict with the runtime JSON key template and open-ended payload types.
 The private erased owner plus demand-driven serialization view is therefore the
 appropriate implementation for this general state.
 
-### Gate 2: interrupted-run resume and append (implemented)
+### Gate 2: interrupted-run resume and rewind (implemented)
 
-Runtime model can continue an incomplete task in its existing directory, load only
-the newest full-state checkpoint, and append later chunks.
+Runtime model can continue an incomplete task in its existing directory, load
+the newest full-state checkpoint, remove later observations, and write forward
+again from that state.
 `create_new_recording` remains strictly new-directory-only; explicit
 `continue_existing_recording` and
 `continue_recording_from_latest_checkpoint` validate recording identity and
@@ -4414,13 +4452,10 @@ Readers continue to reject ordinary analysis of a running recording, so the brie
 prepared state is never presented as completed output.
 
 At resume, each stream can contain at most one open chunk: its highest ordinal.
-The recovery pass opens and examines only that chunk. If metadata already has
-its prepared descriptor, recovery verifies the open bytes against that
-descriptor and completes the rename. Otherwise it parses complete JSONL
-records, truncates an incomplete trailing record if present, rebuilds the
-incremental checksum/counters, and continues appending to the same chunk (or
-seals it immediately when it already meets the byte target). Older sealed
-chunks remain unopened during this positional recovery.
+If metadata already has its prepared descriptor, recovery verifies the open
+bytes against that descriptor and completes the rename. Otherwise the open
+chunk was never published as durable scientific data and is discarded. Older
+sealed chunks remain unopened during positional recovery.
 
 `SystemStateWriterBuilder::continue_existing_recording` is explicit rather
 than making `create_new_recording` silently reuse a directory. It accepts only
@@ -4445,17 +4480,16 @@ and IO-independence. The operation performs one coordinated transaction:
 3. recover each stream's open chunk;
 4. select and decode the newest complete checkpoint record from the requested
    stream;
-5. seed and start the append worker; and
-6. return both the live writer and reconstructed owned state.
+5. stage retained prefixes and omit later chunks in the in-memory inventory;
+6. atomically commit the rewound metadata, then idempotently replace or remove
+   the now-obsolete chunk files and seed the append worker; and
+7. return both the live writer and reconstructed owned state.
 
-For the selected checkpoint stream, recovery first examines its highest open
-chunk. A final non-newline-terminated fragment is ignored and truncated as a
-crash remnant. Every earlier newline-terminated record must be structurally
-valid; recovery never skips corruption in the middle and calls a later record
-"valid." If the open chunk contains no complete record, lookup falls back to
-the last record of the highest sealed chunk. Because that payload becomes the
-resumed scientific state, the selected sealed chunk must first pass exact
-byte-count and checksum verification. Earlier sealed chunks remain unopened.
+For the selected checkpoint stream, prepared publication is completed and an
+unpublished open chunk is discarded before selection. The final record of the
+highest sealed checkpoint chunk becomes the resumed scientific state, so that
+chunk must first pass exact byte-count and checksum verification. Earlier
+sealed chunks remain unopened.
 
 The returned `SystemState` is complete, not a partially populated full-state
 shell. Therefore the selected checkpoint stream must declare every field in
@@ -4473,8 +4507,25 @@ convenience counterpart, not a second recovery implementation.
 
 The explicit public vocabulary is:
 
+    builder.open_or_resume_from_latest_checkpoint(decoders)?;
     builder.continue_existing_recording()?;
     builder.continue_recording_from_latest_checkpoint("space", decoders)?;
+
+`open_or_resume_from_latest_checkpoint` is the concise normal boundary. It
+creates a new writer when the directory is absent and otherwise infers the
+newest complete-state checkpoint. Existing data later than that checkpoint is
+removed and may be overwritten without a runtime warning. This is documented
+behavior, not an interactive policy. Missing checkpoints, corrupt newest
+checkpoints, and configuration mismatches remain hard errors.
+
+`metadata.json` is authoritative for Workflow-managed chunk membership and
+descriptors. A rewind never destroys the previous sealed bytes before its new
+inventory is durable. If interruption occurs before metadata commit, recovery
+discards the uncommitted staged replacement; if it occurs afterward, recovery
+publishes the staged bytes matching the new descriptor and removes files the
+inventory omits. Repeating recovery therefore converges on metadata. Users must
+not manually alter managed metadata, chunks, or temporary files; unexplained
+differences are corruption rather than an alternate source of truth.
 
 `continue_existing_recording` means storage-only continuation: validate and recover an
 existing running recording, then return `SystemStateWriter` ready for later records.
@@ -4869,7 +4920,7 @@ Required method allocation:
 | `analysis_workflow` | `StateSeries`, `StateSeriesView`, `StateSeriesPushError`, `StateSeriesError`; all public construction, capacity, lookup, iteration, mutation, append/rejection, extraction, clear, and clone methods |
 | `storage_workflow` | `TimeAxisMetadata`, `StateStreamConfig`, `SystemStateWriterBuilder`, `SystemStateWriter`, `JsonPayloadDecoder`, `JsonPayloadDecoderRegistry`, both default decoders, and `StoredStateSeriesReader`; every public success-path method including `read_all`, with private encoding/writing/format behavior verified through files and readback |
 | `storage_resilience` | `StorageError` source/context behavior and reachable configuration, lifecycle, queue, decoder, record, metadata, filesystem, and integrity failure families |
-| `resume_workflow` | explicit `continue_existing_recording`/`continue_recording_from_latest_checkpoint`, full-state schema enforcement, typed checkpoint reconstruction, prepared and unprepared crash windows, multi-sealed-plus-open recovery without sealed-content inspection, continuation rejection boundaries, append seeding, `flush`, and exclusive root leasing |
+| `resume_workflow` | automatic checkpoint inference, explicit continuation APIs, full-state schema enforcement, typed checkpoint reconstruction, cross-stream post-checkpoint rewind, prepared and unprepared crash windows, continuation rejection boundaries, append seeding, `flush`, and exclusive root leasing |
 | `configuration_workflow` | `ProjectConfig`, `ParameterSpace`, `TaskParameters`, `TaskParametersIter`, `TaskConfig`, `TaskConfigIter`, `MatchingTaskConfigIter`, `ProjectPaths`, and `ConfigurationError`; all public loading, inspection, complete task generation, exact filtering, unique selection, lookup, iteration, decoding, path, exact-export, ownership, and diagnostic methods plus meaningful parser/validation families |
 | `runtime_workflow` | `WorkflowRuntime`, phases, executable tasks, structured selectors, configuration workload generation, `TaskContext`, task-local handles, summaries, and `RuntimeError`; plan validation, dependency selection, bounded scheduling, active-phase display, cancellation, exclusive ownership, task-owned I/O, and failure barriers |
 
@@ -5432,7 +5483,7 @@ completed results through the storage reader. Exact matching can select a
 subset while retaining the Cartesian product of every unconstrained axis.
 Scoped execution policy and richer logging remain orchestration layer-level work rather
 than prerequisites missing from this crate. Migration should preserve the new
-storage-format version 6 contract and should not introduce compatibility
+storage-format version 7 contract and should not introduce compatibility
 aliases for the former step-based counter or sampling names.
 
 ## dependent-model crate migration audit

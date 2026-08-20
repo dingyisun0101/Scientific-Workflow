@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use super::error::RuntimeError;
+use super::execution_record::ExecutionRecorder;
 use super::phase::{Phase, PhaseFailurePolicy, Task, TaskDisplayKind};
 use super::reporting::RuntimeReporter;
 use super::task::TaskContext;
@@ -16,16 +17,21 @@ struct ScheduledTask {
     task: Task,
 }
 
-pub(crate) fn execute_phase(phase: Phase, reporter: &RuntimeReporter) -> Result<(), RuntimeError> {
-    let worker_count = phase.max_concurrent_workloads();
-    let queue_capacity = phase.queue_capacity();
+pub(crate) fn execute_phase(
+    phase: Phase,
+    reporter: &RuntimeReporter,
+    execution: &ExecutionRecorder,
+) -> Result<(), RuntimeError> {
+    let worker_count = phase.max_active_tasks();
+    let prepared_task_queue_capacity = phase.prepared_task_queue_capacity();
     let failure_policy = phase.failure_policy();
     let delay_per_task = phase.delay_per_task();
     let task_timeout = phase.task_timeout();
     let deadline_after = phase.deadline_after();
     let phase_id = phase.id().get();
     let tasks = phase.into_tasks();
-    let (work_sender, work_receiver) = mpsc::sync_channel::<ScheduledTask>(queue_capacity);
+    let (work_sender, work_receiver) =
+        mpsc::sync_channel::<ScheduledTask>(prepared_task_queue_capacity);
     let work_receiver = Arc::new(Mutex::new(work_receiver));
     let (result_sender, result_receiver) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
@@ -135,6 +141,18 @@ pub(crate) fn execute_phase(phase: Phase, reporter: &RuntimeReporter) -> Result<
                         }
                     };
                     start_permit.started();
+                    let _execution_timer = match execution.task_started(&key) {
+                        Ok(timer) => timer,
+                        Err(error) => {
+                            context.fail(error.to_string());
+                            stop.store(true, Ordering::Release);
+                            if failure_policy == PhaseFailurePolicy::FailFast {
+                                reporter.request_cancellation();
+                            }
+                            let _ = results.send(Err(error));
+                            continue;
+                        }
+                    };
                     if context.is_cancelled() {
                         context.cancel("cancelled before task execution");
                         let _ = results.send(Err(RuntimeError::Cancelled));

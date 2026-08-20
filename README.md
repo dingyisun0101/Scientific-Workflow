@@ -30,12 +30,20 @@ Recordings are written beneath the example's ignored `target/recordings`
 directory. `ExecutionScope` selects a new timestamped, collision-resistant run directory, so rerunning the
 example does not overwrite prior results. The executable covers configuration,
 task expansion, dependency-aware phase selection, state evolution, bounded
-recording, format-v6 positional chunks, explicit recording completion,
+recording, format-v7 positional chunks, explicit recording completion,
 latest-state reconstruction, and numerical verification. It prints validation
 status through the runtime display.
 
 The example is maintained as a repository-level project and is not included
 in the library crate's crates.io archive.
+
+The Rust library can export the complete registered phase/task graph as
+versioned JSON without running tasks. It deliberately has no text, CSV, or
+terminal plan renderer. Every runtime also requires a destination for an
+always-on versioned JSON execution record containing compact phase/task timing
+and outcome facts. Automatic checkpoint continuation rewinds every
+recording stream to the restored checkpoint; data later than that checkpoint
+is overwritten without a runtime warning, as documented in the crate README.
 
 ## Mandatory chunk integrity
 
@@ -58,7 +66,7 @@ those are separate provenance concerns.
 ## Official Python reader
 
 The repository's [`python`](python) package provides the official eager Python
-reader for completed format-v6 recordings. It validates the same lifecycle,
+reader for completed format-v7 recordings. It validates the same lifecycle,
 metadata, framing, schema, ordering, byte-count, and SHA-256 rules as Rust's
 `StoredStateSeriesReader`. Both readers consume one checked-in conformance
 fixture, preventing the Python implementation from becoming an undocumented
@@ -122,6 +130,10 @@ replace that phase with the next; failures retain task context. Redirected
 stderr receives append-only uncolored phase/task lifecycle records. Task
 progress remains observational: models own scientific iteration through
 `SystemState` and synchronize `TaskProgress::set_iteration`.
+
+Runtime construction requires an execution-record path. The record is written
+atomically and remains available even when execution fails; successful runs
+also expose it through `RuntimeSummary::execution_record()`.
 
 ## Integration tests
 

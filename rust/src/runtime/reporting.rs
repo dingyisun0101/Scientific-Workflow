@@ -348,6 +348,22 @@ impl RuntimeReporter {
         summarize(&self.inner.slots)
     }
 
+    pub(crate) fn task_execution_snapshots(&self) -> Vec<TaskExecutionSnapshot> {
+        self.inner
+            .slots
+            .iter()
+            .map(|slot| TaskExecutionSnapshot {
+                key: slot.identity.task_key().clone(),
+                status: TaskStatus::decode(slot.status.load(Ordering::Acquire)),
+                current_iteration: (slot.display_kind == TaskDisplayKind::Progress)
+                    .then(|| slot.current.load(Ordering::Relaxed)),
+                target_iteration: (slot.display_kind == TaskDisplayKind::Progress
+                    && slot.target_known.load(Ordering::Acquire))
+                .then(|| slot.target.load(Ordering::Relaxed)),
+            })
+            .collect()
+    }
+
     /// Finishes a successful session and emits its final summary and message.
     ///
     /// Every task must already be completed. The method stops and joins the
@@ -393,6 +409,13 @@ impl RuntimeReporter {
         }
         Ok(())
     }
+}
+
+pub(crate) struct TaskExecutionSnapshot {
+    pub(crate) key: TaskKey,
+    pub(crate) status: TaskStatus,
+    pub(crate) current_iteration: Option<u64>,
+    pub(crate) target_iteration: Option<u64>,
 }
 
 impl fmt::Debug for RuntimeReporter {

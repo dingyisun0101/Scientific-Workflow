@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::error::ConfigurationError;
 use super::parameter_key_tuple::ParameterKeyTuple;
@@ -292,6 +292,74 @@ impl TaskConfig {
     /// Resolves one named path lexically against the project root.
     pub fn resolve_path(&self, key: &str) -> Result<PathBuf, ConfigurationError> {
         self.paths.resolve_path(key)
+    }
+
+    /// Materializes the complete resolved task configuration as canonical JSON.
+    ///
+    /// Parameters retain their nested fixed-plus-sweep shape. Project paths
+    /// retain the exact strings declared in `paths.json`; they are not
+    /// canonicalized or resolved against the host filesystem.
+    pub fn resolved_json(&self) -> Value {
+        let mut paths = Map::with_capacity(self.paths.len());
+        for (key, path) in self.paths.iter() {
+            paths.insert(
+                key.to_owned(),
+                Value::String(path.to_string_lossy().into_owned()),
+            );
+        }
+        let mut task = Map::with_capacity(2);
+        task.insert(
+            "parameters".to_owned(),
+            Value::Object(self.parameters.resolved_object().clone()),
+        );
+        task.insert("paths".to_owned(), Value::Object(paths));
+        Value::Object(task)
+    }
+
+    /// Writes this resolved configuration as deterministic pretty JSON.
+    ///
+    /// An existing byte-identical file is reused. Different existing content
+    /// is rejected and never overwritten.
+    pub fn write_resolved_json(&self, path: impl AsRef<Path>) -> Result<(), ConfigurationError> {
+        let path = path.as_ref();
+        let mut bytes = serde_json::to_vec_pretty(&self.resolved_json()).map_err(|source| {
+            ConfigurationError::SerializeTaskParameters {
+                task_ordinal: self.task_ordinal(),
+                source,
+            }
+        })?;
+        bytes.push(b'\n');
+        write_identical_or_create(path, &bytes)
+    }
+}
+
+fn write_identical_or_create(path: &Path, bytes: &[u8]) -> Result<(), ConfigurationError> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut file) => file
+            .write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|source| ConfigurationError::WriteConfigurationFile {
+                path: path.to_path_buf(),
+                source,
+            }),
+        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+            let existing =
+                fs::read(path).map_err(|source| ConfigurationError::WriteConfigurationFile {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            if existing == bytes {
+                Ok(())
+            } else {
+                Err(ConfigurationError::ResolvedTaskConfigConflict {
+                    path: path.to_path_buf(),
+                })
+            }
+        }
+        Err(source) => Err(ConfigurationError::WriteConfigurationFile {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 

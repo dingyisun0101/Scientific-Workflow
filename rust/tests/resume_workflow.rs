@@ -6,6 +6,7 @@
 //! cargo test --test resume_workflow -- --nocapture
 //! ```
 
+use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::num::NonZeroU64;
@@ -15,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use physics_in_parallel::math::{Dense, Tensor};
 use scientific_workflow::prelude::basics::*;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -82,6 +84,34 @@ fn decoders() -> JsonPayloadDecoderRegistry {
         .unwrap()
 }
 
+fn automatic_builder(run: &Path, spec: &SystemStateSchema) -> SystemStateWriterBuilder {
+    automatic_builder_with_chunk_limit(run, spec, 1)
+}
+
+fn automatic_builder_with_chunk_limit(
+    run: &Path,
+    spec: &SystemStateSchema,
+    max_chunk_bytes: u64,
+) -> SystemStateWriterBuilder {
+    SystemStateWriter::builder(run, spec)
+        .with_shared_stream_storage(StateStreamStorage::chunked(
+            NonZeroU64::new(max_chunk_bytes).unwrap(),
+            NonZeroU64::new(1_000_000).unwrap(),
+        ))
+        .add_state_stream(StateStreamConfig::new(
+            "observations",
+            ["activity"],
+            SamplingInterval::iterations(1).unwrap(),
+            None,
+        ))
+        .add_state_stream(StateStreamConfig::new(
+            "checkpoint",
+            ["population", "space", "activity"],
+            SamplingInterval::iterations(2).unwrap(),
+            None,
+        ))
+}
+
 fn state(spec: &SystemStateSchema, index: u64) -> SystemState {
     let mut lattice = Tensor::<u64, Dense>::zeros(&[2]);
     lattice.set(&[0], index + 10);
@@ -120,6 +150,206 @@ fn mark_manifest_running(metadata: &mut Value) {
         .as_object_mut()
         .unwrap()
         .remove("terminal_metadata");
+}
+
+fn stream_position(metadata: &Value, name: &str) -> usize {
+    metadata["streams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|stream| stream["name"] == name)
+        .unwrap()
+}
+
+fn retained_prefix(bytes: &[u8], checkpoint: u64) -> Vec<u8> {
+    bytes
+        .split_inclusive(|byte| *byte == b'\n')
+        .take_while(|line| {
+            serde_json::from_slice::<Value>(&line[..line.len() - 1]).unwrap()["iteration"]
+                .as_u64()
+                .unwrap()
+                <= checkpoint
+        })
+        .flatten()
+        .copied()
+        .collect()
+}
+
+fn update_chunk_descriptor(descriptor: &mut Value, bytes: &[u8]) {
+    let iterations = bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            serde_json::from_slice::<Value>(line).unwrap()["iteration"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    descriptor["records"] = (iterations.len() as u64).into();
+    descriptor["bytes"] = (bytes.len() as u64).into();
+    descriptor["first_iteration"] = iterations.first().copied().unwrap().into();
+    descriptor["last_iteration"] = iterations.last().copied().unwrap().into();
+    let mut checksum = String::from("sha256:");
+    for byte in Sha256::digest(bytes) {
+        write!(&mut checksum, "{byte:02x}").unwrap();
+    }
+    descriptor["checksum"] = checksum.into();
+}
+
+#[test]
+fn automatic_resume_infers_checkpoint_and_rewinds_every_stream() {
+    let workspace = TempWorkspace::new("automatic-resume");
+    let run = workspace.run();
+    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+
+    let (mut writer, restored) = automatic_builder(&run, &spec)
+        .open_or_resume_from_latest_checkpoint(decoders())
+        .unwrap();
+    assert!(restored.is_none());
+    for iteration in 0..=3 {
+        writer.observe_state(&state(&spec, iteration)).unwrap();
+    }
+    drop(writer);
+
+    let (mut writer, restored) = automatic_builder(&run, &spec)
+        .open_or_resume_from_latest_checkpoint(decoders())
+        .unwrap();
+    let restored = restored.unwrap();
+    assert_eq!(restored.simulation_time().iteration(), 2);
+    let rewound = metadata(&run);
+    for stream in rewound["streams"].as_array().unwrap() {
+        assert!(
+            stream["chunks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|chunk| chunk["last_iteration"].as_u64().unwrap() <= 2)
+        );
+    }
+
+    writer.observe_state(&state(&spec, 3)).unwrap();
+    writer.complete_recording().unwrap();
+    let completed = metadata(&run);
+    let observations = completed["streams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|stream| stream["name"] == "observations")
+        .unwrap();
+    assert_eq!(
+        observations["chunks"].as_array().unwrap().last().unwrap()["last_iteration"],
+        3
+    );
+}
+
+#[test]
+fn metadata_authority_completes_interrupted_rewind_idempotently() {
+    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+
+    // Crash before metadata commit: the old sealed file still matches metadata,
+    // so the uncommitted staged replacement is discarded before rewind retries.
+    let before_metadata = TempWorkspace::new("rewind-before-metadata");
+    let before_run = before_metadata.run();
+    let mut writer = automatic_builder_with_chunk_limit(&before_run, &spec, 1_000_000)
+        .create_new_recording()
+        .unwrap();
+    for iteration in 0..=3 {
+        writer.observe_state(&state(&spec, iteration)).unwrap();
+    }
+    drop(writer);
+    let before_manifest = metadata(&before_run);
+    let observations = stream_position(&before_manifest, "observations");
+    let directory = before_manifest["streams"][observations]["directory"]
+        .as_str()
+        .unwrap();
+    let filename = before_manifest["streams"][observations]["chunks"][0]["file"]
+        .as_str()
+        .unwrap();
+    let sealed = before_run.join(directory).join(filename);
+    let staged = sealed.with_extension("jsonl.tmp");
+    let prefix = retained_prefix(&fs::read(&sealed).unwrap(), 2);
+    fs::write(&staged, &prefix).unwrap();
+
+    let (writer, restored) = automatic_builder_with_chunk_limit(&before_run, &spec, 1_000_000)
+        .open_or_resume_from_latest_checkpoint(decoders())
+        .unwrap();
+    assert_eq!(restored.unwrap().simulation_time().iteration(), 2);
+    assert_eq!(fs::read(&sealed).unwrap(), prefix);
+    assert!(!staged.exists());
+    drop(writer);
+
+    // Crash after metadata commit: the staged bytes now match metadata and
+    // replace the obsolete sealed file when recovery next enters the stream.
+    let after_metadata = TempWorkspace::new("rewind-after-metadata");
+    let after_run = after_metadata.run();
+    let mut writer = automatic_builder_with_chunk_limit(&after_run, &spec, 1_000_000)
+        .create_new_recording()
+        .unwrap();
+    for iteration in 0..=3 {
+        writer.observe_state(&state(&spec, iteration)).unwrap();
+    }
+    drop(writer);
+    let mut after_manifest = metadata(&after_run);
+    let observations = stream_position(&after_manifest, "observations");
+    let directory = after_manifest["streams"][observations]["directory"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let filename = after_manifest["streams"][observations]["chunks"][0]["file"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sealed = after_run.join(directory).join(filename);
+    let staged = sealed.with_extension("jsonl.tmp");
+    let prefix = retained_prefix(&fs::read(&sealed).unwrap(), 2);
+    fs::write(&staged, &prefix).unwrap();
+    update_chunk_descriptor(
+        &mut after_manifest["streams"][observations]["chunks"][0],
+        &prefix,
+    );
+    write_metadata(&after_run, &after_manifest);
+
+    let (writer, restored) = automatic_builder_with_chunk_limit(&after_run, &spec, 1_000_000)
+        .open_or_resume_from_latest_checkpoint(decoders())
+        .unwrap();
+    assert_eq!(restored.unwrap().simulation_time().iteration(), 2);
+    assert_eq!(fs::read(&sealed).unwrap(), prefix);
+    assert!(!staged.exists());
+    drop(writer);
+
+    // Committed omission similarly authorizes cleanup of a later sealed chunk.
+    let omitted = TempWorkspace::new("rewind-omitted-chunk");
+    let omitted_run = omitted.run();
+    let mut writer = automatic_builder(&omitted_run, &spec)
+        .create_new_recording()
+        .unwrap();
+    for iteration in 0..=3 {
+        writer.observe_state(&state(&spec, iteration)).unwrap();
+    }
+    drop(writer);
+    let mut omitted_manifest = metadata(&omitted_run);
+    let observations = stream_position(&omitted_manifest, "observations");
+    let directory = omitted_manifest["streams"][observations]["directory"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let removed_file = omitted_manifest["streams"][observations]["chunks"]
+        .as_array_mut()
+        .unwrap()
+        .pop()
+        .unwrap()["file"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let removed_path = omitted_run.join(directory).join(removed_file);
+    assert!(removed_path.is_file());
+    write_metadata(&omitted_run, &omitted_manifest);
+    let (writer, restored) = automatic_builder(&omitted_run, &spec)
+        .open_or_resume_from_latest_checkpoint(decoders())
+        .unwrap();
+    assert_eq!(restored.unwrap().simulation_time().iteration(), 2);
+    assert!(!removed_path.exists());
+    drop(writer);
 }
 
 #[test]

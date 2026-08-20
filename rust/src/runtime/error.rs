@@ -1,6 +1,7 @@
 //! Errors produced by runtime planning, scheduling, and rendering.
 
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use thiserror::Error;
@@ -11,6 +12,48 @@ use crate::configuration::ConfigurationError;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// An execution record could not be serialized.
+    #[error("failed to serialize workflow execution record")]
+    SerializeExecutionRecord {
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// An execution record could not be written atomically.
+    #[error("failed to write workflow execution record `{path}`")]
+    WriteExecutionRecord {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    /// An operational execution-record timestamp could not be formatted.
+    #[error("failed to format UTC timestamp while attempting to {operation}")]
+    ExecutionRecordTimestamp {
+        operation: &'static str,
+        #[source]
+        source: time::error::Format,
+    },
+
+    /// An execution plan could not be serialized.
+    #[error("failed to serialize workflow execution plan")]
+    SerializeExecutionPlan {
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// An execution plan could not be written or inspected.
+    #[error("failed to write workflow execution plan `{path}`")]
+    WriteExecutionPlan {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    /// Plan export found different existing content.
+    #[error("workflow execution plan destination `{path}` already contains different data")]
+    ExecutionPlanConflict { path: PathBuf },
+
     /// A selected phase failed after producing a structured runtime snapshot.
     #[error("workflow phase execution failed: {source}")]
     PhaseExecutionFailed {
@@ -49,11 +92,11 @@ pub enum RuntimeError {
     InvalidPhaseLabel { phase: u64 },
 
     /// A phase active-workload limit is zero.
-    #[error("phase {phase} max_concurrent_workloads must be greater than zero")]
+    #[error("phase {phase} max_active_tasks must be greater than zero")]
     InvalidPhaseWorkloadLimit { phase: u64 },
 
     /// A phase prepared-work queue capacity is zero.
-    #[error("phase {phase} queue_capacity must be greater than zero")]
+    #[error("phase {phase} prepared_task_queue_capacity must be greater than zero")]
     InvalidPhaseQueueCapacity { phase: u64 },
 
     /// One optional phase timing duration is zero or cannot be represented.

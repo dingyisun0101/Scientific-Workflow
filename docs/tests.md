@@ -379,7 +379,8 @@ through the operation that produces it.
 ### Scenario
 
 Reproduce both crash windows using real encoded chunks, explicitly reopen the
-running output, reconstruct a complete typed checkpoint, continue append
+running output, reconstruct a complete typed checkpoint, rewind later streams,
+and continue writing
 ordering, force a durability barrier, and finish into an ordinarily readable
 analysis series. Separately exercise a multi-chunk open tail and meaningful
 continuation rejection boundaries.
@@ -470,6 +471,8 @@ the copy, and reject meaningful ambiguous or invalid inputs.
 - Reject out-of-range tasks, unknown parameters and paths, typed decode
   mismatch, recursively duplicated JSON keys, fixed/sweep overlap,
   inconsistent explicit cases, and non-string path values.
+- Return configuration loading failures in deterministic parameter-then-path
+  order without constructing a partial project or aggregate error wrapper.
 
 ### Structures and methods
 
@@ -532,6 +535,9 @@ test harness terminal; a bounded plain-output check covers renderer output.
   never prompts after the final selected phase.
 - One active runtime excludes another even in hidden mode and releases its
   lease after success, failure, and panic-safe shutdown.
+- The mandatory execution-record path receives atomic, versioned JSON for both
+  successful and failed runs, including finalized runtime/phase/task lifecycle
+  timing and statuses.
 - Default fail-fast and optional finish-active policies stop admission after a
   failure, distinguish failed/cancelled/skipped outcomes, and prevent dependent
   phases from starting while retaining structured failure summaries.
@@ -540,7 +546,8 @@ test harness terminal; a bounded plain-output check covers renderer output.
 
 ### Structures and methods
 
-- `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeSummary`, and
+- `WorkflowRuntime`, `WorkflowRuntimeBuilder`, `RuntimeSummary`,
+  `ExecutionRecord`, `PhaseExecutionRecord`, `TaskExecutionRecord`, and
   `PhaseSummary` construction, selection, execution, cancellation, and
   inspection;
 - `Phase`, `PhaseBuilder`, `PhaseId`, `Task`, `TaskId`, `TaskKey`,
@@ -552,7 +559,7 @@ test harness terminal; a bounded plain-output check covers renderer output.
 
 ### Log contract
 
-    test result: ok. 11 passed; 0 failed
+    test result: ok. 13 passed; 0 failed
 
 ## Logging rules
 
@@ -573,7 +580,8 @@ test harness terminal; a bounded plain-output check covers renderer output.
 2. `analysis_workflow.rs` implemented and run independently.
 3. `storage_workflow.rs` implemented and run independently.
 4. `storage_resilience.rs` implemented and run independently.
-5. `resume_workflow.rs` implemented for crash recovery and append.
+5. `resume_workflow.rs` implemented for crash recovery, automatic checkpoint
+   inference, cross-stream rewind, and continuation.
 6. `configuration_workflow.rs` implemented for project configuration and task
    expansion.
 7. `runtime_workflow.rs` implements phase scheduling and runtime display.

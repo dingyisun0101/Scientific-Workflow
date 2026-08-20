@@ -8,5 +8,5 @@
   "radius_sampling_interval": {"iterations": 5},
   "checkpoint_sampling_interval": {"iterations": 1000},
   "maximum_chunk_bytes": 8192,
-  "writer_queue_bytes": 65536
+  "storage_queue_bytes": 65536
 }
