@@ -2,8 +2,9 @@
 
 ## Scope and status
 
-This is the authoritative clean-slate design for the Rust crate. Superseded
-alternatives are intentionally absent.
+This records the clean-slate design and implementation history for the Rust
+crate. The crate README, rustdoc, schemas, and tested public API are
+authoritative when older implementation notes in this document differ.
 
 Current scope:
 
@@ -128,7 +129,7 @@ for task in project.task_configs() {
     submit(task)?;
 }
 
-for task in project.task_configs_matching("temperature", 300.0)? {
+for task in project.task_configs_matching("/environment/temperature", 300.0)? {
     submit(task)?;
 }
 ```
@@ -139,11 +140,12 @@ case list. Filtering one sweep key retains every combination of all other axes.
 exactly one task; zero and multiple matches are separate errors. Fixed constants
 and paths are deliberately invalid selection keys.
 
-`fixed.json` remains a plain object:
+`fixed.json` is an arbitrarily nested object. Terminal values receive canonical
+JSON Pointer identities:
 
 ```json
 {
-  "lattice_shape": [1024, 1024],
+  "environment": {"lattice_shape": [1024, 1024]},
   "physical_time_increment": 0.01
 }
 ```
@@ -154,10 +156,14 @@ axis order and changes the last axis fastest:
 ```json
 {
   "mode": "cartesian",
-  "axes": [
-    {"name": "temperature", "values": [280.0, 300.0, 320.0]},
-    {"name": "seed", "values": [1, 2, 3]}
-  ]
+  "axes": {
+    "environment": {
+      "temperature": {"values": [280.0, 300.0, 320.0]}
+    },
+    "rng": {
+      "seed": {"values": [1, 2, 3]}
+    }
+  }
 }
 ```
 
@@ -167,19 +173,21 @@ Explicit correlated cases use:
 {
   "mode": "cases",
   "cases": [
-    {"temperature": 280.0, "physical_time_increment": 0.1},
-    {"temperature": 300.0, "physical_time_increment": 0.05}
+    {"environment": {"temperature": 280.0}, "physical_time_increment": 0.1},
+    {"environment": {"temperature": 300.0}, "physical_time_increment": 0.05}
   ]
 }
 ```
 
-Every fixed value, Cartesian candidate, and explicit case value may be any JSON
-value, including an object or another array. No Cartesian axes means one
-fixed-only task; an individual axis with no candidates is rejected. Explicit
-cases must share one key set. Fixed and swept keys are disjoint so `fixed.json`
-remains semantically truthful and lookup never needs override precedence.
-Duplicate object keys and structurally invalid roots are rejected with path
-and key context.
+Arrays, scalars, null, and other non-object JSON values are literal Cartesian
+candidates. Object candidates are rejected because correlated parameter leaves
+belong exclusively in explicit `cases`. No Cartesian axes means one fixed-only
+task; an individual axis with no candidates is rejected. Explicit cases must
+share one flattened leaf-path set. Fixed and swept terminal paths must be
+disjoint and structurally non-overlapping, while each file may contribute
+different leaves to one reconstructed parent object. Public parameter lookup
+uses canonical JSON Pointers, including top-level values. Duplicate object keys
+and structurally invalid roots are rejected with path and key context.
 
 `paths.json` is a separate plain object whose values are path strings. It
 contains shared named input roots, data locations, and output roots; it does not

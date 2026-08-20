@@ -137,6 +137,17 @@ fn parse_dimension_values(
             format!("cartesian axis `{axis_path}` has no candidates"),
         );
     }
+    if values
+        .iter()
+        .any(|candidate| matches!(candidate, StrictValue::Object(_)))
+    {
+        return invalid(
+            path,
+            format!(
+                "cartesian axis `{axis_path}` candidates cannot be objects; use explicit `cases` for correlated parameters"
+            ),
+        );
+    }
     Ok(SweepDimension {
         candidates: values
             .into_iter()

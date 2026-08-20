@@ -1,7 +1,7 @@
 //! Optional phase timing gates and cooperative expiration watches.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -30,21 +30,25 @@ impl StartGate {
         }
     }
 
-    /// Waits for one dense executable-task rank without changing its pending state.
-    pub(crate) fn wait_for_turn(
-        &self,
+    /// Waits for one dense executable-task rank while it remains pending.
+    pub(crate) fn wait_for_turn<'a>(
+        &'a self,
         rank: usize,
         cancelled: &AtomicBool,
         stopped: &AtomicBool,
-    ) -> bool {
+    ) -> Option<StartPermit<'a>> {
         let Some(interval) = self.interval else {
-            return !cancelled.load(Ordering::Acquire) && !stopped.load(Ordering::Acquire);
+            return (!cancelled.load(Ordering::Acquire) && !stopped.load(Ordering::Acquire))
+                .then_some(StartPermit {
+                    interval: None,
+                    state: None,
+                });
         };
         loop {
             if cancelled.load(Ordering::Acquire) || stopped.load(Ordering::Acquire) {
-                return false;
+                return None;
             }
-            let mut state = self
+            let state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -62,10 +66,31 @@ impl StartGate {
                 thread::sleep(remaining.min(CANCELLATION_POLL_INTERVAL));
                 continue;
             }
-            state.next_rank += 1;
-            state.earliest_start = now.checked_add(interval);
-            return true;
+            return Some(StartPermit {
+                interval: Some(interval),
+                state: Some(state),
+            });
         }
+    }
+}
+
+/// Exclusive permission to transition one ranked task from pending to running.
+pub(crate) struct StartPermit<'a> {
+    interval: Option<Duration>,
+    state: Option<MutexGuard<'a, StartGateState>>,
+}
+
+impl StartPermit<'_> {
+    /// Records the completed running transition before allowing the next rank.
+    pub(crate) fn started(mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        state.next_rank += 1;
+        state.earliest_start = Instant::now().checked_add(
+            self.interval
+                .expect("a delayed start permit always retains its interval"),
+        );
     }
 }
 

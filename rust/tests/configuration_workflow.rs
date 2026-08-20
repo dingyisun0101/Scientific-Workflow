@@ -747,6 +747,20 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             if path == &legacy_axes_root.join("config/sweep.json")
     ));
 
+    let object_candidate_root = workspace.project("cartesian-object-candidate");
+    write_project(
+        &object_candidate_root,
+        br#"{}"#,
+        br#"{"mode":"cartesian","axes":{"species":{"values":[{"num_taxa":128}]}}}"#,
+        br#"{}"#,
+    );
+    assert!(matches!(
+        ProjectConfig::load(&object_candidate_root),
+        Err(ConfigurationError::InvalidConfigurationDocument { ref path, ref reason })
+            if path == &object_candidate_root.join("config/sweep.json")
+                && reason.contains("use explicit `cases`")
+    ));
+
     let inconsistent_root = workspace.project("inconsistent");
     write_project(
         &inconsistent_root,
@@ -773,7 +787,7 @@ fn project_configuration_expands_round_trips_and_rejects_ambiguity() {
             if path == &invalid_path_root.join("config/paths.json")
     ));
     println!(
-        "[validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true inconsistent_cases=true invalid_path=true"
+        "[validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true object_candidates_rejected=true inconsistent_cases=true invalid_path=true"
     );
     println!("[result] configuration_workflow=passed");
 }

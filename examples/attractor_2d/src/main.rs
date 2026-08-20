@@ -6,7 +6,6 @@ mod task_execution;
 mod validation;
 
 use std::error::Error;
-use std::thread;
 use std::time::Duration;
 
 use scientific_workflow::prelude::basics::*;
@@ -14,7 +13,7 @@ use scientific_workflow::prelude::runtime::*;
 
 /// Error boundary shared by the example's application.
 pub(crate) type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
-const DISPLAY_PAUSE: Duration = Duration::from_secs(3);
+const TASK_START_DELAY: Duration = Duration::from_secs(3);
 
 fn main() -> AppResult<()> {
     // ScientificProject is the example's configuration boundary. It loads the
@@ -41,7 +40,6 @@ fn main() -> AppResult<()> {
     // is only needed when individual tasks must capture unique owned resources.
     let simulation = Phase::builder(1, "attractor simulation")
         .progress_tasks_from_project(&project, "attractor", move |context| {
-            pause_for_display(context, "simulation starts in 3 seconds");
             task_execution::run_task(&simulation_schema, &simulation_execution, context)
         })
         // `mu` is a concise display selector, not a second task identity. The
@@ -51,6 +49,9 @@ fn main() -> AppResult<()> {
         // policy belongs to the external service manager running this process.
         .max_concurrent_workloads(3)
         .queue_capacity(2)
+        // Admission remains pending until each dense phase-local rank starts.
+        // This staggers recording creation without sleeping inside workloads.
+        .delay_per_task(TASK_START_DELAY)
         .build()?;
 
     // Validation receives independently generated tasks with matching ordinals.
@@ -58,13 +59,13 @@ fn main() -> AppResult<()> {
     // recording—not an in-memory runtime result—the durable phase handoff.
     let validation = Phase::builder(2, "recording validation")
         .activity_tasks_from_project(&project, "validate", move |context| {
-            pause_for_display(context, "validation starts in 3 seconds");
             validation::validate_recording(&execution, context)
         })
         .display_tasks_by("validate", ["/mu"])
         .depends_on(1)
         .max_concurrent_workloads(3)
         .queue_capacity(2)
+        .delay_per_task(TASK_START_DELAY)
         .build()?;
 
     // Requesting phase 2 with dependency expansion runs phase 1 first. Runtime
@@ -75,11 +76,4 @@ fn main() -> AppResult<()> {
         .build()?
         .run_phases_with_dependencies([2])?;
     Ok(())
-}
-
-fn pause_for_display(context: &TaskContext, detail: &str) {
-    // Deliberately slow only the example's phase entrance so a reader can see
-    // the refreshed phase header before its tasks begin producing progress.
-    context.set_detail(detail);
-    thread::sleep(DISPLAY_PAUSE);
 }

@@ -32,6 +32,14 @@ pub(crate) fn execute_phase(phase: Phase, reporter: &RuntimeReporter) -> Result<
     let cancellation = reporter.cancellation_flag();
     let start_gate = Arc::new(StartGate::new(delay_per_task));
     let timing_failures = Arc::new(TimingFailures::new());
+    let deadline_watch = deadline_after.map(|deadline_after| {
+        ExpirationWatch::phase(
+            deadline_after,
+            phase_id,
+            Arc::clone(&cancellation),
+            Arc::clone(&timing_failures),
+        )
+    });
     for task in tasks.iter().filter(|task| task.is_reused()) {
         reporter.mark_reused(task.key())?;
     }
@@ -45,15 +53,6 @@ pub(crate) fn execute_phase(phase: Phase, reporter: &RuntimeReporter) -> Result<
             reporter.mark_delayed(task.key(), rank)?;
         }
     }
-    let deadline_watch = deadline_after.map(|deadline_after| {
-        ExpirationWatch::phase(
-            deadline_after,
-            phase_id,
-            Arc::clone(&cancellation),
-            Arc::clone(&timing_failures),
-        )
-    });
-
     thread::scope(|scope| {
         for _ in 0..worker_count {
             let receiver = Arc::clone(&work_receiver);
@@ -85,7 +84,8 @@ pub(crate) fn execute_phase(phase: Phase, reporter: &RuntimeReporter) -> Result<
                         let _ = results.send(Err(RuntimeError::Cancelled));
                         continue;
                     }
-                    if !start_gate.wait_for_turn(rank, &cancellation, &stop) {
+                    let Some(start_permit) = start_gate.wait_for_turn(rank, &cancellation, &stop)
+                    else {
                         if reporter.is_cancelled() {
                             let _ = reporter.mark_cancelled(&key);
                             let _ = results.send(Err(RuntimeError::Cancelled));
@@ -94,7 +94,7 @@ pub(crate) fn execute_phase(phase: Phase, reporter: &RuntimeReporter) -> Result<
                             let _ = results.send(Ok(key));
                         }
                         continue;
-                    }
+                    };
                     if stop.load(Ordering::Acquire) {
                         let _ = reporter.mark_skipped(&key);
                         let _ = results.send(Ok(key));
@@ -126,10 +126,15 @@ pub(crate) fn execute_phase(phase: Phase, reporter: &RuntimeReporter) -> Result<
                     let context = match context {
                         Ok(context) => context,
                         Err(error) => {
+                            stop.store(true, Ordering::Release);
+                            if failure_policy == PhaseFailurePolicy::FailFast {
+                                reporter.request_cancellation();
+                            }
                             let _ = results.send(Err(error));
                             continue;
                         }
                     };
+                    start_permit.started();
                     if context.is_cancelled() {
                         context.cancel("cancelled before task execution");
                         let _ = results.send(Err(RuntimeError::Cancelled));

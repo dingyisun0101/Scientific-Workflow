@@ -496,7 +496,7 @@ the copy, and reject meaningful ambiguous or invalid inputs.
     [round-trip] fixed_bytes=true sweep_bytes=true paths_bytes=true reload=true overwrite_rejected=true
     [lookup-errors] bounds=true missing=true type=true path=true
     [cases] tasks=... correlated=true key_order_normalized=true
-    [validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true inconsistent_cases=true invalid_path=true
+    [validation] fixed_only=true nested_duplicate=true overlap=true legacy_axes_rejected=true object_candidates_rejected=true inconsistent_cases=true invalid_path=true
     [result] configuration_workflow=passed
 
 ## Test 7: runtime_workflow.rs

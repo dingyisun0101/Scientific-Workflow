@@ -375,6 +375,9 @@ literal JSON arrays:
 }
 ```
 
+Cartesian candidates are individual JSON values and cannot be objects. Use
+explicit `cases` whenever several parameter leaves must vary together.
+
 Use correlated explicit cases when several parameter values must vary together:
 
 ```json
