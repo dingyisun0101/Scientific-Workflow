@@ -13,7 +13,8 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use physics_in_parallel::math::{Dense, Tensor};
+use physics_in_parallel::prelude::advanced::Dense;
+use physics_in_parallel::prelude::basic::Tensor;
 use scientific_workflow::prelude::basics::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

@@ -28,7 +28,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use physics_in_parallel::math::{Dense, Tensor};
+use physics_in_parallel::prelude::advanced::Dense;
+use physics_in_parallel::prelude::basic::Tensor;
 use scientific_workflow::system_state::{
     SimulationTime, StateError, StateFieldSchema, SystemState, SystemStateSchema,
 };

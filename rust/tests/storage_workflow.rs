@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use physics_in_parallel::engines::soa::{AttrsCore, AttrsMeta, PhysObj};
-use physics_in_parallel::math::{Dense, Tensor};
+use physics_in_parallel::prelude::advanced::{AttrsCore, AttrsMeta, Dense, PhysObjAdvanced};
+use physics_in_parallel::prelude::basic::Tensor;
+use physics_in_parallel::prelude::models::PhysObj;
 use scientific_workflow::prelude::basics::*;
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -612,7 +613,7 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
         .set_vector_of("position", 1, &[1.25_f64, -2.5])
         .unwrap();
     attributes.set_vector_of("species", 0, &[7_i64]).unwrap();
-    let particles = PhysObj::new(AttrsMeta::new(3, "particles", "mixed"), attributes);
+    let particles = PhysObj::from_raw_parts(AttrsMeta::new(3, "particles", "mixed"), attributes);
     let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
     state.insert_payload("particles", particles).unwrap();
 
@@ -644,13 +645,13 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
         .unwrap()
         .payload::<PhysObj>("particles")
         .unwrap();
-    assert_eq!(decoded.meta.label, "particles");
+    assert_eq!(decoded.label(), "particles");
     assert_eq!(
-        decoded.core.vector_of::<f64>("position", 1).unwrap(),
+        decoded.attribute_vector::<f64>("position", 1).unwrap(),
         [1.25, -2.5]
     );
     assert_eq!(
-        decoded.core.vector_of::<i64>("species", 0).unwrap(),
+        decoded.attribute_vector::<i64>("species", 0).unwrap(),
         [7_i64]
     );
     println!("[pip-payload] phys_obj=true mixed_types=true generic_decoder=true");

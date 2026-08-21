@@ -504,7 +504,9 @@ dependencies = [
 
 [[package]]
 name = "physics_in_parallel"
-version = "3.3.0"
+version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ffbbcffac04fbf4da48583a00db59685b52c5ba3d7100c02282ac047028378e"
 dependencies = [
  "ahash",
  "erased-serde",

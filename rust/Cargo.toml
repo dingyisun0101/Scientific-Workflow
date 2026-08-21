@@ -33,4 +33,4 @@ thiserror = "2"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-physics_in_parallel = { path = "../../pip", version = "3.3.0" }
+physics_in_parallel = "3.6.0"

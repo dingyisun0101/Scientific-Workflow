@@ -2,8 +2,8 @@
 
 This README is the public API documentation for the crates.io publication of
 `scientific-workflow`.
-For repository context, private crate boundaries, and runnable example
-guidance, see the [repository README](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/README.md).
+For repository context and runnable example guidance, see the
+[repository README](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/README.md).
 
 `scientific-workflow` provides Rust primitives for representing scientific
 system states and building reproducible simulation workflows.

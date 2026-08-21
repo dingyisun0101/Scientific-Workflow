@@ -1622,7 +1622,7 @@ This yields two deliberately separate guarantees:
 
 The runtime does not expose `ResourcePolicy`, `RuntimeClient`, a subprocess
 launcher, an IPC protocol, or OS-isolation configuration. Applications such as
-Dispatcher retain ownership of Python invocation, systemd integration, worker
+Applications retain ownership of Python invocation, service integration, worker
 protocols, and result verification.
 
 ### Phase failure policy
