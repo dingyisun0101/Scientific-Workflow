@@ -2,7 +2,7 @@
 name = "attractor-2d"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.97"
 publish = false
 autobins = false
 description = "Two-dimensional Hopf-attractor workflow using scientific-workflow"
