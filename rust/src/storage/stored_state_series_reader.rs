@@ -491,12 +491,14 @@ fn validate_complete_resume_schema(
                 "stream declares {stream_fields} fields but the full state declares {full_spec_fields}",
             ),
         },
-        CheckpointSchemaMismatch::Field { position, stored, expected } => {
-            StorageError::IncompleteCheckpointStream {
-                stream: stream.name.clone(),
-                reason: format!("field {position} is `{stored}` but full state requires `{expected}`"),
-            }
-        }
+        CheckpointSchemaMismatch::Field {
+            position,
+            stored,
+            expected,
+        } => StorageError::IncompleteCheckpointStream {
+            stream: stream.name.clone(),
+            reason: format!("field {position} is `{stored}` but full state requires `{expected}`"),
+        },
     })
 }
 

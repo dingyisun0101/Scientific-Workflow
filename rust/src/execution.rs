@@ -6,7 +6,7 @@
 //!   - and opening of previously used scopes.
 //!
 //! # Boundary
-//! 
+//!
 //! This module is intentionally filesystem-only. It does not define task
 //! policies, scheduling, artifact identity rules, or payload serialization. The
 //! downstream caller owns those concerns and consumes the directories this module

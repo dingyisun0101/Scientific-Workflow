@@ -265,7 +265,11 @@ impl Study {
         self.execute(selected)
     }
 
-    fn select_phases<I, P>(&self, phases: I, include_dependencies: bool) -> Result<Vec<usize>, StudyError>
+    fn select_phases<I, P>(
+        &self,
+        phases: I,
+        include_dependencies: bool,
+    ) -> Result<Vec<usize>, StudyError>
     where
         I: IntoIterator<Item = P>,
         P: Into<PhaseId>,

@@ -176,10 +176,7 @@ fn validate_relative_name(name: &str) -> Result<(), ExecutionScopeError> {
     validate_path_components(name, true)
 }
 
-fn validate_path_components(
-    name: &str,
-    allow_relative: bool,
-) -> Result<(), ExecutionScopeError> {
+fn validate_path_components(name: &str, allow_relative: bool) -> Result<(), ExecutionScopeError> {
     let path = Path::new(name);
     let mut components = path.components();
     let valid = !name.trim().is_empty()
