@@ -10,7 +10,7 @@ StudySettings
   -> ReplicateExecutor
   -> output/replicate_0 worker context
   -> StudyConfiguration
-  -> simulation and validation PhaseConfiguration values
+  -> simulation and validation WorkloadConfiguration values
   -> ResolvedConfiguration values
   -> application-mapped simulation tasks
   -> phase 1: task-owned evolve and record
@@ -22,12 +22,12 @@ StudySettings
 
 ## Ownership
 
-- `StudySettings` owns the validated replicate count, execution mode, failure
-  policy, and study seed.
+- `StudySettings` owns the validated replicate count, scheduling mode, failure
+  policy, and base seed.
 - `ReplicateExecutor` owns one subprocess per replicate and the exclusive
   `replicate_<index>` output scope. This example declares exactly one.
 - `StudyConfiguration` owns the validated study-wide parameter registry and
-  exposes only phase-scoped combination spaces.
+  exposes only workload-scoped combination spaces.
 - The example uses `ProjectPaths` to select the replicate output root and
   independently loads `state.json` through the state-schema API.
 - `ResolvedConfiguration` is the only resolved configuration object. Tuple decoding groups
@@ -50,9 +50,9 @@ ExecutionScope::named_task_recording_directory(producer_identity)
 ```
 
 Validation configurations are paired with producers from the same global and
-group-shared selections. After the dependency barrier, each validation task
+component-shared selections. After the dependency barrier, each validation task
 receives the producer descriptor directly and verifies its completed recording.
-Independent phase-local sweeps may therefore differ in count and ordering
+Independent workload-local sweeps may therefore differ in count and ordering
 without redirecting validation to another producer. Scientific I/O remains
 application-owned and the durable result remains the authoritative boundary.
 
@@ -76,7 +76,7 @@ not impose them and they are not part of the numerical method.
 
 ## Files
 
-- `study.json`: declare one sequential, fail-fast replicate and the study seed.
+- `study.json`: declare one sequential, fail-fast replicate and the base seed.
 - `main.rs`: dispatch replicates, then load, declare three phases, and run one
   worker study.
 - `attractor_run.rs`: decode producer identity and retain its explicit output path.

@@ -47,13 +47,13 @@ pub enum ConfigurationError {
         key: String,
     },
 
-    /// A requested group-qualified phase is not declared.
-    #[error("study configuration has no phase `{phase_group}/{phase}`")]
-    UnknownPhaseConfiguration {
-        /// Requested phase-group key.
-        phase_group: String,
-        /// Requested phase key.
-        phase: String,
+    /// A requested component-qualified workload is not declared.
+    #[error("study configuration has no workload `{component}/{workload}`")]
+    UnknownWorkloadConfiguration {
+        /// Requested component key.
+        component: String,
+        /// Requested workload key.
+        workload: String,
     },
 
     /// The Cartesian product cannot be represented by a `u64` ordinal.
@@ -63,14 +63,14 @@ pub enum ConfigurationError {
         axis: String,
     },
 
-    /// A requested flattened ordinal is outside its phase configuration.
+    /// A requested flattened ordinal is outside its workload configuration.
     #[error(
         "combination ordinal {ordinal} is out of bounds for a configuration space containing {combination_count} combinations"
     )]
     CombinationOrdinalOutOfBounds {
         /// Requested zero-based ordinal.
         ordinal: u64,
-        /// Number of valid combinations in the phase.
+        /// Number of valid combinations in the workload.
         combination_count: u64,
     },
 

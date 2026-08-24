@@ -30,8 +30,8 @@ impl AttractorRun {
         let task_id = format!(
             "attractor-g{:06}-s{:06}-p{:06}",
             configuration.global_ordinal(),
-            configuration.group_ordinal(),
-            configuration.phase_ordinal(),
+            configuration.component_ordinal(),
+            configuration.workload_ordinal(),
         );
         let recording_directory = execution.named_task_recording_directory(&task_id)?;
         Ok(Self {
@@ -70,8 +70,8 @@ impl AttractorRun {
 
     /// Reports whether validation settings belong to this producer's shared scopes.
     pub(crate) fn matches_validation(&self, validation: &ResolvedConfiguration) -> bool {
-        self.configuration.phase_group() == validation.phase_group()
+        self.configuration.component() == validation.component()
             && self.configuration.global_ordinal() == validation.global_ordinal()
-            && self.configuration.group_ordinal() == validation.group_ordinal()
+            && self.configuration.component_ordinal() == validation.component_ordinal()
     }
 }

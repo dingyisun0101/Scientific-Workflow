@@ -4,8 +4,11 @@
 
 `StudySettings` loads the exact process-level policy from `study.json`:
 replicate count, sequential or parallel execution, failure policy, and the
-study seed. Loading is side-effect free. `ReplicateExecutor` enacts that policy
-only after the application supplies its resolved output root.
+study seed. It also preserves the optional application-owned object and
+decodes it through `application<T>()` without rereading the file. Workflow does
+not interpret that object's fields. Loading is side-effect free.
+`ReplicateExecutor` enacts the process policy only after the application
+supplies its resolved output root.
 
 The original process is a controller. It starts the current executable once
 per replicate, preserving its arguments and stdio. Each child re-enters the
@@ -67,7 +70,7 @@ until its dependencies are satisfied.
 
 `Task` is the only registerable workload type. A task has:
 
-- a phase-local `TaskId`;
+- a workload-local `TaskId`;
 - a phase-qualified `TaskKey` after registration;
 - a human-readable label;
 - an application-defined category;
@@ -170,7 +173,7 @@ library-defined inputs are independent:
 
 ```text
 study.json      → StudySettings       → ReplicateExecutor
-parameters.json → StudyConfiguration  → PhaseConfiguration
+parameters.json → StudyConfiguration  → WorkloadConfiguration
 paths.json      → ProjectPaths        → application-selected paths
 ```
 
@@ -182,8 +185,8 @@ Scientific parameter expansion follows this separate flow:
 parameters.json
         ↓
 StudyConfiguration
-        ↓ phase(group, phase)
-PhaseConfiguration
+        ↓ workload(component, workload)
+WorkloadConfiguration
         ↓
 ConfigurationIter
         ↓
@@ -193,9 +196,9 @@ Task
 ```
 
 `StudyConfiguration::load(study_root)` validates the complete study-wide
-parameter registry. `phase(group, phase)` returns the only expandable space;
-its `combinations()` method lazily enumerates global × group-shared ×
-phase-local selections. `combination(ordinal)` provides deterministic indexed
+parameter registry. `workload(component, workload)` returns the only expandable space;
+its `combinations()` method lazily enumerates global × component-shared ×
+workload-local selections. `combination(ordinal)` provides deterministic indexed
 access.
 
 `ResolvedConfiguration` exposes its ordinal, lookup, typed decoding,

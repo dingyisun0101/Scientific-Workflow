@@ -35,13 +35,13 @@ cooperative cancellation.
 `configuration_workflow.rs` verifies the complete configuration contract:
 
 ```text
-parameters.json → StudyConfiguration → PhaseConfiguration → ResolvedConfiguration values
+parameters.json → StudyConfiguration → WorkloadConfiguration → ResolvedConfiguration values
 ```
 
 Coverage includes:
 
-- strict `study.json` replicate settings and rejection of unknown or invalid
-  policy fields;
+- strict Workflow-owned `study.json` fields, typed application settings, and
+  rejection of unknown or invalid policy fields;
 - nested fixed values;
 - Cartesian sweep products and deterministic ordinal order;
 - explicit cases;
@@ -83,7 +83,7 @@ The repository also checks:
 - Simulator-owned `SimulatorInputs` and `SimulatorConfiguration` grouping into
   ensemble tasks;
 - Dispatcher-owned study directories, inputs, paths, phases, and plans;
-- the attractor example's direct mapping from `PhaseConfiguration`
+- the attractor example's direct mapping from `WorkloadConfiguration`
   combinations into tasks.
 
 These builds ensure downstream programs retain ownership of model-specific

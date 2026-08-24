@@ -249,11 +249,11 @@ impl Task {
         metadata.insert(
             "configuration_identity".to_owned(),
             serde_json::json!({
-                "phase_group": configuration.phase_group(),
-                "phase": configuration.phase(),
+                "component": configuration.component(),
+                "workload": configuration.workload(),
                 "global_ordinal": configuration.global_ordinal(),
-                "group_ordinal": configuration.group_ordinal(),
-                "phase_ordinal": configuration.phase_ordinal(),
+                "component_ordinal": configuration.component_ordinal(),
+                "workload_ordinal": configuration.workload_ordinal(),
             }),
         );
         metadata.insert("configuration".to_owned(), configuration.to_json_value());

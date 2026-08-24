@@ -496,7 +496,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .join("tests/fixtures/configuration/cartesian_study"),
     )
     .unwrap()
-    .phase("test", "simulation")
+    .workload("test", "dynamics")
     .unwrap();
     let configuration = configurations.combination(0).unwrap();
     let task_metadata_run = workspace.root.join("task-metadata-run");

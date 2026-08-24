@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use scientific_workflow::configuration::{
-    ConfigurationError, ProjectPaths, ReplicateExecutionMode, ReplicateFailurePolicy,
+    ConfigurationError, ProjectPaths, ReplicateFailurePolicy, ReplicateScheduling,
     ResolvedConfiguration, StudyConfiguration, StudySettings,
 };
+use serde::Deserialize;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -21,7 +22,7 @@ fn study_directory(name: &str, parameters: &str) -> PathBuf {
 }
 
 #[test]
-fn phase_expansion_combines_global_group_and_local_scopes() {
+fn workload_expansion_combines_global_component_and_local_scopes() {
     let root = study_directory(
         "scoped-cartesian",
         r#"{
@@ -29,12 +30,12 @@ fn phase_expansion_combines_global_group_and_local_scopes() {
             "temperature":{"$sweep":[280.0,300.0]},
             "solver":{"step":0.01}
           },
-          "phase_group":{"models":{
+          "components":{"models":{
             "shared":{
               "seed":{"$sweep":[7,11]},
               "solver":{"tolerance":0.000001}
             },
-            "phase":{
+            "workloads":{
               "glv":{"solver":{"method":"adaptive"}},
               "lattice":{
                 "size":{"$sweep":[4,8]},
@@ -45,8 +46,8 @@ fn phase_expansion_combines_global_group_and_local_scopes() {
         }"#,
     );
     let study = StudyConfiguration::load(&root).unwrap();
-    let glv = study.phase("models", "glv").unwrap();
-    let lattice = study.phase("models", "lattice").unwrap();
+    let glv = study.workload("models", "glv").unwrap();
+    let lattice = study.workload("models", "lattice").unwrap();
 
     assert_eq!(glv.combination_count(), 4);
     assert_eq!(lattice.combination_count(), 8);
@@ -67,8 +68,8 @@ fn phase_expansion_combines_global_group_and_local_scopes() {
                 .unwrap();
             (
                 configuration.global_ordinal(),
-                configuration.group_ordinal(),
-                configuration.phase_ordinal(),
+                configuration.component_ordinal(),
+                configuration.workload_ordinal(),
                 values,
             )
         })
@@ -100,9 +101,9 @@ fn ordinary_arrays_are_literal_and_cases_remain_correlated() {
         "literal-and-cases",
         r#"{
           "global":{"shape":[64],"fields":["abundance","space"]},
-          "phase_group":{"analysis":{
+          "components":{"analysis":{
             "shared":{},
-            "phase":{"convert":{
+            "workloads":{"convert":{
               "$cases":[
                 {"temperature":280.0,"seed":1},
                 {"temperature":300.0,"seed":9}
@@ -113,7 +114,7 @@ fn ordinary_arrays_are_literal_and_cases_remain_correlated() {
     );
     let combinations = StudyConfiguration::load(&root)
         .unwrap()
-        .phase("analysis", "convert")
+        .workload("analysis", "convert")
         .unwrap()
         .combinations()
         .collect::<Vec<ResolvedConfiguration>>();
@@ -137,7 +138,7 @@ fn rejects_scope_overlap_and_mixed_case_grammars() {
         "overlap",
         r#"{
           "global":{"seed":1},
-          "phase_group":{"g":{"shared":{"seed":2},"phase":{"p":{}}}}
+          "components":{"g":{"shared":{"seed":2},"workloads":{"p":{}}}}
         }"#,
     );
     assert!(matches!(
@@ -150,7 +151,7 @@ fn rejects_scope_overlap_and_mixed_case_grammars() {
         "mixed",
         r#"{
           "global":{},
-          "phase_group":{"g":{"shared":{},"phase":{"p":{
+          "components":{"g":{"shared":{},"workloads":{"p":{
             "seed":{"$sweep":[1,2]},"$cases":[{"size":4},{"size":8}]
           }}}}
         }"#,
@@ -166,11 +167,11 @@ fn rejects_scope_overlap_and_mixed_case_grammars() {
 fn indexed_access_and_errors_retain_the_combination_ordinal() {
     let root = study_directory(
         "indexed",
-        r#"{"global":{"seed":7},"phase_group":{"g":{"shared":{},"phase":{"p":{}}}}}"#,
+        r#"{"global":{"seed":7},"components":{"g":{"shared":{},"workloads":{"p":{}}}}}"#,
     );
     let space = StudyConfiguration::load(&root)
         .unwrap()
-        .phase("g", "p")
+        .workload("g", "p")
         .unwrap();
     let configuration = space.combination(0).unwrap();
 
@@ -188,8 +189,8 @@ fn indexed_access_and_errors_retain_the_combination_ordinal() {
     assert!(matches!(
         StudyConfiguration::load(&root)
             .unwrap()
-            .phase("g", "missing"),
-        Err(ConfigurationError::UnknownPhaseConfiguration { .. })
+            .workload("g", "missing"),
+        Err(ConfigurationError::UnknownWorkloadConfiguration { .. })
     ));
     fs::remove_dir_all(root).unwrap();
 }
@@ -198,7 +199,7 @@ fn indexed_access_and_errors_retain_the_combination_ordinal() {
 fn project_paths_are_strict_ordered_and_resolve_lexically() {
     let root = study_directory(
         "paths",
-        r#"{"global":{},"phase_group":{"g":{"shared":{},"phase":{"p":{}}}}}"#,
+        r#"{"global":{},"components":{"g":{"shared":{},"workloads":{"p":{}}}}}"#,
     );
     let configuration = root.join("config");
     fs::write(
@@ -232,14 +233,19 @@ fn project_paths_are_strict_ordered_and_resolve_lexically() {
 fn study_settings_strictly_define_replicate_execution() {
     let root = study_directory(
         "replicate-settings",
-        r#"{"global":{},"phase_group":{"g":{"shared":{},"phase":{"p":{}}}}}"#,
+        r#"{"global":{},"components":{"g":{"shared":{},"workloads":{"p":{}}}}}"#,
     );
     let source = br#"{
       "replicate_settings": {
         "replicates": 4,
-        "execution": "parallel",
+        "scheduling": "parallel",
         "failure_policy": "finish_all",
-        "seed": 1101
+        "base_seed": 1101
+      },
+      "application": {
+        "schema": "test.study.v1",
+        "protocol": "typed-test",
+        "enabled_phases": ["prepare", "export"]
       }
     }"#;
     fs::write(root.join("study.json"), source).unwrap();
@@ -249,13 +255,28 @@ fn study_settings_strictly_define_replicate_execution() {
     assert_eq!(study.study_root(), root);
     assert_eq!(study.source_json(), source);
     assert_eq!(settings.replicates(), 4);
-    assert_eq!(settings.execution(), ReplicateExecutionMode::Parallel);
+    assert_eq!(settings.scheduling(), ReplicateScheduling::Parallel);
     assert_eq!(settings.failure_policy(), ReplicateFailurePolicy::FinishAll);
-    assert_eq!(settings.seed(), 1101);
+    assert_eq!(settings.base_seed(), 1101);
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Application {
+        schema: String,
+        protocol: String,
+        enabled_phases: Vec<String>,
+    }
+    assert_eq!(
+        study.application::<Application>().unwrap(),
+        Application {
+            schema: "test.study.v1".to_owned(),
+            protocol: "typed-test".to_owned(),
+            enabled_phases: vec!["prepare".to_owned(), "export".to_owned()],
+        }
+    );
 
     fs::write(
         root.join("study.json"),
-        r#"{"replicate_settings":{"replicates":0,"execution":"sequential","failure_policy":"fail_fast","seed":1}}"#,
+        r#"{"replicate_settings":{"replicates":0,"scheduling":"sequential","failure_policy":"fail_fast","base_seed":1}}"#,
     )
     .unwrap();
     assert!(matches!(
@@ -265,7 +286,18 @@ fn study_settings_strictly_define_replicate_execution() {
 
     fs::write(
         root.join("study.json"),
-        r#"{"replicate_settings":{"replicates":1,"execution":"sequential","failure_policy":"fail_fast","seed":1,"unknown":true}}"#,
+        r#"{"replicate_settings":{"replicates":1,"scheduling":"sequential","failure_policy":"fail_fast","base_seed":1},"application":{"unknown":true}}"#,
+    )
+    .unwrap();
+    let study = StudySettings::load(&root).unwrap();
+    assert!(matches!(
+        study.application::<Application>(),
+        Err(ConfigurationError::InvalidConfigurationDocument { .. })
+    ));
+
+    fs::write(
+        root.join("study.json"),
+        r#"{"replicate_settings":{"replicates":1,"scheduling":"sequential","failure_policy":"fail_fast","base_seed":1,"unknown":true}}"#,
     )
     .unwrap();
     assert!(matches!(

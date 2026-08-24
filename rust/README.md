@@ -23,7 +23,7 @@ in application crates:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.8.0"
+scientific-workflow = "0.9.0"
 ```
 
 The dependency intentionally has no Cargo features. All public modules use one
@@ -31,30 +31,31 @@ implementation and one dependency graph; applications import only the module
 boundaries they need. Commit the application's `Cargo.lock` when it is an
 executable so every deployment resolves the same compatible release.
 
-### Migrating from 0.7
+### Migrating from 0.8
 
-Version 0.8 is a breaking configuration and orchestration release:
+Version 0.9 is a breaking configuration-vocabulary release:
 
-1. Replace `config/fixed.json` and `config/sweep.json` with one
-   `config/parameters.json`. Ordinary values and arrays are literal; wrap only
-   Cartesian choices in `{"$sweep": [...]}` and use scope-level `$cases` for
-   correlated choices.
-2. Put truly study-wide parameters in `global`. Put parameters shared by
-   related phases in `phase_group.<group>.shared`, and phase-local parameters
-   in `phase_group.<group>.phase.<phase>`.
-3. Replace `ConfigurationSpace` loading with `StudyConfiguration::load`, select
-   a phase using `phase(group, phase)`, and call `combinations()` on that
-   `PhaseConfiguration`.
-4. Add the required root `study.json` and declare all four replicate settings.
-5. At program startup, pass the validated `ReplicateSettings` and resolved
-   output root to `ReplicateExecutor::dispatch_current_executable`. Construct
-   the application study only in the returned `Some(ReplicateContext)` branch.
-6. Derive recording paths from the context's `ExecutionScope`; do not rebuild
-   `replicate_<index>` paths in application code. Request named random seeds
-   through `ReplicateContext::seed_deriver()` only when needed.
+1. Rename the root `phase_group` object to `components` and every component's
+   `phase` object to `workloads`. Keep `global`, `shared`, `$sweep`, and
+   `$cases` unchanged.
+2. Select one configuration workload with
+   `workload(component, workload)`, and call `combinations()` on that
+   `WorkloadConfiguration`. The former phase-oriented Rust API is removed;
+   components deliberately have no expansion API.
+3. Replace resolved-configuration identity accessors `phase_group()`,
+   `group_ordinal()`, `phase()`, and `phase_ordinal()` with `component()`,
+   `component_ordinal()`, `workload()`, and `workload_ordinal()`.
+4. In `study.json`, replace replicate `execution` with `scheduling` and `seed`
+   with `base_seed`. The corresponding Rust accessors are `scheduling()` and
+   `base_seed()`.
+5. Configuration provenance now records `component`, `workload`,
+   `component_ordinal`, and `workload_ordinal` under `configuration_identity`.
+6. Put truly study-wide parameters in `global`. Put parameters shared by
+   related workloads in `components.<component>.shared`, and workload-local
+   parameters in `components.<component>.workloads.<workload>`.
 
-The complete grammars and startup example appear below. Existing 0.7 output is
-never silently adopted or overwritten by the replicate dispatcher.
+The complete grammars and startup example appear below. Version 0.9 provides
+no aliases for the former phase-oriented names.
 
 ## What problem the crate solves
 
@@ -86,7 +87,7 @@ parameters.json               paths.json
 StudyConfiguration            ProjectPaths
       │                           │
       ▼                           │
-PhaseConfiguration               │
+WorkloadConfiguration               │
       │                           │
       └──── application maps combinations ────────────┐
                                                        ▼
@@ -191,36 +192,43 @@ without cleanup.
 
 ### `configuration`: strict experiment inputs
 
-The `configuration` module validates three independent input concerns: complete
-study replicate policy, study-wide scientific parameters, and named paths:
+The `configuration` module validates three independent input concerns: the
+study manifest, study-wide scientific parameters, and named paths:
 
 ```text
 study/
-├── study.json             required replicate execution policy
+├── study.json             replicate policy and application-owned settings
 └── config/
     ├── parameters.json    scientific parameters and selections
     └── paths.json         named filesystem paths
 ```
 
-`StudySettings` strictly loads `study.json`. `StudyConfiguration` independently
-loads `config/parameters.json`. Calling
-`phase(group, phase)` returns a `PhaseConfiguration`, whose combinations
-automatically compose the global, group-shared, and phase-local scopes.
+`StudySettings` strictly loads `study.json`, validates Workflow's replicate
+policy, and exposes the already-parsed application object through one typed
+API. `StudyConfiguration` independently loads `config/parameters.json`. Calling
+`workload(component, workload)` returns a `WorkloadConfiguration`, whose combinations
+automatically compose the global, component-shared, and workload-local scopes.
 `ResolvedConfiguration` supports exact JSON Pointer lookup, typed decoding,
 terminal-key iteration, nested-document reconstruction, and scoped ordinals.
 
 #### Complete `study.json` grammar
 
-The root contains exactly one `replicate_settings` object, and that object
-contains exactly four required fields:
+The root contains the required `replicate_settings` object and an optional
+`application` object. `replicate_settings` contains exactly four required
+fields:
 
 ```json
 {
   "replicate_settings": {
     "replicates": 4,
-    "execution": "parallel",
+    "scheduling": "parallel",
     "failure_policy": "finish_all",
-    "seed": 1101
+    "base_seed": 1101
+  },
+  "application": {
+    "schema": "my-program.study.v1",
+    "protocol": "calibration",
+    "enabled_phases": ["prepare", "run"]
   }
 }
 ```
@@ -228,13 +236,43 @@ contains exactly four required fields:
 | Field | Accepted values | Meaning |
 |---|---|---|
 | `replicates` | positive JSON integer representable as `u64` | Number of isolated executions of the complete program |
-| `execution` | `"sequential"` or `"parallel"` | Whether the controller awaits each child before starting the next or starts one child per replicate immediately |
+| `scheduling` | `"sequential"` or `"parallel"` | Whether the controller awaits each child before starting the next or starts one child per replicate immediately |
 | `failure_policy` | `"fail_fast"` or `"finish_all"` | Whether a failure stops future sequential children/terminates active parallel children, or lets every replicate finish |
-| `seed` | JSON integer representable as `u64` | Study-level source for lazy namespace-separated seeds |
+| `base_seed` | JSON integer representable as `u64` | Study-level source for lazy namespace-separated seeds |
 
-Unknown, missing, duplicated, mistyped, or zero-valued fields are rejected.
-There are no implicit defaults: the source document always states the complete
-replicate contract.
+Unknown Workflow-level fields and unknown, missing, duplicated, mistyped, or
+zero-valued replicate fields are rejected. There are no replicate defaults:
+the source document always states the complete process contract. The optional
+`application` value must be an object. Workflow preserves it without assigning
+meaning to its fields.
+
+The user program decodes that object from the already-parsed manifest. This
+eliminates application-specific companion settings files and a second
+filesystem read:
+
+```rust,no_run
+use serde::Deserialize;
+use scientific_workflow::configuration::StudySettings;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationSettings {
+    schema: String,
+    protocol: String,
+    enabled_phases: Vec<String>,
+}
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let study = StudySettings::load("study")?;
+let application: ApplicationSettings = study.application()?;
+# let _ = (application.schema, application.protocol, application.enabled_phases);
+# Ok(())
+# }
+```
+
+The requested type owns its grammar and validation. Applications needing an
+untyped object can request `serde_json::Value`; Workflow exposes no second,
+overlapping key-access interface.
 
 `ReplicateExecutor` consumes the validated settings plus an output root chosen
 through `ProjectPaths`. The first process is the controller and starts the same
@@ -282,19 +320,19 @@ requests a named random stream. A deterministic study need not derive a seed.
 #### Complete `parameters.json` grammar
 
 The root has exactly two fields. `global` is a parameter scope.
-`phase_group` is indexed by stable application-defined string keys:
+`components` is indexed by stable application-defined string keys:
 
 ```json
 {
   "global": {
     "species": 128
   },
-  "phase_group": {
+  "components": {
     "models": {
       "shared": {
         "maximum_iterations": 10000
       },
-      "phase": {
+      "workloads": {
         "mean-field": {
           "solver": {"time_step": 0.01}
         },
@@ -308,10 +346,10 @@ The root has exactly two fields. `global` is a parameter scope.
 }
 ```
 
-Each group has exactly `shared` and `phase`. `phase` is indexed by stable
-application-defined phase keys. Only `global`, `phase_group`, `shared`,
-`phase`, `$sweep`, and `$cases` are grammar names; keys such as `models` and
-`mean-field` have no built-in scientific meaning.
+Each component has exactly `shared` and `workloads`. `workloads` is indexed by
+stable application-defined workload keys. Only `global`, `components`,
+`shared`, `workloads`, `$sweep`, and `$cases` are grammar names; keys such as
+`models` and `mean-field` have no built-in scientific meaning.
 
 Every ordinary JSON value is literal, including arrays. An array can therefore
 represent a shape, field list, recording definition, matrix, or any other
@@ -348,26 +386,27 @@ cases.
 
 #### Scope composition and ownership
 
-For one selected phase, expansion is:
+For one selected workload, expansion is:
 
 ```text
-global selections × group shared selections × phase-local selections
+global selections × component shared selections × workload-local selections
 ```
 
 Declare a parameter at the lowest scope whose complete set of descendants must
 share or cross it. A truly study-wide value belongs in `global`; a value shared
-only by a related set of phases belongs in that group's `shared`; all other
-values belong in their consuming phase.
+only by a related set of workloads belongs in that component's `shared`; all
+other values belong in their consuming workload.
 
 The merged scopes cannot contain overlapping paths. There is intentionally no
 shadowing or fallback precedence: `/seed` cannot be declared globally and
-again in a contributing group or phase. Parameters with the same short name
+again in a contributing component or workload. Parameters with the same short name
 but different meanings should use explicit namespaces.
 
-Global selections vary slowest, followed by group selections and phase-local
-selections. Each result exposes `global_ordinal()`, `group_ordinal()`, and
-`phase_ordinal()` in addition to the flattened `ordinal()`. Because a phase
-never expands sibling phase selections, editing an unrelated phase cannot
+Global selections vary slowest, followed by component selections and
+workload-local selections. Each result exposes `global_ordinal()`,
+`component_ordinal()`, and `workload_ordinal()` in addition to the flattened
+`ordinal()`. Because a workload never expands sibling workload selections,
+editing an unrelated workload cannot
 multiply or renumber its tasks.
 
 #### Loading and decoding
@@ -377,17 +416,17 @@ use scientific_workflow::configuration::{ProjectPaths, StudyConfiguration};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let study = StudyConfiguration::load("study")?;
-let configurations = study.phase("models", "mean-field")?;
+let configurations = study.workload("models", "mean-field")?;
 let paths = ProjectPaths::load("study")?;
 
 for configuration in configurations.combinations() {
     let (species, maximum): (usize, u64) =
         configuration.decode_values(("/species", "/maximum_iterations"))?;
     println!(
-        "global={} group={} phase={} species={species} maximum={maximum}",
+        "global={} component={} workload={} species={species} maximum={maximum}",
         configuration.global_ordinal(),
-        configuration.group_ordinal(),
-        configuration.phase_ordinal(),
+        configuration.component_ordinal(),
+        configuration.workload_ordinal(),
     );
 }
 
@@ -396,7 +435,7 @@ println!("recordings: {}", paths.resolve_path("recordings")?.display());
 # }
 ```
 
-Loading validates the entire registry before returning any phase. It rejects
+Loading validates the entire registry before returning any workload. It rejects
 duplicate JSON keys, missing or unknown grammar fields, blank keys, malformed
 or empty selections, mismatched cases, overlapping paths, and combination
 count overflow. `source_json()` preserves the exact validated parameter bytes.
@@ -427,7 +466,7 @@ the renderer, coordinates cancellation, and writes a durable `StudyRecord`.
 `StudyPlan` is the serializable declaration available before execution, while
 `StudySummary` and `PhaseSummary` describe the outcome.
 
-A `Phase` owns a deterministic list of tasks and phase-local execution policy:
+A `Phase` owns a deterministic list of tasks and workload-local execution policy:
 maximum active tasks, prepared queue capacity, start interval, per-task timeout,
 phase deadline, dependencies, failure behavior, and optional confirmation.
 
@@ -448,7 +487,7 @@ use scientific_workflow::prelude::study::*;
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let study_configuration = StudyConfiguration::load("study")?;
-let configurations = study_configuration.phase("models", "simulation")?;
+let configurations = study_configuration.workload("models", "dynamics")?;
 let paths = ProjectPaths::load("study")?;
 let tasks = configurations.combinations().map({
     let paths = paths.clone();

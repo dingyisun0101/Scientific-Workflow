@@ -5,9 +5,9 @@ pub use crate::artifact::{
     VerifiedArtifact, load_verified_artifact, persist_artifact,
 };
 pub use crate::configuration::{
-    ConfigurationError, ConfigurationIter, PhaseConfiguration, ProjectPaths,
-    ReplicateExecutionMode, ReplicateFailurePolicy, ReplicateSettings, ResolvedConfiguration,
-    StudyConfiguration, StudySettings,
+    ConfigurationError, ConfigurationIter, ProjectPaths, ReplicateFailurePolicy,
+    ReplicateScheduling, ReplicateSettings, ResolvedConfiguration, StudyConfiguration,
+    StudySettings, WorkloadConfiguration,
 };
 pub use crate::execution::{
     ExecutionScope, ExecutionScopeError, ReplicateContext, ReplicateExecutionError,

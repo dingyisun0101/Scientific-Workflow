@@ -12,10 +12,10 @@ The current registry release is consumed with:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.8.0"
+scientific-workflow = "0.9.0"
 ```
 
-See the [0.7 migration checklist](rust/README.md#migrating-from-07) before
+See the [0.8 migration checklist](rust/README.md#migrating-from-08) before
 updating an existing application.
 
 ## Vocabulary
@@ -39,12 +39,12 @@ Configuration is independent:
 ```text
 study.json
 → StudySettings
-→ ReplicateExecutor
-→ output_root/replicate_<index>
+├── replicate_settings → ReplicateExecutor → output_root/replicate_<index>
+└── application → application-owned typed settings
 
 parameters.json
 → StudyConfiguration
-→ selected PhaseConfiguration
+→ selected WorkloadConfiguration
 → ResolvedConfiguration combinations
 → application-defined Tasks
 ```
@@ -69,8 +69,8 @@ It requests cooperative study cancellation.
 
 [`examples/attractor_2d`](examples/attractor_2d) demonstrates the complete
 boundary. The application loads its single-replicate `StudySettings`, enters
-the isolated output scope, loads `StudyConfiguration`, selects the simulation
-and validation phase configurations, maps each
+the isolated output scope, loads `StudyConfiguration`, selects the dynamics
+and validation workload configurations, maps each
 `ResolvedConfiguration` into simulation and validation tasks, builds phases,
 and runs one study. A final one-shot task uses Python to render the verified
 trajectories. Each task owns its scientific state, recording I/O, or derived

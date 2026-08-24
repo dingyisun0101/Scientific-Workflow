@@ -12,11 +12,11 @@
     "mu": {"$sweep": [-0.25, 0.25, 1.0]},
     "angular_frequency": {"$sweep": [0.75, 1.25]}
   },
-  "phase_group": {
+  "components": {
     "attractor": {
       "shared": {},
-      "phase": {
-        "simulation": {},
+      "workloads": {
+        "dynamics": {},
         "validation": {},
         "rendering": {}
       }

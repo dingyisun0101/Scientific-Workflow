@@ -23,9 +23,9 @@ fn parallel_dispatch_reenters_one_isolated_worker_per_replicate() {
             r#"{
               "replicate_settings": {
                 "replicates": 3,
-                "execution": "parallel",
+                "scheduling": "parallel",
                 "failure_policy": "finish_all",
-                "seed": 1101
+                "base_seed": 1101
               }
             }"#,
         )
@@ -41,7 +41,7 @@ fn parallel_dispatch_reenters_one_isolated_worker_per_replicate() {
         assert_eq!(replicate.count(), 3);
         assert_eq!(
             replicate.seed_deriver().base_seed(),
-            settings.replicate_settings().seed()
+            settings.replicate_settings().base_seed()
         );
         assert_eq!(
             replicate.seed_deriver().replicate_index(),

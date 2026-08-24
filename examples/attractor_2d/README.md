@@ -38,12 +38,12 @@ scripts/
 
 No application-specific configuration struct or task registry exists.
 `ResolvedConfiguration::decode_values` decodes heterogeneous parameter groups directly
-from the merged global/group/phase selection. The concise phase helpers apply one shared
+from the merged global/component/workload selection. The concise phase helpers apply one shared
 callable to every generated task; advanced per-task `FnOnce` factories remain
 available when a task must own a unique non-Clone resource.
 
 `StudySettings` validates `study.json` before any output is created. The
-example deliberately declares `replicates: 1` and `execution: "sequential"`.
+example deliberately declares `replicates: 1` and `scheduling: "sequential"`.
 The initial process dispatches one worker; that worker runs the study inside
 `target/output/replicate_0`. Although this deterministic model does not request
 randomness, the required study seed demonstrates the same complete settings
@@ -63,8 +63,8 @@ independent sampling:
 | `checkpoint` | `point`, `radius` | 1000 iterations |
 
 Phase 2 depends on phase 1. Planning pairs each validation configuration with
-explicit producer descriptors from the same global and group-shared selections.
-The descriptors carry their recording paths, so independent phase-local sweep
+explicit producer descriptors from the same global and component-shared selections.
+The descriptors carry their recording paths, so independent workload-local sweep
 ordering cannot redirect validation to another producer. Validation reads the
 latest checkpoint and verifies its final iteration and
 `radius == hypot(point)`. Durable recordings are the phase handoff; Workflow

@@ -1,21 +1,24 @@
-//! Strict study-level replicate policy loaded from `study.json`.
+//! Strict Workflow policy and typed application settings loaded from `study.json`.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 
 use super::error::ConfigurationError;
 use super::source::{invalid, parse_strict_json, read_source};
 
 const STUDY_SETTINGS_FILE: &str = "study.json";
 
-/// Validated, immutable study-level replicate settings.
+/// Validated, immutable study manifest.
 ///
-/// This type owns only the library-defined `study.json` grammar. Scientific
-/// parameters remain in `config/parameters.json`, and named paths remain in
-/// `config/paths.json`.
+/// Workflow owns and validates `replicate_settings`. The `application` object
+/// remains opaque until the user program requests it as one application-owned
+/// type through [`Self::application`]. Scientific parameters remain in
+/// `config/parameters.json`, and named paths remain in `config/paths.json`.
 #[derive(Clone)]
 pub struct StudySettings {
     inner: Arc<StudySettingsInner>,
@@ -48,10 +51,11 @@ impl StudySettings {
                 source: source.into_boxed_slice(),
                 replicate_settings: ReplicateSettings {
                     replicates: raw.replicate_settings.replicates,
-                    execution: raw.replicate_settings.execution,
+                    scheduling: raw.replicate_settings.scheduling,
                     failure_policy: raw.replicate_settings.failure_policy,
-                    seed: raw.replicate_settings.seed,
+                    base_seed: raw.replicate_settings.base_seed,
                 },
+                application: raw.application,
             }),
         })
     }
@@ -75,6 +79,23 @@ impl StudySettings {
     pub fn replicate_settings(&self) -> ReplicateSettings {
         self.inner.replicate_settings
     }
+
+    /// Decodes the application-owned object without rereading `study.json`.
+    ///
+    /// Workflow does not interpret this object. Applications should use a
+    /// strongly typed `Deserialize` implementation—normally with
+    /// `#[serde(deny_unknown_fields)]`—to own and validate their settings.
+    pub fn application<T>(&self) -> Result<T, ConfigurationError>
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_value(Value::Object(self.inner.application.clone())).map_err(|source| {
+            ConfigurationError::InvalidConfigurationDocument {
+                path: self.source_path().to_path_buf(),
+                reason: format!("application settings do not match the requested type: {source}"),
+            }
+        })
+    }
 }
 
 impl fmt::Debug for StudySettings {
@@ -84,6 +105,7 @@ impl fmt::Debug for StudySettings {
             .field("study_root", &self.study_root())
             .field("source_path", &self.source_path())
             .field("replicate_settings", &self.replicate_settings())
+            .field("application_fields", &self.inner.application.len())
             .finish_non_exhaustive()
     }
 }
@@ -93,15 +115,16 @@ struct StudySettingsInner {
     source_path: PathBuf,
     source: Box<[u8]>,
     replicate_settings: ReplicateSettings,
+    application: Map<String, Value>,
 }
 
 /// Validated policy for executing one or more isolated study replicates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReplicateSettings {
     replicates: u64,
-    execution: ReplicateExecutionMode,
+    scheduling: ReplicateScheduling,
     failure_policy: ReplicateFailurePolicy,
-    seed: u64,
+    base_seed: u64,
 }
 
 impl ReplicateSettings {
@@ -110,9 +133,9 @@ impl ReplicateSettings {
         self.replicates
     }
 
-    /// Returns whether replicate subprocesses run sequentially or in parallel.
-    pub const fn execution(self) -> ReplicateExecutionMode {
-        self.execution
+    /// Returns whether replicate subprocesses are scheduled sequentially or in parallel.
+    pub const fn scheduling(self) -> ReplicateScheduling {
+        self.scheduling
     }
 
     /// Returns the controller response to a failed replicate subprocess.
@@ -120,23 +143,23 @@ impl ReplicateSettings {
         self.failure_policy
     }
 
-    /// Returns the study-level seed used for lazy per-replicate derivation.
-    pub const fn seed(self) -> u64 {
-        self.seed
+    /// Returns the study-level base seed used for lazy per-replicate derivation.
+    pub const fn base_seed(self) -> u64 {
+        self.base_seed
     }
 }
 
 /// Process-level scheduling mode for study replicates.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum ReplicateExecutionMode {
+pub enum ReplicateScheduling {
     /// Start and await one replicate subprocess at a time.
     Sequential,
     /// Start one subprocess for every replicate before awaiting completion.
     Parallel,
 }
 
-impl ReplicateExecutionMode {
+impl ReplicateScheduling {
     /// Returns the exact `study.json` spelling.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -170,13 +193,15 @@ impl ReplicateFailurePolicy {
 #[serde(deny_unknown_fields)]
 struct RawStudySettings {
     replicate_settings: RawReplicateSettings,
+    #[serde(default)]
+    application: Map<String, Value>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawReplicateSettings {
     replicates: u64,
-    execution: ReplicateExecutionMode,
+    scheduling: ReplicateScheduling,
     failure_policy: ReplicateFailurePolicy,
-    seed: u64,
+    base_seed: u64,
 }

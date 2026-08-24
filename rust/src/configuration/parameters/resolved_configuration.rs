@@ -11,12 +11,12 @@ use super::super::error::ConfigurationError;
 use super::super::parameter_key_tuple::ParameterKeyTuple;
 use super::super::parameter_path::ParameterPath;
 use super::super::parameter_tree::{lookup_path, reconstruct};
-use super::PhaseConfigurationInner;
+use super::WorkloadConfigurationInner;
 use super::reconstruction;
 
-/// One immutable, lazily materialized phase configuration combination.
+/// One immutable, lazily materialized workload configuration combination.
 pub struct ResolvedConfiguration {
-    inner: Arc<PhaseConfigurationInner>,
+    inner: Arc<WorkloadConfigurationInner>,
     ordinal: u64,
     resolved: OnceLock<Value>,
 }
@@ -32,7 +32,7 @@ impl Clone for ResolvedConfiguration {
 }
 
 impl ResolvedConfiguration {
-    pub(super) fn new(inner: Arc<PhaseConfigurationInner>, ordinal: u64) -> Self {
+    pub(super) fn new(inner: Arc<WorkloadConfigurationInner>, ordinal: u64) -> Self {
         Self {
             inner,
             ordinal,
@@ -40,19 +40,19 @@ impl ResolvedConfiguration {
         }
     }
 
-    /// Returns the flattened ordinal within this phase configuration.
+    /// Returns the flattened ordinal within this workload configuration.
     pub fn ordinal(&self) -> u64 {
         self.ordinal
     }
 
-    /// Returns the stable string key of the containing phase group.
-    pub fn phase_group(&self) -> &str {
-        &self.inner.phase_group
+    /// Returns the stable string key of the containing workload component.
+    pub fn component(&self) -> &str {
+        &self.inner.component
     }
 
-    /// Returns the stable string key of the selected phase.
-    pub fn phase(&self) -> &str {
-        &self.inner.phase
+    /// Returns the stable string key of the selected workload.
+    pub fn workload(&self) -> &str {
+        &self.inner.workload
     }
 
     /// Returns the selection ordinal contributed by the global scope.
@@ -60,13 +60,13 @@ impl ResolvedConfiguration {
         self.inner.scope_ordinal(self.ordinal, 0)
     }
 
-    /// Returns the selection ordinal contributed by the group shared scope.
-    pub fn group_ordinal(&self) -> u64 {
+    /// Returns the selection ordinal contributed by the component shared scope.
+    pub fn component_ordinal(&self) -> u64 {
         self.inner.scope_ordinal(self.ordinal, 1)
     }
 
-    /// Returns the selection ordinal contributed by the phase-local scope.
-    pub fn phase_ordinal(&self) -> u64 {
+    /// Returns the selection ordinal contributed by the workload-local scope.
+    pub fn workload_ordinal(&self) -> u64 {
         self.inner.scope_ordinal(self.ordinal, 2)
     }
 
@@ -229,24 +229,24 @@ impl fmt::Debug for ResolvedConfiguration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResolvedConfiguration")
-            .field("phase_group", &self.phase_group())
-            .field("phase", &self.phase())
+            .field("component", &self.component())
+            .field("workload", &self.workload())
             .field("ordinal", &self.ordinal)
             .field("values", &self.len())
             .finish_non_exhaustive()
     }
 }
 
-/// Lazy deterministic iterator over all combinations of one phase.
+/// Lazy deterministic iterator over all combinations of one workload.
 #[derive(Clone)]
 pub struct ConfigurationIter {
-    inner: Arc<PhaseConfigurationInner>,
+    inner: Arc<WorkloadConfigurationInner>,
     next: u64,
     end: u64,
 }
 
 impl ConfigurationIter {
-    pub(super) fn new(inner: Arc<PhaseConfigurationInner>, end: u64) -> Self {
+    pub(super) fn new(inner: Arc<WorkloadConfigurationInner>, end: u64) -> Self {
         Self {
             inner,
             next: 0,

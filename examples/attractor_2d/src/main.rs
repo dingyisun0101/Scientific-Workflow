@@ -35,8 +35,8 @@ fn main() -> AppResult<()> {
 
 fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<()> {
     let study_configuration = StudyConfiguration::load(study_root)?;
-    let simulation_configurations = study_configuration.phase("attractor", "simulation")?;
-    let validation_configurations = study_configuration.phase("attractor", "validation")?;
+    let simulation_configurations = study_configuration.workload("attractor", "dynamics")?;
+    let validation_configurations = study_configuration.workload("attractor", "validation")?;
     let schema = SystemStateSchema::load_json_template(study_root.join("config/state.json"))?;
 
     // Replicate dispatch created this isolated scope before starting the worker.
@@ -47,7 +47,7 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
 
     // Producer descriptors decode configuration once and carry the exact output
     // path into every consumer. Phase-local ordinals are never compared across
-    // independently expanded phase configuration spaces.
+    // independently expanded workload configuration spaces.
     let producer_runs = simulation_configurations
         .combinations()
         .map(|configuration| AttractorRun::new(execution, configuration))
@@ -140,7 +140,7 @@ fn simulation_task(run: AttractorRun, schema: SystemStateSchema) -> Task {
 
 fn validation_tasks(
     producers: &[AttractorRun],
-    configurations: &PhaseConfiguration,
+    configurations: &WorkloadConfiguration,
 ) -> AppResult<Vec<Task>> {
     let mut tasks = Vec::new();
     for configuration in configurations.combinations() {
@@ -168,7 +168,7 @@ fn validation_task(producer: AttractorRun, configuration: ResolvedConfiguration)
     let task_id = format!(
         "validate-{}-v{:06}",
         producer.task_id(),
-        configuration.phase_ordinal()
+        configuration.workload_ordinal()
     );
     let label = format!(
         "validate mu={} omega={}",

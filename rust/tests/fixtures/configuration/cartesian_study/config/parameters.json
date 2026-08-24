@@ -3,7 +3,7 @@
     "physical_time_increment": 0.125,
     "lattice_shape": [4, 8]
   },
-  "phase_group": {
+  "components": {
     "test": {
       "shared": {
         "solver": {
@@ -11,8 +11,8 @@
           "tolerance": 1e-9
         }
       },
-      "phase": {
-        "simulation": {
+      "workloads": {
+        "dynamics": {
           "temperature": {"$sweep": [280.0, 300.0]},
           "seed": {"$sweep": [7, 11, 13]}
         }

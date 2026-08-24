@@ -2,12 +2,12 @@
   "global": {
     "lattice_shape": [16, 16]
   },
-  "phase_group": {
+  "components": {
     "test": {
       "shared": {
         "integrator": "adaptive"
       },
-      "phase": {
+      "workloads": {
         "simulation": {
           "$cases": [
             {"temperature": 275.0, "physical_time_increment": 0.2},

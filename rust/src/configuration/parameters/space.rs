@@ -1,4 +1,4 @@
-//! Study-wide loading and phase-scoped configuration spaces.
+//! Study-wide loading and workload-scoped configuration spaces.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -21,17 +21,17 @@ const CONFIGURATION_DIRECTORY: &str = "config";
 
 /// One validated study-wide parameter registry.
 ///
-/// Call [`StudyConfiguration::phase`] to obtain the only iterable space. A
-/// phase automatically includes the global and containing group scopes.
+/// Call [`StudyConfiguration::workload`] to obtain the only iterable space. A
+/// workload automatically includes the global and containing component scopes.
 #[derive(Clone)]
 pub struct StudyConfiguration {
     inner: Arc<StudyConfigurationInner>,
 }
 
-/// The lazily expanded parameter space for one group-qualified phase.
+/// The lazily expanded parameter space for one component-qualified workload.
 #[derive(Clone)]
-pub struct PhaseConfiguration {
-    pub(super) inner: Arc<PhaseConfigurationInner>,
+pub struct WorkloadConfiguration {
+    pub(super) inner: Arc<WorkloadConfigurationInner>,
 }
 
 impl StudyConfiguration {
@@ -48,7 +48,7 @@ impl StudyConfiguration {
             "parameters.json root must be an object",
         )?;
         let global = take_required(&source_path, &mut root, "global")?;
-        let phase_groups = take_required(&source_path, &mut root, "phase_group")?;
+        let components = take_required(&source_path, &mut root, "components")?;
         reject_remaining(&source_path, &root, "parameters.json")?;
 
         let global = Arc::new(ScopeConfiguration::new(parse_scope(
@@ -56,71 +56,72 @@ impl StudyConfiguration {
             require_object(&source_path, global, "`global` must be an object")?,
             "global scope",
         )?)?);
-        let groups = require_object(
-            &source_path,
-            phase_groups,
-            "`phase_group` must be an object",
-        )?;
-        if groups.is_empty() {
+        let components =
+            require_object(&source_path, components, "`components` must be an object")?;
+        if components.is_empty() {
             return super::super::source::invalid(
                 &source_path,
-                "`phase_group` must contain at least one group",
+                "`components` must contain at least one component",
             );
         }
 
-        let mut phases = HashMap::with_capacity(groups.len());
-        for (group_key, group) in groups {
-            validate_name(&source_path, &group_key, "phase-group key")?;
-            let mut group = require_object(
+        let mut workloads = HashMap::with_capacity(components.len());
+        for (component_key, component) in components {
+            validate_name(&source_path, &component_key, "component key")?;
+            let mut component = require_object(
                 &source_path,
-                group,
-                format!("phase group `{group_key}` must be an object"),
+                component,
+                format!("component `{component_key}` must be an object"),
             )?;
-            let shared = take_required(&source_path, &mut group, "shared")?;
-            let phase = take_required(&source_path, &mut group, "phase")?;
-            reject_remaining(&source_path, &group, &format!("phase group `{group_key}`"))?;
+            let shared = take_required(&source_path, &mut component, "shared")?;
+            let workload = take_required(&source_path, &mut component, "workloads")?;
+            reject_remaining(
+                &source_path,
+                &component,
+                &format!("component `{component_key}`"),
+            )?;
             let shared = Arc::new(ScopeConfiguration::new(parse_scope(
                 &source_path,
                 require_object(
                     &source_path,
                     shared,
-                    format!("phase group `{group_key}` field `shared` must be an object"),
+                    format!("component `{component_key}` field `shared` must be an object"),
                 )?,
-                &format!("phase group `{group_key}` shared scope"),
+                &format!("component `{component_key}` shared scope"),
             )?)?);
-            let phase = require_object(
+            let workload = require_object(
                 &source_path,
-                phase,
-                format!("phase group `{group_key}` field `phase` must be an object"),
+                workload,
+                format!("component `{component_key}` field `workloads` must be an object"),
             )?;
-            if phase.is_empty() {
+            if workload.is_empty() {
                 return super::super::source::invalid(
                     &source_path,
-                    format!("phase group `{group_key}` must contain at least one phase"),
+                    format!("component `{component_key}` must contain at least one workload"),
                 );
             }
-            let mut group_phases = HashMap::with_capacity(phase.len());
-            for (phase_key, values) in phase {
-                validate_name(&source_path, &phase_key, "phase key")?;
+            let mut component_workloads = HashMap::with_capacity(workload.len());
+            for (workload_key, values) in workload {
+                validate_name(&source_path, &workload_key, "workload key")?;
                 let local = Arc::new(ScopeConfiguration::new(parse_scope(
                     &source_path,
                     require_object(
                         &source_path,
                         values,
-                        format!("phase `{group_key}/{phase_key}` must be an object"),
+                        format!("workload `{component_key}/{workload_key}` must be an object"),
                     )?,
-                    &format!("phase `{group_key}/{phase_key}`"),
+                    &format!("workload `{component_key}/{workload_key}`"),
                 )?)?);
                 let space = compose_space(
                     Arc::clone(&configuration_directory),
                     &source_path,
-                    &group_key,
-                    &phase_key,
+                    &component_key,
+                    &workload_key,
                     [Arc::clone(&global), Arc::clone(&shared), local],
                 )?;
-                group_phases.insert(phase_key.into_boxed_str(), Arc::new(space));
+                component_workloads.insert(workload_key.into_boxed_str(), Arc::new(space));
             }
-            phases.insert(group_key.into_boxed_str(), group_phases);
+            workloads.insert(component_key.into_boxed_str(), component_workloads);
         }
         Ok(Self {
             inner: Arc::new(StudyConfigurationInner {
@@ -128,7 +129,7 @@ impl StudyConfiguration {
                 configuration_directory,
                 source_path,
                 source: source.into_boxed_slice(),
-                phases,
+                workloads,
             }),
         })
     }
@@ -153,43 +154,43 @@ impl StudyConfiguration {
         &self.inner.source
     }
 
-    /// Returns one exact group-qualified phase configuration.
-    pub fn phase(
+    /// Returns one exact component-qualified workload configuration.
+    pub fn workload(
         &self,
-        phase_group: &str,
-        phase: &str,
-    ) -> Result<PhaseConfiguration, ConfigurationError> {
+        component: &str,
+        workload: &str,
+    ) -> Result<WorkloadConfiguration, ConfigurationError> {
         let inner = self
             .inner
-            .phases
-            .get(phase_group)
-            .and_then(|phases| phases.get(phase))
+            .workloads
+            .get(component)
+            .and_then(|workloads| workloads.get(workload))
             .map(Arc::clone)
-            .ok_or_else(|| ConfigurationError::UnknownPhaseConfiguration {
-                phase_group: phase_group.to_owned(),
-                phase: phase.to_owned(),
+            .ok_or_else(|| ConfigurationError::UnknownWorkloadConfiguration {
+                component: component.to_owned(),
+                workload: workload.to_owned(),
             })?;
-        Ok(PhaseConfiguration { inner })
+        Ok(WorkloadConfiguration { inner })
     }
 }
 
-impl PhaseConfiguration {
+impl WorkloadConfiguration {
     /// Returns the directory containing the study-wide parameter source.
     pub fn configuration_directory(&self) -> &Path {
         self.inner.configuration_directory.as_path()
     }
 
-    /// Returns this phase's stable containing group key.
-    pub fn phase_group(&self) -> &str {
-        &self.inner.phase_group
+    /// Returns this workload's stable containing component key.
+    pub fn component(&self) -> &str {
+        &self.inner.component
     }
 
-    /// Returns this phase's stable string key.
-    pub fn phase(&self) -> &str {
-        &self.inner.phase
+    /// Returns this workload's stable string key.
+    pub fn workload(&self) -> &str {
+        &self.inner.workload
     }
 
-    /// Returns the complete `global × shared × phase` combination count.
+    /// Returns the complete `global × shared × workload` combination count.
     pub fn combination_count(&self) -> u64 {
         self.inner.combination_count
     }
@@ -232,7 +233,7 @@ impl PhaseConfiguration {
         self.inner.selectable_paths().map(ParameterPath::identifier)
     }
 
-    /// Resolves one flattened phase ordinal with bounds checking.
+    /// Resolves one flattened workload ordinal with bounds checking.
     pub fn combination(&self, ordinal: u64) -> Result<ResolvedConfiguration, ConfigurationError> {
         if ordinal >= self.combination_count() {
             return Err(ConfigurationError::CombinationOrdinalOutOfBounds {
@@ -255,19 +256,24 @@ impl fmt::Debug for StudyConfiguration {
             .debug_struct("StudyConfiguration")
             .field("study_root", &self.study_root())
             .field(
-                "phases",
-                &self.inner.phases.values().map(HashMap::len).sum::<usize>(),
+                "workloads",
+                &self
+                    .inner
+                    .workloads
+                    .values()
+                    .map(HashMap::len)
+                    .sum::<usize>(),
             )
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Debug for PhaseConfiguration {
+impl fmt::Debug for WorkloadConfiguration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PhaseConfiguration")
-            .field("phase_group", &self.phase_group())
-            .field("phase", &self.phase())
+            .debug_struct("WorkloadConfiguration")
+            .field("component", &self.component())
+            .field("workload", &self.workload())
             .field("combinations", &self.combination_count())
             .finish_non_exhaustive()
     }
@@ -278,13 +284,13 @@ struct StudyConfigurationInner {
     configuration_directory: Arc<PathBuf>,
     source_path: PathBuf,
     source: Box<[u8]>,
-    phases: HashMap<Box<str>, HashMap<Box<str>, Arc<PhaseConfigurationInner>>>,
+    workloads: HashMap<Box<str>, HashMap<Box<str>, Arc<WorkloadConfigurationInner>>>,
 }
 
-pub(crate) struct PhaseConfigurationInner {
+pub(crate) struct WorkloadConfigurationInner {
     pub(super) configuration_directory: Arc<PathBuf>,
-    pub(super) phase_group: Box<str>,
-    pub(super) phase: Box<str>,
+    pub(super) component: Box<str>,
+    pub(super) workload: Box<str>,
     scopes: [Arc<ScopeConfiguration>; 3],
     pub(super) combination_count: u64,
 }
@@ -292,22 +298,22 @@ pub(crate) struct PhaseConfigurationInner {
 fn compose_space(
     configuration_directory: Arc<PathBuf>,
     source_path: &Path,
-    phase_group: &str,
-    phase: &str,
+    component: &str,
+    workload: &str,
     scopes: [Arc<ScopeConfiguration>; 3],
-) -> Result<PhaseConfigurationInner, ConfigurationError> {
+) -> Result<WorkloadConfigurationInner, ConfigurationError> {
     validate_scopes_disjoint(source_path, &scopes)?;
     let combination_count = scopes.iter().try_fold(1_u64, |count, scope| {
         count.checked_mul(scope.combination_count()).ok_or_else(|| {
             ConfigurationError::CombinationCountOverflow {
-                axis: format!("phase `{phase_group}/{phase}`"),
+                axis: format!("workload `{component}/{workload}`"),
             }
         })
     })?;
-    Ok(PhaseConfigurationInner {
+    Ok(WorkloadConfigurationInner {
         configuration_directory,
-        phase_group: phase_group.to_owned().into_boxed_str(),
-        phase: phase.to_owned().into_boxed_str(),
+        component: component.to_owned().into_boxed_str(),
+        workload: workload.to_owned().into_boxed_str(),
         scopes,
         combination_count,
     })
@@ -339,7 +345,7 @@ impl ScopeConfiguration {
     }
 }
 
-impl PhaseConfigurationInner {
+impl WorkloadConfigurationInner {
     pub(super) fn fixed_leaves(&self) -> ScopeSliceIter<'_, ParameterLeaf> {
         ScopeSliceIter::new([
             &self.scopes[0].fixed,

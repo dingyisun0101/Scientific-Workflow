@@ -8,7 +8,7 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::Duration;
 
-use crate::configuration::{ReplicateExecutionMode, ReplicateFailurePolicy, ReplicateSettings};
+use crate::configuration::{ReplicateFailurePolicy, ReplicateScheduling, ReplicateSettings};
 use crate::rng_record::ReplicateSeedDeriver;
 
 use super::{ExecutionScope, ExecutionScopeError};
@@ -53,11 +53,11 @@ impl ReplicateExecutor {
         let executable = env::current_exe().map_err(ReplicateExecutionError::CurrentExecutable)?;
         let arguments = env::args_os().skip(1).collect::<Vec<_>>();
         self.prepare_output_scopes()?;
-        match self.settings.execution() {
-            ReplicateExecutionMode::Sequential => {
+        match self.settings.scheduling() {
+            ReplicateScheduling::Sequential => {
                 self.run_sequential(&executable, &arguments)?;
             }
-            ReplicateExecutionMode::Parallel => {
+            ReplicateScheduling::Parallel => {
                 self.run_parallel(&executable, &arguments)?;
             }
         }
@@ -89,7 +89,7 @@ impl ReplicateExecutor {
             index,
             count: self.settings.replicates(),
             execution_scope,
-            seed_deriver: ReplicateSeedDeriver::new(self.settings.seed(), index),
+            seed_deriver: ReplicateSeedDeriver::new(self.settings.base_seed(), index),
         })
     }
 
