@@ -8,9 +8,7 @@ use super::super::parameter_path::ParameterPath;
 use super::super::parameter_tree::{
     ParameterLeaf, flatten_candidate, flatten_root, paths_conflict,
 };
-use super::super::source::{
-    StrictValue, invalid, parse_strict_json, read_source, require_object, validate_name,
-};
+use super::super::source::{StrictValue, invalid, require_object, validate_name};
 use super::plan::{SweepDimension, SweepPlan};
 
 pub(crate) fn parse_sweep(
@@ -101,23 +99,8 @@ fn parse_nested_axis_at(
             format!("nested sweep path `{axis_path}` must contain an object"),
         );
     };
-    let has_values = entries.iter().any(|(key, _)| key == "values");
-    let has_values_from = entries.iter().any(|(key, _)| key == "values_from");
-    if has_values && has_values_from {
-        return invalid(
-            path,
-            format!(
-                "nested sweep axis `{axis_path}` cannot contain both `values` and `values_from`"
-            ),
-        );
-    }
-    if has_values || has_values_from {
-        let values = if has_values {
-            take_required(path, &mut entries, "values")?
-        } else {
-            let source = take_required(path, &mut entries, "values_from")?;
-            load_external_values(path, &axis_path, source)?
-        };
+    if entries.iter().any(|(key, _)| key == "values") {
+        let values = take_required(path, &mut entries, "values")?;
         reject_remaining(path, &entries, &format!("nested sweep axis `{axis_path}`"))?;
         dimensions.push(parse_dimension_values(path, axis_path, values)?);
         return Ok(());
@@ -135,38 +118,6 @@ fn parse_nested_axis_at(
         )?;
     }
     Ok(())
-}
-
-fn load_external_values(
-    sweep_path: &Path,
-    axis_path: &ParameterPath,
-    source: StrictValue,
-) -> Result<StrictValue, ConfigurationError> {
-    let StrictValue::String(source) = source else {
-        return invalid(
-            sweep_path,
-            format!("cartesian axis `{axis_path}` field `values_from` must be a string"),
-        );
-    };
-    if source.trim().is_empty() {
-        return invalid(
-            sweep_path,
-            format!("cartesian axis `{axis_path}` field `values_from` must not be empty"),
-        );
-    }
-    let path = sweep_path
-        .parent()
-        .expect("sweep.json always has a configuration-directory parent")
-        .join(source);
-    let bytes = read_source(&path)?;
-    let values = parse_strict_json(&path, &bytes)?;
-    if !matches!(values, StrictValue::Array(_)) {
-        return invalid(
-            &path,
-            format!("external values for Cartesian axis `{axis_path}` must be an array"),
-        );
-    }
-    Ok(values)
 }
 
 fn parse_dimension_values(

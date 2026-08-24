@@ -53,27 +53,6 @@ fn resolves_every_fixed_and_cartesian_sweep_combination() {
 }
 
 #[test]
-fn cartesian_axes_can_share_values_from_an_external_json_array() {
-    let directory = configuration_directory(
-        "external-values",
-        r#"{"shared":true}"#,
-        r#"{"mode":"cartesian","axes":{"sys_idx":{"values_from":"systems.json"}}}"#,
-    );
-    fs::write(directory.join("systems.json"), r#"[0,1]"#).unwrap();
-
-    let space = ConfigurationSpace::load(&directory).unwrap();
-    assert_eq!(space.combination_count(), 2);
-    assert_eq!(
-        space
-            .combinations()
-            .map(|configuration| configuration.decode_value::<u64>("/sys_idx").unwrap())
-            .collect::<Vec<_>>(),
-        [0, 1]
-    );
-    fs::remove_dir_all(directory).unwrap();
-}
-
-#[test]
 fn resolves_explicit_cases_without_creating_tasks() {
     let directory = configuration_directory(
         "cases",
