@@ -63,7 +63,7 @@ the phase handoff; Workflow does not transport application data between phases.
 Phase 3 depends on phase 2 and contains one ordinary one-shot task. It invokes
 `scripts/render_trajectories.py` through `mamba run -n DSES`, reads every
 verified trajectory using `scientific_workflow_reader`, and writes one PNG per
-configuration to the execution's `outputs/` directory. The study scheduler
+configuration to `workflow/examples/attractor_2d/target/plots`. The study scheduler
 does not know that this task launches Python or creates images.
 
 Both phases include an explicit three-second entrance pause so their refreshed
@@ -93,17 +93,12 @@ Recordings remain under the ignored directory:
 examples/attractor_2d/target/recordings/
 ```
 
-Each generated execution contains the rendered images alongside its study
-record and task recordings:
+Rendered images are stored in:
 
 ```text
-execution-.../
-├── task-000000/
-├── ...
-├── study-record.json
-└── outputs/
-    ├── trajectory-000000.png
-    └── ...
+workflow/examples/attractor_2d/target/plots/
+├── trajectory-000000.png
+└── ...
 ```
 
 A successful run ends with:

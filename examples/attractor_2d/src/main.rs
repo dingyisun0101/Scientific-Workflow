@@ -99,6 +99,7 @@ fn main() -> AppResult<()> {
     // depends on validation; the task itself owns the Python process and files.
     let rendering_execution = execution.clone();
     let rendering_script = study_root.join("scripts/render_trajectories.py");
+    let rendering_output = study_root.join("target").join("plots");
     let rendering = Phase::builder(3, "trajectory rendering")
         .task(
             Task::one_shot(
@@ -108,7 +109,7 @@ fn main() -> AppResult<()> {
                     rendering::render_trajectories(
                         &rendering_script,
                         rendering_execution.directory(),
-                        &rendering_execution.directory().join("outputs"),
+                        &rendering_output,
                         context,
                     )
                 },
