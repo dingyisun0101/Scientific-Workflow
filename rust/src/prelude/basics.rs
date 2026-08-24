@@ -5,11 +5,9 @@ pub use crate::artifact::{
     VerifiedArtifact, load_verified_artifact, persist_artifact,
 };
 pub use crate::configuration::{
-    ConfigurationError, MatchingTaskConfigIter, ParameterSpace, ProjectConfig, ProjectPaths,
-    TaskConfig, TaskConfigIter, TaskParameters, TaskParametersIter,
+    ConfigurationError, ConfigurationIter, ConfigurationSpace, ResolvedConfiguration,
 };
 pub use crate::execution::{ExecutionScope, ExecutionScopeError};
-pub use crate::project::{ScientificProject, ScientificProjectError};
 pub use crate::rng_record::{RNG_RECORDS_METADATA_KEY, RngRecord, RngRecordError};
 pub use crate::storage::{
     CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,

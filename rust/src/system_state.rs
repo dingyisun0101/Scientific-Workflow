@@ -30,6 +30,13 @@
 //! module only retains a private borrowed erased view for the future storage
 //! encoder. It does not select JSON framing or perform IO.
 //!
+//! # Boundary
+//!
+//! `system_state` owns schema declaration, field indexing, and owned in-memory
+//! evolution of typed payloads. It does not own persistence formats, execution
+//! controls, scheduling, sampling decisions, artifact publication, or RNG
+//! provenance.
+//!
 //! # Ownership
 //!
 //! [`SystemState::insert_payload`] consumes a concrete payload without cloning it. An

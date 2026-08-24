@@ -1,14 +1,14 @@
-//! Sealed tuple decoding for resolved task parameters.
+//! Sealed tuple decoding for resolved configurations.
 
 use serde::de::DeserializeOwned;
 
-use super::{ConfigurationError, TaskParameters};
+use super::{ConfigurationError, ResolvedConfiguration};
 
 mod sealed {
     pub trait Sealed<Values> {}
 }
 
-/// Internal mapping used by [`TaskParameters::decode_values`].
+/// Internal mapping used by [`ResolvedConfiguration::decode_values`].
 ///
 /// This trait is public only because it appears in a public method bound. It is
 /// sealed, omitted from the prelude, and implemented for borrowed key tuples
@@ -17,7 +17,7 @@ mod sealed {
 pub trait ParameterKeyTuple<Values>: sealed::Sealed<Values> {
     /// Decodes the supported tuple from one resolved parameter dictionary.
     #[doc(hidden)]
-    fn decode(self, parameters: &TaskParameters) -> Result<Values, ConfigurationError>;
+    fn decode(self, parameters: &ResolvedConfiguration) -> Result<Values, ConfigurationError>;
 }
 
 macro_rules! key_type {
@@ -42,7 +42,7 @@ macro_rules! impl_parameter_key_tuple {
         {
             fn decode(
                 self,
-                parameters: &TaskParameters,
+                parameters: &ResolvedConfiguration,
             ) -> Result<($($type,)+), ConfigurationError> {
                 let ($($key,)+) = self;
                 Ok(($(parameters.decode_value::<$type>($key)?,)+))

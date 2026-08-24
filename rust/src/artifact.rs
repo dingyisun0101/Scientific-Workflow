@@ -1,4 +1,15 @@
 //! Generic content-addressed input artifacts inside an execution scope.
+//!
+//! This module owns immutable artifact publication and integrity verification:
+//! deterministic naming, SHA-256 identity computation, deduplicating persistence,
+//! descriptor encoding, and strict load-time checks.
+//!
+//! # Boundary
+//!
+//! Artifact handling is intentionally limited to bytes. The module does not own
+//! execution policy, storage stream formats, task scheduling, or scientific
+//! semantics. Callers map descriptors into their own provenance domain and pass
+//! them through `ExecutionScope` paths.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;

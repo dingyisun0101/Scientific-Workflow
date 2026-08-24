@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::error::RuntimeError;
+use super::error::StudyError;
 
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -94,14 +94,14 @@ impl StartPermit<'_> {
     }
 }
 
-pub(crate) struct TimingFailures(Mutex<Option<RuntimeError>>);
+pub(crate) struct TimingFailures(Mutex<Option<StudyError>>);
 
 impl TimingFailures {
     pub(crate) fn new() -> Self {
         Self(Mutex::new(None))
     }
 
-    fn record(&self, error: RuntimeError) {
+    fn record(&self, error: StudyError) {
         let mut first = self
             .0
             .lock()
@@ -111,7 +111,7 @@ impl TimingFailures {
         }
     }
 
-    pub(crate) fn take(&self) -> Option<RuntimeError> {
+    pub(crate) fn take(&self) -> Option<StudyError> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -133,7 +133,7 @@ impl ExpirationWatch {
         failures: Arc<TimingFailures>,
     ) -> Self {
         Self::start(timeout, cancelled, failures, move || {
-            RuntimeError::TaskTimedOut { task, timeout }
+            StudyError::TaskTimedOut { task, timeout }
         })
     }
 
@@ -144,7 +144,7 @@ impl ExpirationWatch {
         failures: Arc<TimingFailures>,
     ) -> Self {
         Self::start(deadline_after, cancelled, failures, move || {
-            RuntimeError::PhaseDeadlineExceeded {
+            StudyError::PhaseDeadlineExceeded {
                 phase,
                 deadline_after,
             }
@@ -158,7 +158,7 @@ impl ExpirationWatch {
         error: F,
     ) -> Self
     where
-        F: FnOnce() -> RuntimeError + Send + 'static,
+        F: FnOnce() -> StudyError + Send + 'static,
     {
         let (completed, receiver) = mpsc::channel();
         let expired = Arc::new(AtomicBool::new(false));

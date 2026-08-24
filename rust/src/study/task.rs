@@ -5,10 +5,9 @@ use std::error::Error;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::error::RuntimeError;
-use super::phase::{Task, TaskDisplayKind, TaskId, TaskKey};
-use super::reporting::{ActivityTask, TaskProgress};
-use crate::configuration::TaskConfig;
+use super::error::StudyError;
+use super::phase::{Task, TaskId, TaskKey};
+use super::renderer::{OneShotTaskHandle, TaskProgressHandle};
 
 /// Error-erased result returned by one task-owned workload.
 pub type TaskResult = Result<(), Box<dyn Error + Send + Sync + 'static>>;
@@ -16,11 +15,11 @@ pub type TaskResult = Result<(), Box<dyn Error + Send + Sync + 'static>>;
 pub(crate) type Workload = Box<dyn FnOnce(&TaskContext) -> TaskResult + Send + 'static>;
 
 enum TaskHandle {
-    Progress(TaskProgress),
-    Activity(ActivityTask),
+    Progress(TaskProgressHandle),
+    OneShot(OneShotTaskHandle),
 }
 
-/// Read-only task identity/configuration plus reporting and cancellation.
+/// Read-only task identity plus reporting and cancellation.
 ///
 /// The context deliberately has no filesystem, storage, artifact, network,
 /// subprocess, or machine-resource operations. The workload owns all such
@@ -31,17 +30,17 @@ pub struct TaskContext {
 }
 
 impl TaskContext {
-    pub(crate) fn progress(task: Task, progress: TaskProgress) -> Self {
+    pub(crate) fn progress(task: Task, progress: TaskProgressHandle) -> Self {
         Self {
             task,
             handle: TaskHandle::Progress(progress),
         }
     }
 
-    pub(crate) fn activity(task: Task, activity: ActivityTask) -> Self {
+    pub(crate) fn one_shot(task: Task, one_shot: OneShotTaskHandle) -> Self {
         Self {
             task,
-            handle: TaskHandle::Activity(activity),
+            handle: TaskHandle::OneShot(one_shot),
         }
     }
 
@@ -60,65 +59,44 @@ impl TaskContext {
         self.task.id()
     }
 
-    /// Borrows the task kind/namespace.
-    pub fn kind(&self) -> &str {
-        self.task.kind()
+    /// Borrows the application-defined task category.
+    pub fn category(&self) -> &str {
+        self.task.category_name()
     }
 
-    /// Borrows the configuration from which this task was generated.
-    pub fn configuration(&self) -> &TaskConfig {
-        self.task.configuration()
+    /// Borrows one application-defined metadata value.
+    pub fn metadata(&self, key: &str) -> Option<&Value> {
+        self.task.metadata_value(key)
     }
 
-    /// Borrows one fixed, swept, or explicit task parameter.
-    pub fn value(&self, key: &str) -> Option<&Value> {
-        self.task.value(key)
-    }
-
-    /// Decodes one required task parameter.
-    pub fn decode_value<T>(&self, key: &str) -> Result<T, RuntimeError>
+    /// Decodes one required metadata value.
+    pub fn decode_metadata<T>(&self, key: &str) -> Result<T, StudyError>
     where
         T: DeserializeOwned,
     {
         self.task.decode_value(key)
     }
 
-    /// Borrows iterative progress for a progress task.
-    pub fn progress_handle(&self) -> Option<&TaskProgress> {
-        match &self.handle {
-            TaskHandle::Progress(progress) => Some(progress),
-            TaskHandle::Activity(_) => None,
-        }
-    }
-
     /// Sets or replaces the target iteration of a progress task.
-    pub fn set_target_iteration(&self, target: u64) -> Result<(), RuntimeError> {
+    pub fn set_target_iteration(&self, target: u64) -> Result<(), StudyError> {
         self.required_progress()?.set_target_iteration(target)
     }
 
     /// Synchronizes a progress task to the authoritative scientific iteration.
-    pub fn set_iteration(&self, iteration: u64) -> Result<(), RuntimeError> {
+    pub fn set_iteration(&self, iteration: u64) -> Result<(), StudyError> {
         self.required_progress()?.set_iteration(iteration)
     }
 
     /// Synchronizes iteration and reports whether work should continue.
-    pub fn should_continue(&self, iteration: u64) -> Result<bool, RuntimeError> {
+    pub fn should_continue(&self, iteration: u64) -> Result<bool, StudyError> {
         self.required_progress()?.should_continue(iteration)
     }
 
-    /// Borrows lifecycle-only reporting for an activity task.
-    pub fn activity_handle(&self) -> Option<&ActivityTask> {
-        match &self.handle {
-            TaskHandle::Progress(_) => None,
-            TaskHandle::Activity(activity) => Some(activity),
-        }
-    }
-
-    /// Reports whether the runtime requested cooperative cancellation.
+    /// Reports whether the study requested cooperative cancellation.
     pub fn is_cancelled(&self) -> bool {
         match &self.handle {
             TaskHandle::Progress(progress) => progress.is_cancelled(),
-            TaskHandle::Activity(activity) => activity.is_cancelled(),
+            TaskHandle::OneShot(one_shot) => one_shot.is_cancelled(),
         }
     }
 
@@ -127,24 +105,24 @@ impl TaskContext {
         let detail = detail.into();
         match &self.handle {
             TaskHandle::Progress(progress) => progress.set_detail(detail),
-            TaskHandle::Activity(activity) => activity.set_detail(detail),
+            TaskHandle::OneShot(one_shot) => one_shot.set_detail(detail),
         }
     }
 
     /// Sends a task-scoped display message.
-    pub fn report(&self, message: impl Into<String>) -> Result<(), RuntimeError> {
+    pub fn report(&self, message: impl Into<String>) -> Result<(), StudyError> {
         let message = message.into();
         match &self.handle {
             TaskHandle::Progress(progress) => progress.report(message),
-            TaskHandle::Activity(activity) => activity.report(message),
+            TaskHandle::OneShot(one_shot) => one_shot.report(message),
         }
     }
 
-    pub(crate) fn complete(self) -> Result<(), RuntimeError> {
+    pub(crate) fn complete(self) -> Result<(), StudyError> {
         match self.handle {
             TaskHandle::Progress(progress) => progress.complete(None),
-            TaskHandle::Activity(activity) => {
-                activity.complete();
+            TaskHandle::OneShot(one_shot) => {
+                one_shot.complete();
                 Ok(())
             }
         }
@@ -154,7 +132,7 @@ impl TaskContext {
         let reason = reason.into();
         match self.handle {
             TaskHandle::Progress(progress) => progress.fail(reason),
-            TaskHandle::Activity(activity) => activity.fail(reason),
+            TaskHandle::OneShot(one_shot) => one_shot.fail(reason),
         }
     }
 
@@ -162,20 +140,19 @@ impl TaskContext {
         let reason = reason.into();
         match self.handle {
             TaskHandle::Progress(progress) => progress.cancel(reason),
-            TaskHandle::Activity(activity) => activity.cancel(reason),
+            TaskHandle::OneShot(one_shot) => one_shot.cancel(reason),
         }
     }
 
-    fn required_progress(&self) -> Result<&TaskProgress, RuntimeError> {
-        self.progress_handle()
-            .ok_or_else(|| RuntimeError::ManagedTaskKindMismatch {
+    fn required_progress(&self) -> Result<&TaskProgressHandle, StudyError> {
+        match &self.handle {
+            TaskHandle::Progress(progress) => Ok(progress),
+            TaskHandle::OneShot(_) => Err(StudyError::TaskModeMismatch {
                 task: self.key().to_string(),
                 requested: "progress",
-                actual: match self.task.display_kind() {
-                    TaskDisplayKind::Progress => "progress",
-                    TaskDisplayKind::Activity => "activity",
-                },
-            })
+                actual: "one-shot",
+            }),
+        }
     }
 }
 
@@ -184,8 +161,8 @@ impl std::fmt::Debug for TaskContext {
         formatter
             .debug_struct("TaskContext")
             .field("key", self.key())
-            .field("kind", &self.kind())
-            .field("display_kind", &self.task.display_kind())
+            .field("category", &self.category())
+            .field("mode", &self.task.mode())
             .finish_non_exhaustive()
     }
 }

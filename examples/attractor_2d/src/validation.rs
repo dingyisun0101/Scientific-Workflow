@@ -5,10 +5,11 @@ use crate::{
     hopf_model::{POINT_FIELD, RADIUS_FIELD},
     recording::CHECKPOINT_STREAM,
 };
-use scientific_workflow::prelude::runtime::TaskContext;
+use scientific_workflow::prelude::study::TaskContext;
 
 pub(crate) fn validate_recording(
     execution: &ExecutionScope,
+    configuration: &ResolvedConfiguration,
     context: &TaskContext,
 ) -> AppResult<()> {
     context.set_detail("checking final checkpoint");
@@ -19,8 +20,8 @@ pub(crate) fn validate_recording(
         .with_json_field::<Vec<f64>>(POINT_FIELD)?
         .with_json_field::<f64>(RADIUS_FIELD)?;
     // The validation phase regenerates the same task ordinal from configuration,
-    // so it can locate phase 1 output without a runtime-owned result map.
-    let directory = execution.task_recording_directory(context.configuration().task_ordinal());
+    // so it can locate phase 1 output without a study-owned result map.
+    let directory = execution.task_recording_directory(configuration.ordinal());
 
     // Validation needs only the latest restart-capable checkpoint. The reader
     // reconstructs named payloads from compact values plus central metadata.
@@ -28,7 +29,7 @@ pub(crate) fn validate_recording(
         .read_latest_state_from_stream(CHECKPOINT_STREAM)?;
     let point = state.payload::<Vec<f64>>(POINT_FIELD)?;
     let radius = state.payload::<f64>(RADIUS_FIELD)?;
-    let expected_iteration: u64 = context.decode_value("/step_count")?;
+    let expected_iteration: u64 = configuration.decode_value("/step_count")?;
 
     // Check durable scientific invariants rather than rerunning the solver.
     if point.len() != 2 || *radius != point[0].hypot(point[1]) {

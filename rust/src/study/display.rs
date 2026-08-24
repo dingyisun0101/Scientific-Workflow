@@ -1,11 +1,17 @@
-//! Runtime-level phase headings and line-oriented lifecycle records.
+//! Study-level phase headings and line-oriented lifecycle records.
+//!
+//! # Boundary
+//!
+//! This module owns only rendering text and input handoff for one study execution.
+//! It does not choose scheduling policy, drive workloads, persist data, or track
+//! application metadata.
 
 use std::io::{self, BufRead, Write};
 
 use super::phase::{Phase, PhaseId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RuntimeOutput {
+pub(crate) enum DisplayMode {
     Auto,
     Terminal,
     Plain,
@@ -23,7 +29,7 @@ pub(crate) fn phase_heading(phase: &Phase, position: usize, total: usize) -> Str
             .collect::<Vec<_>>()
             .join(",")
     };
-    let timing = timing_heading(phase);
+    let timing = phase_timing(phase, TimingOutputStyle::Heading);
     format!(
         "Phase {position} of {total} — [{}] {} · tasks={} · active≤{} · queue={}{timing} · failure={} · confirm={} · dependencies={dependencies}",
         phase.id(),
@@ -40,9 +46,9 @@ pub(crate) fn phase_heading(phase: &Phase, position: usize, total: usize) -> Str
     )
 }
 
-pub(crate) fn phase_start(output: RuntimeOutput, phase: &Phase, position: usize, total: usize) {
-    if output == RuntimeOutput::Plain {
-        let timing = timing_plain(phase);
+pub(crate) fn phase_start(output: DisplayMode, phase: &Phase, position: usize, total: usize) {
+    if output == DisplayMode::Plain {
+        let timing = phase_timing(phase, TimingOutputStyle::Plain);
         eprintln!(
             "[phase-start] position={position}/{total} phase={} label={} tasks={} max_active_tasks={} prepared_task_queue_capacity={}{timing} failure_policy={} require_confirm={}",
             phase.id(),
@@ -56,35 +62,30 @@ pub(crate) fn phase_start(output: RuntimeOutput, phase: &Phase, position: usize,
     }
 }
 
-fn timing_heading(phase: &Phase) -> String {
-    if phase.delay_per_task().is_none()
-        && phase.task_timeout().is_none()
-        && phase.deadline_after().is_none()
-    {
-        String::new()
-    } else {
-        format!(
-            " · delay={:?} · task-timeout={:?} · deadline={:?}",
-            phase.delay_per_task(),
-            phase.task_timeout(),
-            phase.deadline_after(),
-        )
-    }
+enum TimingOutputStyle {
+    Heading,
+    Plain,
 }
 
-fn timing_plain(phase: &Phase) -> String {
-    if phase.delay_per_task().is_none()
-        && phase.task_timeout().is_none()
-        && phase.deadline_after().is_none()
-    {
+fn phase_timing(phase: &Phase, style: TimingOutputStyle) -> String {
+    let delay = phase.delay_per_task();
+    let task_timeout = phase.task_timeout();
+    let deadline = phase.deadline_after();
+    if delay.is_none() && task_timeout.is_none() && deadline.is_none() {
         String::new()
     } else {
-        format!(
-            " delay_per_task={:?} task_timeout={:?} deadline_after={:?}",
-            phase.delay_per_task(),
-            phase.task_timeout(),
-            phase.deadline_after(),
-        )
+        match style {
+            TimingOutputStyle::Heading => {
+                format!(
+                    " · delay={:?} · task-timeout={:?} · deadline={:?}",
+                    delay, task_timeout, deadline,
+                )
+            }
+            TimingOutputStyle::Plain => format!(
+                " delay_per_task={:?} task_timeout={:?} deadline_after={:?}",
+                delay, task_timeout, deadline,
+            ),
+        }
     }
 }
 
@@ -115,8 +116,8 @@ pub(crate) fn confirm_transition(current: PhaseId, next: &Phase) -> io::Result<b
     }
 }
 
-pub(crate) fn phase_complete(output: RuntimeOutput, phase: PhaseId, label: &str, success: bool) {
-    if output == RuntimeOutput::Plain {
+pub(crate) fn phase_complete(output: DisplayMode, phase: PhaseId, label: &str, success: bool) {
+    if output == DisplayMode::Plain {
         eprintln!(
             "[phase-complete] phase={} label={} status={}",
             phase,
@@ -126,10 +127,10 @@ pub(crate) fn phase_complete(output: RuntimeOutput, phase: PhaseId, label: &str,
     }
 }
 
-pub(crate) fn runtime_complete(output: RuntimeOutput, phases: usize, tasks: usize, success: bool) {
-    if output != RuntimeOutput::Hidden {
+pub(crate) fn study_complete(output: DisplayMode, phases: usize, tasks: usize, success: bool) {
+    if output != DisplayMode::Hidden {
         eprintln!(
-            "[runtime] status={} phases={} tasks={}",
+            "[study] status={} phases={} tasks={}",
             if success { "completed" } else { "failed" },
             phases,
             tasks,

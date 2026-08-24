@@ -45,16 +45,16 @@ fn parse_cartesian(path: &Path, axes: StrictValue) -> Result<SweepPlan, Configur
     let mut dimensions = parse_nested_axes(path, entries)?;
     validate_dimension_paths(path, &dimensions)?;
 
-    let mut task_count = 1_u64;
+    let mut combination_count = 1_u64;
     for dimension in dimensions.iter_mut().rev() {
-        dimension.stride = task_count;
+        dimension.stride = combination_count;
         let length = u64::try_from(dimension.candidates.len()).map_err(|_| {
-            ConfigurationError::TaskCountOverflow {
+            ConfigurationError::CombinationCountOverflow {
                 axis: dimension.path.identifier().to_owned(),
             }
         })?;
-        task_count = task_count.checked_mul(length).ok_or_else(|| {
-            ConfigurationError::TaskCountOverflow {
+        combination_count = combination_count.checked_mul(length).ok_or_else(|| {
+            ConfigurationError::CombinationCountOverflow {
                 axis: dimension.path.identifier().to_owned(),
             }
         })?;
@@ -65,7 +65,7 @@ fn parse_cartesian(path: &Path, axes: StrictValue) -> Result<SweepPlan, Configur
         .collect();
     Ok(SweepPlan::cartesian(
         dimensions,
-        task_count,
+        combination_count,
         selectable_paths,
     ))
 }

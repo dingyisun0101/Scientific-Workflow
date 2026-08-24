@@ -491,19 +491,19 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         clones.load(Ordering::SeqCst)
     );
 
-    let project = ProjectConfig::load(
+    let configurations = ConfigurationSpace::load(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/configuration/cartesian_project"),
+            .join("tests/fixtures/configuration/cartesian_study/config"),
     )
     .unwrap();
-    let task = project.parameters().task(0).unwrap();
+    let configuration = configurations.combination(0).unwrap();
     let task_metadata_run = workspace.root.join("task-metadata-run");
     SystemStateWriter::builder(&task_metadata_run, &live)
         .with_user_metadata(Map::from_iter([(
             "experiment".to_owned(),
             Value::from("metadata-merge"),
         )]))
-        .with_task_parameters(&task)
+        .with_configuration(&configuration)
         .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(4_096).unwrap(),
             NonZeroU64::new(16_384).unwrap(),
@@ -521,7 +521,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     let task_metadata: Value =
         serde_json::from_slice(&fs::read(task_metadata_run.join("metadata.json")).unwrap())
             .unwrap();
-    assert_eq!(task_metadata["user_metadata"]["task_ordinal"], 0);
+    assert_eq!(task_metadata["user_metadata"]["ordinal"], 0);
     assert_eq!(task_metadata["user_metadata"]["temperature"], 280.0);
     assert_eq!(task_metadata["user_metadata"]["seed"], 7);
     assert_eq!(
@@ -533,7 +533,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         task_metadata["streams"][0]["sampling_interval"],
         serde_json::json!({"iterations": 1})
     );
-    println!("[task-metadata] task_ordinal=0 temperature=280 seed=7");
+    println!("[task-metadata] ordinal=0 temperature=280 seed=7");
     println!("[result] storage_workflow=passed");
 }
 

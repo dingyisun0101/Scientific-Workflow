@@ -2,13 +2,13 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
-use super::error::RuntimeError;
-use super::execution_record::ExecutionRecorder;
-use super::phase::{Phase, PhaseFailurePolicy, Task, TaskDisplayKind};
-use super::reporting::RuntimeReporter;
+use super::error::StudyError;
+use super::phase::{Phase, PhaseFailurePolicy, Task, TaskKey, TaskMode};
+use super::record::StudyRecorder;
+use super::renderer::StudyRenderer;
 use super::task::TaskContext;
 use super::timing::{ExpirationWatch, StartGate, TimingFailures};
 
@@ -19,9 +19,9 @@ struct ScheduledTask {
 
 pub(crate) fn execute_phase(
     phase: Phase,
-    reporter: &RuntimeReporter,
-    execution: &ExecutionRecorder,
-) -> Result<(), RuntimeError> {
+    renderer: &StudyRenderer,
+    execution: &StudyRecorder,
+) -> Result<(), StudyError> {
     let worker_count = phase.max_active_tasks();
     let prepared_task_queue_capacity = phase.prepared_task_queue_capacity();
     let failure_policy = phase.failure_policy();
@@ -35,7 +35,7 @@ pub(crate) fn execute_phase(
     let work_receiver = Arc::new(Mutex::new(work_receiver));
     let (result_sender, result_receiver) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
-    let cancellation = reporter.cancellation_flag();
+    let cancellation = renderer.cancellation_flag();
     let start_gate = Arc::new(StartGate::new(delay_per_task));
     let timing_failures = Arc::new(TimingFailures::new());
     let deadline_watch = deadline_after.map(|deadline_after| {
@@ -46,17 +46,17 @@ pub(crate) fn execute_phase(
             Arc::clone(&timing_failures),
         )
     });
-    for task in tasks.iter().filter(|task| task.is_reused()) {
-        reporter.mark_reused(task.key())?;
+    for task in tasks.iter().filter(|task| task.is_completed()) {
+        renderer.mark_completed(task.key())?;
     }
     if delay_per_task.is_some() {
         for (rank, task) in tasks
             .iter()
-            .filter(|task| !task.is_reused())
+            .filter(|task| !task.is_completed())
             .enumerate()
             .skip(1)
         {
-            reporter.mark_delayed(task.key(), rank)?;
+            renderer.mark_delayed(task.key(), rank)?;
         }
     }
     thread::scope(|scope| {
@@ -81,62 +81,60 @@ pub(crate) fn execute_phase(
                     let ScheduledTask { rank, mut task } = scheduled;
                     let key = task.key().clone();
                     if stop.load(Ordering::Acquire) {
-                        let _ = reporter.mark_skipped(&key);
-                        let _ = results.send(Ok(key));
+                        mark_task_skipped(&renderer, &results, &key);
                         continue;
                     }
-                    if reporter.is_cancelled() {
-                        let _ = reporter.mark_cancelled(&key);
-                        let _ = results.send(Err(RuntimeError::Cancelled));
+                    if renderer.is_cancelled() {
+                        mark_task_cancelled(&renderer, &results, &key);
                         continue;
                     }
                     let Some(start_permit) = start_gate.wait_for_turn(rank, &cancellation, &stop)
                     else {
-                        if reporter.is_cancelled() {
-                            let _ = reporter.mark_cancelled(&key);
-                            let _ = results.send(Err(RuntimeError::Cancelled));
+                        if renderer.is_cancelled() {
+                            mark_task_cancelled(&renderer, &results, &key);
                         } else {
-                            let _ = reporter.mark_skipped(&key);
-                            let _ = results.send(Ok(key));
+                            mark_task_skipped(&renderer, &results, &key);
                         }
                         continue;
                     };
                     if stop.load(Ordering::Acquire) {
-                        let _ = reporter.mark_skipped(&key);
-                        let _ = results.send(Ok(key));
+                        mark_task_skipped(&renderer, &results, &key);
                         continue;
                     }
-                    if reporter.is_cancelled() {
-                        let _ = reporter.mark_cancelled(&key);
-                        let _ = results.send(Err(RuntimeError::Cancelled));
+                    if renderer.is_cancelled() {
+                        mark_task_cancelled(&renderer, &results, &key);
                         continue;
                     }
                     let Some(workload) = task.take_workload() else {
-                        let _ = results.send(Err(RuntimeError::MissingTaskWorkload {
-                            task: key.to_string(),
-                        }));
-                        stop.store(true, Ordering::Release);
-                        if failure_policy == PhaseFailurePolicy::FailFast {
-                            reporter.request_cancellation();
-                        }
+                        signal_task_failure(
+                            &renderer,
+                            &results,
+                            &stop,
+                            failure_policy,
+                            StudyError::MissingTaskWorkload {
+                                task: key.to_string(),
+                            },
+                        );
                         continue;
                     };
-                    let context = match task.display_kind() {
-                        TaskDisplayKind::Progress => reporter
+                    let context = match task.mode() {
+                        TaskMode::Progress => renderer
                             .start_progress(&key, 0, None)
                             .map(|progress| TaskContext::progress(task, progress)),
-                        TaskDisplayKind::Activity => reporter
-                            .start_activity(&key)
-                            .map(|activity| TaskContext::activity(task, activity)),
+                        TaskMode::OneShot => renderer
+                            .start_one_shot(&key)
+                            .map(|one_shot| TaskContext::one_shot(task, one_shot)),
                     };
                     let context = match context {
                         Ok(context) => context,
                         Err(error) => {
-                            stop.store(true, Ordering::Release);
-                            if failure_policy == PhaseFailurePolicy::FailFast {
-                                reporter.request_cancellation();
-                            }
-                            let _ = results.send(Err(error));
+                            signal_task_failure(
+                                &renderer,
+                                &results,
+                                &stop,
+                                failure_policy,
+                                error,
+                            );
                             continue;
                         }
                     };
@@ -145,17 +143,19 @@ pub(crate) fn execute_phase(
                         Ok(timer) => timer,
                         Err(error) => {
                             context.fail(error.to_string());
-                            stop.store(true, Ordering::Release);
-                            if failure_policy == PhaseFailurePolicy::FailFast {
-                                reporter.request_cancellation();
-                            }
-                            let _ = results.send(Err(error));
+                            signal_task_failure(
+                                &renderer,
+                                &results,
+                                &stop,
+                                failure_policy,
+                                error,
+                            );
                             continue;
                         }
                     };
                     if context.is_cancelled() {
                         context.cancel("cancelled before task execution");
-                        let _ = results.send(Err(RuntimeError::Cancelled));
+                        let _ = report_task_outcome(&results, Err(StudyError::Cancelled));
                         continue;
                     }
                     let timeout_watch = task_timeout.map(|timeout| {
@@ -170,45 +170,55 @@ pub(crate) fn execute_phase(
                     let timed_out = timeout_watch.is_some_and(ExpirationWatch::finish);
                     if timed_out {
                         context.cancel("task timeout exceeded");
-                        stop.store(true, Ordering::Release);
-                        let _ = results.send(Err(RuntimeError::Cancelled));
+                        signal_task_failure(
+                            &renderer,
+                            &results,
+                            &stop,
+                            failure_policy,
+                            StudyError::Cancelled,
+                        );
                         continue;
                     }
                     match outcome {
                         Ok(Ok(())) => {
                             let result = if context.is_cancelled() {
                                 context.cancel("cancelled");
-                                Err(RuntimeError::Cancelled)
+                                Err(StudyError::Cancelled)
                             } else {
                                 context.complete().map(|()| key)
                             };
-                            let _ = results.send(result);
+                            let _ = match result {
+                                Ok(key) => report_task_outcome(&results, Ok(key)),
+                                Err(error) => report_task_outcome(&results, Err(error)),
+                            };
                         }
                         Ok(Err(source)) => {
-                            let cancelled = context.is_cancelled();
-                            let error = if cancelled {
+                            if context.is_cancelled() {
                                 context.cancel(source.to_string());
-                                RuntimeError::Cancelled
+                                let _ = report_task_outcome(&results, Err(StudyError::Cancelled));
                             } else {
                                 context.fail(source.to_string());
-                                stop.store(true, Ordering::Release);
-                                if failure_policy == PhaseFailurePolicy::FailFast {
-                                    reporter.request_cancellation();
-                                }
-                                RuntimeError::TaskWorkload {
-                                    task: key.to_string(),
-                                    source,
-                                }
-                            };
-                            let _ = results.send(Err(error));
+                                signal_task_failure(
+                                    &renderer,
+                                    &results,
+                                    &stop,
+                                    failure_policy,
+                                    StudyError::TaskWorkload {
+                                        task: key.to_string(),
+                                        source,
+                                    },
+                                );
+                            }
                         }
                         Err(_) => {
                             context.fail("task workload panicked");
-                            stop.store(true, Ordering::Release);
-                            if failure_policy == PhaseFailurePolicy::FailFast {
-                                reporter.request_cancellation();
-                            }
-                            let _ = results.send(Err(RuntimeError::SchedulerPanicked));
+                            signal_task_failure(
+                                &renderer,
+                                &results,
+                                &stop,
+                                failure_policy,
+                                StudyError::SchedulerPanicked,
+                            );
                         }
                     }
                 }
@@ -218,15 +228,15 @@ pub(crate) fn execute_phase(
 
         for (rank, task) in tasks
             .into_iter()
-            .filter(|task| !task.is_reused())
+            .filter(|task| !task.is_completed())
             .enumerate()
         {
             if stop.load(Ordering::Acquire) {
-                let _ = reporter.mark_skipped(task.key());
-            } else if reporter.is_cancelled() {
-                let _ = reporter.mark_cancelled(task.key());
+                let _ = renderer.mark_skipped(task.key());
+            } else if renderer.is_cancelled() {
+                let _ = renderer.mark_cancelled(task.key());
             } else if let Err(error) = work_sender.send(ScheduledTask { rank, task }) {
-                let _ = reporter.mark_skipped(error.0.task.key());
+                let _ = renderer.mark_skipped(error.0.task.key());
             }
         }
         drop(work_sender);
@@ -247,9 +257,48 @@ pub(crate) fn execute_phase(
         Err(error)
     } else if let Some(error) = first_error {
         Err(error)
-    } else if reporter.is_cancelled() {
-        Err(RuntimeError::Cancelled)
+    } else if renderer.is_cancelled() {
+        Err(StudyError::Cancelled)
     } else {
         Ok(())
     }
+}
+
+fn mark_task_skipped(
+    renderer: &StudyRenderer,
+    results: &mpsc::Sender<Result<TaskKey, StudyError>>,
+    key: &TaskKey,
+) {
+    let _ = renderer.mark_skipped(key);
+    let _ = report_task_outcome(results, Ok(key.clone()));
+}
+
+fn mark_task_cancelled(
+    renderer: &StudyRenderer,
+    results: &mpsc::Sender<Result<TaskKey, StudyError>>,
+    key: &TaskKey,
+) {
+    let _ = renderer.mark_cancelled(key);
+    let _ = report_task_outcome(results, Err(StudyError::Cancelled));
+}
+
+fn signal_task_failure(
+    renderer: &StudyRenderer,
+    results: &mpsc::Sender<Result<TaskKey, StudyError>>,
+    stop: &AtomicBool,
+    failure_policy: PhaseFailurePolicy,
+    error: StudyError,
+) {
+    stop.store(true, Ordering::Release);
+    if failure_policy == PhaseFailurePolicy::FailFast {
+        renderer.request_cancellation();
+    }
+    let _ = report_task_outcome(results, Err(error));
+}
+
+fn report_task_outcome(
+    results: &mpsc::Sender<Result<TaskKey, StudyError>>,
+    outcome: Result<TaskKey, StudyError>,
+) -> Result<(), mpsc::SendError<Result<TaskKey, StudyError>>> {
+    results.send(outcome)
 }

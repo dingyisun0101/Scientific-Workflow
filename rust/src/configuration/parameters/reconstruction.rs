@@ -3,9 +3,9 @@
 use serde_json::Value;
 
 use super::super::parameter_tree::reconstruct;
-use super::ParameterSpaceInner;
+use super::ConfigurationSpaceInner;
 
-pub(super) fn document(inner: &ParameterSpaceInner, ordinal: u64) -> Value {
+pub(super) fn document(inner: &ConfigurationSpaceInner, ordinal: u64) -> Value {
     reconstruct(
         inner
             .fixed

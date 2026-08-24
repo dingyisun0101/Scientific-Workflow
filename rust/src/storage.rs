@@ -53,6 +53,13 @@
 //! [`StateSeries`](crate::time_series::StateSeries) values. Decoder
 //! implementations remain per payload type and registrations remain per exact
 //! state key. Latest-state reads verify and decode only the newest chunk.
+//!
+//! # Boundary
+//!
+//! Storage owns durable mechanics: run directories, stream chunking, queue
+//! flushing, metadata transitions, and reconstruction integrity checks. Callers
+//! own simulation evolution, stream schemas, payload codecs, and scheduling.
+//! Storage does not define modeling APIs, RNG behavior, or artifact semantics.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -67,7 +74,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
-use crate::configuration::TaskParameters;
+use crate::configuration::ResolvedConfiguration;
 use crate::system_state::{StateSchemaSource, SystemState, SystemStateSchema};
 
 mod error;
@@ -569,21 +576,19 @@ impl SystemStateWriterBuilder {
         self
     }
 
-    /// Merges one resolved task dictionary into the recording's user metadata.
+    /// Merges one resolved configuration into the recording's user metadata.
     ///
     /// Fixed and swept values retain their resolved JSON representation.
-    /// The synthetic `task_ordinal` entry is always set from the task itself and
-    /// therefore replaces any same-named input entry. Task values also replace
+    /// The synthetic `ordinal` entry is always set from the configuration and
+    /// therefore replaces any same-named input entry. Configuration values also replace
     /// same-named caller metadata, while unrelated metadata and RNG records are
     /// preserved. On a key collision, the most recently supplied source wins.
     #[must_use]
-    pub fn with_task_parameters(mut self, parameters: &TaskParameters) -> Self {
+    pub fn with_configuration(mut self, configuration: &ResolvedConfiguration) -> Self {
         self.user_metadata
-            .extend(parameters.resolved_object().clone());
-        self.user_metadata.insert(
-            "task_ordinal".to_owned(),
-            Value::from(parameters.task_ordinal()),
-        );
+            .extend(configuration.resolved_object().clone());
+        self.user_metadata
+            .insert("ordinal".to_owned(), Value::from(configuration.ordinal()));
         self
     }
 
@@ -783,7 +788,7 @@ impl SystemStateWriter {
     /// terminal boundary.
     ///
     /// Terminal values are stored separately from immutable creation-time user
-    /// metadata and therefore cannot silently replace task parameters.
+    /// metadata and therefore cannot silently replace configuration parameters.
     pub fn complete_recording_with_terminal_metadata(
         mut self,
         terminal_metadata: Map<String, Value>,
@@ -1258,7 +1263,7 @@ struct PreparedStateStream {
     writer: StateStreamStorageConfig,
 }
 
-/// Runtime sampling policy and encoder for one logical stream.
+/// Sampling policy and encoder for one logical stream.
 struct ScheduledStateStream {
     encoder: JsonStateRecordEncoder,
     sampling_interval: SamplingInterval,

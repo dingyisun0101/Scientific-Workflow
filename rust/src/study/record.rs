@@ -1,4 +1,4 @@
-//! Always-on, compact runtime lifecycle recording.
+//! Always-on, compact study lifecycle recording.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -9,16 +9,16 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use super::error::RuntimeError;
-use super::phase::{Phase, PhaseId, TaskDisplayKind, TaskKey};
-use super::reporting::{ProgressSummary, TaskExecutionSnapshot};
+use super::error::StudyError;
+use super::phase::{Phase, PhaseId, TaskKey, TaskMode};
+use super::renderer::{ProgressSummary, TaskExecutionSnapshot};
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
 
-const EXECUTION_RECORD_FORMAT: &str = "scientific-workflow.execution-record.v1";
+const STUDY_RECORD_FORMAT: &str = "scientific-workflow.study-record.v1";
 
-/// Durable lifecycle summary for one runtime invocation.
+/// Durable lifecycle summary for one study execution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ExecutionRecord {
+pub struct StudyRecord {
     format: &'static str,
     status: &'static str,
     started_at_utc: String,
@@ -28,12 +28,12 @@ pub struct ExecutionRecord {
     duration_ns: Option<u64>,
     phase_count: usize,
     task_count: usize,
-    phases: Vec<PhaseExecutionRecord>,
+    phases: Vec<PhaseRecord>,
 }
 
 /// Lifecycle facts for one selected phase.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PhaseExecutionRecord {
+pub struct PhaseRecord {
     id: u64,
     label: String,
     status: &'static str,
@@ -43,18 +43,17 @@ pub struct PhaseExecutionRecord {
     ended_at_utc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ns: Option<u64>,
-    progress: ExecutionProgressCounts,
-    tasks: Vec<TaskExecutionRecord>,
+    progress: TaskCounts,
+    tasks: Vec<TaskRecord>,
 }
 
 /// Lifecycle facts for one selected task.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct TaskExecutionRecord {
+pub struct TaskRecord {
     id: String,
-    kind: String,
+    category: String,
     label: String,
-    configuration_ordinal: u64,
-    display_kind: &'static str,
+    mode: &'static str,
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     started_at_utc: Option<String>,
@@ -71,39 +70,38 @@ pub struct TaskExecutionRecord {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-struct ExecutionProgressCounts {
+struct TaskCounts {
     total: u64,
     completed: u64,
-    reused: u64,
     failed: u64,
     cancelled: u64,
     skipped: u64,
 }
 
-pub(crate) struct ExecutionRecorder {
+pub(crate) struct StudyRecorder {
     inner: Arc<Mutex<RecorderState>>,
 }
 
 struct RecorderState {
     path: PathBuf,
-    record: ExecutionRecord,
-    runtime_started: Instant,
+    record: StudyRecord,
+    study_started: Instant,
     phase_positions: HashMap<PhaseId, usize>,
     task_positions: HashMap<TaskKey, (usize, usize)>,
     phase_started: HashMap<PhaseId, Instant>,
     finished: bool,
 }
 
-pub(crate) struct TaskExecutionTimer {
+pub(crate) struct TaskTimer {
     recorder: Arc<Mutex<RecorderState>>,
     key: TaskKey,
     started: Instant,
 }
 
-impl ExecutionRecorder {
-    pub(crate) fn start(path: PathBuf, phases: &[&Phase]) -> Result<Self, RuntimeError> {
-        let started_at_utc = timestamp("start runtime execution record")?;
-        let runtime_started = Instant::now();
+impl StudyRecorder {
+    pub(crate) fn start(path: PathBuf, phases: &[&Phase]) -> Result<Self, StudyError> {
+        let started_at_utc = timestamp("start study execution record")?;
+        let study_started = Instant::now();
         let mut phase_positions = HashMap::with_capacity(phases.len());
         let mut task_positions = HashMap::new();
         let mut phase_records = Vec::with_capacity(phases.len());
@@ -113,14 +111,13 @@ impl ExecutionRecorder {
             let mut tasks = Vec::with_capacity(phase.tasks().len());
             for (task_position, task) in phase.tasks().iter().enumerate() {
                 task_positions.insert(task.key().clone(), (phase_position, task_position));
-                tasks.push(TaskExecutionRecord {
+                tasks.push(TaskRecord {
                     id: task.id().to_string(),
-                    kind: task.kind().to_owned(),
+                    category: task.category_name().to_owned(),
                     label: task.label().to_owned(),
-                    configuration_ordinal: task.configuration_ordinal(),
-                    display_kind: match task.display_kind() {
-                        TaskDisplayKind::Progress => "progress",
-                        TaskDisplayKind::Activity => "activity",
+                    mode: match task.mode() {
+                        TaskMode::Progress => "progress",
+                        TaskMode::OneShot => "one-shot",
                     },
                     status: "pending",
                     started_at_utc: None,
@@ -132,22 +129,22 @@ impl ExecutionRecorder {
                 });
             }
             task_count += tasks.len();
-            phase_records.push(PhaseExecutionRecord {
+            phase_records.push(PhaseRecord {
                 id: phase.id().get(),
                 label: phase.label().to_owned(),
                 status: "pending",
                 started_at_utc: None,
                 ended_at_utc: None,
                 duration_ns: None,
-                progress: ExecutionProgressCounts::default(),
+                progress: TaskCounts::default(),
                 tasks,
             });
         }
         let recorder = Self {
             inner: Arc::new(Mutex::new(RecorderState {
                 path,
-                record: ExecutionRecord {
-                    format: EXECUTION_RECORD_FORMAT,
+                record: StudyRecord {
+                    format: STUDY_RECORD_FORMAT,
                     status: "running",
                     started_at_utc,
                     ended_at_utc: None,
@@ -156,7 +153,7 @@ impl ExecutionRecorder {
                     task_count,
                     phases: phase_records,
                 },
-                runtime_started,
+                study_started,
                 phase_positions,
                 task_positions,
                 phase_started: HashMap::with_capacity(phases.len()),
@@ -167,7 +164,7 @@ impl ExecutionRecorder {
         Ok(recorder)
     }
 
-    pub(crate) fn phase_started(&self, id: PhaseId) -> Result<(), RuntimeError> {
+    pub(crate) fn phase_started(&self, id: PhaseId) -> Result<(), StudyError> {
         let timestamp = timestamp("record phase start")?;
         let mut state = lock(&self.inner);
         let position = state.phase_positions[&id];
@@ -177,7 +174,7 @@ impl ExecutionRecorder {
         persist_state(&state)
     }
 
-    pub(crate) fn task_started(&self, key: &TaskKey) -> Result<TaskExecutionTimer, RuntimeError> {
+    pub(crate) fn task_started(&self, key: &TaskKey) -> Result<TaskTimer, StudyError> {
         let timestamp = timestamp("record task start")?;
         let started = Instant::now();
         let mut state = lock(&self.inner);
@@ -191,7 +188,7 @@ impl ExecutionRecorder {
         task.status = "running";
         task.started_at_utc = Some(timestamp);
         task.start_offset_ns = offset;
-        Ok(TaskExecutionTimer {
+        Ok(TaskTimer {
             recorder: Arc::clone(&self.inner),
             key: key.clone(),
             started,
@@ -204,7 +201,7 @@ impl ExecutionRecorder {
         success: bool,
         progress: &ProgressSummary,
         tasks: Vec<TaskExecutionSnapshot>,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), StudyError> {
         let ended_at_utc = timestamp("record phase completion")?;
         let mut state = lock(&self.inner);
         for snapshot in tasks {
@@ -227,23 +224,23 @@ impl ExecutionRecorder {
         persist_state(&state)
     }
 
-    pub(crate) fn finish(&self, success: bool) -> Result<ExecutionRecord, RuntimeError> {
-        let ended_at_utc = timestamp("finish runtime execution record")?;
+    pub(crate) fn finish(&self, success: bool) -> Result<StudyRecord, StudyError> {
+        let ended_at_utc = timestamp("finish study execution record")?;
         let mut state = lock(&self.inner);
         state.record.status = if success { "completed" } else { "failed" };
         state.record.ended_at_utc = Some(ended_at_utc);
-        state.record.duration_ns = Some(nanoseconds(state.runtime_started.elapsed()));
+        state.record.duration_ns = Some(nanoseconds(state.study_started.elapsed()));
         state.finished = true;
         persist_state(&state)?;
         Ok(state.record.clone())
     }
 
-    fn persist(&self) -> Result<(), RuntimeError> {
+    fn persist(&self) -> Result<(), StudyError> {
         persist_state(&lock(&self.inner))
     }
 }
 
-impl Drop for ExecutionRecorder {
+impl Drop for StudyRecorder {
     fn drop(&mut self) {
         let mut state = lock(&self.inner);
         if state.finished {
@@ -251,13 +248,13 @@ impl Drop for ExecutionRecorder {
         }
         state.record.status = "failed";
         state.record.ended_at_utc = utc_now_rfc3339().ok();
-        state.record.duration_ns = Some(nanoseconds(state.runtime_started.elapsed()));
+        state.record.duration_ns = Some(nanoseconds(state.study_started.elapsed()));
         let _ = persist_state(&state);
         state.finished = true;
     }
 }
 
-impl Drop for TaskExecutionTimer {
+impl Drop for TaskTimer {
     fn drop(&mut self) {
         let ended_at_utc = utc_now_rfc3339().ok();
         let mut state = lock(&self.recorder);
@@ -268,38 +265,37 @@ impl Drop for TaskExecutionTimer {
     }
 }
 
-fn counts(summary: &ProgressSummary) -> ExecutionProgressCounts {
-    ExecutionProgressCounts {
+fn counts(summary: &ProgressSummary) -> TaskCounts {
+    TaskCounts {
         total: summary.total(),
         completed: summary.completed(),
-        reused: summary.reused(),
         failed: summary.failed(),
         cancelled: summary.cancelled(),
         skipped: summary.skipped(),
     }
 }
 
-fn timestamp(operation: &'static str) -> Result<String, RuntimeError> {
-    utc_now_rfc3339().map_err(|source| RuntimeError::ExecutionRecordTimestamp { operation, source })
+fn timestamp(operation: &'static str) -> Result<String, StudyError> {
+    utc_now_rfc3339().map_err(|source| StudyError::StudyRecordTimestamp { operation, source })
 }
 
 fn nanoseconds(duration: std::time::Duration) -> u64 {
     duration_nanoseconds(duration).unwrap_or(u64::MAX)
 }
 
-fn persist_state(state: &RecorderState) -> Result<(), RuntimeError> {
+fn persist_state(state: &RecorderState) -> Result<(), StudyError> {
     let path = &state.path;
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent).map_err(|source| RuntimeError::WriteExecutionRecord {
+        fs::create_dir_all(parent).map_err(|source| StudyError::WriteStudyRecord {
             path: path.clone(),
             source,
         })?;
     }
     let mut bytes = serde_json::to_vec_pretty(&state.record)
-        .map_err(|source| RuntimeError::SerializeExecutionRecord { source })?;
+        .map_err(|source| StudyError::SerializeStudyRecord { source })?;
     bytes.push(b'\n');
     let temporary = temporary_path(path);
     let mut file = OpenOptions::new()
@@ -307,17 +303,17 @@ fn persist_state(state: &RecorderState) -> Result<(), RuntimeError> {
         .create(true)
         .truncate(true)
         .open(&temporary)
-        .map_err(|source| RuntimeError::WriteExecutionRecord {
+        .map_err(|source| StudyError::WriteStudyRecord {
             path: temporary.clone(),
             source,
         })?;
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|source| RuntimeError::WriteExecutionRecord {
+        .map_err(|source| StudyError::WriteStudyRecord {
             path: temporary.clone(),
             source,
         })?;
-    fs::rename(&temporary, path).map_err(|source| RuntimeError::WriteExecutionRecord {
+    fs::rename(&temporary, path).map_err(|source| StudyError::WriteStudyRecord {
         path: path.clone(),
         source,
     })?;
@@ -327,7 +323,7 @@ fn persist_state(state: &RecorderState) -> Result<(), RuntimeError> {
     {
         File::open(parent)
             .and_then(|directory| directory.sync_all())
-            .map_err(|source| RuntimeError::WriteExecutionRecord {
+            .map_err(|source| StudyError::WriteStudyRecord {
                 path: parent.to_path_buf(),
                 source,
             })?;
@@ -339,7 +335,7 @@ fn temporary_path(path: &Path) -> PathBuf {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("execution-record.json");
+        .unwrap_or("study-record.json");
     path.with_file_name(format!(".{name}.tmp"))
 }
 

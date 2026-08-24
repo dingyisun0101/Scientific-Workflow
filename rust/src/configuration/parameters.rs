@@ -1,10 +1,10 @@
 //! Nested fixed and swept parameter definitions with deterministic expansion.
 
-mod resolved;
+mod reconstruction;
+mod resolved_configuration;
 mod space;
-mod task;
 
-pub use space::ParameterSpace;
-pub use task::{TaskParameters, TaskParametersIter};
+pub use resolved_configuration::{ConfigurationIter, ResolvedConfiguration};
+pub use space::ConfigurationSpace;
 
-pub(crate) use space::ParameterSpaceInner;
+pub(crate) use space::ConfigurationSpaceInner;

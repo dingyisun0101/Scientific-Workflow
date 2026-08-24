@@ -2,8 +2,15 @@
 //!
 //! Workflow does not generate keys, derive streams, select algorithms, sample
 //! distributions, or maintain RNG cursors. Applications perform those tasks
-//! and use [`RngRecord`] only to persist enough exact identity for
-//! reproducibility and continuation validation.
+//! and use [`RngRecord`] only to persist enough exact identity for reproducibility
+//! and continuation validation.
+//!
+//! # Boundary
+//!
+//! This module owns the metadata schema and deduplication rules for RNG records in
+//! recording metadata only. It does not create random streams or enforce numeric
+//! reproducibility strategy; the caller controls RNG construction and state
+//! restoration order.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

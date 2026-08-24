@@ -1,3 +1,9 @@
+//! Directory-scope internals for execution boundaries.
+//!
+//! This module enforces one boundary contract: safe path component validation plus
+//! deterministic scope naming. It is an internal implementation detail used by
+//! `ExecutionScope`; consumers should treat `ExecutionScope` as the public entry.
+
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,7 +14,7 @@ use super::error::ExecutionScopeError;
 
 static EXECUTION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// One created or reopened project-execution directory.
+/// One created or reopened study-execution directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutionScope {
     directory: PathBuf,
@@ -146,8 +152,8 @@ impl ExecutionScope {
     ///
     /// The directory is deliberately not created: the recording writer must
     /// retain exclusive creation and overwrite protection.
-    pub fn task_recording_directory(&self, task_ordinal: u64) -> PathBuf {
-        self.directory.join(format!("task-{task_ordinal:06}"))
+    pub fn task_recording_directory(&self, ordinal: u64) -> PathBuf {
+        self.directory.join(format!("task-{ordinal:06}"))
     }
 
     /// Derives the absent recording path reserved for one semantic relative path.
@@ -162,28 +168,27 @@ impl ExecutionScope {
 
 /// Requires a nonempty relative name containing exactly one normal component.
 fn validate_name(name: &str) -> Result<(), ExecutionScopeError> {
-    let path = Path::new(name);
-    let mut components = path.components();
-    let valid = !name.trim().is_empty()
-        && matches!(components.next(), Some(Component::Normal(_)))
-        && components.next().is_none();
-    if valid {
-        Ok(())
-    } else {
-        Err(ExecutionScopeError::InvalidName {
-            name: name.to_owned(),
-        })
-    }
+    validate_path_components(name, false)
 }
 
 /// Requires a nonempty relative path made only from normal components.
 fn validate_relative_name(name: &str) -> Result<(), ExecutionScopeError> {
+    validate_path_components(name, true)
+}
+
+fn validate_path_components(
+    name: &str,
+    allow_relative: bool,
+) -> Result<(), ExecutionScopeError> {
     let path = Path::new(name);
+    let mut components = path.components();
     let valid = !name.trim().is_empty()
-        && path.components().next().is_some()
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)));
+        && matches!(components.next(), Some(Component::Normal(_)))
+        && if allow_relative {
+            components.all(|component| matches!(component, Component::Normal(_)))
+        } else {
+            components.next().is_none()
+        };
     if valid {
         Ok(())
     } else {

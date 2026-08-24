@@ -1,4 +1,4 @@
-//! Cheap task selections with lazy nested-document materialization.
+//! Cheap resolved combinations with lazy nested-document materialization.
 
 use std::fmt;
 use std::iter::FusedIterator;
@@ -11,16 +11,16 @@ use super::super::error::ConfigurationError;
 use super::super::parameter_key_tuple::ParameterKeyTuple;
 use super::super::parameter_path::ParameterPath;
 use super::super::parameter_tree::{lookup_path, reconstruct};
-use super::ParameterSpaceInner;
-use super::resolved;
+use super::ConfigurationSpaceInner;
+use super::reconstruction;
 
-pub struct TaskParameters {
-    inner: Arc<ParameterSpaceInner>,
+pub struct ResolvedConfiguration {
+    inner: Arc<ConfigurationSpaceInner>,
     ordinal: u64,
     resolved: OnceLock<Value>,
 }
 
-impl Clone for TaskParameters {
+impl Clone for ResolvedConfiguration {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -30,8 +30,8 @@ impl Clone for TaskParameters {
     }
 }
 
-impl TaskParameters {
-    pub(super) fn new(inner: Arc<ParameterSpaceInner>, ordinal: u64) -> Self {
+impl ResolvedConfiguration {
+    pub(super) fn new(inner: Arc<ConfigurationSpaceInner>, ordinal: u64) -> Self {
         Self {
             inner,
             ordinal,
@@ -39,7 +39,7 @@ impl TaskParameters {
         }
     }
 
-    pub fn task_ordinal(&self) -> u64 {
+    pub fn ordinal(&self) -> u64 {
         self.ordinal
     }
 
@@ -65,8 +65,8 @@ impl TaskParameters {
 
     pub fn require_value(&self, key: &str) -> Result<&Value, ConfigurationError> {
         self.value(key)
-            .ok_or_else(|| ConfigurationError::UnknownTaskParameter {
-                task_ordinal: self.ordinal,
+            .ok_or_else(|| ConfigurationError::UnknownConfigurationValue {
+                ordinal: self.ordinal,
                 key: key.to_owned(),
             })
     }
@@ -76,15 +76,15 @@ impl TaskParameters {
         T: DeserializeOwned,
     {
         let Some(path) = ParameterPath::parse(key) else {
-            return Err(ConfigurationError::UnknownTaskParameter {
-                task_ordinal: self.ordinal,
+            return Err(ConfigurationError::UnknownConfigurationValue {
+                ordinal: self.ordinal,
                 key: key.to_owned(),
             });
         };
         if let Some(value) = self.exact_leaf(&path) {
             return T::deserialize(value).map_err(|source| {
-                ConfigurationError::DecodeTaskParameter {
-                    task_ordinal: self.ordinal,
+                ConfigurationError::DecodeConfigurationValue {
+                    ordinal: self.ordinal,
                     key: key.to_owned(),
                     source,
                 }
@@ -99,8 +99,8 @@ impl TaskParameters {
             && let Some(value) = lookup_path(&self.inner.fixed_document, &path)
         {
             return T::deserialize(value).map_err(|source| {
-                ConfigurationError::DecodeTaskParameter {
-                    task_ordinal: self.ordinal,
+                ConfigurationError::DecodeConfigurationValue {
+                    ordinal: self.ordinal,
                     key: key.to_owned(),
                     source,
                 }
@@ -114,13 +114,13 @@ impl TaskParameters {
                 .filter(|leaf| path.is_ancestor_of(&leaf.path)),
         );
         let Some(value) = lookup_path(&subtree, &path) else {
-            return Err(ConfigurationError::UnknownTaskParameter {
-                task_ordinal: self.ordinal,
+            return Err(ConfigurationError::UnknownConfigurationValue {
+                ordinal: self.ordinal,
                 key: key.to_owned(),
             });
         };
-        T::deserialize(value).map_err(|source| ConfigurationError::DecodeTaskParameter {
-            task_ordinal: self.ordinal,
+        T::deserialize(value).map_err(|source| ConfigurationError::DecodeConfigurationValue {
+            ordinal: self.ordinal,
             key: key.to_owned(),
             source,
         })
@@ -183,11 +183,11 @@ impl TaskParameters {
             )
     }
 
-    /// Serializes the complete rehydrated nested task document.
+    /// Serializes the complete rehydrated nested configuration document.
     pub fn to_json(&self) -> Result<String, ConfigurationError> {
         serde_json::to_string(self.resolved_document()).map_err(|source| {
-            ConfigurationError::SerializeTaskParameters {
-                task_ordinal: self.ordinal,
+            ConfigurationError::SerializeResolvedConfiguration {
+                ordinal: self.ordinal,
                 source,
             }
         })
@@ -195,13 +195,13 @@ impl TaskParameters {
 
     fn resolved_document(&self) -> &Value {
         self.resolved
-            .get_or_init(|| resolved::document(&self.inner, self.ordinal))
+            .get_or_init(|| reconstruction::document(&self.inner, self.ordinal))
     }
 
     pub(crate) fn resolved_object(&self) -> &serde_json::Map<String, Value> {
         self.resolved_document()
             .as_object()
-            .expect("resolved task parameters always form a JSON object")
+            .expect("resolved configurations always form a JSON object")
     }
 
     fn exact_leaf(&self, path: &ParameterPath) -> Option<&Value> {
@@ -215,25 +215,25 @@ impl TaskParameters {
     }
 }
 
-impl fmt::Debug for TaskParameters {
+impl fmt::Debug for ResolvedConfiguration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("TaskParameters")
-            .field("task_ordinal", &self.ordinal)
-            .field("parameters", &self.len())
+            .debug_struct("ResolvedConfiguration")
+            .field("ordinal", &self.ordinal)
+            .field("values", &self.len())
             .finish_non_exhaustive()
     }
 }
 
 #[derive(Clone)]
-pub struct TaskParametersIter {
-    inner: Arc<ParameterSpaceInner>,
+pub struct ConfigurationIter {
+    inner: Arc<ConfigurationSpaceInner>,
     next: u64,
     end: u64,
 }
 
-impl TaskParametersIter {
-    pub(super) fn new(inner: Arc<ParameterSpaceInner>, end: u64) -> Self {
+impl ConfigurationIter {
+    pub(super) fn new(inner: Arc<ConfigurationSpaceInner>, end: u64) -> Self {
         Self {
             inner,
             next: 0,
@@ -242,8 +242,8 @@ impl TaskParametersIter {
     }
 }
 
-impl Iterator for TaskParametersIter {
-    type Item = TaskParameters;
+impl Iterator for ConfigurationIter {
+    type Item = ResolvedConfiguration;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next == self.end {
@@ -251,7 +251,7 @@ impl Iterator for TaskParametersIter {
         }
         let ordinal = self.next;
         self.next += 1;
-        Some(TaskParameters::new(Arc::clone(&self.inner), ordinal))
+        Some(ResolvedConfiguration::new(Arc::clone(&self.inner), ordinal))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -263,12 +263,12 @@ impl Iterator for TaskParametersIter {
     }
 }
 
-impl FusedIterator for TaskParametersIter {}
+impl FusedIterator for ConfigurationIter {}
 
-impl fmt::Debug for TaskParametersIter {
+impl fmt::Debug for ConfigurationIter {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("TaskParametersIter")
+            .debug_struct("ConfigurationIter")
             .field("next", &self.next)
             .field("end", &self.end)
             .finish_non_exhaustive()

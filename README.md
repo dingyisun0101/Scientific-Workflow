@@ -1,234 +1,83 @@
 # Scientific Workflow
 
-The Rust crate is located in `rust/`. The crate-facing documentation is in
-[`rust/README.md`](rust/README.md).
+The Rust crate lives in [`rust/`](rust/). Its complete public overview is in
+[`rust/README.md`](rust/README.md), and the architectural rationale is in
+[`docs/design.md`](docs/design.md).
 
-Run commands from that directory:
+## Vocabulary
+
+The orchestration hierarchy is:
+
+```text
+Study → Phase → Task → workload
+```
+
+- `Study` is the largest scope and owns scheduling, display, cancellation,
+  `StudyPlan`, `StudyRecord`, and `StudySummary`.
+- `Phase` owns tasks plus concurrency, delay, timeout, dependency, and failure
+  policies.
+- `Task` is every registerable workload. Progress and one-shot work are modes
+  of the same task type.
+- `TaskContext` is the sole task-to-study communication boundary.
+
+Configuration is independent:
+
+```text
+fixed.json + sweep.json
+→ ConfigurationSpace
+→ ResolvedConfiguration combinations
+→ application-defined Tasks
+```
+
+Applications own study paths, schemas, model inputs, recordings, artifacts,
+networking, and subprocesses.
+
+## Terminal display
+
+The study renderer owns all terminal writes and preserves the established task
+progress bar. The display separates study, phase, task, message, and command
+sections. The command input module currently accepts one command:
+
+```text
+exit
+```
+
+It requests cooperative study cancellation.
+
+## Attractor example
+
+[`examples/attractor_2d`](examples/attractor_2d) demonstrates the complete
+boundary. The application loads `ConfigurationSpace`, maps each
+`ResolvedConfiguration` into simulation and validation tasks, builds phases,
+and runs one study. A final one-shot task uses Python to render the verified
+trajectories. Each task owns its scientific state, recording I/O, or derived
+visualization output.
 
 ```bash
-cd rust
+mamba run -n DSES cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
-## Standalone scientific-project example
+Use the maintained `DSES` Mamba environment: the example's final phase invokes
+Matplotlib through `mamba run -n DSES`.
 
-[`examples/attractor_2d`](examples/attractor_2d) is a complete consumer
-application built against the local crate. It loads project-root
-`config/{fixed,sweep,paths,state}.json` inputs, expands a parameter sweep,
-adapts complete shared `TaskConfig` handles into simulation and validation
-phases, evolves one
-directly owned `SystemState` per scheduled task, and
-offers every evolved state to one writer that owns the independent trajectory,
-radius, and checkpoint sampling intervals.
+## Storage integrity
 
-Run it from the repository root:
+Every sealed recording chunk carries a SHA-256 checksum. Completed-recording
+read paths always validate lifecycle, framing, schema, byte count, and digest
+before treating a selected chunk as scientific output.
+
+The official Python reader in [`python`](python) follows the same format and
+integrity rules as Rust's `StoredStateSeriesReader`.
+
+## Tests
+
+Run the Rust suite with:
 
 ```bash
-cargo run --manifest-path examples/attractor_2d/Cargo.toml
+cargo test --all-targets --manifest-path rust/Cargo.toml
 ```
 
-Recordings are written beneath the example's ignored `target/recordings`
-directory. `ExecutionScope` selects a new timestamped, collision-resistant run directory, so rerunning the
-example does not overwrite prior results. The executable covers configuration,
-task expansion, dependency-aware phase selection, state evolution, bounded
-recording, format-v7 positional chunks, explicit recording completion,
-latest-state reconstruction, and numerical verification. It prints validation
-status through the runtime display.
-
-The example is maintained as a repository-level project and is not included
-in the library crate's crates.io archive.
-
-The Rust library can export the complete registered phase/task graph as
-versioned JSON without running tasks. It deliberately has no text, CSV, or
-terminal plan renderer. Every runtime also requires a destination for an
-always-on versioned JSON execution record containing compact phase/task timing
-and outcome facts. Automatic checkpoint continuation rewinds every
-recording stream to the restored checkpoint; data later than that checkpoint
-is overwritten without a runtime warning, as documented in the crate README.
-
-## Mandatory chunk integrity
-
-Every sealed chunk carries a SHA-256 checksum in the recording's sole metadata
-file. Checksum verification is a compulsory part of chunk validation: public
-completed-recording read paths do not provide a flag, feature, or alternate API
-that disables it. A missing chunk, byte-count mismatch, unsupported checksum,
-or digest mismatch is a hard error, and a failed multi-chunk read exposes no
-partial series as if it were valid scientific output.
-
-Valid JSON is not sufficient evidence of an intact scientific record. A code
-path that deliberately does not open an older sealed chunk has not validated
-that chunk and must not describe it as verified. Any chunk selected for
-scientific reconstruction must pass its checksum boundary.
-
-Checksums detect accidental alteration and storage corruption. They do not by
-themselves prove model correctness, authorship, or cryptographic authenticity;
-those are separate provenance concerns.
-
-## Official Python reader
-
-The repository's [`python`](python) package provides the official eager Python
-reader for completed format-v7 recordings. It validates the same lifecycle,
-metadata, framing, schema, ordering, byte-count, and SHA-256 rules as Rust's
-`StoredStateSeriesReader`. Both readers consume one checked-in conformance
-fixture, preventing the Python implementation from becoming an undocumented
-copy of incidental storage details.
-
-The cross-language suite also performs a bidirectional round trip: the public
-Rust writer emits a multi-chunk recording consumed by Python, a test-only
-Python conformance producer re-encodes the reconstructed records, and the
-public Rust reader verifies the Python output down to floating-point bits.
-
-```python
-from scientific_workflow_reader import open_completed_recording
-
-reader = open_completed_recording("path/to/completed/recording")
-signal = reader.read_stream("signal")
-```
-
-Large consumers may use `iter_verified_records(name)`. It validates a complete
-bounded chunk before yielding from that chunk; unlike transactional
-`read_stream`, a later chunk may still fail after earlier records were used.
-
-## RNG provenance
-
-Workflow's `RngRecord` stores a resolved method, sequence-affecting version,
-key encoding, key, and optional parameters beneath a caller-owned namespace.
-It never generates random values or defines a competing RNG configuration.
-Applications should pass one upstream configuration—such as PiP's
-`RngConfig`—to the scientific component, then copy that component's resolved
-seed and method identity into `RngRecord`. The complete mapping and example are
-documented in [`rust/README.md`](rust/README.md#rng-records).
-
-## Workflow runtime
-
-First-class `Phase` values own every `Task` before reporting begins.
-Parameterized tasks are generated from the configuration manager with all
-fixed/sweep values retained, automatic labels, and exact partial selectors.
-Concise task helpers share one thread-safe callable across generated tasks;
-advanced workload factories create a distinct single-use `FnOnce` when a task
-must own a unique resource. Phase failure defaults to fail-fast and may instead
-be configured to finish already active work without admitting more tasks.
-`WorkflowRuntime` schedules only tasks registered through those phases and owns
-their human-facing display. Each task remains responsible for its own files,
-recordings, artifacts, networking, and subprocesses. Hard process resources are
-contained by the externally configured systemd/service scope, not by Workflow.
-
-Phase timing is opt-in. `delay_per_task` spaces actual task admission in dense
-phase-local executable-task order while delayed rows remain visibly pending.
-`task_timeout` limits elapsed execution per task, and `deadline_after` limits
-the phase from its execution start. Omitting all three preserves immediate
-admission. Expiration requests cooperative cancellation; workloads blocked in
-user or system code must yield before the runtime can finish shutting down.
-
-Phases advance automatically by default. A phase configured with
-`.require_confirm(true)` pauses after successful completion and requires the
-user to type `yes` before the next selected phase starts. The final selected
-phase never prompts because there is no transition.
-
-Interactive sessions show only the active phase: its identity, scheduling
-limits, elapsed time, task counts, messages, and rows. Successful transitions
-replace that phase with the next; failures retain task context. Redirected
-stderr receives append-only uncolored phase/task lifecycle records. Task
-progress remains observational: models own scientific iteration through
-`SystemState` and synchronize `TaskProgress::set_iteration`.
-
-Runtime construction requires an execution-record path. The record is written
-atomically and remains available even when execution fails; successful runs
-also expose it through `RuntimeSummary::execution_record()`.
-
-## Integration tests
-
-The permanent suite contains ten behavior-oriented integration targets rather
-than source-file-level tests. The core workflow targets emit concise stable
-logs under `--nocapture`.
-
-### Project configuration
-
-```bash
-cargo test --test configuration_workflow -- --nocapture
-```
-
-Loads real Cartesian and correlated-case projects, the conventional state
-schema, and generated/named execution scopes; generates dict-like task
-configurations, filters exact sweep values, rejects ambiguous unique selection,
-resolves named paths, proves shared value ownership, performs an exact
-three-file export/reload, and rejects ambiguous configuration.
-
-### Simulation state
-
-```bash
-cargo test --test state_workflow -- --nocapture
-```
-
-Loads the real JSON template and verifies mutable live-state evolution,
-zero-copy payload ownership, validation failures, transactional time, and
-explicit deep-clone behavior.
-
-### Analysis series
-
-```bash
-cargo test --test analysis_workflow -- --nocapture
-```
-
-Verifies ordered collection invariants, move-based ownership, borrowed views,
-narrow field mutation, rejection recovery, capacity reuse, and deep cloning.
-
-### Successful storage workflow
-
-```bash
-cargo test --test storage_workflow -- --nocapture
-```
-
-Runs default decoder round trips and a multi-stream PiP tensor workflow through
-the public prelude and `SystemStateWriter`, including borrowed encoding, bounded
-writing, automatic chunking, operational timing, terminal metadata, integrity
-verification, and latest-state/full-series typed reconstruction. Successful output verifies that sealed chunks have final names
-and no temporary files remain after durable publication.
-
-### Storage resilience
-
-```bash
-cargo test --test storage_resilience -- --nocapture
-```
-
-Injects configuration, writer, decoder, record, and chunk-integrity failures
-and verifies contextual errors without exposing partial results.
-
-### Interrupted-run resume
-
-```bash
-cargo test --test resume_workflow -- --nocapture
-```
-
-Exercises both open-chunk crash windows, complete typed checkpoint
-reconstruction, multiple-sealed-plus-open recovery without inspecting sealed
-content, continued append ordering, continuation rejection boundaries,
-explicit durability barriers, and artifact-free exclusive writer ownership.
-
-### Runtime scheduling and display
-
-```bash
-cargo test --test runtime_workflow -- --nocapture
-```
-
-Validates phase dependencies and selection, bounded parallel scheduling,
-configuration-generated workloads, exact selectors, exclusive runtime
-ownership, task-owned I/O, lifecycle summaries, failure barriers, delayed
-pending admission, task timeouts, and phase deadlines.
-
-## Complete verification
-
-```bash
-cargo test --all-targets --no-fail-fast --locked
-cargo test --doc --locked
-cargo clippy --all-targets --all-features --locked -- -D warnings
-```
-
-The detailed coverage allocation and logging contract are documented in
-[`docs/tests.md`](docs/tests.md).
-
-Consumer modules import only the responsibility they use:
-
-```rust
-use scientific_workflow::prelude::basics::*;
-use scientific_workflow::prelude::runtime::*; // orchestration boundaries only
-```
+The suite covers study scheduling and rendering, configuration expansion,
+state ownership, analysis series, storage resilience and continuation,
+artifact integrity, RNG records, and Rust/Python format conformance. See
+[`docs/tests.md`](docs/tests.md) for the responsibility-oriented test map.

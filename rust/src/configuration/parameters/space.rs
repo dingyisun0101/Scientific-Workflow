@@ -1,4 +1,4 @@
-//! Shared immutable parameter-space storage and loading.
+//! Shared immutable configuration-space storage and loading.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -10,17 +10,18 @@ use super::super::parameter_path::ParameterPath;
 use super::super::parameter_tree::{ParameterLeaf, flatten_root, paths_conflict, reconstruct};
 use super::super::source::{parse_strict_json, read_source, require_object, validate_name};
 use super::super::sweep::{SweepPlan, parse_sweep};
-use super::task::{TaskParameters, TaskParametersIter};
+use super::resolved_configuration::{ConfigurationIter, ResolvedConfiguration};
 
 const FIXED_FILE: &str = "fixed.json";
 const SWEEP_FILE: &str = "sweep.json";
 
 #[derive(Clone)]
-pub struct ParameterSpace {
-    pub(super) inner: Arc<ParameterSpaceInner>,
+pub struct ConfigurationSpace {
+    pub(super) inner: Arc<ConfigurationSpaceInner>,
 }
 
-impl ParameterSpace {
+impl ConfigurationSpace {
+    /// Loads and validates `fixed.json` and `sweep.json` from `directory`.
     pub fn load(configuration_directory: impl Into<PathBuf>) -> Result<Self, ConfigurationError> {
         let configuration_directory = configuration_directory.into();
         let fixed_path = configuration_directory.join(FIXED_FILE);
@@ -47,9 +48,9 @@ impl ParameterSpace {
             .enumerate()
             .map(|(index, leaf)| (leaf.path.clone(), index))
             .collect();
-        let task_count = sweep.task_count();
+        let combination_count = sweep.combination_count();
         Ok(Self {
-            inner: Arc::new(ParameterSpaceInner {
+            inner: Arc::new(ConfigurationSpaceInner {
                 configuration_directory,
                 fixed_source: fixed_source.into_boxed_slice(),
                 sweep_source: sweep_source.into_boxed_slice(),
@@ -57,12 +58,13 @@ impl ParameterSpace {
                 fixed_document,
                 fixed_by_path,
                 sweep,
-                task_count,
+                combination_count,
             }),
         })
     }
 
-    pub fn configuration_directory(&self) -> &Path {
+    /// Returns the configuration directory exactly as supplied during loading.
+    pub fn directory(&self) -> &Path {
         &self.inner.configuration_directory
     }
 
@@ -74,26 +76,22 @@ impl ParameterSpace {
         &self.inner.sweep_source
     }
 
-    /// Number of terminal values contributed by `fixed.json`.
-    pub fn fixed_parameter_count(&self) -> usize {
+    /// Returns the number of fixed terminal values.
+    pub fn fixed_value_count(&self) -> usize {
         self.inner.fixed.len()
     }
 
-    /// Number of independently selectable axes or explicit-case fields.
-    pub fn sweep_parameter_count(&self) -> usize {
+    /// Returns the number of independently selected sweep paths.
+    pub fn sweep_dimension_count(&self) -> usize {
         self.inner.sweep.selectable_paths().len()
     }
 
-    /// Number of terminal values in the first resolved task.
-    pub fn parameter_count(&self) -> usize {
-        self.task(0).map_or(0, |task| task.len())
+    pub fn combination_count(&self) -> u64 {
+        self.inner.combination_count
     }
 
-    pub fn task_count(&self) -> u64 {
-        self.inner.task_count
-    }
-
-    pub fn contains_parameter(&self, key: &str) -> bool {
+    /// Reports whether a fixed or swept value exists at or beneath `key`.
+    pub fn contains(&self, key: &str) -> bool {
         let Some(path) = ParameterPath::parse(key) else {
             return false;
         };
@@ -120,34 +118,34 @@ impl ParameterSpace {
             .map(ParameterPath::identifier)
     }
 
-    pub fn task(&self, ordinal: u64) -> Result<TaskParameters, ConfigurationError> {
-        if ordinal >= self.task_count() {
-            return Err(ConfigurationError::TaskOrdinalOutOfBounds {
+    pub fn combination(&self, ordinal: u64) -> Result<ResolvedConfiguration, ConfigurationError> {
+        if ordinal >= self.combination_count() {
+            return Err(ConfigurationError::CombinationOrdinalOutOfBounds {
                 ordinal,
-                task_count: self.task_count(),
+                combination_count: self.combination_count(),
             });
         }
-        Ok(TaskParameters::new(Arc::clone(&self.inner), ordinal))
+        Ok(ResolvedConfiguration::new(Arc::clone(&self.inner), ordinal))
     }
 
-    pub fn tasks(&self) -> TaskParametersIter {
-        TaskParametersIter::new(Arc::clone(&self.inner), self.task_count())
+    pub fn combinations(&self) -> ConfigurationIter {
+        ConfigurationIter::new(Arc::clone(&self.inner), self.combination_count())
     }
 }
 
-impl fmt::Debug for ParameterSpace {
+impl fmt::Debug for ConfigurationSpace {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ParameterSpace")
-            .field("configuration_directory", &self.configuration_directory())
-            .field("fixed_parameters", &self.fixed_parameter_count())
-            .field("sweep_parameters", &self.sweep_parameter_count())
-            .field("task_count", &self.task_count())
+            .debug_struct("ConfigurationSpace")
+            .field("configuration_directory", &self.directory())
+            .field("fixed_values", &self.fixed_value_count())
+            .field("sweep_dimensions", &self.sweep_dimension_count())
+            .field("combinations", &self.combination_count())
             .finish_non_exhaustive()
     }
 }
 
-pub(crate) struct ParameterSpaceInner {
+pub(crate) struct ConfigurationSpaceInner {
     pub(super) configuration_directory: PathBuf,
     pub(super) fixed_source: Box<[u8]>,
     pub(super) sweep_source: Box<[u8]>,
@@ -155,7 +153,7 @@ pub(crate) struct ParameterSpaceInner {
     pub(super) fixed_document: serde_json::Value,
     pub(super) fixed_by_path: HashMap<ParameterPath, usize>,
     pub(super) sweep: SweepPlan,
-    pub(super) task_count: u64,
+    pub(super) combination_count: u64,
 }
 
 fn validate_disjoint(

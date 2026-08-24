@@ -58,21 +58,6 @@ impl ParameterPath {
     pub fn identifier(&self) -> &str {
         &self.identifier
     }
-
-    pub fn to_json_pointer(&self) -> String {
-        let mut output = String::new();
-        for segment in &self.segments {
-            output.push('/');
-            for character in segment.chars() {
-                match character {
-                    '~' => output.push_str("~0"),
-                    '/' => output.push_str("~1"),
-                    _ => output.push(character),
-                }
-            }
-        }
-        output
-    }
 }
 
 impl fmt::Display for ParameterPath {

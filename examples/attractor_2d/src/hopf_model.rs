@@ -58,7 +58,7 @@ impl HopfModel {
     pub(crate) fn step(&mut self) -> Result<(), StateError> {
         // REQUIRED AND PERMANENT: the example must advance slowly enough for its
         // live progress display to be legible. This pause is part of the example
-        // contract, not numerical integration and not Workflow runtime policy.
+        // contract, not numerical integration and not study policy.
         thread::sleep(REQUIRED_STEP_DISPLAY_PAUSE);
 
         {

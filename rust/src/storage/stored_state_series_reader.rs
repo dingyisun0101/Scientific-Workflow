@@ -478,14 +478,55 @@ fn validate_complete_resume_schema(
     stream: &StateStreamMetadata,
     full_spec: &SystemStateSchema,
 ) -> Result<(), StorageError> {
-    if stream.fields.len() != full_spec.len() {
-        return Err(StorageError::IncompleteCheckpointStream {
+    let Some(mismatch) = checkpoint_schema_mismatch(stream, full_spec) else {
+        return Ok(());
+    };
+    Err(match mismatch {
+        CheckpointSchemaMismatch::Count {
+            stream_fields,
+            full_spec_fields,
+        } => StorageError::IncompleteCheckpointStream {
             stream: stream.name.clone(),
             reason: format!(
-                "stream declares {} fields but the full state declares {}",
-                stream.fields.len(),
-                full_spec.len()
+                "stream declares {stream_fields} fields but the full state declares {full_spec_fields}",
             ),
+        },
+        CheckpointSchemaMismatch::Field { position, stored, expected } => {
+            StorageError::IncompleteCheckpointStream {
+                stream: stream.name.clone(),
+                reason: format!("field {position} is `{stored}` but full state requires `{expected}`"),
+            }
+        }
+    })
+}
+
+pub(crate) fn is_complete_checkpoint_stream(
+    stream: &StateStreamMetadata,
+    full_spec: &SystemStateSchema,
+) -> bool {
+    checkpoint_schema_mismatch(stream, full_spec).is_none()
+}
+
+enum CheckpointSchemaMismatch {
+    Count {
+        stream_fields: usize,
+        full_spec_fields: usize,
+    },
+    Field {
+        position: usize,
+        stored: String,
+        expected: String,
+    },
+}
+
+fn checkpoint_schema_mismatch(
+    stream: &StateStreamMetadata,
+    full_spec: &SystemStateSchema,
+) -> Option<CheckpointSchemaMismatch> {
+    if stream.fields.len() != full_spec.len() {
+        return Some(CheckpointSchemaMismatch::Count {
+            stream_fields: stream.fields.len(),
+            full_spec_fields: full_spec.len(),
         });
     }
     for (position, (stored, expected)) in stream
@@ -496,32 +537,14 @@ fn validate_complete_resume_schema(
     {
         if stored.name != expected.name() || stored.description.as_deref() != expected.description()
         {
-            return Err(StorageError::IncompleteCheckpointStream {
-                stream: stream.name.clone(),
-                reason: format!(
-                    "field {position} is `{}` but full state requires `{}`",
-                    stored.name,
-                    expected.name()
-                ),
+            return Some(CheckpointSchemaMismatch::Field {
+                position,
+                stored: stored.name.clone(),
+                expected: expected.name().to_string(),
             });
         }
     }
-    Ok(())
-}
-
-pub(crate) fn is_complete_checkpoint_stream(
-    stream: &StateStreamMetadata,
-    full_spec: &SystemStateSchema,
-) -> bool {
-    stream.fields.len() == full_spec.len()
-        && stream
-            .fields
-            .iter()
-            .zip(full_spec.field_schemas())
-            .all(|(stored, expected)| {
-                stored.name == expected.name()
-                    && stored.description.as_deref() == expected.description()
-            })
+    None
 }
 
 /// Parses one record and dispatches each raw field into its owned final type.

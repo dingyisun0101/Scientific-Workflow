@@ -11,7 +11,7 @@ use serde_json::{Number, Value};
 use super::error::ConfigurationError;
 
 /// Duplicate-preserving syntax tree used until semantic validation completes.
-pub(super) enum StrictValue {
+pub(crate) enum StrictValue {
     Null,
     Bool(bool),
     Number(Number),
@@ -147,14 +147,14 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     }
 }
 
-pub(super) fn read_source(path: &Path) -> Result<Vec<u8>, ConfigurationError> {
+pub(crate) fn read_source(path: &Path) -> Result<Vec<u8>, ConfigurationError> {
     fs::read(path).map_err(|source| ConfigurationError::ReadConfigurationFile {
         path: path.to_path_buf(),
         source,
     })
 }
 
-pub(super) fn parse_strict_json(
+pub(crate) fn parse_strict_json(
     path: &Path,
     source: &[u8],
 ) -> Result<StrictValue, ConfigurationError> {
@@ -173,7 +173,7 @@ pub(super) fn parse_strict_json(
     Ok(value)
 }
 
-pub(super) fn require_object(
+pub(crate) fn require_object(
     path: &Path,
     value: StrictValue,
     reason: impl Into<String>,
@@ -184,7 +184,7 @@ pub(super) fn require_object(
     }
 }
 
-pub(super) fn validate_name(path: &Path, name: &str, kind: &str) -> Result<(), ConfigurationError> {
+pub(crate) fn validate_name(path: &Path, name: &str, kind: &str) -> Result<(), ConfigurationError> {
     if name.trim().is_empty() {
         return invalid(
             path,
@@ -194,7 +194,7 @@ pub(super) fn validate_name(path: &Path, name: &str, kind: &str) -> Result<(), C
     Ok(())
 }
 
-pub(super) fn invalid<T>(path: &Path, reason: impl Into<String>) -> Result<T, ConfigurationError> {
+pub(crate) fn invalid<T>(path: &Path, reason: impl Into<String>) -> Result<T, ConfigurationError> {
     Err(ConfigurationError::InvalidConfigurationDocument {
         path: path.to_path_buf(),
         reason: reason.into(),

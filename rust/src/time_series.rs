@@ -7,7 +7,7 @@
 //!
 //! # Responsibility boundary
 //!
-//! A time series is not the simulation's runtime write buffer. Simulations own
+//! A time series is not the simulation's live write buffer. Simulations own
 //! and evolve a live `SystemState`; the future `storage` module will
 //! encode selected fields and queue completed byte records for asynchronous
 //! writing. `time_series` is used when states are intentionally collected in
@@ -15,6 +15,12 @@
 //!
 //! Consequently, this module performs no JSON processing, decoding, file IO,
 //! queue management, or chunking. It also has no payload codec registry.
+//!
+//! # Boundary
+//!
+//! `time_series` owns only in-memory assembly and ordering of complete sampled
+//! states for analysis. It does not own schema loading, state mutation, persistence
+//! format choices, or workload scheduling.
 //!
 //! # Collection invariants
 //!

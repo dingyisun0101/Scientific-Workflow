@@ -11,7 +11,7 @@ pub(crate) struct SweepPlan {
 enum SweepKind {
     Cartesian {
         dimensions: Vec<SweepDimension>,
-        task_count: u64,
+        combination_count: u64,
     },
     Cases {
         cases: Vec<Vec<ParameterLeaf>>,
@@ -27,13 +27,13 @@ pub(super) struct SweepDimension {
 impl SweepPlan {
     pub(super) fn cartesian(
         dimensions: Vec<SweepDimension>,
-        task_count: u64,
+        combination_count: u64,
         selectable_paths: Vec<ParameterPath>,
     ) -> Self {
         Self {
             kind: SweepKind::Cartesian {
                 dimensions,
-                task_count,
+                combination_count,
             },
             selectable_paths,
         }
@@ -49,9 +49,11 @@ impl SweepPlan {
         }
     }
 
-    pub(crate) fn task_count(&self) -> u64 {
+    pub(crate) fn combination_count(&self) -> u64 {
         match &self.kind {
-            SweepKind::Cartesian { task_count, .. } => *task_count,
+            SweepKind::Cartesian {
+                combination_count, ..
+            } => *combination_count,
             SweepKind::Cases { cases } => {
                 u64::try_from(cases.len()).expect("validated case count fits u64")
             }

@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 
 use crate::AppResult;
 use scientific_workflow::prelude::basics::*;
-use scientific_workflow::prelude::runtime::TaskContext;
+use scientific_workflow::prelude::study::TaskContext;
 
 use crate::hopf_model::{POINT_FIELD, RADIUS_FIELD};
 
@@ -17,14 +17,14 @@ pub(crate) const CHECKPOINT_STREAM: &str = "checkpoint";
 
 pub(crate) fn record_task(
     directory: &std::path::Path,
-    task: &TaskConfig,
+    configuration: &ResolvedConfiguration,
     model: &mut crate::hopf_model::HopfModel,
     context: &TaskContext,
 ) -> AppResult<()> {
-    // Operational policy is decoded from the same resolved TaskConfig as model
+    // Operational policy is decoded from the same resolved configuration as model
     // parameters. There is intentionally no parallel recording-settings type.
-    let step_count: u64 = task.decode_value("/step_count")?;
-    let mut writer = build_writer(model.state(), directory, task)?;
+    let step_count: u64 = configuration.decode_value("/step_count")?;
+    let mut writer = build_writer(model.state(), directory, configuration)?;
 
     // TaskContext updates drive the terminal display only. SystemState is the
     // scientific record, and SystemStateWriter alone decides when to sample it.
@@ -49,7 +49,7 @@ pub(crate) fn record_task(
 fn build_writer(
     state: &SystemState,
     directory: &std::path::Path,
-    task: &TaskConfig,
+    configuration: &ResolvedConfiguration,
 ) -> AppResult<SystemStateWriter> {
     // Grouped decoding keeps related policy together while retaining precise
     // concrete Rust types, including non-zero limits validated at decode time.
@@ -59,7 +59,7 @@ fn build_writer(
         SamplingInterval,
         NonZeroU64,
         NonZeroU64,
-    ) = task.decode_values((
+    ) = configuration.decode_values((
         "/trajectory_sampling_interval",
         "/radius_sampling_interval",
         "/checkpoint_sampling_interval",
@@ -78,7 +78,7 @@ fn build_writer(
         .with_time_axis_metadata(time_axis)
         // Persisting resolved parameters makes each task output independently
         // interpretable without duplicating them in every state record.
-        .with_task_parameters(task.parameters())
+        .with_configuration(configuration)
         // Queue bytes bound memory and apply backpressure; chunk bytes govern
         // file rollover without ever splitting one encoded state record.
         .add_state_stream(StateStreamConfig::new(

@@ -1,7 +1,6 @@
 {
   "model_name": "supercritical_hopf_normal_form",
   "initial_point": [0.25, 0.0],
-  "angular_frequency": 1.0,
   "physical_time_increment_per_step": 0.01,
   "step_count": 5000,
   "trajectory_sampling_interval": {"iterations": 10},

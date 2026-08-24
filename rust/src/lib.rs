@@ -7,25 +7,49 @@
 //! language bridges remain separate modules rather than accumulating behind
 //! one monolithic interface.
 //!
-//! # Current modules
+//! # Module boundaries (public API ownership)
 //!
-//! [`configuration`] provides the standard `config/{fixed,sweep,paths}.json`
-//! project layout, arbitrary nested fixed/sweep separation, deterministic
-//! Cartesian or explicit-case task expansion, complete task-configuration
-//! handles, exact sweep-value selection, named path resolution, and byte-exact
-//! source export.
-//! [`project`] combines task configuration with either a project-owned
-//! `config/state.json` schema or a canonical schema supplied by a fixed-model
-//! crate as one immutable [`project::ScientificProject`]. [`execution`] creates
-//! collision-resistant or caller-named execution scopes and deterministic task
-//! recording paths without taking ownership away from storage writers.
-//! [`artifact`] atomically publishes and verifies content-addressed immutable
-//! bytes while leaving their scientific representation to consumer crates.
-//! [`runtime`] provides phase-based bounded scheduling and one process-wide
-//! human-facing display for registered tasks. Task workloads retain ownership
-//! of all scientific I/O. [`rng_record`] provides only
-//! validated, persisted RNG provenance records; random generation remains an
-//! application responsibility.
+//! The boundary map is strict: each module owns only one slice of behavior, and
+//! callers move data between boundaries without duplicating the same concern.
+//!
+//! - `study`: declarative study/phase/task planning and run execution. It owns
+//!   declaration validation, scheduling, cancellation, execution timing, and
+//!   progress summaries. It does not own model semantics, storage formats, or
+//!   schema declarations.
+//! - `configuration`: experiment-space declarations (`fixed.json` + `sweep.json`)
+//!   and resolved combinations. It owns parameter expansion only. It does not
+//!   own task construction, state schemas, persistence, or execution control.
+//! - `system_state`: typed heterogeneous fielded state values and schema.
+//! - `time_series`: ordered in-memory complete-state collections for analysis.
+//! - `storage`: asynchronous buffered persistence and completed-run reconstruction.
+//! - `execution`: directory-scoped recording lifecycle and path derivation.
+//! - `artifact`: immutable input content-addressed publication under an execution
+//!   scope, plus strict load-time verification.
+//! - `rng_record`: validated reproducibility metadata for caller-owned RNG sources.
+//! - `prelude`: curated import surfaces that preserve public boundaries.
+//!
+//! # Study vocabulary
+//!
+//! A [`study::Study`] is the largest scope. It owns scheduling, cancellation,
+//! recording, and display for an ordered set of [`study::Phase`] values. A
+//! phase owns many [`study::Task`] values plus their concurrency, delay,
+//! timeout, dependency, and failure policies. A task owns one workload, which
+//! reports progress, detail, messages, and cancellation through
+//! [`study::TaskContext`]. Progress and one-shot work are modes of the same
+//! task type.
+//!
+//! [`configuration`] is deliberately outside that hierarchy. It resolves a
+//! directory containing `fixed.json` and `sweep.json` into every deterministic
+//! [`configuration::ResolvedConfiguration`]. The downstream application decides
+//! how each combination becomes a task and owns all paths, schemas, model
+//! inputs, storage, and other effects captured by the workload.
+//!
+//! # Supporting modules
+//!
+//! [`execution`] creates collision-resistant or caller-named execution scopes
+//! and deterministic task recording paths. [`artifact`] atomically publishes
+//! and verifies content-addressed immutable bytes. [`rng_record`] stores
+//! validated RNG provenance while leaving random generation to applications.
 //!
 //! [`system_state`] provides:
 //!
@@ -51,7 +75,7 @@
 //! metadata, automatic operational timing, terminal summaries, name-selected payload
 //! decoders, and verified full-series or latest-state reconstruction.
 //! Import [`prelude::basics`] for these scientific primitives and
-//! [`prelude::runtime`] only at orchestration boundaries.
+//! [`prelude::study`] only at orchestration boundaries.
 //!
 //! # Basic use
 //!
@@ -88,9 +112,9 @@ pub mod artifact;
 pub mod configuration;
 pub mod execution;
 pub mod prelude;
-pub mod project;
 pub mod rng_record;
-pub mod runtime;
 pub mod storage;
+#[path = "study.rs"]
+pub mod study;
 pub mod system_state;
 pub mod time_series;
