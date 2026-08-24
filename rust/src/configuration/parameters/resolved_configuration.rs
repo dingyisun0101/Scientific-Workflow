@@ -193,6 +193,14 @@ impl ResolvedConfiguration {
         })
     }
 
+    /// Clones the complete rehydrated nested configuration document.
+    ///
+    /// The document is cached after its first reconstruction. This method is
+    /// intended for durable provenance records that must own their JSON value.
+    pub fn to_json_value(&self) -> Value {
+        self.resolved_document().clone()
+    }
+
     fn resolved_document(&self) -> &Value {
         self.resolved
             .get_or_init(|| reconstruction::document(&self.inner, self.ordinal))

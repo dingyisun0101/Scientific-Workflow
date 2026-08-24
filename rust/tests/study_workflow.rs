@@ -93,6 +93,12 @@ fn configurations_are_mapped_to_tasks_by_the_application() {
 }
 
 #[test]
+fn prelude_study_types_are_reexports_of_the_canonical_module() {
+    let task = scientific_workflow::prelude::study::Task::completed("same", "same");
+    let _: scientific_workflow::study::Task = task;
+}
+
+#[test]
 fn phase_owns_scheduling_and_dependencies() {
     let _guard = STUDY_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let order = Arc::new(AtomicU64::new(0));
@@ -204,4 +210,61 @@ fn study_writes_a_durable_record() {
     let record: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(record["phases"][0]["tasks"][0]["category"], "output");
     assert_eq!(record["phases"][0]["tasks"][0]["mode"], "one-shot");
+    assert_eq!(
+        record["phases"][0]["tasks"][0]["metadata"]["format"],
+        "json"
+    );
+}
+
+#[test]
+fn configured_tasks_preserve_complete_plan_and_record_provenance() {
+    let _guard = STUDY_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let root = record_path("provenance-root").with_extension("");
+    let configuration_directory = root.join("config");
+    fs::create_dir_all(&configuration_directory).unwrap();
+    fs::write(
+        configuration_directory.join("fixed.json"),
+        r#"{"solver":{"step":0.25}}"#,
+    )
+    .unwrap();
+    fs::write(
+        configuration_directory.join("sweep.json"),
+        r#"{"mode":"cartesian","axes":{"seed":{"values":[17]}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        configuration_directory.join("paths.json"),
+        r#"{"recordings":"results"}"#,
+    )
+    .unwrap();
+    let configurations = ConfigurationSpace::load(&configuration_directory).unwrap();
+    let configuration = configurations.combination(0).unwrap();
+    let paths = scientific_workflow::configuration::ProjectPaths::load(&root).unwrap();
+    let record_path = root.join("study-record.json");
+    let phase = Phase::builder(1, "configured")
+        .task(
+            Task::one_shot_for_configuration("simulation", &configuration, |_| Ok(()))
+                .with_project_paths(&paths),
+        )
+        .build()
+        .unwrap();
+    let study = Study::builder(&record_path)
+        .phase(phase)
+        .hidden()
+        .build()
+        .unwrap();
+
+    let plan: serde_json::Value =
+        serde_json::from_slice(&study.plan().to_pretty_json().unwrap()).unwrap();
+    let metadata = &plan["phases"][0]["tasks"][0]["metadata"];
+    assert_eq!(metadata["configuration_ordinal"], 0);
+    assert_eq!(metadata["configuration"]["solver"]["step"], 0.25);
+    assert_eq!(metadata["configuration"]["seed"], 17);
+    assert_eq!(metadata["project_paths"]["recordings"], "results");
+
+    study.run_phases([1]).unwrap();
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    assert_eq!(record["phases"][0]["tasks"][0]["metadata"], *metadata);
+    fs::remove_dir_all(root).unwrap();
 }

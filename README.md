@@ -1,5 +1,9 @@
 # Scientific Workflow
 
+> Warning: this crate is test software. API shape and guarantees are unstable.
+> Treat all releases as potentially breaking until a stable line is announced and
+> update downstream integrations together with each bump.
+
 The Rust crate lives in [`rust/`](rust/). Its complete public overview is in
 [`rust/README.md`](rust/README.md), and the architectural rationale is in
 [`docs/design.md`](docs/design.md).

@@ -15,8 +15,10 @@
 //!
 //! [`ConfigurationSpace`] validates those two documents and lazily produces
 //! every [`ResolvedConfiguration`]. It does not know about tasks, phases,
-//! studies, workloads, display, paths, storage, or scientific state.
-//! Callers decide how each resolved configuration is used.
+//! studies, workloads, display, storage, or scientific state. Callers decide
+//! how each resolved configuration is used. The independent [`ProjectPaths`]
+//! utility strictly validates `config/paths.json` when a downstream project
+//! uses the conventional named-path document.
 //!
 //! # Basic workflow
 //!
@@ -60,6 +62,7 @@ mod parameter_key_tuple;
 mod parameter_path;
 mod parameter_tree;
 mod parameters;
+mod paths;
 pub(crate) mod source;
 mod sweep;
 
@@ -67,3 +70,4 @@ pub use error::ConfigurationError;
 #[doc(hidden)]
 pub use parameter_key_tuple::ParameterKeyTuple;
 pub use parameters::{ConfigurationIter, ConfigurationSpace, ResolvedConfiguration};
+pub use paths::ProjectPaths;

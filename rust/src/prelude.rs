@@ -5,10 +5,9 @@
 //! [`study`]. Import study management only at orchestration boundaries.
 //!
 //! # Boundary
-//! 
+//!
 //! The prelude modules define import convenience only. They do not add new API
 //! behavior; they preserve stable ownership boundaries by limiting wildcard usage.
 
 pub mod basics;
-#[path = "study.rs"]
 pub mod study;

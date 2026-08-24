@@ -2,7 +2,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use super::error::StudyError;
@@ -81,33 +81,33 @@ pub(crate) fn execute_phase(
                     let ScheduledTask { rank, mut task } = scheduled;
                     let key = task.key().clone();
                     if stop.load(Ordering::Acquire) {
-                        mark_task_skipped(&renderer, &results, &key);
+                        mark_task_skipped(renderer, &results, &key);
                         continue;
                     }
                     if renderer.is_cancelled() {
-                        mark_task_cancelled(&renderer, &results, &key);
+                        mark_task_cancelled(renderer, &results, &key);
                         continue;
                     }
                     let Some(start_permit) = start_gate.wait_for_turn(rank, &cancellation, &stop)
                     else {
                         if renderer.is_cancelled() {
-                            mark_task_cancelled(&renderer, &results, &key);
+                            mark_task_cancelled(renderer, &results, &key);
                         } else {
-                            mark_task_skipped(&renderer, &results, &key);
+                            mark_task_skipped(renderer, &results, &key);
                         }
                         continue;
                     };
                     if stop.load(Ordering::Acquire) {
-                        mark_task_skipped(&renderer, &results, &key);
+                        mark_task_skipped(renderer, &results, &key);
                         continue;
                     }
                     if renderer.is_cancelled() {
-                        mark_task_cancelled(&renderer, &results, &key);
+                        mark_task_cancelled(renderer, &results, &key);
                         continue;
                     }
                     let Some(workload) = task.take_workload() else {
                         signal_task_failure(
-                            &renderer,
+                            renderer,
                             &results,
                             &stop,
                             failure_policy,
@@ -128,13 +128,7 @@ pub(crate) fn execute_phase(
                     let context = match context {
                         Ok(context) => context,
                         Err(error) => {
-                            signal_task_failure(
-                                &renderer,
-                                &results,
-                                &stop,
-                                failure_policy,
-                                error,
-                            );
+                            signal_task_failure(renderer, &results, &stop, failure_policy, error);
                             continue;
                         }
                     };
@@ -143,13 +137,7 @@ pub(crate) fn execute_phase(
                         Ok(timer) => timer,
                         Err(error) => {
                             context.fail(error.to_string());
-                            signal_task_failure(
-                                &renderer,
-                                &results,
-                                &stop,
-                                failure_policy,
-                                error,
-                            );
+                            signal_task_failure(renderer, &results, &stop, failure_policy, error);
                             continue;
                         }
                     };
@@ -171,7 +159,7 @@ pub(crate) fn execute_phase(
                     if timed_out {
                         context.cancel("task timeout exceeded");
                         signal_task_failure(
-                            &renderer,
+                            renderer,
                             &results,
                             &stop,
                             failure_policy,
@@ -199,7 +187,7 @@ pub(crate) fn execute_phase(
                             } else {
                                 context.fail(source.to_string());
                                 signal_task_failure(
-                                    &renderer,
+                                    renderer,
                                     &results,
                                     &stop,
                                     failure_policy,
@@ -213,7 +201,7 @@ pub(crate) fn execute_phase(
                         Err(_) => {
                             context.fail("task workload panicked");
                             signal_task_failure(
-                                &renderer,
+                                renderer,
                                 &results,
                                 &stop,
                                 failure_policy,

@@ -105,6 +105,18 @@
 //!
 //! Future orchestration-layer features will organize scoped workflow execution
 //! without changing the public state-value ownership or storage contracts.
+//!
+//! # Release stability
+//!
+//! This crate is a test release. Public API behavior is allowed to change across
+//! updates without backward compatibility guarantees.
+//!
+//! ## Downstream no-overlap policy
+//!
+//! For downstream consumers, preserve boundary ownership:
+//! keep orchestration in `study`, persistence in `storage`, and pure state in
+//! `system_state`/`time_series`. Do not implement overlapping behavior in a
+//! downstream layer; if a seam is missing, negotiate an explicit API addition.
 
 mod clock;
 

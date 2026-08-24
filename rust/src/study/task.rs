@@ -74,7 +74,7 @@ impl TaskContext {
     where
         T: DeserializeOwned,
     {
-        self.task.decode_value(key)
+        self.task.decode_metadata(key)
     }
 
     /// Sets or replaces the target iteration of a progress task.

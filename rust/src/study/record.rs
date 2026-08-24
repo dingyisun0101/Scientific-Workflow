@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use serde::Serialize;
+use serde_json::Value;
 
 use super::error::StudyError;
 use super::phase::{Phase, PhaseId, TaskKey, TaskMode};
@@ -55,6 +56,7 @@ pub struct TaskRecord {
     label: String,
     mode: &'static str,
     status: &'static str,
+    metadata: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     started_at_utc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,6 +122,11 @@ impl StudyRecorder {
                         TaskMode::OneShot => "one-shot",
                     },
                     status: "pending",
+                    metadata: Value::Object(
+                        task.metadata_iter()
+                            .map(|(key, value)| (key.to_owned(), value.clone()))
+                            .collect(),
+                    ),
                     started_at_utc: None,
                     ended_at_utc: None,
                     duration_ns: None,

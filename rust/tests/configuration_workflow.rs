@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use scientific_workflow::configuration::{
-    ConfigurationError, ConfigurationSpace, ResolvedConfiguration,
+    ConfigurationError, ConfigurationSpace, ProjectPaths, ResolvedConfiguration,
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -94,4 +94,46 @@ fn indexed_access_and_value_errors_retain_the_combination_ordinal() {
     ));
 
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn project_paths_are_strict_ordered_and_resolve_lexically() {
+    let root = std::env::temp_dir().join(format!(
+        "scientific-workflow-paths-{}-{}",
+        std::process::id(),
+        NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+    ));
+    let configuration = root.join("config");
+    fs::create_dir_all(&configuration).unwrap();
+    fs::write(
+        configuration.join("paths.json"),
+        r#"{"recordings":"results","input":"data/input.json"}"#,
+    )
+    .unwrap();
+
+    let paths = ProjectPaths::load(&root).unwrap();
+    assert_eq!(paths.keys().collect::<Vec<_>>(), ["recordings", "input"]);
+    assert_eq!(
+        paths.resolve_path("recordings").unwrap(),
+        root.join("results")
+    );
+    assert_eq!(paths.to_json_value()["input"], "data/input.json");
+
+    fs::write(
+        configuration.join("paths.json"),
+        r#"{"recordings":"first","recordings":"second"}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        ProjectPaths::load(&root),
+        Err(ConfigurationError::DuplicateConfigurationKey { key, .. })
+            if key == "recordings"
+    ));
+
+    fs::write(configuration.join("paths.json"), r#"{" ":"results"}"#).unwrap();
+    assert!(matches!(
+        ProjectPaths::load(&root),
+        Err(ConfigurationError::InvalidConfigurationDocument { .. })
+    ));
+    fs::remove_dir_all(root).unwrap();
 }

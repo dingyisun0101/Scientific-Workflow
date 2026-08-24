@@ -60,6 +60,9 @@ pub enum ConfigurationError {
         source: serde_json::Error,
     },
 
+    #[error("project paths do not contain `{key}`")]
+    UnknownProjectPath { key: String },
+
     #[error("failed to serialize resolved configuration ordinal {ordinal}")]
     SerializeResolvedConfiguration {
         ordinal: u64,
