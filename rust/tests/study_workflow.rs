@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use scientific_workflow::configuration::ConfigurationSpace;
+use scientific_workflow::configuration::{PhaseConfiguration, StudyConfiguration};
 use scientific_workflow::prelude::study::*;
 
 static STUDY_LOCK: Mutex<()> = Mutex::new(());
@@ -17,16 +17,18 @@ fn record_path(label: &str) -> std::path::PathBuf {
     ))
 }
 
-fn configuration_space() -> (std::path::PathBuf, ConfigurationSpace) {
+fn configuration_space() -> (std::path::PathBuf, PhaseConfiguration) {
     let directory = record_path("configuration").with_extension("");
-    fs::create_dir_all(&directory).unwrap();
-    fs::write(directory.join("fixed.json"), r#"{"iterations":3}"#).unwrap();
+    fs::create_dir_all(directory.join("config")).unwrap();
     fs::write(
-        directory.join("sweep.json"),
-        r#"{"mode":"cartesian","axes":{"seed":{"values":[7,11,13]}}}"#,
+        directory.join("config/parameters.json"),
+        r#"{"global":{"iterations":3},"phase_group":{"test":{"shared":{},"phase":{"simulation":{"seed":{"$sweep":[7,11,13]}}}}}}"#,
     )
     .unwrap();
-    let space = ConfigurationSpace::load(&directory).unwrap();
+    let space = StudyConfiguration::load(&directory)
+        .unwrap()
+        .phase("test", "simulation")
+        .unwrap();
     (directory, space)
 }
 
@@ -223,13 +225,8 @@ fn configured_tasks_preserve_complete_plan_and_record_provenance() {
     let configuration_directory = root.join("config");
     fs::create_dir_all(&configuration_directory).unwrap();
     fs::write(
-        configuration_directory.join("fixed.json"),
-        r#"{"solver":{"step":0.25}}"#,
-    )
-    .unwrap();
-    fs::write(
-        configuration_directory.join("sweep.json"),
-        r#"{"mode":"cartesian","axes":{"seed":{"values":[17]}}}"#,
+        configuration_directory.join("parameters.json"),
+        r#"{"global":{"solver":{"step":0.25}},"phase_group":{"test":{"shared":{},"phase":{"simulation":{"seed":{"$sweep":[17]}}}}}}"#,
     )
     .unwrap();
     fs::write(
@@ -237,7 +234,10 @@ fn configured_tasks_preserve_complete_plan_and_record_provenance() {
         r#"{"recordings":"results"}"#,
     )
     .unwrap();
-    let configurations = ConfigurationSpace::load(&configuration_directory).unwrap();
+    let configurations = StudyConfiguration::load(&root)
+        .unwrap()
+        .phase("test", "simulation")
+        .unwrap();
     let configuration = configurations.combination(0).unwrap();
     let paths = scientific_workflow::configuration::ProjectPaths::load(&root).unwrap();
     let record_path = root.join("study-record.json");
@@ -258,6 +258,11 @@ fn configured_tasks_preserve_complete_plan_and_record_provenance() {
         serde_json::from_slice(&study.plan().to_pretty_json().unwrap()).unwrap();
     let metadata = &plan["phases"][0]["tasks"][0]["metadata"];
     assert_eq!(metadata["configuration_ordinal"], 0);
+    assert_eq!(metadata["configuration_identity"]["phase_group"], "test");
+    assert_eq!(metadata["configuration_identity"]["phase"], "simulation");
+    assert_eq!(metadata["configuration_identity"]["global_ordinal"], 0);
+    assert_eq!(metadata["configuration_identity"]["group_ordinal"], 0);
+    assert_eq!(metadata["configuration_identity"]["phase_ordinal"], 0);
     assert_eq!(metadata["configuration"]["solver"]["step"], 0.25);
     assert_eq!(metadata["configuration"]["seed"], 17);
     assert_eq!(metadata["project_paths"]["recordings"], "results");

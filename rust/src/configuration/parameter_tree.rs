@@ -6,6 +6,7 @@ use super::parameter_path::ParameterPath;
 use super::source::StrictValue;
 
 /// One uniquely identified terminal JSON value.
+#[derive(Clone)]
 pub(super) struct ParameterLeaf {
     pub(super) path: ParameterPath,
     pub(super) value: Value,

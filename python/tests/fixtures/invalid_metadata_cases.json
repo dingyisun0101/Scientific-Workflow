@@ -1,0 +1,37 @@
+[
+  {
+    "name": "unknown format name",
+    "pointer": "/format",
+    "value": "unknown-workflow-format"
+  },
+  {
+    "name": "unsupported format version",
+    "pointer": "/version",
+    "value": 8
+  },
+  {
+    "name": "unsafe stream directory",
+    "pointer": "/streams/0/directory",
+    "value": "../outside"
+  },
+  {
+    "name": "zero sampling interval",
+    "pointer": "/streams/0/sampling_interval/iterations",
+    "value": 0
+  },
+  {
+    "name": "zero storage queue",
+    "pointer": "/streams/0/storage/storage_queue_bytes",
+    "value": 0
+  },
+  {
+    "name": "nonsequential first chunk",
+    "pointer": "/streams/0/chunks/0/ordinal",
+    "value": 1
+  },
+  {
+    "name": "malformed chunk checksum",
+    "pointer": "/streams/0/chunks/0/checksum",
+    "value": "sha256:not-a-digest"
+  }
+]

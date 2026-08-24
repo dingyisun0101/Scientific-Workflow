@@ -1,0 +1,21 @@
+{
+  "global": {
+    "lattice_shape": [16, 16]
+  },
+  "phase_group": {
+    "test": {
+      "shared": {
+        "integrator": "adaptive"
+      },
+      "phase": {
+        "simulation": {
+          "$cases": [
+            {"temperature": 275.0, "physical_time_increment": 0.2},
+            {"temperature": 290.0, "physical_time_increment": 0.1},
+            {"temperature": 310.0, "physical_time_increment": 0.05}
+          ]
+        }
+      }
+    }
+  }
+}

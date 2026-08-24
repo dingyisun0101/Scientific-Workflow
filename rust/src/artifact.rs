@@ -47,7 +47,9 @@ impl ArtifactDescriptor {
 /// Whether publishing created new bytes or reused identical existing bytes.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ArtifactDisposition {
+    /// This publication created the destination artifact.
     Created,
+    /// Identical bytes already existed and were reused.
     Reused,
 }
 
@@ -332,40 +334,74 @@ fn remove_published_temporary(path: &Path) -> Result<(), ArtifactError> {
     })
 }
 
+/// Failure while validating or publishing an immutable artifact.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ArtifactError {
+    /// A filename fragment is empty or contains unsafe characters.
     #[error("invalid artifact {kind} `{value}`")]
-    InvalidFragment { kind: &'static str, value: String },
+    InvalidFragment {
+        /// Kind of fragment, such as `stem` or `extension`.
+        kind: &'static str,
+        /// Rejected fragment value.
+        value: String,
+    },
+    /// A filesystem operation failed during publication.
     #[error("failed to {operation} at `{path}`")]
     Io {
+        /// Stable description of the attempted operation.
         operation: &'static str,
+        /// Filesystem path affected by the operation.
         path: PathBuf,
+        /// Underlying operating-system failure.
         #[source]
         source: std::io::Error,
     },
+    /// Existing bytes at a digest-derived path do not match the digest input.
     #[error("artifact digest collision for `{digest}` at `{path}`")]
-    DigestCollision { digest: String, path: PathBuf },
+    DigestCollision {
+        /// SHA-256 identity whose destination was occupied.
+        digest: String,
+        /// Conflicting artifact path.
+        path: PathBuf,
+    },
+    /// All bounded attempts to allocate a unique temporary path collided.
     #[error("could not allocate a temporary artifact beneath `{directory}`")]
-    TemporaryIdentityExhausted { directory: PathBuf },
+    TemporaryIdentityExhausted {
+        /// Directory in which allocation was attempted.
+        directory: PathBuf,
+    },
 }
 
+/// Failure while locating or verifying a persisted artifact.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ArtifactLoadError {
+    /// Descriptor contents are malformed or escape the execution directory.
     #[error("invalid artifact descriptor: {reason}")]
-    InvalidDescriptor { reason: String },
+    InvalidDescriptor {
+        /// Contextual descriptor violation.
+        reason: String,
+    },
+    /// A filesystem operation failed during loading.
     #[error("failed to {operation} at `{path}`")]
     Io {
+        /// Stable description of the attempted operation.
         operation: &'static str,
+        /// Filesystem path affected by the operation.
         path: PathBuf,
+        /// Underlying operating-system failure.
         #[source]
         source: std::io::Error,
     },
+    /// Loaded bytes do not have the descriptor's declared digest.
     #[error("artifact `{path}` has SHA-256 `{actual}`, but metadata declares `{expected}`")]
     DigestMismatch {
+        /// Canonical path of the loaded artifact.
         path: PathBuf,
+        /// SHA-256 digest declared by the descriptor.
         expected: String,
+        /// SHA-256 digest calculated from the loaded bytes.
         actual: String,
     },
 }

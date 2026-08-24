@@ -1,7 +1,0 @@
-{
-  "mode": "cartesian",
-  "axes": {
-    "mu": {"values": [-0.25, 0.25, 1.0]},
-    "angular_frequency": {"values": [0.75, 1.25]}
-  }
-}

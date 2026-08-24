@@ -31,7 +31,7 @@ static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
 pub enum TaskStatus {
     /// The task is registered but has not started.
     Pending,
-    /// The task currently owns an active [`TaskProgressHandle`] handle.
+    /// The task currently owns an active progress-reporting handle.
     Running,
     /// Evolution, persistence, and caller-defined validation completed.
     Completed,
@@ -84,11 +84,11 @@ impl TaskStatus {
     }
 }
 
-/// Exact parameter-derived identity of one task.
+/// Exact reporting identity and immutable metadata of one task.
 ///
-/// The identity contains only the caller-selected parameter fields. Its label
-/// is deterministic compact JSON text intended for reporting, while equality
-/// validation uses the retained JSON values themselves.
+/// The label and phase-qualified key identify the task in progress output.
+/// Metadata contains the complete application-defined task metadata map,
+/// including configuration provenance when attached by the caller.
 #[derive(Clone, Debug)]
 pub struct TaskIdentity {
     label: Arc<str>,
@@ -97,33 +97,31 @@ pub struct TaskIdentity {
 }
 
 impl TaskIdentity {
-    /// Returns the terminal label derived from exact parameter key/value pairs.
+    /// Returns the declared display label for this task.
     pub fn label(&self) -> &str {
         &self.label
     }
 
-    /// Returns the number of parameter fields forming this identity.
+    /// Returns the number of task metadata entries.
     pub fn len(&self) -> usize {
         self.metadata.len()
     }
 
-    /// Reports whether the identity contains no parameter fields.
+    /// Reports whether the task contains no metadata.
     pub fn is_empty(&self) -> bool {
         self.metadata.is_empty()
     }
 
-    /// Borrows one exact identity value by parameter name.
+    /// Borrows one exact task metadata value by key.
     pub fn value(&self, key: &str) -> Option<&Value> {
         self.metadata.get(key)
     }
 
-    /// Iterates identity fields in the configured display order.
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (&str, &Value)> + '_> {
-        Box::new(
-            self.metadata
-                .iter()
-                .map(|(key, value)| (key.as_str(), value)),
-        )
+    /// Iterates task metadata in deterministic key order.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &Value)> {
+        self.metadata
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
     }
 
     /// Returns the exact first-class task key when this identity came from a

@@ -16,6 +16,46 @@ the application that understands them.
 > change between releases until a stable 1.0 line is announced. Treat every
 > version update as a coordinated migration.
 
+## Installation
+
+Scientific Workflow 0.8 requires Rust 1.97 or newer. Use the registry release
+in application crates:
+
+```toml
+[dependencies]
+scientific-workflow = "0.8.0"
+```
+
+The dependency intentionally has no Cargo features. All public modules use one
+implementation and one dependency graph; applications import only the module
+boundaries they need. Commit the application's `Cargo.lock` when it is an
+executable so every deployment resolves the same compatible release.
+
+### Migrating from 0.7
+
+Version 0.8 is a breaking configuration and orchestration release:
+
+1. Replace `config/fixed.json` and `config/sweep.json` with one
+   `config/parameters.json`. Ordinary values and arrays are literal; wrap only
+   Cartesian choices in `{"$sweep": [...]}` and use scope-level `$cases` for
+   correlated choices.
+2. Put truly study-wide parameters in `global`. Put parameters shared by
+   related phases in `phase_group.<group>.shared`, and phase-local parameters
+   in `phase_group.<group>.phase.<phase>`.
+3. Replace `ConfigurationSpace` loading with `StudyConfiguration::load`, select
+   a phase using `phase(group, phase)`, and call `combinations()` on that
+   `PhaseConfiguration`.
+4. Add the required root `study.json` and declare all four replicate settings.
+5. At program startup, pass the validated `ReplicateSettings` and resolved
+   output root to `ReplicateExecutor::dispatch_current_executable`. Construct
+   the application study only in the returned `Some(ReplicateContext)` branch.
+6. Derive recording paths from the context's `ExecutionScope`; do not rebuild
+   `replicate_<index>` paths in application code. Request named random seeds
+   through `ReplicateContext::seed_deriver()` only when needed.
+
+The complete grammars and startup example appear below. Existing 0.7 output is
+never silently adopted or overwritten by the replicate dispatcher.
+
 ## What problem the crate solves
 
 A scientific executable usually does more than evaluate equations. It must
@@ -35,12 +75,20 @@ Scientific Workflow separates those responsibilities. A typical program has
 the following flow:
 
 ```text
-fixed.json + sweep.json       paths.json
-          │                       │
-          ▼                       ▼
-  ConfigurationSpace         ProjectPaths
-          │                       │
-          └────── application maps combinations ──────┐
+study.json ──► StudySettings ──► ReplicateExecutor
+                                      │
+                                      ▼
+                         output/replicate_<index>
+                                      │
+parameters.json               paths.json
+      │                           │
+      ▼                           ▼
+StudyConfiguration            ProjectPaths
+      │                           │
+      ▼                           │
+PhaseConfiguration               │
+      │                           │
+      └──── application maps combinations ────────────┐
                                                        ▼
                                               Study → Phase → Task
                                                        │
@@ -143,75 +191,225 @@ without cleanup.
 
 ### `configuration`: strict experiment inputs
 
-The `configuration` module turns validated JSON documents into immutable,
-deterministic scientific inputs.
-
-`ConfigurationSpace` reads a directory containing `fixed.json` and
-`sweep.json`. Fixed leaves are shared by every combination. Swept leaves are
-expanded either as a Cartesian product or as explicit cases.
-`ResolvedConfiguration` represents one combination and supports exact JSON
-Pointer lookup, typed decoding, iteration over terminal keys, and reconstruction
-of the complete nested document.
-
-The module also provides `ProjectPaths`. It strictly loads the conventional
-`config/paths.json`, rejects duplicate or blank entries, preserves declaration
-order and original bytes, and resolves relative values lexically against a
-project root. It does not canonicalize targets, expand shell syntax, or require
-paths to exist; those policies remain explicit application decisions.
-
-An input tree normally looks like this:
+The `configuration` module validates three independent input concerns: complete
+study replicate policy, study-wide scientific parameters, and named paths:
 
 ```text
 study/
+├── study.json             required replicate execution policy
 └── config/
-    ├── fixed.json
-    ├── sweep.json
-    └── paths.json
+    ├── parameters.json    scientific parameters and selections
+    └── paths.json         named filesystem paths
 ```
 
-Example fixed and sweep documents:
+`StudySettings` strictly loads `study.json`. `StudyConfiguration` independently
+loads `config/parameters.json`. Calling
+`phase(group, phase)` returns a `PhaseConfiguration`, whose combinations
+automatically compose the global, group-shared, and phase-local scopes.
+`ResolvedConfiguration` supports exact JSON Pointer lookup, typed decoding,
+terminal-key iteration, nested-document reconstruction, and scoped ordinals.
+
+#### Complete `study.json` grammar
+
+The root contains exactly one `replicate_settings` object, and that object
+contains exactly four required fields:
 
 ```json
 {
-  "solver": { "time_step": 0.01 },
-  "maximum_iterations": 10000
-}
-```
-
-```json
-{
-  "mode": "cartesian",
-  "axes": {
-    "temperature": { "values": [280.0, 300.0] },
-    "seed": { "values": [7, 11] }
+  "replicate_settings": {
+    "replicates": 4,
+    "execution": "parallel",
+    "failure_policy": "finish_all",
+    "seed": 1101
   }
 }
 ```
 
+| Field | Accepted values | Meaning |
+|---|---|---|
+| `replicates` | positive JSON integer representable as `u64` | Number of isolated executions of the complete program |
+| `execution` | `"sequential"` or `"parallel"` | Whether the controller awaits each child before starting the next or starts one child per replicate immediately |
+| `failure_policy` | `"fail_fast"` or `"finish_all"` | Whether a failure stops future sequential children/terminates active parallel children, or lets every replicate finish |
+| `seed` | JSON integer representable as `u64` | Study-level source for lazy namespace-separated seeds |
+
+Unknown, missing, duplicated, mistyped, or zero-valued fields are rejected.
+There are no implicit defaults: the source document always states the complete
+replicate contract.
+
+`ReplicateExecutor` consumes the validated settings plus an output root chosen
+through `ProjectPaths`. The first process is the controller and starts the same
+executable once per replicate. Each child re-enters the same call and receives
+a `ReplicateContext`; only that branch constructs and runs the scientific
+study:
+
 ```rust,no_run
-use scientific_workflow::configuration::{ConfigurationSpace, ProjectPaths};
+use scientific_workflow::prelude::basics::*;
 
+# fn run_one_replicate(_replicate: &ReplicateContext) -> Result<(), Box<dyn std::error::Error>> {
+# Ok(())
+# }
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-let space = ConfigurationSpace::load("study/config")?;
-let paths = ProjectPaths::load("study")?;
+let study_root = std::path::Path::new("study");
+let settings = StudySettings::load(study_root)?;
+let output_root = ProjectPaths::load(study_root)?.resolve_path("output_root")?;
 
-for configuration in space.combinations() {
-    let (temperature, seed): (f64, u64) =
-        configuration.decode_values(("/temperature", "/seed"))?;
-    println!(
-        "combination={} temperature={temperature} seed={seed}",
-        configuration.ordinal()
-    );
-}
+let Some(replicate) =
+    ReplicateExecutor::new(settings.replicate_settings(), output_root)
+        .dispatch_current_executable()?
+else {
+    return Ok(()); // Controller completed all child processes.
+};
 
-let recording_root = paths.resolve_path("recordings")?;
-println!("recordings: {}", recording_root.display());
+run_one_replicate(&replicate)?;
 # Ok(())
 # }
 ```
 
-Configuration does not register tasks, choose concurrency, create output, or
-validate domain-specific physics. It only defines and expands inputs.
+Replicate indices are zero-based. The controller exclusively creates
+`output_root/replicate_0`, `replicate_1`, and so on; an existing directory is a
+hard error rather than an overwrite. Original command-line arguments and stdio
+are inherited. In parallel mode there is deliberately no process pool or
+machine-resource scheduler: one child is started for every declared replicate.
+Applications should use plain or hidden study display when concurrent children
+would otherwise compete for an interactive terminal.
+
+`ReplicateContext::execution_scope()` is the existing output scope and should
+be passed to APIs that require an `ExecutionScope`.
+`ReplicateContext::seed_deriver()` reuses the library's versioned
+`ReplicateSeedDeriver`; seed material is calculated only when the application
+requests a named random stream. A deterministic study need not derive a seed.
+
+#### Complete `parameters.json` grammar
+
+The root has exactly two fields. `global` is a parameter scope.
+`phase_group` is indexed by stable application-defined string keys:
+
+```json
+{
+  "global": {
+    "species": 128
+  },
+  "phase_group": {
+    "models": {
+      "shared": {
+        "maximum_iterations": 10000
+      },
+      "phase": {
+        "mean-field": {
+          "solver": {"time_step": 0.01}
+        },
+        "lattice": {
+          "shape": [64],
+          "boundary": "periodic"
+        }
+      }
+    }
+  }
+}
+```
+
+Each group has exactly `shared` and `phase`. `phase` is indexed by stable
+application-defined phase keys. Only `global`, `phase_group`, `shared`,
+`phase`, `$sweep`, and `$cases` are grammar names; keys such as `models` and
+`mean-field` have no built-in scientific meaning.
+
+Every ordinary JSON value is literal, including arrays. An array can therefore
+represent a shape, field list, recording definition, matrix, or any other
+domain value without escaping. Cartesian selection requires an explicit
+object containing exactly `$sweep`:
+
+```json
+{
+  "temperature": {"$sweep": [280.0, 300.0]},
+  "shape": {"$sweep": [[64], [128], [64, 64]]},
+  "fields": ["abundance", "space"]
+}
+```
+
+All `$sweep` markers in one scope form a Cartesian product. Choices may be any
+JSON values, including arrays and objects, but every object choice for one
+marker must flatten to the same key set.
+
+Correlated alternatives use one scope-level `$cases` array:
+
+```json
+{
+  "solver": "rk4",
+  "$cases": [
+    {"temperature": 280.0, "time_step": 0.02},
+    {"temperature": 300.0, "time_step": 0.01}
+  ]
+}
+```
+
+Every case must be a nonempty object with the same flattened key set. A scope
+cannot mix `$cases` and `$sweep`; ordinary sibling values are shared by all
+cases.
+
+#### Scope composition and ownership
+
+For one selected phase, expansion is:
+
+```text
+global selections × group shared selections × phase-local selections
+```
+
+Declare a parameter at the lowest scope whose complete set of descendants must
+share or cross it. A truly study-wide value belongs in `global`; a value shared
+only by a related set of phases belongs in that group's `shared`; all other
+values belong in their consuming phase.
+
+The merged scopes cannot contain overlapping paths. There is intentionally no
+shadowing or fallback precedence: `/seed` cannot be declared globally and
+again in a contributing group or phase. Parameters with the same short name
+but different meanings should use explicit namespaces.
+
+Global selections vary slowest, followed by group selections and phase-local
+selections. Each result exposes `global_ordinal()`, `group_ordinal()`, and
+`phase_ordinal()` in addition to the flattened `ordinal()`. Because a phase
+never expands sibling phase selections, editing an unrelated phase cannot
+multiply or renumber its tasks.
+
+#### Loading and decoding
+
+```rust,no_run
+use scientific_workflow::configuration::{ProjectPaths, StudyConfiguration};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let study = StudyConfiguration::load("study")?;
+let configurations = study.phase("models", "mean-field")?;
+let paths = ProjectPaths::load("study")?;
+
+for configuration in configurations.combinations() {
+    let (species, maximum): (usize, u64) =
+        configuration.decode_values(("/species", "/maximum_iterations"))?;
+    println!(
+        "global={} group={} phase={} species={species} maximum={maximum}",
+        configuration.global_ordinal(),
+        configuration.group_ordinal(),
+        configuration.phase_ordinal(),
+    );
+}
+
+println!("recordings: {}", paths.resolve_path("recordings")?.display());
+# Ok(())
+# }
+```
+
+Loading validates the entire registry before returning any phase. It rejects
+duplicate JSON keys, missing or unknown grammar fields, blank keys, malformed
+or empty selections, mismatched cases, overlapping paths, and combination
+count overflow. `source_json()` preserves the exact validated parameter bytes.
+
+`ProjectPaths` strictly loads `config/paths.json`, rejects duplicate or blank
+entries, preserves declaration order and original bytes, and resolves relative
+values lexically against the study root. It does not canonicalize targets,
+expand shell syntax, or require paths to exist.
+
+Configuration validates process-level replicate policy but does not execute
+it. It does not register tasks, create output, choose phase concurrency, or
+validate domain-specific physics. Applications explicitly pass settings to the
+execution API and map selected parameter combinations into workloads.
 
 ### `study`: orchestration and lifecycle
 
@@ -245,11 +443,12 @@ path table. These helpers prevent each application from inventing a different
 configuration-to-task convention.
 
 ```rust,no_run
-use scientific_workflow::configuration::{ConfigurationSpace, ProjectPaths};
+use scientific_workflow::configuration::{ProjectPaths, StudyConfiguration};
 use scientific_workflow::prelude::study::*;
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-let configurations = ConfigurationSpace::load("study/config")?;
+let study_configuration = StudyConfiguration::load("study")?;
+let configurations = study_configuration.phase("models", "simulation")?;
 let paths = ProjectPaths::load("study")?;
 let tasks = configurations.combinations().map({
     let paths = paths.clone();
@@ -348,17 +547,22 @@ Storage owns persistence integrity and reconstruction. The application still
 owns what to record, when an observation is scientifically meaningful, and why
 a run terminates.
 
-### `execution`: filesystem identity for runs
+### `execution`: replicate isolation and filesystem identity
 
-The `execution` module owns collision-resistant run directories through
-`ExecutionScope`. A caller can create a named scope, create a generated scope,
-or open an existing scope according to the API being used. Child paths are
-validated so semantic task identifiers cannot accidentally become unsafe path
-traversals.
+The `execution` module owns `ReplicateExecutor`, `ReplicateContext`, and
+collision-resistant run directories through `ExecutionScope`. Replicate
+dispatch uses the operating system's process API directly: the controller
+starts the current executable, preserves its arguments, supplies one internal
+worker index, and observes the resulting status. It does not introduce a
+second task scheduler or process-pool abstraction.
 
-An execution scope is only a filesystem lifecycle boundary. It does not create
-tasks, interpret configuration, define recording schemas, or select scientific
-parameters.
+A caller can also create a named scope, create a generated scope, or open an
+existing scope directly. Child paths are validated so semantic task
+identifiers cannot accidentally become unsafe path traversals.
+
+An execution scope is only a filesystem lifecycle boundary. Replicate dispatch
+does not create study tasks, interpret scientific parameters, define recording
+schemas, or choose machine-level CPU and memory limits.
 
 ### `artifact`: immutable verified inputs
 
@@ -379,9 +583,27 @@ number generators. `RngRecord` captures namespace, implementation identity,
 version, seed material, and optional method-specific metadata, and can be
 inserted into recording metadata under `RNG_RECORDS_METADATA_KEY`.
 
-The module records provenance only. It does not generate random numbers or
-claim that two different algorithms are interchangeable merely because they
-share a seed.
+`ReplicateContext::seed_deriver()` supplies a `ReplicateSeedDeriver` initialized
+from `study.json` and the worker's zero-based replicate index. The deriver
+lazily derives a named stream seed. Its versioned, domain-separated SHA-256 contract
+is independent of request order, process scheduling, and sequential versus
+parallel execution. Every `DerivedSeed` carries the exact `RngRecord` that
+should accompany persisted output:
+
+```rust
+use scientific_workflow::rng_record::ReplicateSeedDeriver;
+
+let replicate = ReplicateSeedDeriver::new(1101, 3);
+let matrix = replicate.derive("matrix")?;
+let pairing = replicate.derive("pairing/task-17")?;
+assert_ne!(matrix.value(), pairing.value());
+# Ok::<(), scientific_workflow::rng_record::RngRecordError>(())
+```
+
+The module does not construct an RNG, sample distributions, or claim that two
+algorithms are interchangeable merely because they share a seed. Applications
+use the derived `u64` with their selected RNG implementation and retain the
+provided provenance record.
 
 ### `prelude`: narrow imports, no new behavior
 

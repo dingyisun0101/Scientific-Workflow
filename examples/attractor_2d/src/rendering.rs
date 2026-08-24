@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use scientific_workflow::prelude::study::TaskContext;
@@ -7,16 +7,17 @@ use crate::AppResult;
 
 pub(crate) fn render_trajectories(
     script: &Path,
-    recording_directory: &Path,
+    recording_directories: &[PathBuf],
     output_directory: &Path,
     context: &TaskContext,
 ) -> AppResult<()> {
     context.set_detail("starting Python trajectory renderer");
-    let output = Command::new("mamba")
-        .args(["run", "-n", "DSES", "python"])
-        .arg(script)
-        .arg("--recording-directory")
-        .arg(recording_directory)
+    let mut command = Command::new("mamba");
+    command.args(["run", "-n", "DSES", "python"]).arg(script);
+    for recording in recording_directories {
+        command.arg("--recording").arg(recording);
+    }
+    let output = command
         .arg("--output-directory")
         .arg(output_directory)
         .output()?;

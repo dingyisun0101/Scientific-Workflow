@@ -51,8 +51,7 @@ impl ProjectPaths {
             by_name.insert(name.clone().into_boxed_str(), position);
             entries.push(PathEntry {
                 name: name.into_boxed_str(),
-                source: raw.clone().into_boxed_str(),
-                raw: PathBuf::from(raw),
+                source: raw.into_boxed_str(),
             });
         }
 
@@ -67,35 +66,43 @@ impl ProjectPaths {
         })
     }
 
+    /// Returns the project root supplied to [`Self::load`].
     pub fn project_root(&self) -> &Path {
         &self.inner.project_root
     }
 
+    /// Returns the exact `paths.json` source path.
     pub fn source_path(&self) -> &Path {
         &self.inner.source_path
     }
 
+    /// Borrows the original validated source bytes without reserialization.
     pub fn source_json(&self) -> &[u8] {
         &self.inner.source
     }
 
+    /// Returns the number of declared named paths.
     pub fn len(&self) -> usize {
         self.inner.entries.len()
     }
 
+    /// Reports whether the path table contains no entries.
     pub fn is_empty(&self) -> bool {
         self.inner.entries.is_empty()
     }
 
+    /// Reports whether `key` is declared.
     pub fn contains(&self, key: &str) -> bool {
         self.inner.by_name.contains_key(key)
     }
 
+    /// Borrows the declared path without resolving it against the project root.
     pub fn path(&self, key: &str) -> Option<&Path> {
         let &position = self.inner.by_name.get(key)?;
-        Some(&self.inner.entries[position].raw)
+        Some(Path::new(self.inner.entries[position].source.as_ref()))
     }
 
+    /// Borrows a required declared path or returns an unknown-path error.
     pub fn require_path(&self, key: &str) -> Result<&Path, ConfigurationError> {
         self.path(key)
             .ok_or_else(|| ConfigurationError::UnknownProjectPath {
@@ -103,6 +110,7 @@ impl ProjectPaths {
             })
     }
 
+    /// Returns an absolute declaration unchanged or joins a relative one to the project root.
     pub fn resolve_path(&self, key: &str) -> Result<PathBuf, ConfigurationError> {
         let path = self.require_path(key)?;
         if path.is_absolute() {
@@ -112,15 +120,17 @@ impl ProjectPaths {
         }
     }
 
+    /// Iterates names in source declaration order.
     pub fn keys(&self) -> impl ExactSizeIterator<Item = &str> {
         self.inner.entries.iter().map(|entry| entry.name.as_ref())
     }
 
+    /// Iterates names and unresolved paths in source declaration order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &Path)> {
         self.inner
             .entries
             .iter()
-            .map(|entry| (entry.name.as_ref(), entry.raw.as_path()))
+            .map(|entry| (entry.name.as_ref(), Path::new(entry.source.as_ref())))
     }
 
     /// Returns a deterministic JSON object suitable for task provenance.
@@ -162,5 +172,4 @@ struct ProjectPathsInner {
 struct PathEntry {
     name: Box<str>,
     source: Box<str>,
-    raw: PathBuf,
 }

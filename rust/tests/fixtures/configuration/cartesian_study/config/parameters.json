@@ -1,0 +1,22 @@
+{
+  "global": {
+    "physical_time_increment": 0.125,
+    "lattice_shape": [4, 8]
+  },
+  "phase_group": {
+    "test": {
+      "shared": {
+        "solver": {
+          "method": "rk4",
+          "tolerance": 1e-9
+        }
+      },
+      "phase": {
+        "simulation": {
+          "temperature": {"$sweep": [280.0, 300.0]},
+          "seed": {"$sweep": [7, 11, 13]}
+        }
+      }
+    }
+  }
+}

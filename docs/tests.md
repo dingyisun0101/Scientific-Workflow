@@ -35,11 +35,13 @@ cooperative cancellation.
 `configuration_workflow.rs` verifies the complete configuration contract:
 
 ```text
-configuration directory → ConfigurationSpace → ResolvedConfiguration values
+parameters.json → StudyConfiguration → PhaseConfiguration → ResolvedConfiguration values
 ```
 
 Coverage includes:
 
+- strict `study.json` replicate settings and rejection of unknown or invalid
+  policy fields;
 - nested fixed values;
 - Cartesian sweep products and deterministic ordinal order;
 - explicit cases;
@@ -50,6 +52,13 @@ Coverage includes:
 
 Configuration tests deliberately do not cover task creation, named paths,
 schemas, scheduling, or display because those concerns are outside the module.
+
+## Replicate execution tests
+
+`replicate_workflow.rs` runs the integration-test executable through the public
+dispatcher. It verifies that parallel mode re-enters exactly one worker per
+declared replicate, creates isolated `replicate_<index>` scopes, preserves the
+declared count, and binds every worker to the matching lazy seed deriver.
 
 ## Scientific modules
 
@@ -63,7 +72,8 @@ schemas, scheduling, or display because those concerns are outside the module.
   digest validation.
 - `rng_record_workflow.rs` verifies RNG provenance validation and persistence.
 - `python_reader_conformance.rs` verifies the shared persisted format across
-  Rust and Python readers.
+  Rust and Python readers. Both readers also consume one shared corpus of
+  malformed metadata mutations and must reject every case.
 
 ## Downstream integration
 
@@ -73,7 +83,7 @@ The repository also checks:
 - Simulator-owned `SimulatorInputs` and `SimulatorConfiguration` grouping into
   ensemble tasks;
 - Dispatcher-owned study directories, inputs, paths, phases, and plans;
-- the attractor example's direct mapping from `ConfigurationSpace`
+- the attractor example's direct mapping from `PhaseConfiguration`
   combinations into tasks.
 
 These builds ensure downstream programs retain ownership of model-specific

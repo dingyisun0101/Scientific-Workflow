@@ -1,10 +1,12 @@
+use std::path::Path;
+
 use crate::{AppResult, hopf_model::HopfModel, recording};
 use scientific_workflow::prelude::basics::*;
 use scientific_workflow::prelude::study::*;
 
 pub(crate) fn run_task(
     schema: &SystemStateSchema,
-    execution: &ExecutionScope,
+    recording_directory: &Path,
     task: &ResolvedConfiguration,
     context: &TaskContext,
 ) -> AppResult<()> {
@@ -23,12 +25,5 @@ pub(crate) fn run_task(
     // and I/O. The study owns neither and observes only TaskContext progress.
     let mut model = HopfModel::new(schema, initial_point, mu, omega, dt)?;
 
-    // Task ordinal is stable across equally generated phase task sets. It is
-    // therefore sufficient to derive the same durable directory in validation.
-    recording::record_task(
-        &execution.task_recording_directory(task.ordinal()),
-        task,
-        &mut model,
-        context,
-    )
+    recording::record_task(recording_directory, task, &mut model, context)
 }

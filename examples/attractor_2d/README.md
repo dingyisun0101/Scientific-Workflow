@@ -19,10 +19,10 @@ dy/dt = omega*x + mu*y - (x² + y²)*y
 ## Source layout
 
 ```text
+study.json       one sequential replicate, fail-fast policy, and study seed
 config/
-├── fixed.json       model, sampling, and storage values
-├── sweep.json       the `mu × angular_frequency` sweep
-├── paths.json       recording root
+├── parameters.json  shared model values and inline parameter sweeps
+├── paths.json       replicate output root
 └── state.json       `point` and `radius` fields
 src/
 ├── main.rs           phases and study
@@ -38,9 +38,16 @@ scripts/
 
 No application-specific configuration struct or task registry exists.
 `ResolvedConfiguration::decode_values` decodes heterogeneous parameter groups directly
-from fixed and swept JSON values. The concise phase helpers apply one shared
+from the merged global/group/phase selection. The concise phase helpers apply one shared
 callable to every generated task; advanced per-task `FnOnce` factories remain
 available when a task must own a unique non-Clone resource.
+
+`StudySettings` validates `study.json` before any output is created. The
+example deliberately declares `replicates: 1` and `execution: "sequential"`.
+The initial process dispatches one worker; that worker runs the study inside
+`target/output/replicate_0`. Although this deterministic model does not request
+randomness, the required study seed demonstrates the same complete settings
+grammar used by stochastic programs.
 
 ## Study flow
 
@@ -55,16 +62,19 @@ independent sampling:
 | `radius` | `radius` | 5 iterations |
 | `checkpoint` | `point`, `radius` | 1000 iterations |
 
-Phase 2 depends on phase 1. Its tasks derive the corresponding recording path
-from the same deterministic task ordinal, read the latest checkpoint, and
-verify its final iteration and `radius == hypot(point)`. Durable recordings are
-the phase handoff; Workflow does not transport application data between phases.
+Phase 2 depends on phase 1. Planning pairs each validation configuration with
+explicit producer descriptors from the same global and group-shared selections.
+The descriptors carry their recording paths, so independent phase-local sweep
+ordering cannot redirect validation to another producer. Validation reads the
+latest checkpoint and verifies its final iteration and
+`radius == hypot(point)`. Durable recordings are the phase handoff; Workflow
+does not transport application data between phases.
 
 Phase 3 depends on phase 2 and contains one ordinary one-shot task. It invokes
 `scripts/render_trajectories.py` through `mamba run -n DSES`, reads every
 verified trajectory using `scientific_workflow_reader`, and writes one PNG per
-configuration to `workflow/examples/attractor_2d/target/plots`. The study scheduler
-does not know that this task launches Python or creates images.
+configuration to the current replicate's `plots` directory. The study
+scheduler does not know that this task launches Python or creates images.
 
 Both phases include an explicit three-second entrance pause so their refreshed
 headers remain readable. Every model step also has a required one-millisecond
@@ -87,19 +97,21 @@ The rendering task also invokes Python explicitly through
 `mamba run -n DSES`; this keeps the subprocess environment unambiguous even
 when the Rust binary is launched another way.
 
-Recordings remain under the ignored directory:
+All output belongs to the declared replicate:
 
 ```text
-examples/attractor_2d/target/recordings/
+examples/attractor_2d/target/output/replicate_0/
+├── study-record.json
+├── attractor-g000000-s000000-p000000/
+│   └── ... recording metadata and chunks
+├── ...
+└── plots/
+    ├── trajectory-000000.png
+    └── ...
 ```
 
-Rendered images are stored in:
-
-```text
-workflow/examples/attractor_2d/target/plots/
-├── trajectory-000000.png
-└── ...
-```
+Replicate directories are exclusive. Remove or archive `replicate_0` before a
+fresh run; Workflow never overwrites an existing replicate implicitly.
 
 A successful run ends with:
 

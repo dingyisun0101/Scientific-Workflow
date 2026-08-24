@@ -6,7 +6,7 @@ class RecordingError(Exception):
 
 
 class MetadataError(RecordingError):
-    """The authoritative metadata document violates format v4."""
+    """The authoritative metadata document violates the supported format."""
 
 
 class RecordingNotCompleteError(MetadataError):

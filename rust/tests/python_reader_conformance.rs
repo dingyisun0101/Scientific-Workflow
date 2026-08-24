@@ -43,6 +43,19 @@ fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../python/tests/fixtures/complete")
 }
 
+fn invalid_metadata_cases() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../python/tests/fixtures/invalid_metadata_cases.json")
+}
+
+fn repository_python_support_is_available() -> bool {
+    fixture().is_dir()
+        && invalid_metadata_cases().is_file()
+        && PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../python/src/scientific_workflow_reader")
+            .is_dir()
+}
+
 fn decoders() -> JsonPayloadDecoderRegistry {
     JsonPayloadDecoderRegistry::with_capacity(2)
         .with_json_field::<Vec<f64>>("population")
@@ -114,6 +127,9 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
 
 #[test]
 fn rust_and_python_readers_share_one_format_v7_fixture() {
+    if !repository_python_support_is_available() {
+        return;
+    }
     let reader = StoredStateSeriesReader::open_completed_recording(fixture(), decoders()).unwrap();
     assert_eq!(reader.format_version(), 7);
     assert_eq!(reader.stream_names().collect::<Vec<_>>(), ["signal"]);
@@ -143,6 +159,9 @@ fn rust_and_python_readers_share_one_format_v7_fixture() {
 
 #[test]
 fn rust_writes_python_reads_and_writes_then_rust_reads_exactly() {
+    if !repository_python_support_is_available() {
+        return;
+    }
     let workspace = TempWorkspace::new();
     let rust_recording = workspace.root.join("rust-recording");
     let python_recording = workspace.root.join("python-recording");
@@ -218,4 +237,40 @@ fn rust_writes_python_reads_and_writes_then_rust_reads_exactly() {
         second.payload::<String>("label").unwrap(),
         "python → rust λ"
     );
+}
+
+#[test]
+fn rust_and_python_share_invalid_metadata_rejections() {
+    if !repository_python_support_is_available() {
+        return;
+    }
+    let workspace = TempWorkspace::new();
+    let cases: Value =
+        serde_json::from_slice(&fs::read(invalid_metadata_cases()).unwrap()).unwrap();
+    for (index, case) in cases.as_array().unwrap().iter().enumerate() {
+        let recording = workspace.root.join(format!("invalid-{index}"));
+        fs::create_dir_all(recording.join("streams/signal")).unwrap();
+        fs::copy(
+            fixture().join("streams/signal/chunk-000000.jsonl"),
+            recording.join("streams/signal/chunk-000000.jsonl"),
+        )
+        .unwrap();
+        let mut metadata: Value =
+            serde_json::from_slice(&fs::read(fixture().join("metadata.json")).unwrap()).unwrap();
+        let pointer = case["pointer"].as_str().unwrap();
+        *metadata.pointer_mut(pointer).unwrap() = case["value"].clone();
+        fs::write(
+            recording.join("metadata.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = StoredStateSeriesReader::open_completed_recording(&recording, decoders())
+            .and_then(|reader| reader.read_stream_as_state_series("signal"));
+        assert!(
+            outcome.is_err(),
+            "Rust accepted shared invalid metadata case `{}`",
+            case["name"].as_str().unwrap()
+        );
+    }
 }

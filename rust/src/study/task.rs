@@ -19,6 +19,60 @@ enum TaskHandle {
     OneShot(OneShotTaskHandle),
 }
 
+impl TaskHandle {
+    fn progress(&self) -> Option<&TaskProgressHandle> {
+        match self {
+            Self::Progress(progress) => Some(progress),
+            Self::OneShot(_) => None,
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Progress(progress) => progress.is_cancelled(),
+            Self::OneShot(one_shot) => one_shot.is_cancelled(),
+        }
+    }
+
+    fn set_detail(&self, detail: String) {
+        match self {
+            Self::Progress(progress) => progress.set_detail(detail),
+            Self::OneShot(one_shot) => one_shot.set_detail(detail),
+        }
+    }
+
+    fn report(&self, message: String) -> Result<(), StudyError> {
+        match self {
+            Self::Progress(progress) => progress.report(message),
+            Self::OneShot(one_shot) => one_shot.report(message),
+        }
+    }
+
+    fn complete(self) -> Result<(), StudyError> {
+        match self {
+            Self::Progress(progress) => progress.complete(None),
+            Self::OneShot(one_shot) => {
+                one_shot.complete();
+                Ok(())
+            }
+        }
+    }
+
+    fn fail(self, reason: String) {
+        match self {
+            Self::Progress(progress) => progress.fail(reason),
+            Self::OneShot(one_shot) => one_shot.fail(reason),
+        }
+    }
+
+    fn cancel(self, reason: String) {
+        match self {
+            Self::Progress(progress) => progress.cancel(reason),
+            Self::OneShot(one_shot) => one_shot.cancel(reason),
+        }
+    }
+}
+
 /// Read-only task identity plus reporting and cancellation.
 ///
 /// The context deliberately has no filesystem, storage, artifact, network,
@@ -94,65 +148,39 @@ impl TaskContext {
 
     /// Reports whether the study requested cooperative cancellation.
     pub fn is_cancelled(&self) -> bool {
-        match &self.handle {
-            TaskHandle::Progress(progress) => progress.is_cancelled(),
-            TaskHandle::OneShot(one_shot) => one_shot.is_cancelled(),
-        }
+        self.handle.is_cancelled()
     }
 
     /// Updates the human-readable task detail.
     pub fn set_detail(&self, detail: impl Into<String>) {
-        let detail = detail.into();
-        match &self.handle {
-            TaskHandle::Progress(progress) => progress.set_detail(detail),
-            TaskHandle::OneShot(one_shot) => one_shot.set_detail(detail),
-        }
+        self.handle.set_detail(detail.into());
     }
 
     /// Sends a task-scoped display message.
     pub fn report(&self, message: impl Into<String>) -> Result<(), StudyError> {
-        let message = message.into();
-        match &self.handle {
-            TaskHandle::Progress(progress) => progress.report(message),
-            TaskHandle::OneShot(one_shot) => one_shot.report(message),
-        }
+        self.handle.report(message.into())
     }
 
     pub(crate) fn complete(self) -> Result<(), StudyError> {
-        match self.handle {
-            TaskHandle::Progress(progress) => progress.complete(None),
-            TaskHandle::OneShot(one_shot) => {
-                one_shot.complete();
-                Ok(())
-            }
-        }
+        self.handle.complete()
     }
 
     pub(crate) fn fail(self, reason: impl Into<String>) {
-        let reason = reason.into();
-        match self.handle {
-            TaskHandle::Progress(progress) => progress.fail(reason),
-            TaskHandle::OneShot(one_shot) => one_shot.fail(reason),
-        }
+        self.handle.fail(reason.into());
     }
 
     pub(crate) fn cancel(self, reason: impl Into<String>) {
-        let reason = reason.into();
-        match self.handle {
-            TaskHandle::Progress(progress) => progress.cancel(reason),
-            TaskHandle::OneShot(one_shot) => one_shot.cancel(reason),
-        }
+        self.handle.cancel(reason.into());
     }
 
     fn required_progress(&self) -> Result<&TaskProgressHandle, StudyError> {
-        match &self.handle {
-            TaskHandle::Progress(progress) => Ok(progress),
-            TaskHandle::OneShot(_) => Err(StudyError::TaskModeMismatch {
+        self.handle
+            .progress()
+            .ok_or_else(|| StudyError::TaskModeMismatch {
                 task: self.key().to_string(),
                 requested: "progress",
                 actual: "one-shot",
-            }),
-        }
+            })
     }
 }
 

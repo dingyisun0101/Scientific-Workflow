@@ -57,6 +57,26 @@ fn metadata(key: &str) -> Map<String, Value> {
     metadata
 }
 
+#[test]
+fn replicate_seeds_are_lazy_versioned_and_order_independent() {
+    let replicate_zero = ReplicateSeedDeriver::new(1101, 0);
+    let matrix = replicate_zero.derive("matrix").unwrap();
+    let pairing = replicate_zero.derive("pairing").unwrap();
+    let next_matrix = ReplicateSeedDeriver::new(1101, 1).derive("matrix").unwrap();
+
+    assert_eq!(matrix.value(), 7_764_280_038_077_573_120);
+    assert_eq!(pairing.value(), 16_304_155_092_128_863_366);
+    assert_eq!(next_matrix.value(), 6_233_544_743_961_248_020);
+    assert_eq!(replicate_zero.derive("matrix").unwrap(), matrix);
+    assert_eq!(matrix.record().namespace(), "matrix");
+    assert_eq!(matrix.record().parameters()["base_seed"], 1101);
+    assert_eq!(matrix.record().parameters()["replicate_index"], 0);
+    assert!(matches!(
+        replicate_zero.derive(" "),
+        Err(RngRecordError::EmptySeedNamespace)
+    ));
+}
+
 fn writer_builder(
     run: &Path,
     schema: &SystemStateSchema,

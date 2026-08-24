@@ -409,14 +409,9 @@ class RecordingReader:
             yield from records
 
     def read_all_streams(self) -> tuple[tuple[str, StateSeries], ...]:
-        output: list[tuple[str, StateSeries]] = []
-        try:
-            for name in self.stream_names:
-                output.append((name, self.read_stream(name)))
-        except Exception:
-            output.clear()
-            raise
-        return tuple(output)
+        return tuple(
+            (name, self.read_stream(name)) for name in self.stream_names
+        )
 
     def read_latest(self, stream: str) -> StateRecord:
         """Verifies the newest chunk and reconstructs only its final state."""

@@ -8,6 +8,16 @@ The Rust crate lives in [`rust/`](rust/). Its complete public overview is in
 [`rust/README.md`](rust/README.md), and the architectural rationale is in
 [`docs/design.md`](docs/design.md).
 
+The current registry release is consumed with:
+
+```toml
+[dependencies]
+scientific-workflow = "0.8.0"
+```
+
+See the [0.7 migration checklist](rust/README.md#migrating-from-07) before
+updating an existing application.
+
 ## Vocabulary
 
 The orchestration hierarchy is:
@@ -27,14 +37,21 @@ Study → Phase → Task → workload
 Configuration is independent:
 
 ```text
-fixed.json + sweep.json
-→ ConfigurationSpace
+study.json
+→ StudySettings
+→ ReplicateExecutor
+→ output_root/replicate_<index>
+
+parameters.json
+→ StudyConfiguration
+→ selected PhaseConfiguration
 → ResolvedConfiguration combinations
 → application-defined Tasks
 ```
 
-Applications own study paths, schemas, model inputs, recordings, artifacts,
-networking, and subprocesses.
+Workflow owns the one-subprocess-per-replicate boundary. Applications own study
+paths, schemas, model inputs, recordings, artifacts, networking, and any
+domain-specific subprocesses started by tasks.
 
 ## Terminal display
 
@@ -51,7 +68,9 @@ It requests cooperative study cancellation.
 ## Attractor example
 
 [`examples/attractor_2d`](examples/attractor_2d) demonstrates the complete
-boundary. The application loads `ConfigurationSpace`, maps each
+boundary. The application loads its single-replicate `StudySettings`, enters
+the isolated output scope, loads `StudyConfiguration`, selects the simulation
+and validation phase configurations, maps each
 `ResolvedConfiguration` into simulation and validation tasks, builds phases,
 and runs one study. A final one-shot task uses Python to render the verified
 trajectories. Each task owns its scientific state, recording I/O, or derived

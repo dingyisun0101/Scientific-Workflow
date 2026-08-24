@@ -389,7 +389,10 @@ impl SamplingInterval {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StateStreamLayout {
     /// Accumulate encoded records in memory until the rollover target is met.
-    Chunked { target_bytes: NonZeroU64 },
+    Chunked {
+        /// Approximate encoded-byte threshold at which a chunk is sealed.
+        target_bytes: NonZeroU64,
+    },
     /// Publish every encoded record as its own immutable file.
     IndividualFiles,
 }
@@ -419,6 +422,7 @@ impl StateStreamStorage {
         }
     }
 
+    /// Returns the configured on-disk stream layout.
     pub const fn layout(self) -> StateStreamLayout {
         self.layout
     }

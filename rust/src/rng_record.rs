@@ -1,16 +1,17 @@
-//! Lightweight provenance records for application-owned random number generators.
+//! Deterministic replicate seeds and provenance for application-owned RNGs.
 //!
-//! Workflow does not generate keys, derive streams, select algorithms, sample
-//! distributions, or maintain RNG cursors. Applications perform those tasks
-//! and use [`RngRecord`] only to persist enough exact identity for reproducibility
-//! and continuation validation.
+//! [`ReplicateSeedDeriver`] lazily derives a stable named `u64` seed from one
+//! study base seed and replicate index. The result includes an [`RngRecord`]
+//! ready for storage provenance. Workflow does not construct RNG engines,
+//! sample distributions, or maintain RNG cursors.
 //!
 //! # Boundary
 //!
-//! This module owns the metadata schema and deduplication rules for RNG records in
-//! recording metadata only. It does not create random streams or enforce numeric
-//! reproducibility strategy; the caller controls RNG construction and state
-//! restoration order.
+//! This module owns one versioned seed-derivation algorithm plus the metadata
+//! schema and deduplication rules for RNG records. Callers retain control of RNG
+//! construction, sampling, and state restoration order.
+
+use sha2::{Digest, Sha256};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -18,6 +19,109 @@ use thiserror::Error;
 
 /// Reserved user-metadata key containing records indexed by application namespace.
 pub const RNG_RECORDS_METADATA_KEY: &str = "rng_records";
+
+const REPLICATE_SEED_METHOD: &str = "sha256-domain-separated";
+const REPLICATE_SEED_VERSION: &str = "scientific-workflow.replicate-seed.v1";
+
+/// Lazy source of deterministic, order-independent named replicate seeds.
+///
+/// A namespace identifies one scientific random stream, such as `matrix`,
+/// `pairing`, or `replacement/task-17`. The same base seed, replicate index,
+/// and namespace always produce the same value regardless of process,
+/// scheduling, or request order. Different namespaces are domain-separated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplicateSeedDeriver {
+    base_seed: u64,
+    replicate_index: u64,
+}
+
+/// One derived seed together with its exact persistable provenance record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DerivedSeed {
+    value: u64,
+    record: RngRecord,
+}
+
+impl ReplicateSeedDeriver {
+    /// Creates a lazy deriver for one replicate.
+    pub const fn new(base_seed: u64, replicate_index: u64) -> Self {
+        Self {
+            base_seed,
+            replicate_index,
+        }
+    }
+
+    /// Returns the study-level base seed.
+    pub const fn base_seed(self) -> u64 {
+        self.base_seed
+    }
+
+    /// Returns the zero-based replicate index.
+    pub const fn replicate_index(self) -> u64 {
+        self.replicate_index
+    }
+
+    /// Derives one named stream seed and its matching provenance record.
+    ///
+    /// Derivation occurs only when requested. The namespace must be nonblank
+    /// and should remain stable across executions. The versioned byte contract
+    /// is SHA-256 over the method version, base seed, replicate index, namespace
+    /// byte length, and namespace bytes; the first eight digest bytes are read
+    /// as a big-endian `u64`.
+    pub fn derive(self, namespace: &str) -> Result<DerivedSeed, RngRecordError> {
+        if namespace.trim().is_empty() {
+            return Err(RngRecordError::EmptySeedNamespace);
+        }
+        let namespace_length =
+            u64::try_from(namespace.len()).map_err(|_| RngRecordError::SeedNamespaceTooLong)?;
+        let mut hasher = Sha256::new();
+        hasher.update(REPLICATE_SEED_VERSION.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.base_seed.to_be_bytes());
+        hasher.update(self.replicate_index.to_be_bytes());
+        hasher.update(namespace_length.to_be_bytes());
+        hasher.update(namespace.as_bytes());
+        let digest = hasher.finalize();
+        let value = u64::from_be_bytes(
+            digest[..8]
+                .try_into()
+                .expect("SHA-256 always contains at least eight bytes"),
+        );
+        let parameters = Map::from_iter([
+            ("base_seed".to_owned(), Value::from(self.base_seed)),
+            (
+                "replicate_index".to_owned(),
+                Value::from(self.replicate_index),
+            ),
+        ]);
+        let record = RngRecord::new(
+            namespace,
+            REPLICATE_SEED_METHOD,
+            REPLICATE_SEED_VERSION,
+            "u64-decimal",
+            value.to_string(),
+            Some(parameters),
+        )?;
+        Ok(DerivedSeed { value, record })
+    }
+}
+
+impl DerivedSeed {
+    /// Returns the derived `u64` suitable for application RNG construction.
+    pub const fn value(&self) -> u64 {
+        self.value
+    }
+
+    /// Borrows the exact record that should accompany persisted RNG output.
+    pub const fn record(&self) -> &RngRecord {
+        &self.record
+    }
+
+    /// Splits the result into its seed and owned provenance record.
+    pub fn into_parts(self) -> (u64, RngRecord) {
+        (self.value, self.record)
+    }
+}
 
 /// Immutable identity of one application-owned random source.
 ///
@@ -167,6 +271,12 @@ impl RngRecord {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RngRecordError {
+    /// A requested replicate stream has no stable identity.
+    #[error("replicate seed namespace must not be empty or whitespace-only")]
+    EmptySeedNamespace,
+    /// A namespace cannot be represented by the versioned length encoding.
+    #[error("replicate seed namespace is too long")]
+    SeedNamespaceTooLong,
     /// A required textual identity field is empty or whitespace-only.
     #[error("RNG record field `{field}` must not be empty")]
     EmptyField {

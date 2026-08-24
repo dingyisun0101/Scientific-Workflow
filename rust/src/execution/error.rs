@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+/// Failure while validating or creating an execution-directory scope.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ExecutionScopeError {

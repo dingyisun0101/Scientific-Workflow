@@ -16,16 +16,19 @@
 //!   declaration validation, scheduling, cancellation, execution timing, and
 //!   progress summaries. It does not own model semantics, storage formats, or
 //!   schema declarations.
-//! - `configuration`: experiment-space declarations (`fixed.json` + `sweep.json`)
-//!   and resolved combinations. It owns parameter expansion only. It does not
-//!   own task construction, state schemas, persistence, or execution control.
+//! - `configuration`: strict study-level replicate settings, study-wide
+//!   `parameters.json`, phase-scoped expansion, named paths, and resolved
+//!   combinations. It owns input validation and parameter expansion only. It
+//!   does not own task construction, state schemas, or persistence.
 //! - `system_state`: typed heterogeneous fielded state values and schema.
 //! - `time_series`: ordered in-memory complete-state collections for analysis.
 //! - `storage`: asynchronous buffered persistence and completed-run reconstruction.
-//! - `execution`: directory-scoped recording lifecycle and path derivation.
+//! - `execution`: replicate subprocess dispatch, isolated output scopes, and
+//!   directory-scoped recording path derivation.
 //! - `artifact`: immutable input content-addressed publication under an execution
 //!   scope, plus strict load-time verification.
-//! - `rng_record`: validated reproducibility metadata for caller-owned RNG sources.
+//! - `rng_record`: lazy named replicate-seed derivation and validated
+//!   reproducibility metadata for caller-owned RNG sources.
 //! - `prelude`: curated import surfaces that preserve public boundaries.
 //!
 //! # Study vocabulary
@@ -38,18 +41,21 @@
 //! [`study::TaskContext`]. Progress and one-shot work are modes of the same
 //! task type.
 //!
-//! [`configuration`] is deliberately outside that hierarchy. It resolves a
-//! directory containing `fixed.json` and `sweep.json` into every deterministic
-//! [`configuration::ResolvedConfiguration`]. The downstream application decides
-//! how each combination becomes a task and owns all paths, schemas, model
+//! [`configuration`] is deliberately outside that hierarchy. It validates
+//! process-level replicate policy from `study.json`, resolves a study-wide
+//! `parameters.json`, then selects one string-keyed phase whose
+//! global, group-shared, and local choices expand into deterministic
+//! [`configuration::ResolvedConfiguration`] values. The downstream application
+//! decides how each combination becomes a task and owns all schemas, model
 //! inputs, storage, and other effects captured by the workload.
 //!
 //! # Supporting modules
 //!
-//! [`execution`] creates collision-resistant or caller-named execution scopes
-//! and deterministic task recording paths. [`artifact`] atomically publishes
-//! and verifies content-addressed immutable bytes. [`rng_record`] stores
-//! validated RNG provenance while leaving random generation to applications.
+//! [`execution`] dispatches isolated replicate subprocesses, creates their
+//! output scopes, and derives deterministic task recording paths. [`artifact`]
+//! atomically publishes and verifies content-addressed immutable bytes.
+//! [`rng_record`] stores validated RNG provenance while leaving random
+//! generation to applications.
 //!
 //! [`system_state`] provides:
 //!
@@ -117,6 +123,8 @@
 //! keep orchestration in `study`, persistence in `storage`, and pure state in
 //! `system_state`/`time_series`. Do not implement overlapping behavior in a
 //! downstream layer; if a seam is missing, negotiate an explicit API addition.
+
+#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 
 mod clock;
 

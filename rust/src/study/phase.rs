@@ -246,6 +246,16 @@ impl Task {
             "configuration_ordinal".to_owned(),
             Value::from(configuration.ordinal()),
         );
+        metadata.insert(
+            "configuration_identity".to_owned(),
+            serde_json::json!({
+                "phase_group": configuration.phase_group(),
+                "phase": configuration.phase(),
+                "global_ordinal": configuration.global_ordinal(),
+                "group_ordinal": configuration.group_ordinal(),
+                "phase_ordinal": configuration.phase_ordinal(),
+            }),
+        );
         metadata.insert("configuration".to_owned(), configuration.to_json_value());
         self
     }

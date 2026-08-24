@@ -11,11 +11,12 @@ use super::super::error::ConfigurationError;
 use super::super::parameter_key_tuple::ParameterKeyTuple;
 use super::super::parameter_path::ParameterPath;
 use super::super::parameter_tree::{lookup_path, reconstruct};
-use super::ConfigurationSpaceInner;
+use super::PhaseConfigurationInner;
 use super::reconstruction;
 
+/// One immutable, lazily materialized phase configuration combination.
 pub struct ResolvedConfiguration {
-    inner: Arc<ConfigurationSpaceInner>,
+    inner: Arc<PhaseConfigurationInner>,
     ordinal: u64,
     resolved: OnceLock<Value>,
 }
@@ -31,7 +32,7 @@ impl Clone for ResolvedConfiguration {
 }
 
 impl ResolvedConfiguration {
-    pub(super) fn new(inner: Arc<ConfigurationSpaceInner>, ordinal: u64) -> Self {
+    pub(super) fn new(inner: Arc<PhaseConfigurationInner>, ordinal: u64) -> Self {
         Self {
             inner,
             ordinal,
@@ -39,30 +40,53 @@ impl ResolvedConfiguration {
         }
     }
 
+    /// Returns the flattened ordinal within this phase configuration.
     pub fn ordinal(&self) -> u64 {
         self.ordinal
+    }
+
+    /// Returns the stable string key of the containing phase group.
+    pub fn phase_group(&self) -> &str {
+        &self.inner.phase_group
+    }
+
+    /// Returns the stable string key of the selected phase.
+    pub fn phase(&self) -> &str {
+        &self.inner.phase
+    }
+
+    /// Returns the selection ordinal contributed by the global scope.
+    pub fn global_ordinal(&self) -> u64 {
+        self.inner.scope_ordinal(self.ordinal, 0)
+    }
+
+    /// Returns the selection ordinal contributed by the group shared scope.
+    pub fn group_ordinal(&self) -> u64 {
+        self.inner.scope_ordinal(self.ordinal, 1)
+    }
+
+    /// Returns the selection ordinal contributed by the phase-local scope.
+    pub fn phase_ordinal(&self) -> u64 {
+        self.inner.scope_ordinal(self.ordinal, 2)
     }
 
     /// Borrows an exact leaf or lazily reconstructed nested subtree.
     pub fn value(&self, key: &str) -> Option<&Value> {
         let path = ParameterPath::parse(key)?;
-        if let Some(&position) = self.inner.fixed_by_path.get(&path) {
-            return Some(&self.inner.fixed[position].value);
-        }
-        if let Some(leaf) = self.inner.sweep.selected_leaf(self.ordinal, &path) {
+        if let Some(leaf) = self.inner.fixed_leaf(&path) {
             return Some(&leaf.value);
         }
-        if !self
+        if let Some(leaf) = self
             .inner
-            .sweep
             .selected_leaves(self.ordinal)
-            .any(|leaf| path.is_ancestor_of(&leaf.path))
+            .find(|leaf| leaf.path == path)
         {
-            return lookup_path(&self.inner.fixed_document, &path);
+            return Some(&leaf.value);
         }
         lookup_path(self.resolved_document(), &path)
     }
 
+    /// Borrows a required value or returns an ordinal-qualified error.
     pub fn require_value(&self, key: &str) -> Result<&Value, ConfigurationError> {
         self.value(key)
             .ok_or_else(|| ConfigurationError::UnknownConfigurationValue {
@@ -71,6 +95,7 @@ impl ResolvedConfiguration {
             })
     }
 
+    /// Deserializes one exact leaf or reconstructed subtree into `T`.
     pub fn decode_value<T>(&self, key: &str) -> Result<T, ConfigurationError>
     where
         T: DeserializeOwned,
@@ -90,27 +115,10 @@ impl ResolvedConfiguration {
                 }
             });
         }
-        let has_selected_sweep_descendant = self
-            .inner
-            .sweep
-            .selected_leaves(self.ordinal)
-            .any(|leaf| path.is_ancestor_of(&leaf.path));
-        if !has_selected_sweep_descendant
-            && let Some(value) = lookup_path(&self.inner.fixed_document, &path)
-        {
-            return T::deserialize(value).map_err(|source| {
-                ConfigurationError::DecodeConfigurationValue {
-                    ordinal: self.ordinal,
-                    key: key.to_owned(),
-                    source,
-                }
-            });
-        }
         let subtree = reconstruct(
             self.inner
-                .fixed
-                .iter()
-                .chain(self.inner.sweep.selected_leaves(self.ordinal))
+                .fixed_leaves()
+                .chain(self.inner.selected_leaves(self.ordinal))
                 .filter(|leaf| path.is_ancestor_of(&leaf.path)),
         );
         let Some(value) = lookup_path(&subtree, &path) else {
@@ -126,6 +134,7 @@ impl ResolvedConfiguration {
         })
     }
 
+    /// Deserializes a tuple of required paths without an intermediate struct.
     pub fn decode_values<Values, Keys>(&self, keys: Keys) -> Result<Values, ConfigurationError>
     where
         Keys: ParameterKeyTuple<Values>,
@@ -133,25 +142,26 @@ impl ResolvedConfiguration {
         keys.decode(self)
     }
 
+    /// Reports whether this resolved combination contains `key` or descendants.
     pub fn contains(&self, key: &str) -> bool {
         let Some(path) = ParameterPath::parse(key) else {
             return false;
         };
         self.inner
-            .fixed
-            .iter()
+            .fixed_leaves()
             .any(|leaf| leaf.path == path || path.is_ancestor_of(&leaf.path))
             || self
                 .inner
-                .sweep
                 .selected_leaves(self.ordinal)
                 .any(|leaf| leaf.path == path || path.is_ancestor_of(&leaf.path))
     }
 
+    /// Returns the number of resolved terminal values.
     pub fn len(&self) -> usize {
-        self.inner.fixed.len() + self.inner.sweep.selected_leaf_count(self.ordinal)
+        self.inner.fixed_leaves().count() + self.inner.selected_leaves(self.ordinal).count()
     }
 
+    /// Reports whether the resolved document contains no terminal values.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -159,38 +169,30 @@ impl ResolvedConfiguration {
     /// Iterates canonical terminal parameter identifiers.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.inner
-            .fixed
-            .iter()
+            .fixed_leaves()
             .map(|leaf| leaf.path.identifier())
             .chain(
                 self.inner
-                    .sweep
                     .selected_leaves(self.ordinal)
                     .map(|leaf| leaf.path.identifier()),
             )
     }
 
+    /// Iterates resolved terminal keys and borrowed values in declaration order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
         self.inner
-            .fixed
-            .iter()
+            .fixed_leaves()
             .map(|leaf| (leaf.path.identifier(), &leaf.value))
             .chain(
                 self.inner
-                    .sweep
                     .selected_leaves(self.ordinal)
                     .map(|leaf| (leaf.path.identifier(), &leaf.value)),
             )
     }
 
     /// Serializes the complete rehydrated nested configuration document.
-    pub fn to_json(&self) -> Result<String, ConfigurationError> {
-        serde_json::to_string(self.resolved_document()).map_err(|source| {
-            ConfigurationError::SerializeResolvedConfiguration {
-                ordinal: self.ordinal,
-                source,
-            }
-        })
+    pub fn to_json(&self) -> String {
+        self.resolved_document().to_string()
     }
 
     /// Clones the complete rehydrated nested configuration document.
@@ -213,12 +215,12 @@ impl ResolvedConfiguration {
     }
 
     fn exact_leaf(&self, path: &ParameterPath) -> Option<&Value> {
-        if let Some(&position) = self.inner.fixed_by_path.get(path) {
-            return Some(&self.inner.fixed[position].value);
+        if let Some(leaf) = self.inner.fixed_leaf(path) {
+            return Some(&leaf.value);
         }
         self.inner
-            .sweep
-            .selected_leaf(self.ordinal, path)
+            .selected_leaves(self.ordinal)
+            .find(|leaf| &leaf.path == path)
             .map(|leaf| &leaf.value)
     }
 }
@@ -227,21 +229,24 @@ impl fmt::Debug for ResolvedConfiguration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResolvedConfiguration")
+            .field("phase_group", &self.phase_group())
+            .field("phase", &self.phase())
             .field("ordinal", &self.ordinal)
             .field("values", &self.len())
             .finish_non_exhaustive()
     }
 }
 
+/// Lazy deterministic iterator over all combinations of one phase.
 #[derive(Clone)]
 pub struct ConfigurationIter {
-    inner: Arc<ConfigurationSpaceInner>,
+    inner: Arc<PhaseConfigurationInner>,
     next: u64,
     end: u64,
 }
 
 impl ConfigurationIter {
-    pub(super) fn new(inner: Arc<ConfigurationSpaceInner>, end: u64) -> Self {
+    pub(super) fn new(inner: Arc<PhaseConfigurationInner>, end: u64) -> Self {
         Self {
             inner,
             next: 0,

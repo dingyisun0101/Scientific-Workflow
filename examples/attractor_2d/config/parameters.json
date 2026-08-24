@@ -1,0 +1,25 @@
+{
+  "global": {
+    "model_name": "supercritical_hopf_normal_form",
+    "initial_point": [0.25, 0.0],
+    "physical_time_increment_per_step": 0.01,
+    "step_count": 5000,
+    "trajectory_sampling_interval": {"iterations": 10},
+    "radius_sampling_interval": {"iterations": 5},
+    "checkpoint_sampling_interval": {"iterations": 1000},
+    "maximum_chunk_bytes": 8192,
+    "storage_queue_bytes": 65536,
+    "mu": {"$sweep": [-0.25, 0.25, 1.0]},
+    "angular_frequency": {"$sweep": [0.75, 1.25]}
+  },
+  "phase_group": {
+    "attractor": {
+      "shared": {},
+      "phase": {
+        "simulation": {},
+        "validation": {},
+        "rendering": {}
+      }
+    }
+  }
+}

@@ -242,7 +242,7 @@ impl Study {
     /// Runs every registered phase in dependency order.
     pub fn run(self) -> Result<StudySummary, StudyError> {
         let selected = topological_positions(&self.phases)?;
-        self.execute(selected)
+        self.execute(&selected)
     }
 
     /// Runs exactly the selected phases; omitted unsatisfied dependencies fail.
@@ -252,7 +252,7 @@ impl Study {
         P: Into<PhaseId>,
     {
         let selected = self.select_phases(phases, false)?;
-        self.execute(selected)
+        self.execute(&selected)
     }
 
     /// Adds unsatisfied dependencies and runs the deterministic closure.
@@ -262,7 +262,7 @@ impl Study {
         P: Into<PhaseId>,
     {
         let selected = self.select_phases(phases, true)?;
-        self.execute(selected)
+        self.execute(&selected)
     }
 
     fn select_phases<I, P>(
@@ -319,7 +319,7 @@ impl Study {
             .is_some_and(|verify| verify(phase))
     }
 
-    fn execute(self, selected: Vec<usize>) -> Result<StudySummary, StudyError> {
+    fn execute(self, selected: &[usize]) -> Result<StudySummary, StudyError> {
         let _lease = StudyLease::acquire()?;
         let total_phases = selected.len();
         let total_tasks = selected
@@ -462,18 +462,22 @@ pub struct PhaseSummary {
 }
 
 impl PhaseSummary {
+    /// Returns the completed phase's stable identity.
     pub const fn id(&self) -> PhaseId {
         self.id
     }
 
+    /// Borrows the completed phase's display label.
     pub fn label(&self) -> &str {
         &self.label
     }
 
+    /// Borrows the aggregate terminal task progress for this phase.
     pub fn progress(&self) -> &ProgressSummary {
         &self.progress
     }
 
+    /// Reports whether every task in the phase completed successfully.
     pub fn is_success(&self) -> bool {
         self.progress.is_success()
     }
@@ -487,6 +491,7 @@ pub struct StudySummary {
 }
 
 impl StudySummary {
+    /// Borrows completed phase summaries in execution order.
     pub fn phases(&self) -> &[PhaseSummary] {
         &self.phases
     }
@@ -496,10 +501,12 @@ impl StudySummary {
         self.record.as_ref()
     }
 
+    /// Returns the total number of tasks across the completed phase summaries.
     pub fn total_tasks(&self) -> u64 {
         self.phases.iter().map(|phase| phase.progress.total()).sum()
     }
 
+    /// Reports whether at least one phase ran and every phase succeeded.
     pub fn is_success(&self) -> bool {
         !self.phases.is_empty() && self.phases.iter().all(PhaseSummary::is_success)
     }

@@ -3,13 +3,8 @@
 use serde_json::Value;
 
 use super::super::parameter_tree::reconstruct;
-use super::ConfigurationSpaceInner;
+use super::PhaseConfigurationInner;
 
-pub(super) fn document(inner: &ConfigurationSpaceInner, ordinal: u64) -> Value {
-    reconstruct(
-        inner
-            .fixed
-            .iter()
-            .chain(inner.sweep.selected_leaves(ordinal)),
-    )
+pub(super) fn document(inner: &PhaseConfigurationInner, ordinal: u64) -> Value {
+    reconstruct(inner.fixed_leaves().chain(inner.selected_leaves(ordinal)))
 }

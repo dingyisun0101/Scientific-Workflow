@@ -121,7 +121,7 @@ impl ExecutionScope {
         if !metadata.is_dir() {
             return Err(ExecutionScopeError::Io {
                 operation: "open non-directory",
-                path: directory.clone(),
+                path: directory,
                 source: std::io::Error::new(
                     std::io::ErrorKind::NotADirectory,
                     "execution scope must be a directory",

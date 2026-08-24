@@ -1,4 +1,4 @@
-//! Parsing of arbitrarily nested Cartesian axis trees and correlated cases.
+//! Parsing of one inline parameter scope.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -9,149 +9,179 @@ use super::super::parameter_tree::{
     ParameterLeaf, flatten_candidate, flatten_root, paths_conflict,
 };
 use super::super::source::{StrictValue, invalid, require_object, validate_name};
-use super::plan::{SweepDimension, SweepPlan};
+use super::plan::SweepDimension;
 
-pub(crate) fn parse_sweep(
-    path: &Path,
-    document: StrictValue,
-) -> Result<SweepPlan, ConfigurationError> {
-    let mut root = require_object(path, document, "sweep.json root must be an object")?;
-    let mode = take_required(path, &mut root, "mode")?;
-    let StrictValue::String(mode) = mode else {
-        return invalid(path, "sweep field `mode` must be a string");
-    };
-    match mode.as_str() {
-        "cartesian" => {
-            let axes = take_required(path, &mut root, "axes")?;
-            reject_remaining(path, &root, "cartesian sweep")?;
-            parse_cartesian(path, axes)
-        }
-        "cases" => {
-            let cases = take_required(path, &mut root, "cases")?;
-            reject_remaining(path, &root, "explicit-case sweep")?;
-            parse_cases(path, cases)
-        }
-        _ => invalid(
-            path,
-            format!("unsupported sweep mode `{mode}`; expected `cartesian` or `cases`"),
-        ),
-    }
+/// Ordinary leaves and independent selection dimensions declared by one scope.
+#[derive(Clone)]
+pub(crate) struct ParsedScope {
+    pub(crate) fixed: Vec<ParameterLeaf>,
+    pub(crate) dimensions: Vec<SweepDimension>,
 }
 
-fn parse_cartesian(path: &Path, axes: StrictValue) -> Result<SweepPlan, ConfigurationError> {
-    let StrictValue::Object(entries) = axes else {
-        return invalid(path, "cartesian sweep field `axes` must be an object");
-    };
-    let mut dimensions = parse_nested_axes(path, entries)?;
-    validate_dimension_paths(path, &dimensions)?;
-
-    let mut combination_count = 1_u64;
-    for dimension in dimensions.iter_mut().rev() {
-        dimension.stride = combination_count;
-        let length = u64::try_from(dimension.candidates.len()).map_err(|_| {
-            ConfigurationError::CombinationCountOverflow {
-                axis: dimension.path.identifier().to_owned(),
-            }
-        })?;
-        combination_count = combination_count.checked_mul(length).ok_or_else(|| {
-            ConfigurationError::CombinationCountOverflow {
-                axis: dimension.path.identifier().to_owned(),
-            }
-        })?;
-    }
-    let selectable_paths = dimensions
-        .iter()
-        .map(|dimension| dimension.path.clone())
-        .collect();
-    Ok(SweepPlan::cartesian(
-        dimensions,
-        combination_count,
-        selectable_paths,
-    ))
-}
-
-fn parse_nested_axes(
-    path: &Path,
+pub(crate) fn parse_scope(
+    source_path: &Path,
     entries: Vec<(String, StrictValue)>,
-) -> Result<Vec<SweepDimension>, ConfigurationError> {
+    scope: &str,
+) -> Result<ParsedScope, ConfigurationError> {
+    let mut fixed = Vec::new();
     let mut dimensions = Vec::new();
-    for (key, value) in entries {
-        validate_name(path, &key, "sweep path segment")?;
-        parse_nested_axis_at(
-            path,
-            ParameterPath::root(key.into_boxed_str()),
+    let mut cases = None;
+    for (name, value) in entries {
+        validate_name(source_path, &name, "parameter")?;
+        if name == "$cases" {
+            if cases.replace(value).is_some() {
+                return invalid(source_path, format!("{scope} repeats `$cases`"));
+            }
+            continue;
+        }
+        if name.starts_with('$') {
+            return invalid(
+                source_path,
+                format!("{scope} contains unknown reserved field `{name}`"),
+            );
+        }
+        parse_at(
+            source_path,
+            ParameterPath::root(name.into_boxed_str()),
             value,
+            &mut fixed,
             &mut dimensions,
         )?;
     }
-    Ok(dimensions)
+    if let Some(cases) = cases {
+        if !dimensions.is_empty() {
+            return invalid(
+                source_path,
+                format!("{scope} cannot combine `$cases` with `$sweep`"),
+            );
+        }
+        dimensions.push(parse_cases(source_path, cases, scope)?);
+    }
+    validate_disjoint(source_path, &fixed, &dimensions)?;
+    Ok(ParsedScope { fixed, dimensions })
 }
 
-fn parse_nested_axis_at(
-    path: &Path,
-    axis_path: ParameterPath,
+fn parse_at(
+    source_path: &Path,
+    path: ParameterPath,
     value: StrictValue,
+    fixed: &mut Vec<ParameterLeaf>,
     dimensions: &mut Vec<SweepDimension>,
 ) -> Result<(), ConfigurationError> {
-    let StrictValue::Object(mut entries) = value else {
-        return invalid(
-            path,
-            format!("nested sweep path `{axis_path}` must contain an object"),
-        );
-    };
-    if entries.iter().any(|(key, _)| key == "values") {
-        let values = take_required(path, &mut entries, "values")?;
-        reject_remaining(path, &entries, &format!("nested sweep axis `{axis_path}`"))?;
-        dimensions.push(parse_dimension_values(path, axis_path, values)?);
-        return Ok(());
+    match value {
+        StrictValue::Object(mut entries) => {
+            if let Some(position) = entries.iter().position(|(name, _)| name == "$sweep") {
+                if entries.len() != 1 {
+                    return invalid(
+                        source_path,
+                        format!("sweep marker `{path}` must contain only `$sweep`"),
+                    );
+                }
+                let (_, choices) = entries.remove(position);
+                dimensions.push(parse_choices(source_path, &path, choices)?);
+                return Ok(());
+            }
+            if let Some((name, _)) = entries.iter().find(|(name, _)| name.starts_with('$')) {
+                return invalid(
+                    source_path,
+                    format!("parameter object `{path}` contains unknown reserved field `{name}`"),
+                );
+            }
+            if entries.is_empty() {
+                fixed.push(ParameterLeaf::new(
+                    path,
+                    serde_json::Value::Object(Default::default()),
+                ));
+                return Ok(());
+            }
+            for (name, value) in entries {
+                validate_name(source_path, &name, "parameter path segment")?;
+                parse_at(
+                    source_path,
+                    path.appended(name.into_boxed_str()),
+                    value,
+                    fixed,
+                    dimensions,
+                )?;
+            }
+            Ok(())
+        }
+        value => {
+            fixed.push(ParameterLeaf::new(path, value.into_json()));
+            Ok(())
+        }
     }
-    if entries.is_empty() {
-        return invalid(path, format!("nested sweep path `{axis_path}` is empty"));
-    }
-    for (key, value) in entries {
-        validate_name(path, &key, "sweep path segment")?;
-        parse_nested_axis_at(
-            path,
-            axis_path.appended(key.into_boxed_str()),
-            value,
-            dimensions,
-        )?;
-    }
-    Ok(())
 }
 
-fn parse_dimension_values(
-    path: &Path,
-    axis_path: ParameterPath,
-    values: StrictValue,
+fn parse_choices(
+    source_path: &Path,
+    path: &ParameterPath,
+    choices: StrictValue,
 ) -> Result<SweepDimension, ConfigurationError> {
-    let StrictValue::Array(values) = values else {
+    let StrictValue::Array(choices) = choices else {
         return invalid(
-            path,
-            format!("cartesian axis `{axis_path}` field `values` must be an array"),
+            source_path,
+            format!("`$sweep` at `{path}` must be an array"),
         );
     };
-    if values.is_empty() {
-        return invalid(
-            path,
-            format!("cartesian axis `{axis_path}` has no candidates"),
-        );
+    if choices.is_empty() {
+        return invalid(source_path, format!("`$sweep` at `{path}` has no choices"));
     }
-    let mut candidates = values
+    let mut candidates = choices
         .into_iter()
-        .map(|candidate| flatten_candidate(&axis_path, candidate))
+        .map(|choice| flatten_candidate(path, choice))
         .collect::<Vec<_>>();
-    normalize_candidate_paths(path, &axis_path, &mut candidates)?;
+    normalize_candidates(source_path, &path.to_string(), &mut candidates)?;
     Ok(SweepDimension {
+        label: path.to_string(),
         candidates,
-        path: axis_path,
         stride: 0,
     })
 }
 
-fn normalize_candidate_paths(
-    path: &Path,
-    axis_path: &ParameterPath,
+fn parse_cases(
+    source_path: &Path,
+    cases: StrictValue,
+    scope: &str,
+) -> Result<SweepDimension, ConfigurationError> {
+    let StrictValue::Array(cases) = cases else {
+        return invalid(source_path, format!("`$cases` in {scope} must be an array"));
+    };
+    if cases.is_empty() {
+        return invalid(source_path, format!("`$cases` in {scope} has no cases"));
+    }
+    let mut candidates = Vec::with_capacity(cases.len());
+    for (position, case) in cases.into_iter().enumerate() {
+        let entries = require_object(
+            source_path,
+            case,
+            format!("case {position} in {scope} must be an object"),
+        )?;
+        if entries.is_empty() {
+            return invalid(source_path, format!("case {position} in {scope} is empty"));
+        }
+        for (name, _) in &entries {
+            validate_name(source_path, name, "case parameter")?;
+            if name.starts_with('$') {
+                return invalid(
+                    source_path,
+                    format!("case {position} contains reserved field `{name}`"),
+                );
+            }
+        }
+        candidates.push(flatten_root(entries));
+    }
+    normalize_candidates(source_path, &format!("{scope}/$cases"), &mut candidates)?;
+    Ok(SweepDimension {
+        label: format!("{scope}/$cases"),
+        candidates,
+        stride: 0,
+    })
+}
+
+fn normalize_candidates(
+    source_path: &Path,
+    label: &str,
     candidates: &mut [Vec<ParameterLeaf>],
 ) -> Result<(), ConfigurationError> {
     let order = candidates[0]
@@ -167,10 +197,8 @@ fn normalize_candidate_paths(
             != expected
         {
             return invalid(
-                path,
-                format!(
-                    "cartesian axis `{axis_path}` candidates do not contain the same flattened key set"
-                ),
+                source_path,
+                format!("choices for `{label}` do not contain the same flattened key set"),
             );
         }
         let mut by_path = candidate
@@ -179,119 +207,45 @@ fn normalize_candidate_paths(
             .collect::<HashMap<_, _>>();
         *candidate = order
             .iter()
-            .map(|parameter_path| {
-                by_path
-                    .remove(parameter_path)
-                    .expect("validated candidate contains every ordered path")
-            })
+            .map(|path| by_path.remove(path).expect("validated candidate key"))
             .collect();
     }
     Ok(())
 }
 
-fn validate_dimension_paths(
-    path: &Path,
+fn validate_disjoint(
+    source_path: &Path,
+    fixed: &[ParameterLeaf],
     dimensions: &[SweepDimension],
 ) -> Result<(), ConfigurationError> {
-    for (index, dimension) in dimensions.iter().enumerate() {
-        for previous in &dimensions[..index] {
-            if paths_conflict(&dimension.path, &previous.path)
-                || candidate_paths(&dimension.candidates).any(|candidate| {
-                    candidate_paths(&previous.candidates)
-                        .any(|other| paths_conflict(candidate, other))
-                })
-            {
-                return invalid(
-                    path,
-                    format!(
-                        "sweep axes `{}` and `{}` produce overlapping parameter paths",
-                        previous.path, dimension.path
-                    ),
-                );
+    let mut paths: Vec<&ParameterPath> = Vec::with_capacity(fixed.len());
+    for leaf in fixed {
+        if let Some(previous) = paths
+            .iter()
+            .find(|previous| paths_conflict(previous, &leaf.path))
+        {
+            return invalid(
+                source_path,
+                format!("parameter paths `{previous}` and `{}` overlap", leaf.path),
+            );
+        }
+        paths.push(&leaf.path);
+    }
+    for dimension in dimensions {
+        for candidate in &dimension.candidates {
+            for leaf in candidate {
+                if let Some(previous) = paths
+                    .iter()
+                    .find(|previous| paths_conflict(previous, &leaf.path))
+                {
+                    return invalid(
+                        source_path,
+                        format!("parameter paths `{previous}` and `{}` overlap", leaf.path),
+                    );
+                }
             }
         }
-    }
-    Ok(())
-}
-
-fn candidate_paths(candidates: &[Vec<ParameterLeaf>]) -> impl Iterator<Item = &ParameterPath> {
-    candidates
-        .iter()
-        .flat_map(|candidate| candidate.iter().map(|leaf| &leaf.path))
-}
-
-fn parse_cases(path: &Path, cases: StrictValue) -> Result<SweepPlan, ConfigurationError> {
-    let StrictValue::Array(documents) = cases else {
-        return invalid(path, "explicit sweep field `cases` must be an array");
-    };
-    if documents.is_empty() {
-        return invalid(path, "explicit sweep must contain at least one case");
-    }
-    let mut parsed = Vec::with_capacity(documents.len());
-    for (position, document) in documents.into_iter().enumerate() {
-        let entries = require_object(
-            path,
-            document,
-            format!("explicit case at position {position} must be an object"),
-        )?;
-        if entries.is_empty() {
-            return invalid(
-                path,
-                "explicit sweep cases must contain at least one parameter",
-            );
-        }
-        for (name, _) in &entries {
-            validate_name(path, name, "explicit-case parameter")?;
-        }
-        parsed.push(flatten_root(entries));
-    }
-    let order = parsed[0]
-        .iter()
-        .map(|leaf| leaf.path.clone())
-        .collect::<Vec<_>>();
-    let expected = order.iter().collect::<HashSet<_>>();
-    for case in parsed.iter_mut().skip(1) {
-        if case.iter().map(|leaf| &leaf.path).collect::<HashSet<_>>() != expected {
-            return invalid(
-                path,
-                "explicit cases do not contain the same flattened key set as case 0",
-            );
-        }
-        let mut by_path = case
-            .drain(..)
-            .map(|leaf| (leaf.path.clone(), leaf))
-            .collect::<HashMap<_, _>>();
-        *case = order
-            .iter()
-            .map(|parameter_path| {
-                by_path
-                    .remove(parameter_path)
-                    .expect("validated case contains every ordered path")
-            })
-            .collect();
-    }
-    let selectable_paths = parsed[0].iter().map(|leaf| leaf.path.clone()).collect();
-    Ok(SweepPlan::cases(parsed, selectable_paths))
-}
-
-fn take_required(
-    path: &Path,
-    entries: &mut Vec<(String, StrictValue)>,
-    name: &str,
-) -> Result<StrictValue, ConfigurationError> {
-    let Some(position) = entries.iter().position(|(key, _)| key == name) else {
-        return invalid(path, format!("required field `{name}` is missing"));
-    };
-    Ok(entries.remove(position).1)
-}
-
-fn reject_remaining(
-    path: &Path,
-    entries: &[(String, StrictValue)],
-    context: &str,
-) -> Result<(), ConfigurationError> {
-    if let Some((name, _)) = entries.first() {
-        return invalid(path, format!("{context} contains unknown field `{name}`"));
+        paths.extend(dimension.candidates[0].iter().map(|leaf| &leaf.path));
     }
     Ok(())
 }

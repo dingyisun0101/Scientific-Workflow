@@ -4,7 +4,7 @@ use std::fmt;
 
 /// One non-empty JSON object path represented as unescaped key segments.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ParameterPath {
+pub(super) struct ParameterPath {
     segments: Box<[Box<str>]>,
     identifier: Box<str>,
 }
@@ -26,7 +26,7 @@ impl ParameterPath {
     }
 
     /// Parses a canonical non-root JSON Pointer.
-    pub fn parse(key: &str) -> Option<Self> {
+    pub(super) fn parse(key: &str) -> Option<Self> {
         let pointer = key.strip_prefix('/')?;
         let segments = pointer
             .split('/')
@@ -41,11 +41,11 @@ impl ParameterPath {
         Self::from_segments(segments).expect("appending a nonempty path segment remains valid")
     }
 
-    pub fn segments(&self) -> impl ExactSizeIterator<Item = &str> {
+    pub(super) fn segments(&self) -> impl ExactSizeIterator<Item = &str> {
         self.segments.iter().map(AsRef::as_ref)
     }
 
-    pub fn is_ancestor_of(&self, other: &Self) -> bool {
+    pub(super) fn is_ancestor_of(&self, other: &Self) -> bool {
         self.segments.len() < other.segments.len()
             && self
                 .segments
@@ -55,7 +55,7 @@ impl ParameterPath {
     }
 
     /// Stable external JSON Pointer identifier.
-    pub fn identifier(&self) -> &str {
+    pub(super) fn identifier(&self) -> &str {
         &self.identifier
     }
 }

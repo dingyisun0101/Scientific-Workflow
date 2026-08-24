@@ -491,10 +491,12 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         clones.load(Ordering::SeqCst)
     );
 
-    let configurations = ConfigurationSpace::load(
+    let configurations = StudyConfiguration::load(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/configuration/cartesian_study/config"),
+            .join("tests/fixtures/configuration/cartesian_study"),
     )
+    .unwrap()
+    .phase("test", "simulation")
     .unwrap();
     let configuration = configurations.combination(0).unwrap();
     let task_metadata_run = workspace.root.join("task-metadata-run");

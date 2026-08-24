@@ -5,10 +5,17 @@ pub use crate::artifact::{
     VerifiedArtifact, load_verified_artifact, persist_artifact,
 };
 pub use crate::configuration::{
-    ConfigurationError, ConfigurationIter, ConfigurationSpace, ProjectPaths, ResolvedConfiguration,
+    ConfigurationError, ConfigurationIter, PhaseConfiguration, ProjectPaths,
+    ReplicateExecutionMode, ReplicateFailurePolicy, ReplicateSettings, ResolvedConfiguration,
+    StudyConfiguration, StudySettings,
 };
-pub use crate::execution::{ExecutionScope, ExecutionScopeError};
-pub use crate::rng_record::{RNG_RECORDS_METADATA_KEY, RngRecord, RngRecordError};
+pub use crate::execution::{
+    ExecutionScope, ExecutionScopeError, ReplicateContext, ReplicateExecutionError,
+    ReplicateExecutor,
+};
+pub use crate::rng_record::{
+    DerivedSeed, RNG_RECORDS_METADATA_KEY, ReplicateSeedDeriver, RngRecord, RngRecordError,
+};
 pub use crate::storage::{
     CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
     JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, SamplingInterval, StateStreamConfig,

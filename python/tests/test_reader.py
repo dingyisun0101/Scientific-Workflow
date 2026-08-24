@@ -12,12 +12,39 @@ from scientific_workflow_reader import (
     IntegrityError,
     MetadataError,
     RecordError,
+    RecordingError,
     RecordingNotCompleteError,
     UnknownStreamError,
     open_completed_recording,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "complete"
+INVALID_METADATA_CASES = (
+    Path(__file__).parent / "fixtures" / "invalid_metadata_cases.json"
+)
+
+
+def replace_json_pointer(document: object, pointer: str, value: object) -> None:
+    """Replaces one existing list/object value in the shared mutation corpus."""
+    segments = [
+        segment.replace("~1", "/").replace("~0", "~")
+        for segment in pointer.split("/")[1:]
+    ]
+    current = document
+    for segment in segments[:-1]:
+        if isinstance(current, list):
+            current = current[int(segment)]
+        elif isinstance(current, dict):
+            current = current[segment]
+        else:
+            raise AssertionError(f"pointer {pointer!r} traverses a scalar")
+    final = segments[-1]
+    if isinstance(current, list):
+        current[int(final)] = value
+    elif isinstance(current, dict):
+        current[final] = value
+    else:
+        raise AssertionError(f"pointer {pointer!r} ends at a scalar parent")
 
 
 class ReaderTests(unittest.TestCase):
@@ -191,6 +218,20 @@ class ReaderTests(unittest.TestCase):
         metadata_path.write_text(json.dumps(metadata))
         with self.assertRaises(MetadataError):
             open_completed_recording(recording)
+
+    def test_shared_invalid_metadata_corpus_is_rejected(self) -> None:
+        cases = json.loads(INVALID_METADATA_CASES.read_text())
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                temporary, recording = self.copied_fixture()
+                self.addCleanup(temporary.cleanup)
+                metadata_path = recording / "metadata.json"
+                metadata = json.loads(metadata_path.read_text())
+                replace_json_pointer(metadata, case["pointer"], case["value"])
+                metadata_path.write_text(json.dumps(metadata))
+                with self.assertRaises(RecordingError):
+                    reader = open_completed_recording(recording)
+                    reader.read_all_streams()
 
 
 if __name__ == "__main__":

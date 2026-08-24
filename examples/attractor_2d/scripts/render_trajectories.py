@@ -21,16 +21,16 @@ from scientific_workflow_reader import open_completed_recording
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--recording-directory", required=True, type=Path)
+    parser.add_argument(
+        "--recording", required=True, action="append", type=Path, dest="recordings"
+    )
     parser.add_argument("--output-directory", required=True, type=Path)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    recordings = sorted(args.recording_directory.glob("task-[0-9][0-9][0-9][0-9][0-9][0-9]"))
-    if not recordings:
-        raise RuntimeError(f"no task recordings found in {args.recording_directory}")
+    recordings = sorted(args.recordings)
 
     args.output_directory.mkdir(parents=True, exist_ok=True)
     for recording in recordings:

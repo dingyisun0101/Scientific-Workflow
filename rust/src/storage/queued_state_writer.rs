@@ -288,15 +288,19 @@ impl StateWriterWorker {
         let mut error_path = None;
         for (config, recovered) in streams {
             error_path.get_or_insert_with(|| config.directory.clone());
+            let RecoveredStateStream {
+                next_ordinal,
+                last_iteration,
+            } = recovered;
             queue_streams.insert(
                 config.stream.clone(),
                 StreamQueueState {
                     queue_bytes: config.storage.storage_queue_bytes().get(),
                     outstanding_bytes: 0,
-                    last_accepted_iteration: recovered.last_iteration,
+                    last_accepted_iteration: last_iteration,
                 },
             );
-            let sink = StateStreamSink::new(config, recovered);
+            let sink = StateStreamSink::new(config, next_ordinal);
             let replaced = sinks.insert(sink.stream.clone(), sink);
             debug_assert!(replaced.is_none());
         }
@@ -415,12 +419,12 @@ struct StateStreamSink {
 
 impl StateStreamSink {
     /// Combines immutable configuration with recovered append position.
-    fn new(config: StateStreamStorageConfig, recovered: RecoveredStateStream) -> Self {
+    fn new(config: StateStreamStorageConfig, next_ordinal: u64) -> Self {
         Self {
             stream: config.stream,
             directory: config.directory,
             layout: config.storage.layout(),
-            next_ordinal: recovered.next_ordinal,
+            next_ordinal,
             buffer: Vec::new(),
             active: None,
         }
@@ -846,7 +850,7 @@ fn recover_stream(
             })?;
             if active.descriptor() != *descriptor {
                 return Err(StorageError::RecoveryConflict {
-                    path: active.temporary_path.clone(),
+                    path: active.temporary_path,
                     reason: "prepared chunk bytes do not match metadata descriptor".to_owned(),
                 });
             }

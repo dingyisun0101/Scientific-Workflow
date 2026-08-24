@@ -5,6 +5,6 @@ mod resolved_configuration;
 mod space;
 
 pub use resolved_configuration::{ConfigurationIter, ResolvedConfiguration};
-pub use space::ConfigurationSpace;
+pub use space::{PhaseConfiguration, StudyConfiguration};
 
-pub(crate) use space::ConfigurationSpaceInner;
+pub(crate) use space::PhaseConfigurationInner;

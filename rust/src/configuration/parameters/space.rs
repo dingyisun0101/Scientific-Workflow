@@ -1,123 +1,238 @@
-//! Shared immutable configuration-space storage and loading.
+//! Study-wide loading and phase-scoped configuration spaces.
 
 use std::collections::HashMap;
 use std::fmt;
+use std::iter::FusedIterator;
 use std::path::{Path, PathBuf};
+use std::slice;
 use std::sync::Arc;
 
 use super::super::error::ConfigurationError;
 use super::super::parameter_path::ParameterPath;
-use super::super::parameter_tree::{ParameterLeaf, flatten_root, paths_conflict, reconstruct};
-use super::super::source::{parse_strict_json, read_source, require_object, validate_name};
-use super::super::sweep::{SweepPlan, parse_sweep};
+use super::super::parameter_tree::{ParameterLeaf, paths_conflict};
+use super::super::source::{
+    StrictValue, parse_strict_json, read_source, require_object, validate_name,
+};
+use super::super::sweep::{ParsedScope, SweepPlan, parse_scope};
 use super::resolved_configuration::{ConfigurationIter, ResolvedConfiguration};
 
-const FIXED_FILE: &str = "fixed.json";
-const SWEEP_FILE: &str = "sweep.json";
+const PARAMETERS_FILE: &str = "parameters.json";
+const CONFIGURATION_DIRECTORY: &str = "config";
 
+/// One validated study-wide parameter registry.
+///
+/// Call [`StudyConfiguration::phase`] to obtain the only iterable space. A
+/// phase automatically includes the global and containing group scopes.
 #[derive(Clone)]
-pub struct ConfigurationSpace {
-    pub(super) inner: Arc<ConfigurationSpaceInner>,
+pub struct StudyConfiguration {
+    inner: Arc<StudyConfigurationInner>,
 }
 
-impl ConfigurationSpace {
-    /// Loads and validates `fixed.json` and `sweep.json` from `directory`.
-    pub fn load(configuration_directory: impl Into<PathBuf>) -> Result<Self, ConfigurationError> {
-        let configuration_directory = configuration_directory.into();
-        let fixed_path = configuration_directory.join(FIXED_FILE);
-        let sweep_path = configuration_directory.join(SWEEP_FILE);
-        let fixed_source = read_source(&fixed_path)?;
-        let sweep_source = read_source(&sweep_path)?;
-        let fixed_document = parse_strict_json(&fixed_path, &fixed_source)?;
-        let sweep_document = parse_strict_json(&sweep_path, &sweep_source)?;
-        let fixed_entries = require_object(
-            &fixed_path,
-            fixed_document,
-            "fixed.json root must be an object",
-        )?;
-        for (name, _) in &fixed_entries {
-            validate_name(&fixed_path, name, "fixed parameter")?;
-        }
-        let fixed = flatten_root(fixed_entries);
-        let fixed_document = reconstruct(fixed.iter());
-        let sweep = parse_sweep(&sweep_path, sweep_document)?;
-        validate_disjoint(&fixed_path, &sweep_path, &fixed, &sweep)?;
+/// The lazily expanded parameter space for one group-qualified phase.
+#[derive(Clone)]
+pub struct PhaseConfiguration {
+    pub(super) inner: Arc<PhaseConfigurationInner>,
+}
 
-        let fixed_by_path = fixed
-            .iter()
-            .enumerate()
-            .map(|(index, leaf)| (leaf.path.clone(), index))
-            .collect();
-        let combination_count = sweep.combination_count();
+impl StudyConfiguration {
+    /// Loads `config/parameters.json` beneath `study_root`.
+    pub fn load(study_root: impl Into<PathBuf>) -> Result<Self, ConfigurationError> {
+        let study_root = study_root.into();
+        let configuration_directory = Arc::new(study_root.join(CONFIGURATION_DIRECTORY));
+        let source_path = configuration_directory.join(PARAMETERS_FILE);
+        let source = read_source(&source_path)?;
+        let document = parse_strict_json(&source_path, &source)?;
+        let mut root = require_object(
+            &source_path,
+            document,
+            "parameters.json root must be an object",
+        )?;
+        let global = take_required(&source_path, &mut root, "global")?;
+        let phase_groups = take_required(&source_path, &mut root, "phase_group")?;
+        reject_remaining(&source_path, &root, "parameters.json")?;
+
+        let global = Arc::new(ScopeConfiguration::new(parse_scope(
+            &source_path,
+            require_object(&source_path, global, "`global` must be an object")?,
+            "global scope",
+        )?)?);
+        let groups = require_object(
+            &source_path,
+            phase_groups,
+            "`phase_group` must be an object",
+        )?;
+        if groups.is_empty() {
+            return super::super::source::invalid(
+                &source_path,
+                "`phase_group` must contain at least one group",
+            );
+        }
+
+        let mut phases = HashMap::with_capacity(groups.len());
+        for (group_key, group) in groups {
+            validate_name(&source_path, &group_key, "phase-group key")?;
+            let mut group = require_object(
+                &source_path,
+                group,
+                format!("phase group `{group_key}` must be an object"),
+            )?;
+            let shared = take_required(&source_path, &mut group, "shared")?;
+            let phase = take_required(&source_path, &mut group, "phase")?;
+            reject_remaining(&source_path, &group, &format!("phase group `{group_key}`"))?;
+            let shared = Arc::new(ScopeConfiguration::new(parse_scope(
+                &source_path,
+                require_object(
+                    &source_path,
+                    shared,
+                    format!("phase group `{group_key}` field `shared` must be an object"),
+                )?,
+                &format!("phase group `{group_key}` shared scope"),
+            )?)?);
+            let phase = require_object(
+                &source_path,
+                phase,
+                format!("phase group `{group_key}` field `phase` must be an object"),
+            )?;
+            if phase.is_empty() {
+                return super::super::source::invalid(
+                    &source_path,
+                    format!("phase group `{group_key}` must contain at least one phase"),
+                );
+            }
+            let mut group_phases = HashMap::with_capacity(phase.len());
+            for (phase_key, values) in phase {
+                validate_name(&source_path, &phase_key, "phase key")?;
+                let local = Arc::new(ScopeConfiguration::new(parse_scope(
+                    &source_path,
+                    require_object(
+                        &source_path,
+                        values,
+                        format!("phase `{group_key}/{phase_key}` must be an object"),
+                    )?,
+                    &format!("phase `{group_key}/{phase_key}`"),
+                )?)?);
+                let space = compose_space(
+                    Arc::clone(&configuration_directory),
+                    &source_path,
+                    &group_key,
+                    &phase_key,
+                    [Arc::clone(&global), Arc::clone(&shared), local],
+                )?;
+                group_phases.insert(phase_key.into_boxed_str(), Arc::new(space));
+            }
+            phases.insert(group_key.into_boxed_str(), group_phases);
+        }
         Ok(Self {
-            inner: Arc::new(ConfigurationSpaceInner {
+            inner: Arc::new(StudyConfigurationInner {
+                study_root,
                 configuration_directory,
-                fixed_source: fixed_source.into_boxed_slice(),
-                sweep_source: sweep_source.into_boxed_slice(),
-                fixed,
-                fixed_document,
-                fixed_by_path,
-                sweep,
-                combination_count,
+                source_path,
+                source: source.into_boxed_slice(),
+                phases,
             }),
         })
     }
 
-    /// Returns the configuration directory exactly as supplied during loading.
-    pub fn directory(&self) -> &Path {
-        &self.inner.configuration_directory
+    /// Returns the study root supplied to [`Self::load`].
+    pub fn study_root(&self) -> &Path {
+        &self.inner.study_root
     }
 
-    pub fn fixed_source_json(&self) -> &[u8] {
-        &self.inner.fixed_source
+    /// Returns the conventional `config` directory beneath the study root.
+    pub fn configuration_directory(&self) -> &Path {
+        self.inner.configuration_directory.as_path()
     }
 
-    pub fn sweep_source_json(&self) -> &[u8] {
-        &self.inner.sweep_source
+    /// Returns the exact `parameters.json` source path.
+    pub fn source_path(&self) -> &Path {
+        &self.inner.source_path
     }
 
-    /// Returns the number of fixed terminal values.
-    pub fn fixed_value_count(&self) -> usize {
-        self.inner.fixed.len()
+    /// Borrows the original validated source bytes without reserialization.
+    pub fn source_json(&self) -> &[u8] {
+        &self.inner.source
     }
 
-    /// Returns the number of independently selected sweep paths.
-    pub fn sweep_dimension_count(&self) -> usize {
-        self.inner.sweep.selectable_paths().len()
+    /// Returns one exact group-qualified phase configuration.
+    pub fn phase(
+        &self,
+        phase_group: &str,
+        phase: &str,
+    ) -> Result<PhaseConfiguration, ConfigurationError> {
+        let inner = self
+            .inner
+            .phases
+            .get(phase_group)
+            .and_then(|phases| phases.get(phase))
+            .map(Arc::clone)
+            .ok_or_else(|| ConfigurationError::UnknownPhaseConfiguration {
+                phase_group: phase_group.to_owned(),
+                phase: phase.to_owned(),
+            })?;
+        Ok(PhaseConfiguration { inner })
+    }
+}
+
+impl PhaseConfiguration {
+    /// Returns the directory containing the study-wide parameter source.
+    pub fn configuration_directory(&self) -> &Path {
+        self.inner.configuration_directory.as_path()
     }
 
+    /// Returns this phase's stable containing group key.
+    pub fn phase_group(&self) -> &str {
+        &self.inner.phase_group
+    }
+
+    /// Returns this phase's stable string key.
+    pub fn phase(&self) -> &str {
+        &self.inner.phase
+    }
+
+    /// Returns the complete `global × shared × phase` combination count.
     pub fn combination_count(&self) -> u64 {
         self.inner.combination_count
     }
 
-    /// Reports whether a fixed or swept value exists at or beneath `key`.
+    /// Returns the number of ordinary terminal leaves in the merged view.
+    pub fn fixed_value_count(&self) -> usize {
+        self.inner.fixed_leaves().count()
+    }
+
+    /// Returns the number of terminal paths selected by sweep dimensions.
+    pub fn swept_value_count(&self) -> usize {
+        self.inner
+            .scopes
+            .iter()
+            .map(|scope| scope.sweep.selectable_paths().len())
+            .sum()
+    }
+
+    /// Reports whether a fixed or selectable value exists at or below `key`.
     pub fn contains(&self, key: &str) -> bool {
         let Some(path) = ParameterPath::parse(key) else {
             return false;
         };
         self.inner
-            .fixed
-            .iter()
+            .fixed_leaves()
             .any(|leaf| leaf.path == path || path.is_ancestor_of(&leaf.path))
             || self
                 .inner
-                .sweep
-                .all_leaf_paths()
+                .selectable_paths()
                 .any(|candidate| candidate == &path || path.is_ancestor_of(candidate))
     }
 
+    /// Iterates ordinary terminal JSON Pointer keys in declaration order.
     pub fn fixed_keys(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.inner.fixed.iter().map(|leaf| leaf.path.identifier())
+        self.inner.fixed_leaves().map(|leaf| leaf.path.identifier())
     }
 
+    /// Iterates selectable terminal JSON Pointer keys in declaration order.
     pub fn sweep_keys(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.inner
-            .sweep
-            .selectable_paths()
-            .iter()
-            .map(ParameterPath::identifier)
+        self.inner.selectable_paths().map(ParameterPath::identifier)
     }
 
+    /// Resolves one flattened phase ordinal with bounds checking.
     pub fn combination(&self, ordinal: u64) -> Result<ResolvedConfiguration, ConfigurationError> {
         if ordinal >= self.combination_count() {
             return Err(ConfigurationError::CombinationOrdinalOutOfBounds {
@@ -128,55 +243,235 @@ impl ConfigurationSpace {
         Ok(ResolvedConfiguration::new(Arc::clone(&self.inner), ordinal))
     }
 
+    /// Lazily iterates every resolved combination in deterministic order.
     pub fn combinations(&self) -> ConfigurationIter {
         ConfigurationIter::new(Arc::clone(&self.inner), self.combination_count())
     }
 }
 
-impl fmt::Debug for ConfigurationSpace {
+impl fmt::Debug for StudyConfiguration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ConfigurationSpace")
-            .field("configuration_directory", &self.directory())
-            .field("fixed_values", &self.fixed_value_count())
-            .field("sweep_dimensions", &self.sweep_dimension_count())
+            .debug_struct("StudyConfiguration")
+            .field("study_root", &self.study_root())
+            .field(
+                "phases",
+                &self.inner.phases.values().map(HashMap::len).sum::<usize>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for PhaseConfiguration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PhaseConfiguration")
+            .field("phase_group", &self.phase_group())
+            .field("phase", &self.phase())
             .field("combinations", &self.combination_count())
             .finish_non_exhaustive()
     }
 }
 
-pub(crate) struct ConfigurationSpaceInner {
-    pub(super) configuration_directory: PathBuf,
-    pub(super) fixed_source: Box<[u8]>,
-    pub(super) sweep_source: Box<[u8]>,
-    pub(super) fixed: Vec<ParameterLeaf>,
-    pub(super) fixed_document: serde_json::Value,
-    pub(super) fixed_by_path: HashMap<ParameterPath, usize>,
-    pub(super) sweep: SweepPlan,
+struct StudyConfigurationInner {
+    study_root: PathBuf,
+    configuration_directory: Arc<PathBuf>,
+    source_path: PathBuf,
+    source: Box<[u8]>,
+    phases: HashMap<Box<str>, HashMap<Box<str>, Arc<PhaseConfigurationInner>>>,
+}
+
+pub(crate) struct PhaseConfigurationInner {
+    pub(super) configuration_directory: Arc<PathBuf>,
+    pub(super) phase_group: Box<str>,
+    pub(super) phase: Box<str>,
+    scopes: [Arc<ScopeConfiguration>; 3],
     pub(super) combination_count: u64,
 }
 
-fn validate_disjoint(
-    fixed_path: &Path,
-    sweep_path: &Path,
-    fixed: &[ParameterLeaf],
-    sweep: &SweepPlan,
+fn compose_space(
+    configuration_directory: Arc<PathBuf>,
+    source_path: &Path,
+    phase_group: &str,
+    phase: &str,
+    scopes: [Arc<ScopeConfiguration>; 3],
+) -> Result<PhaseConfigurationInner, ConfigurationError> {
+    validate_scopes_disjoint(source_path, &scopes)?;
+    let combination_count = scopes.iter().try_fold(1_u64, |count, scope| {
+        count.checked_mul(scope.combination_count()).ok_or_else(|| {
+            ConfigurationError::CombinationCountOverflow {
+                axis: format!("phase `{phase_group}/{phase}`"),
+            }
+        })
+    })?;
+    Ok(PhaseConfigurationInner {
+        configuration_directory,
+        phase_group: phase_group.to_owned().into_boxed_str(),
+        phase: phase.to_owned().into_boxed_str(),
+        scopes,
+        combination_count,
+    })
+}
+
+struct ScopeConfiguration {
+    fixed: Vec<ParameterLeaf>,
+    fixed_by_path: HashMap<ParameterPath, usize>,
+    sweep: SweepPlan,
+}
+
+impl ScopeConfiguration {
+    fn new(scope: ParsedScope) -> Result<Self, ConfigurationError> {
+        let fixed_by_path = scope
+            .fixed
+            .iter()
+            .enumerate()
+            .map(|(index, leaf)| (leaf.path.clone(), index))
+            .collect();
+        Ok(Self {
+            fixed: scope.fixed,
+            fixed_by_path,
+            sweep: SweepPlan::new(scope.dimensions)?,
+        })
+    }
+
+    const fn combination_count(&self) -> u64 {
+        self.sweep.combination_count()
+    }
+}
+
+impl PhaseConfigurationInner {
+    pub(super) fn fixed_leaves(&self) -> ScopeSliceIter<'_, ParameterLeaf> {
+        ScopeSliceIter::new([
+            &self.scopes[0].fixed,
+            &self.scopes[1].fixed,
+            &self.scopes[2].fixed,
+        ])
+    }
+
+    pub(super) fn selected_leaves(&self, ordinal: u64) -> impl Iterator<Item = &ParameterLeaf> {
+        self.scopes[0]
+            .sweep
+            .selected_leaves(self.scope_ordinal(ordinal, 0))
+            .chain(
+                self.scopes[1]
+                    .sweep
+                    .selected_leaves(self.scope_ordinal(ordinal, 1)),
+            )
+            .chain(
+                self.scopes[2]
+                    .sweep
+                    .selected_leaves(self.scope_ordinal(ordinal, 2)),
+            )
+    }
+
+    pub(super) fn selectable_paths(&self) -> ScopeSliceIter<'_, ParameterPath> {
+        ScopeSliceIter::new([
+            self.scopes[0].sweep.selectable_paths(),
+            self.scopes[1].sweep.selectable_paths(),
+            self.scopes[2].sweep.selectable_paths(),
+        ])
+    }
+
+    pub(super) fn fixed_leaf(&self, path: &ParameterPath) -> Option<&ParameterLeaf> {
+        self.scopes.iter().find_map(|scope| {
+            scope
+                .fixed_by_path
+                .get(path)
+                .map(|&position| &scope.fixed[position])
+        })
+    }
+
+    pub(super) fn scope_ordinal(&self, ordinal: u64, scope: usize) -> u64 {
+        let following = self.scopes[(scope + 1)..]
+            .iter()
+            .map(|scope| scope.combination_count())
+            .product::<u64>();
+        (ordinal / following) % self.scopes[scope].combination_count()
+    }
+}
+
+fn validate_scopes_disjoint(
+    source_path: &Path,
+    scopes: &[Arc<ScopeConfiguration>; 3],
 ) -> Result<(), ConfigurationError> {
-    for fixed_leaf in fixed {
-        if let Some(sweep_path_value) = sweep
-            .all_leaf_paths()
-            .find(|candidate| paths_conflict(&fixed_leaf.path, candidate))
-        {
-            return Err(ConfigurationError::FixedSweepKeyConflict {
-                key: if fixed_leaf.path == *sweep_path_value {
-                    fixed_leaf.path.identifier().to_owned()
-                } else {
-                    format!("{} <> {}", fixed_leaf.path, sweep_path_value)
-                },
-                fixed_path: fixed_path.to_path_buf(),
-                sweep_path: sweep_path.to_path_buf(),
-            });
+    let mut paths: Vec<&ParameterPath> = Vec::new();
+    for path in scopes.iter().flat_map(|scope| {
+        scope
+            .fixed
+            .iter()
+            .map(|leaf| &leaf.path)
+            .chain(scope.sweep.selectable_paths())
+    }) {
+        if let Some(previous) = paths.iter().find(|previous| paths_conflict(previous, path)) {
+            return super::super::source::invalid(
+                source_path,
+                format!("parameter paths `{previous}` and `{path}` overlap"),
+            );
         }
+        paths.push(path);
+    }
+    Ok(())
+}
+
+pub(super) struct ScopeSliceIter<'a, T> {
+    scopes: [slice::Iter<'a, T>; 3],
+    current: usize,
+    remaining: usize,
+}
+
+impl<'a, T> ScopeSliceIter<'a, T> {
+    fn new(scopes: [&'a [T]; 3]) -> Self {
+        Self {
+            remaining: scopes.iter().map(|scope| scope.len()).sum(),
+            scopes: scopes.map(<[T]>::iter),
+            current: 0,
+        }
+    }
+}
+
+impl<'a, T> Iterator for ScopeSliceIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current < self.scopes.len() {
+            if let Some(value) = self.scopes[self.current].next() {
+                self.remaining -= 1;
+                return Some(value);
+            }
+            self.current += 1;
+        }
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T> ExactSizeIterator for ScopeSliceIter<'_, T> {}
+impl<T> FusedIterator for ScopeSliceIter<'_, T> {}
+
+fn take_required(
+    path: &Path,
+    entries: &mut Vec<(String, StrictValue)>,
+    name: &str,
+) -> Result<StrictValue, ConfigurationError> {
+    let Some(position) = entries.iter().position(|(key, _)| key == name) else {
+        return super::super::source::invalid(path, format!("required field `{name}` is missing"));
+    };
+    Ok(entries.remove(position).1)
+}
+
+fn reject_remaining(
+    path: &Path,
+    entries: &[(String, StrictValue)],
+    context: &str,
+) -> Result<(), ConfigurationError> {
+    if let Some((name, _)) = entries.first() {
+        return super::super::source::invalid(
+            path,
+            format!("{context} contains unknown field `{name}`"),
+        );
     }
     Ok(())
 }
