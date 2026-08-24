@@ -188,6 +188,14 @@ Example fixed and sweep documents:
 }
 ```
 
+An axis may replace inline `values` with `values_from`, a JSON-array path
+relative to `sweep.json`. Multiple workload phases can therefore share one
+authoritative axis declaration:
+
+```json
+"sys_idx": { "values_from": "../../../systems.json" }
+```
+
 ```rust,no_run
 use scientific_workflow::configuration::{ConfigurationSpace, ProjectPaths};
 
