@@ -5,8 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use scientific_workflow::system_state::{SimulationTime, StateError, SystemStateSchema};
-use scientific_workflow::time_series::{StateSeries, StateSeriesError};
+use scientific_workflow::state::advanced::StateSchemaAccess;
+use scientific_workflow::state::basic::{
+    StateError, StateSeries, StateSeriesError, StateTime, SystemStateSchema,
+};
 use serde::Serialize;
 
 /// Payload whose clone counter makes expensive series cloning observable.
@@ -36,8 +38,8 @@ fn sample_state(
     index: u64,
     values: Vec<u64>,
     clones: &Arc<AtomicUsize>,
-) -> scientific_workflow::system_state::SystemState {
-    let mut state = spec.create_empty_state(SimulationTime::from_iteration(index));
+) -> scientific_workflow::state::advanced::SystemState {
+    let mut state = spec.create_empty_state(StateTime::from_iteration(index));
     assert!(
         state
             .insert_payload(
@@ -55,7 +57,7 @@ fn sample_state(
 
 #[test]
 fn ordered_analysis_preserves_ownership_and_invariants() {
-    let spec = SystemStateSchema::load_json_template(fixture_path())
+    let spec = SystemStateSchema::load_json_template(&fixture_path())
         .expect("real state fixture must load");
     let clones = Arc::new(AtomicUsize::new(0));
 
@@ -85,16 +87,10 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
 
     assert_eq!(series.len(), 2);
     assert!(!series.is_empty());
-    assert_eq!(series.state_at(0).unwrap().simulation_time().iteration(), 0);
+    assert_eq!(series.state_at(0).unwrap().time().iteration(), 0);
     assert!(series.state_at(2).is_none());
-    assert_eq!(
-        series.first_state().unwrap().simulation_time().iteration(),
-        0
-    );
-    assert_eq!(
-        series.last_state().unwrap().simulation_time().iteration(),
-        4
-    );
+    assert_eq!(series.first_state().unwrap().time().iteration(), 0);
+    assert_eq!(series.last_state().unwrap().time().iteration(), 4);
     assert_eq!(series.as_state_slice().len(), 2);
     assert_eq!(series.iter().count(), 2);
     assert_eq!(
@@ -146,26 +142,22 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
     ));
     assert!(mismatch.source().unwrap().is::<StateError>());
 
-    let view = series.as_view();
-    let copied_view = view;
     assert!(std::ptr::eq(
-        view.schema().field_schemas(),
+        series.schema().field_schemas(),
         spec.field_schemas()
     ));
-    assert_eq!(view.len(), 2);
-    assert!(!view.is_empty());
-    assert_eq!(view.state_at(0).unwrap().simulation_time().iteration(), 0);
-    assert!(view.state_at(5).is_none());
-    assert_eq!(view.first_state().unwrap().simulation_time().iteration(), 0);
-    assert_eq!(view.last_state().unwrap().simulation_time().iteration(), 4);
-    assert_eq!(view.as_state_slice().len(), 2);
-    assert_eq!(view.iter().count(), 2);
+    assert_eq!(series.len(), 2);
+    assert!(!series.is_empty());
+    assert_eq!(series.state_at(0).unwrap().time().iteration(), 0);
+    assert!(series.state_at(5).is_none());
+    assert_eq!(series.first_state().unwrap().time().iteration(), 0);
+    assert_eq!(series.last_state().unwrap().time().iteration(), 4);
+    assert_eq!(series.as_state_slice().len(), 2);
+    assert_eq!(series.iter().count(), 2);
     assert_eq!((&series).into_iter().count(), 2);
-    assert_eq!(copied_view.into_iter().count(), 2);
-    assert!(format!("{view:?}").contains("StateSeriesView"));
     assert!(format!("{series:?}").contains("StateSeries"));
 
-    let foreign_spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let foreign_spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
     assert!(!std::ptr::eq(
         foreign_spec.field_schemas(),
         spec.field_schemas()
@@ -178,7 +170,7 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
         layout_rejection.error(),
         StateSeriesError::SchemaMismatch { iteration: 8 }
     ));
-    assert_eq!(layout_rejection.state().simulation_time().iteration(), 8);
+    assert_eq!(layout_rejection.state().time().iteration(), 8);
     assert!(format!("{layout_rejection:?}").contains("StateSeriesPushError"));
     assert!(layout_rejection.to_string().contains("does not share"));
     assert!(layout_rejection.source().is_some());
@@ -187,7 +179,7 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
         layout_error,
         StateSeriesError::SchemaMismatch { iteration: 8 }
     ));
-    assert_eq!(recovered_foreign.simulation_time().iteration(), 8);
+    assert_eq!(recovered_foreign.time().iteration(), 8);
 
     let duplicate = sample_state(&spec, 4, vec![23], &clones);
     let ordering_rejection = series
@@ -201,10 +193,10 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
         }
     ));
     let (_, recovered_duplicate) = ordering_rejection.into_parts();
-    assert_eq!(recovered_duplicate.simulation_time().iteration(), 4);
+    assert_eq!(recovered_duplicate.time().iteration(), 4);
 
     let popped = series.pop_state().expect("last state must move out");
-    assert_eq!(popped.simulation_time().iteration(), 4);
+    assert_eq!(popped.time().iteration(), 4);
     assert_eq!(series.len(), 1);
     series.push_state(popped).unwrap();
     assert_eq!(clones.load(Ordering::Relaxed), 0);
@@ -234,7 +226,7 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
         reserved_capacity,
         states
             .iter()
-            .map(|state| state.simulation_time().iteration())
+            .map(|state| state.time().iteration())
             .collect::<Vec<_>>()
     );
     println!("[invariants] layout_rejected=true ordering_rejected=true");

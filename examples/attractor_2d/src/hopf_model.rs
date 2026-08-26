@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::Duration;
 
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
 
 use crate::AppResult;
 
@@ -37,7 +37,7 @@ impl HopfModel {
         // Derived values are inserted alongside primary values so every stream
         // can select fields by schema name without knowing this Rust type.
         let radius = initial_point[0].hypot(initial_point[1]);
-        let initial_time = SimulationTime::from_iteration_and_physical_time(0, 0.0)
+        let initial_time = StateTime::from_iteration_and_physical_time(0, 0.0)
             .expect("zero is a finite physical-time coordinate");
         let mut state = schema.create_empty_state(initial_time);
 
@@ -86,7 +86,7 @@ impl HopfModel {
         // Time advances only after every scientific payload was updated
         // successfully, so the timestamp always describes the stored state.
         self.state
-            .advance_simulation_time(Some(self.physical_time_increment_per_step))?;
+            .advance_time(Some(self.physical_time_increment_per_step))?;
         Ok(())
     }
 }

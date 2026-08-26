@@ -1,11 +1,11 @@
 //! Recording persistence and reconstruction for scientific state samples.
 //!
-//! This module is the complete public storage boundary. Simulations configure
-//! named output streams with coordinate-aware sampling intervals through
+//! This module is the transitional public persistence boundary. Applications
+//! supply a scientific [`Writer`] definition through
 //! [`SystemStateWriterBuilder`], then offer a borrowed live [`SystemState`] to
-//! [`SystemStateWriter::observe_state`] after each evolution step. The writer
-//! checks time before accessing any payload and encodes only streams whose
-//! sampling interval includes the current iteration. One bounded queue
+//! [`SystemStateWriter::observe_state`] after each evolution step. The private
+//! writer session checks time before accessing payloads and encodes only due
+//! streams. One bounded queue
 //! and worker serve every configured stream. Each stream accumulates an
 //! independent byte-targeted chunk entirely in reusable userspace memory and
 //! performs filesystem IO only when publishing that chunk. The recording owns exactly one
@@ -23,7 +23,8 @@
 //! # Lifecycle
 //!
 //! [`SystemStateWriterBuilder::create_new_recording`] refuses an existing output root, validates every
-//! stream against one shared state specification, publishes initial `running`
+//! writer definition against one shared state schema, infers deterministic
+//! stream layout, publishes initial `running`
 //! metadata, and then starts the recording writer. A complete buffered chunk is
 //! written once, synchronized, described in metadata, and atomically sealed.
 //! [`SystemStateWriter::complete_recording`] drains the writer, atomically commits
@@ -50,18 +51,19 @@
 //! [`StoredStateSeriesReader`] accepts a completed output directory and a [`JsonPayloadDecoderRegistry`]
 //! registry. The reader validates metadata, chunks, checksums, record order,
 //! and decoder coverage before reconstructing typed
-//! [`StateSeries`](crate::time_series::StateSeries) values. Decoder
+//! [`StateSeries`](crate::state::advanced::StateSeries) values. Decoder
 //! implementations remain per payload type and registrations remain per exact
 //! state key. Latest-state reads verify and decode only the newest chunk.
 //!
 //! # Boundary
 //!
 //! Storage owns durable mechanics: run directories, stream chunking, queue
-//! flushing, metadata transitions, and reconstruction integrity checks. Callers
-//! own simulation evolution, stream schemas, payload codecs, and scheduling.
-//! Storage does not define modeling APIs, RNG behavior, or artifact semantics.
+//! flushing, metadata transitions, and reconstruction integrity checks. Writer
+//! owns scientific stream schemas, cadence, and encoding; callers own
+//! simulation evolution and decode registrations. Storage does not define
+//! modeling APIs, RNG behavior, or artifact semantics.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::num::NonZeroU64;
@@ -75,11 +77,12 @@ use serde_json::{Map, Value};
 
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
 use crate::configuration::ResolvedConfiguration;
-use crate::system_state::{StateSchemaSource, SystemState, SystemStateSchema};
+use crate::state::advanced::{StateSchemaSource, SystemState, SystemStateSchema};
+use crate::writer::WriterSession;
+use crate::writer::advanced::{StreamDescriptor, Writer, WriterDescriptor};
 
 mod error;
 mod json_payload_decoder;
-mod json_state_record_encoder;
 mod jsonl_format;
 mod queued_state_writer;
 mod resume;
@@ -91,10 +94,9 @@ pub use json_payload_decoder::{
 };
 pub use stored_state_series_reader::StoredStateSeriesReader;
 
-use json_state_record_encoder::JsonStateRecordEncoder;
 use jsonl_format::{
-    RecordingMetadata, RecordingStatus, StateFieldMetadata, StateStreamMetadata,
-    TimeAxisMetadata as StoredTimeAxis,
+    EncodedStateRecord, RecordingMetadata, RecordingStatus, StateFieldMetadata,
+    StateStreamMetadata, TimeAxisMetadata as StoredTimeAxis,
 };
 use queued_state_writer::{RecoveredStateStream, StateStreamStorageConfig, StateWriterWorker};
 
@@ -104,85 +106,10 @@ const METADATA_FILE: &str = "metadata.json";
 /// Temporary sibling used for atomic metadata replacement.
 const METADATA_TEMP_FILE: &str = ".metadata.json.tmp";
 
-/// Public description of the temporal coordinates used by a run.
-///
-/// Every record always has an integer iteration. Physical time remains
-/// optional, and its unit is legal only when a physical-coordinate name is
-/// configured. Labels are documentation persisted once in `metadata.json`;
-/// they do not change [`crate::system_state::SimulationTime`] representation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TimeAxisMetadata {
-    iteration_name: String,
-    iteration_unit: Option<String>,
-    physical_time_name: Option<String>,
-    physical_time_unit: Option<String>,
-}
-
-impl TimeAxisMetadata {
-    /// Creates a time-axis declaration with a mandatory iteration label.
-    ///
-    /// Whitespace is retained in the builder and rejected by
-    /// [`SystemStateWriterBuilder::create_new_recording`], keeping fluent configuration infallible
-    /// while ensuring persisted labels are never silently normalized.
-    pub fn new(iteration_name: impl Into<String>) -> Self {
-        Self {
-            iteration_name: iteration_name.into(),
-            iteration_unit: None,
-            physical_time_name: None,
-            physical_time_unit: None,
-        }
-    }
-
-    /// Sets the optional unit of the iteration coordinate.
-    #[must_use]
-    pub fn with_iteration_unit(mut self, unit: impl Into<String>) -> Self {
-        self.iteration_unit = Some(unit.into());
-        self
-    }
-
-    /// Declares the optional floating-point physical coordinate.
-    #[must_use]
-    pub fn with_physical_time_name(mut self, name: impl Into<String>) -> Self {
-        self.physical_time_name = Some(name.into());
-        self
-    }
-
-    /// Sets the physical-coordinate unit.
-    ///
-    /// A matching [`TimeAxisMetadata::with_physical_time_name`] is required; construction fails
-    /// at [`SystemStateWriterBuilder::create_new_recording`] if the unit is configured alone.
-    #[must_use]
-    pub fn with_physical_time_unit(mut self, unit: impl Into<String>) -> Self {
-        self.physical_time_unit = Some(unit.into());
-        self
-    }
-
-    /// Declares the physical-time name and unit together.
-    #[must_use]
-    pub fn with_physical_axis(mut self, name: impl Into<String>, unit: impl Into<String>) -> Self {
-        self.physical_time_name = Some(name.into());
-        self.physical_time_unit = Some(unit.into());
-        self
-    }
-
-    /// Converts public configuration into the private persisted representation.
-    fn into_stored(self) -> StoredTimeAxis {
-        StoredTimeAxis {
-            iteration_name: self.iteration_name,
-            iteration_unit: self.iteration_unit,
-            physical_time_name: self.physical_time_name,
-            physical_time_unit: self.physical_time_unit,
-        }
-    }
-}
-
-impl Default for TimeAxisMetadata {
-    /// Uses `iteration` as the integer-time label and declares no units or
-    /// physical coordinate.
-    fn default() -> Self {
-        Self::new("iteration")
-    }
-}
+/// Internal persistence default used when record configuration supplies no
+/// stream-specific policy. Scientific writer definitions deliberately do not
+/// expose buffering or filesystem mechanics.
+const DEFAULT_STREAM_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Immutable operational timing returned after successful recording completion.
 ///
@@ -339,7 +266,7 @@ impl CompletedRecording {
 /// `{"iterations": 10}` emitted by serialization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SamplingInterval {
+pub(crate) enum SamplingInterval {
     /// Select iteration zero and each iteration divisible by this interval.
     Iterations(NonZeroU64),
 }
@@ -369,17 +296,10 @@ impl<'de> Deserialize<'de> for SamplingInterval {
 
 impl SamplingInterval {
     /// Creates an iteration interval, returning `None` for zero.
-    pub const fn iterations(interval: u64) -> Option<Self> {
+    pub(crate) const fn iterations(interval: u64) -> Option<Self> {
         match NonZeroU64::new(interval) {
             Some(interval) => Some(Self::Iterations(interval)),
             None => None,
-        }
-    }
-
-    /// Reports whether this interval selects `iteration`.
-    const fn includes(self, iteration: u64) -> bool {
-        match self {
-            Self::Iterations(interval) => iteration.is_multiple_of(interval.get()),
         }
     }
 }
@@ -433,88 +353,6 @@ impl StateStreamStorage {
     }
 }
 
-/// Configuration for one independently sampled logical output stream.
-///
-/// Field names are exact keys from the run's [`SystemStateSchema`]. Their input order
-/// is irrelevant: the encoder writes them in canonical template order. Chunk
-/// targets are rollover thresholds, while individual-file streams seal every
-/// record immediately. The queue byte limit is strict in either layout.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct StateStreamConfig {
-    name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    directory: Option<String>,
-    sampling_interval: SamplingInterval,
-    fields: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    storage: Option<StateStreamStorage>,
-}
-
-impl StateStreamConfig {
-    /// Creates a stream whose relative output directory initially equals its
-    /// logical name.
-    ///
-    /// `storage == None` inherits writer-wide storage. Non-zero types make
-    /// explicit limits valid by construction. Names, paths, duplicate
-    /// fields, and state-key membership are validated together by
-    /// [`SystemStateWriterBuilder::create_new_recording`].
-    pub fn new<I, K>(
-        name: impl Into<String>,
-        fields: I,
-        sampling_interval: SamplingInterval,
-        storage: Option<StateStreamStorage>,
-    ) -> Self
-    where
-        I: IntoIterator<Item = K>,
-        K: Into<String>,
-    {
-        let name = name.into();
-        Self {
-            directory: None,
-            name,
-            sampling_interval,
-            fields: fields.into_iter().map(Into::into).collect(),
-            storage,
-        }
-    }
-
-    /// Overrides the stream's relative directory beneath the run root.
-    ///
-    /// Absolute paths, empty paths, and `.` or `..` components are rejected at
-    /// start. Distinct streams must use distinct directories.
-    #[must_use]
-    pub fn with_relative_directory(mut self, directory: impl Into<String>) -> Self {
-        self.directory = Some(directory.into());
-        self
-    }
-
-    /// Returns the logical stream name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the relative directory beneath the recording root.
-    pub fn relative_directory(&self) -> &str {
-        self.directory.as_deref().unwrap_or(&self.name)
-    }
-
-    /// Returns the sampling policy.
-    pub const fn sampling_interval(&self) -> SamplingInterval {
-        self.sampling_interval
-    }
-
-    /// Returns selected state fields in declaration order.
-    pub fn fields(&self) -> &[String] {
-        &self.fields
-    }
-
-    /// Returns stream-specific storage, or `None` when writer storage applies.
-    pub const fn storage(&self) -> Option<StateStreamStorage> {
-        self.storage
-    }
-}
-
 /// Builder for one exclusive state-recording directory.
 ///
 /// The builder owns only paths, immutable configuration, and a cheap shared
@@ -525,36 +363,36 @@ impl StateStreamConfig {
 pub struct SystemStateWriterBuilder {
     root: PathBuf,
     spec: SystemStateSchema,
-    time: TimeAxisMetadata,
+    writer: Writer,
     user_metadata: Map<String, Value>,
     shared_stream_storage: Option<StateStreamStorage>,
-    streams: Vec<StateStreamConfig>,
+    stream_storage: HashMap<String, StateStreamStorage>,
 }
 
 impl SystemStateWriterBuilder {
-    /// Creates an empty run configuration using [`TimeAxisMetadata::default`].
+    /// Creates a recording configuration using [`Writer::all_fields`].
     ///
     /// The schema is derived from a live [`SystemState`] or supplied directly
     /// as a [`SystemStateSchema`]. It is cloned only as an `Arc`-backed metadata
     /// handle; no scientific payload is cloned or retained.
-    pub fn new<S>(root: impl Into<PathBuf>, source: &S) -> Self
+    pub fn new<S>(root: PathBuf, source: &S) -> Self
     where
         S: StateSchemaSource + ?Sized,
     {
         Self {
-            root: root.into(),
+            root,
             spec: source.state_schema().clone(),
-            time: TimeAxisMetadata::default(),
+            writer: Writer::all_fields(),
             user_metadata: Map::new(),
             shared_stream_storage: None,
-            streams: Vec::new(),
+            stream_storage: HashMap::new(),
         }
     }
 
-    /// Replaces the run's temporal-coordinate documentation.
+    /// Replaces the inferred all-field definition with an application writer.
     #[must_use]
-    pub fn with_time_axis_metadata(mut self, time: TimeAxisMetadata) -> Self {
-        self.time = time;
+    pub fn with_writer(mut self, writer: Writer) -> Self {
+        self.writer = writer;
         self
     }
 
@@ -571,9 +409,8 @@ impl SystemStateWriterBuilder {
 
     /// Uses one persistence policy for concise stream declarations.
     ///
-    /// Storage supplied directly through [`StateStreamConfig::new`] remains
-    /// stream-specific and takes precedence. Streams constructed with
-    /// `storage == None` require this shared policy.
+    /// Stream-specific storage overrides remain available only as transitional
+    /// record-layer configuration and take precedence.
     #[must_use]
     pub fn with_shared_stream_storage(mut self, storage: StateStreamStorage) -> Self {
         self.shared_stream_storage = Some(storage);
@@ -596,13 +433,16 @@ impl SystemStateWriterBuilder {
         self
     }
 
-    /// Appends one logical stream declaration in deterministic metadata order.
+    /// Overrides persistence policy for one writer-defined stream.
     ///
-    /// Duplicate names or directories are reported at start so fluent builder
-    /// assembly remains infallible.
+    /// This transitional record-layer setting will move to validated JSON.
     #[must_use]
-    pub fn add_state_stream(mut self, stream: StateStreamConfig) -> Self {
-        self.streams.push(stream);
+    pub fn with_stream_storage(
+        mut self,
+        stream: impl Into<String>,
+        storage: StateStreamStorage,
+    ) -> Self {
+        self.stream_storage.insert(stream.into(), storage);
         self
     }
 
@@ -694,9 +534,8 @@ enum CheckpointRequest {
 /// synchronous [`SystemStateWriter::observe_state`] call.
 pub struct SystemStateWriter {
     root: PathBuf,
-    stream_order: Vec<String>,
     manifest: Arc<RecordingManifest>,
-    streams: HashMap<String, ScheduledStateStream>,
+    session: WriterSession,
     writer: Option<StateWriterWorker>,
     session_started: Instant,
     /// Held after writers so normal field drop keeps the lease until every
@@ -706,7 +545,7 @@ pub struct SystemStateWriter {
 
 impl SystemStateWriter {
     /// Begins configuring a state recording from a live state or schema.
-    pub fn builder<S>(root: impl Into<PathBuf>, source: &S) -> SystemStateWriterBuilder
+    pub fn builder<S>(root: PathBuf, source: &S) -> SystemStateWriterBuilder
     where
         S: StateSchemaSource + ?Sized,
     {
@@ -720,7 +559,11 @@ impl SystemStateWriter {
 
     /// Iterates logical stream names in deterministic declaration order.
     pub fn stream_names(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.stream_order.iter().map(String::as_str)
+        self.session
+            .descriptor()
+            .streams()
+            .iter()
+            .map(StreamDescriptor::name)
     }
 
     /// Offers the current live state to every configured sampling stream.
@@ -737,24 +580,18 @@ impl SystemStateWriter {
     /// queue-limit and ordering errors, or the writer's authoritative terminal
     /// failure.
     pub fn observe_state(&mut self, state: &SystemState) -> Result<(), StorageError> {
-        let iteration = state.simulation_time().iteration();
+        let observations = self
+            .session
+            .observe(state)
+            .map_err(|source| StorageError::Writer { source })?;
         let writer = self
             .writer
             .as_ref()
             .expect("an active recording owns its writer worker");
-        for name in &self.stream_order {
-            let stream = self
-                .streams
-                .get_mut(name)
-                .expect("stream order contains every configured stream");
-            if !stream.sampling_interval.includes(iteration)
-                || stream.last_recorded_iteration == Some(iteration)
-            {
-                continue;
-            }
-            let record = stream.encoder.encode(state)?;
-            writer.submit_record(name, record)?;
-            stream.last_recorded_iteration = Some(iteration);
+        for observation in observations {
+            let stream = observation.stream().to_owned();
+            let record = EncodedStateRecord::new(observation.time(), observation.into_bytes());
+            writer.submit_record(&stream, record)?;
         }
         Ok(())
     }
@@ -766,7 +603,13 @@ impl SystemStateWriter {
     /// prepared in the sole metadata document, renamed to its sealed filename, and directory-synced
     /// before this method returns.
     pub fn flush_stream_to_storage(&self, stream: &str) -> Result<(), StorageError> {
-        if !self.streams.contains_key(stream) {
+        if !self
+            .session
+            .descriptor()
+            .streams()
+            .iter()
+            .any(|candidate| candidate.name() == stream)
+        {
             return Err(StorageError::UnknownStateStream {
                 stream: stream.to_owned(),
             });
@@ -837,22 +680,18 @@ impl SystemStateWriter {
 
     /// Encodes the supplied terminal state for streams that lack this iteration.
     fn record_final_state(&mut self, state: &SystemState) -> Result<(), StorageError> {
-        let iteration = state.simulation_time().iteration();
+        let observations = self
+            .session
+            .observe_final(state)
+            .map_err(|source| StorageError::Writer { source })?;
         let writer = self
             .writer
             .as_ref()
             .expect("an active recording owns its writer worker");
-        for name in &self.stream_order {
-            let stream = self
-                .streams
-                .get_mut(name)
-                .expect("stream order contains every configured stream");
-            if stream.last_recorded_iteration == Some(iteration) {
-                continue;
-            }
-            let record = stream.encoder.encode(state)?;
-            writer.submit_record(name, record)?;
-            stream.last_recorded_iteration = Some(iteration);
+        for observation in observations {
+            let stream = observation.stream().to_owned();
+            let record = EncodedStateRecord::new(observation.time(), observation.into_bytes());
+            writer.submit_record(&stream, record)?;
         }
         Ok(())
     }
@@ -913,7 +752,13 @@ impl SystemStateWriter {
             prepared.metadata_path.clone(),
             prepared.metadata,
         ));
-        Self::start_new_prepared(prepared.root, prepared.streams, manifest, lease)
+        Self::start_new_prepared(
+            prepared.root,
+            prepared.descriptor,
+            prepared.streams,
+            manifest,
+            lease,
+        )
     }
 
     /// Validates, recovers, optionally reconstructs, and starts an append run.
@@ -976,7 +821,7 @@ impl SystemStateWriter {
                 &prepared.root,
                 &prepared.metadata_path,
                 &mut existing,
-                state.simulation_time().iteration(),
+                state.time().iteration(),
             )?;
             commit_metadata(&prepared.root, &prepared.metadata_path, &existing)?;
             Some(state)
@@ -1008,39 +853,33 @@ impl SystemStateWriter {
             existing,
         ));
 
-        let output = Self::start_resumed_prepared(prepared.root, recovered, manifest, lease)?;
+        let output = Self::start_resumed_prepared(
+            prepared.root,
+            prepared.descriptor,
+            recovered,
+            manifest,
+            lease,
+        )?;
         Ok((output, state))
     }
 
     /// Spawns every empty writer after the initial manifest is durable.
     fn start_new_prepared(
         root: PathBuf,
+        descriptor: WriterDescriptor,
         streams: Vec<PreparedStateStream>,
         manifest: Arc<RecordingManifest>,
         lease: RecordingLease,
     ) -> Result<Self, StorageError> {
-        let mut scheduled = HashMap::with_capacity(streams.len());
         let mut configs = Vec::with_capacity(streams.len());
-        let mut stream_order = Vec::with_capacity(streams.len());
         for prepared in streams {
-            let name = prepared.name;
-            stream_order.push(name.clone());
-            scheduled.insert(
-                name,
-                ScheduledStateStream {
-                    encoder: prepared.encoder,
-                    sampling_interval: prepared.sampling_interval,
-                    last_recorded_iteration: None,
-                },
-            );
             configs.push(prepared.writer);
         }
         let writer = StateWriterWorker::start_new_recording(configs, Arc::clone(&manifest))?;
         Ok(Self {
             root,
-            stream_order,
             manifest,
-            streams: scheduled,
+            session: WriterSession::new(descriptor),
             writer: Some(writer),
             session_started: Instant::now(),
             _lease: lease,
@@ -1050,24 +889,15 @@ impl SystemStateWriter {
     /// Spawns every append writer from its recovered active owner and indices.
     fn start_resumed_prepared(
         root: PathBuf,
+        descriptor: WriterDescriptor,
         streams: Vec<(PreparedStateStream, RecoveredStateStream)>,
         manifest: Arc<RecordingManifest>,
         lease: RecordingLease,
     ) -> Result<Self, StorageError> {
-        let mut scheduled = HashMap::with_capacity(streams.len());
         let mut recovered_streams = Vec::with_capacity(streams.len());
-        let mut stream_order = Vec::with_capacity(streams.len());
+        let mut last_iterations = Vec::with_capacity(streams.len());
         for (prepared, seed) in streams {
-            let name = prepared.name;
-            stream_order.push(name.clone());
-            scheduled.insert(
-                name,
-                ScheduledStateStream {
-                    encoder: prepared.encoder,
-                    sampling_interval: prepared.sampling_interval,
-                    last_recorded_iteration: seed.last_iteration(),
-                },
-            );
+            last_iterations.push(seed.last_iteration());
             recovered_streams.push((prepared.writer, seed));
         }
         let writer = StateWriterWorker::continue_recovered_recording(
@@ -1076,9 +906,8 @@ impl SystemStateWriter {
         )?;
         Ok(Self {
             root,
-            stream_order,
             manifest,
-            streams: scheduled,
+            session: WriterSession::with_last_iterations(descriptor, last_iterations),
             writer: Some(writer),
             session_started: Instant::now(),
             _lease: lease,
@@ -1165,6 +994,7 @@ struct PreparedRecording {
     root: PathBuf,
     metadata_path: PathBuf,
     spec: SystemStateSchema,
+    descriptor: WriterDescriptor,
     metadata: RecordingMetadata,
     streams: Vec<PreparedStateStream>,
 }
@@ -1173,64 +1003,62 @@ impl PreparedRecording {
     /// Canonicalizes stream field order and builds expected persisted metadata.
     fn from_builder(builder: SystemStateWriterBuilder) -> Result<Self, StorageError> {
         let metadata_path = builder.root.join(METADATA_FILE);
-        let stored_time = builder.time.into_stored();
-        let mut names = HashSet::with_capacity(builder.streams.len());
-        let mut directories = HashSet::with_capacity(builder.streams.len());
-        let mut streams = Vec::with_capacity(builder.streams.len());
-        let mut declarations = Vec::with_capacity(builder.streams.len());
-
-        for config in builder.streams {
-            if !names.insert(config.name.clone()) {
-                return Err(StorageError::DuplicateStateStream {
-                    stream: config.name,
+        let descriptor = WriterDescriptor::bind(builder.writer, &builder.spec)
+            .map_err(|source| StorageError::Writer { source })?;
+        let stored_time = StoredTimeAxis {
+            iteration_name: "iteration".to_owned(),
+            iteration_unit: descriptor.iteration_unit().map(str::to_owned),
+            physical_time_name: Some("physical_time".to_owned()),
+            physical_time_unit: descriptor.physical_time_unit().map(str::to_owned),
+        };
+        for stream in builder.stream_storage.keys() {
+            if !descriptor
+                .streams()
+                .iter()
+                .any(|candidate| candidate.name() == stream)
+            {
+                return Err(StorageError::UnknownStateStream {
+                    stream: stream.clone(),
                 });
             }
-            let directory = config.relative_directory().to_owned();
-            if !directories.insert(directory.clone()) {
-                return Err(StorageError::InvalidConfiguration {
-                    setting: "stream.directory",
-                    reason: format!("multiple streams use relative directory `{}`", directory),
-                });
-            }
+        }
 
-            let storage = config
-                .storage
+        let default_bytes =
+            NonZeroU64::new(DEFAULT_STREAM_BYTES).expect("the internal byte budget is positive");
+        let default_storage = StateStreamStorage::chunked(default_bytes, default_bytes);
+        let mut streams = Vec::with_capacity(descriptor.streams().len());
+        let mut declarations = Vec::with_capacity(descriptor.streams().len());
+
+        for (index, stream) in descriptor.streams().iter().enumerate() {
+            let directory = format!("stream_{index:04}");
+            let storage = builder
+                .stream_storage
+                .get(stream.name())
+                .copied()
                 .or(builder.shared_stream_storage)
-                .ok_or_else(|| StorageError::InvalidConfiguration {
-                    setting: "stream.storage",
-                    reason: format!(
-                        "stream `{}` has no explicit storage and the writer has no shared storage",
-                        config.name
-                    ),
-                })?;
-            let encoder = JsonStateRecordEncoder::new(&config.name, &builder.spec, &config.fields)?;
-            let fields = encoder
+                .unwrap_or(default_storage);
+            let sampling_interval = SamplingInterval::iterations(stream.every_iterations())
+                .expect("writer descriptors contain positive sampling intervals");
+            let fields = stream
                 .fields()
-                .map(|name| {
-                    let field = builder
-                        .spec
-                        .field_schema(name)
-                        .expect("encoder fields were validated against this specification");
-                    StateFieldMetadata {
-                        name: name.to_owned(),
-                        description: field.description().map(str::to_owned),
-                    }
+                .iter()
+                .map(|field| StateFieldMetadata {
+                    name: field.name().to_owned(),
+                    description: field.description().map(str::to_owned),
                 })
                 .collect::<Vec<_>>();
             declarations.push(StateStreamMetadata {
-                name: config.name.clone(),
+                name: stream.name().to_owned(),
                 directory: directory.clone(),
-                sampling_interval: config.sampling_interval,
+                sampling_interval,
                 fields,
                 storage,
                 chunks: Vec::new(),
             });
             streams.push(PreparedStateStream {
-                name: config.name.clone(),
-                encoder,
-                sampling_interval: config.sampling_interval,
+                name: stream.name().to_owned(),
                 writer: StateStreamStorageConfig::new(
-                    &config.name,
+                    stream.name(),
                     builder.root.join(&directory),
                     storage,
                 )?,
@@ -1253,25 +1081,17 @@ impl PreparedRecording {
             root: builder.root,
             metadata_path,
             spec: builder.spec,
+            descriptor,
             metadata,
             streams,
         })
     }
 }
 
-/// One canonical encoder paired with its immutable writer configuration.
+/// One scientific stream paired with its inferred persistence configuration.
 struct PreparedStateStream {
     name: String,
-    encoder: JsonStateRecordEncoder,
-    sampling_interval: SamplingInterval,
     writer: StateStreamStorageConfig,
-}
-
-/// Sampling policy and encoder for one logical stream.
-struct ScheduledStateStream {
-    encoder: JsonStateRecordEncoder,
-    sampling_interval: SamplingInterval,
-    last_recorded_iteration: Option<u64>,
 }
 
 /// Serialized authority over the sole mutable metadata document.

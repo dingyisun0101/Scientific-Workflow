@@ -15,7 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use physics_in_parallel::prelude::advanced::Dense;
 use physics_in_parallel::prelude::basic::Tensor;
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
+use scientific_workflow::state::advanced::{StateMaintenance, StateSchemaAccess};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -62,16 +63,11 @@ fn builder_with_chunk_limit(
     spec: &SystemStateSchema,
     max_chunk_bytes: u64,
 ) -> SystemStateWriterBuilder {
-    SystemStateWriter::builder(run, spec)
+    SystemStateWriter::builder(run.to_path_buf(), spec)
+        .with_writer(Writer::streams([Stream::all_fields("checkpoint").unwrap()]).unwrap())
         .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(max_chunk_bytes).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
-        ))
-        .add_state_stream(StateStreamConfig::new(
-            "checkpoint",
-            ["population", "space", "activity"],
-            SamplingInterval::iterations(1).unwrap(),
-            None,
         ))
 }
 
@@ -94,22 +90,20 @@ fn automatic_builder_with_chunk_limit(
     spec: &SystemStateSchema,
     max_chunk_bytes: u64,
 ) -> SystemStateWriterBuilder {
-    SystemStateWriter::builder(run, spec)
+    SystemStateWriter::builder(run.to_path_buf(), spec)
+        .with_writer(
+            Writer::streams([
+                Stream::fields("observations", ["activity"]).unwrap(),
+                Stream::all_fields("checkpoint")
+                    .unwrap()
+                    .every_iterations(2)
+                    .unwrap(),
+            ])
+            .unwrap(),
+        )
         .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(max_chunk_bytes).unwrap(),
             NonZeroU64::new(1_000_000).unwrap(),
-        ))
-        .add_state_stream(StateStreamConfig::new(
-            "observations",
-            ["activity"],
-            SamplingInterval::iterations(1).unwrap(),
-            None,
-        ))
-        .add_state_stream(StateStreamConfig::new(
-            "checkpoint",
-            ["population", "space", "activity"],
-            SamplingInterval::iterations(2).unwrap(),
-            None,
         ))
 }
 
@@ -118,7 +112,7 @@ fn state(spec: &SystemStateSchema, index: u64) -> SystemState {
     lattice.set(&[0], index + 10);
     lattice.set(&[1], index + 20);
     let mut state = spec.create_empty_state(
-        SimulationTime::from_iteration_and_physical_time(index, index as f64 * 0.5).unwrap(),
+        StateTime::from_iteration_and_physical_time(index, index as f64 * 0.5).unwrap(),
     );
     state
         .insert_payload("population", vec![index as f64, index as f64 + 0.25])
@@ -201,7 +195,7 @@ fn update_chunk_descriptor(descriptor: &mut Value, bytes: &[u8]) {
 fn automatic_resume_infers_checkpoint_and_rewinds_every_stream() {
     let workspace = TempWorkspace::new("automatic-resume");
     let run = workspace.run();
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
 
     let (mut writer, restored) = automatic_builder(&run, &spec)
         .open_or_resume_from_latest_checkpoint(decoders())
@@ -216,7 +210,7 @@ fn automatic_resume_infers_checkpoint_and_rewinds_every_stream() {
         .open_or_resume_from_latest_checkpoint(decoders())
         .unwrap();
     let restored = restored.unwrap();
-    assert_eq!(restored.simulation_time().iteration(), 2);
+    assert_eq!(restored.time().iteration(), 2);
     let rewound = metadata(&run);
     for stream in rewound["streams"].as_array().unwrap() {
         assert!(
@@ -245,7 +239,7 @@ fn automatic_resume_infers_checkpoint_and_rewinds_every_stream() {
 
 #[test]
 fn metadata_authority_completes_interrupted_rewind_idempotently() {
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
 
     // Crash before metadata commit: the old sealed file still matches metadata,
     // so the uncommitted staged replacement is discarded before rewind retries.
@@ -274,7 +268,7 @@ fn metadata_authority_completes_interrupted_rewind_idempotently() {
     let (writer, restored) = automatic_builder_with_chunk_limit(&before_run, &spec, 1_000_000)
         .open_or_resume_from_latest_checkpoint(decoders())
         .unwrap();
-    assert_eq!(restored.unwrap().simulation_time().iteration(), 2);
+    assert_eq!(restored.unwrap().time().iteration(), 2);
     assert_eq!(fs::read(&sealed).unwrap(), prefix);
     assert!(!staged.exists());
     drop(writer);
@@ -313,7 +307,7 @@ fn metadata_authority_completes_interrupted_rewind_idempotently() {
     let (writer, restored) = automatic_builder_with_chunk_limit(&after_run, &spec, 1_000_000)
         .open_or_resume_from_latest_checkpoint(decoders())
         .unwrap();
-    assert_eq!(restored.unwrap().simulation_time().iteration(), 2);
+    assert_eq!(restored.unwrap().time().iteration(), 2);
     assert_eq!(fs::read(&sealed).unwrap(), prefix);
     assert!(!staged.exists());
     drop(writer);
@@ -348,7 +342,7 @@ fn metadata_authority_completes_interrupted_rewind_idempotently() {
     let (writer, restored) = automatic_builder(&omitted_run, &spec)
         .open_or_resume_from_latest_checkpoint(decoders())
         .unwrap();
-    assert_eq!(restored.unwrap().simulation_time().iteration(), 2);
+    assert_eq!(restored.unwrap().time().iteration(), 2);
     assert!(!removed_path.exists());
     drop(writer);
 }
@@ -357,7 +351,7 @@ fn metadata_authority_completes_interrupted_rewind_idempotently() {
 fn unpublished_tail_is_discarded_and_resume_uses_latest_sealed_checkpoint() {
     let workspace = TempWorkspace::new("unprepared-resume");
     let run = workspace.run();
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
 
     let recording_builder = || builder_with_chunk_limit(&run, &spec, 1);
     let mut output = recording_builder().create_new_recording().unwrap();
@@ -375,8 +369,8 @@ fn unpublished_tail_is_discarded_and_resume_uses_latest_sealed_checkpoint() {
         .unwrap()
         .pop();
     write_metadata(&run, &manifest);
-    let sealed = run.join("checkpoint/chunk-000001.jsonl");
-    let open = run.join("checkpoint/chunk-000001.jsonl.tmp");
+    let sealed = run.join("stream_0000/chunk-000001.jsonl");
+    let open = run.join("stream_0000/chunk-000001.jsonl.tmp");
     fs::rename(&sealed, &open).unwrap();
     OpenOptions::new()
         .append(true)
@@ -388,8 +382,8 @@ fn unpublished_tail_is_discarded_and_resume_uses_latest_sealed_checkpoint() {
     let (mut output, resumed) = recording_builder()
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .unwrap();
-    assert_eq!(resumed.simulation_time().iteration(), 0);
-    assert_eq!(resumed.simulation_time().physical_time(), Some(0.0));
+    assert_eq!(resumed.time().iteration(), 0);
+    assert_eq!(resumed.time().physical_time(), Some(0.0));
     assert_eq!(
         resumed.payload::<Vec<f64>>("population").unwrap(),
         &[0.0, 0.25]
@@ -405,14 +399,11 @@ fn unpublished_tail_is_discarded_and_resume_uses_latest_sealed_checkpoint() {
             .get(&[1]),
         20
     );
-    assert_eq!(
-        resumed.populated_field_count(),
-        resumed.declared_field_count()
-    );
+    assert_eq!(resumed.populated_field_count(), resumed.schema().len());
     println!(
         "[resume-state] iteration={} physical_time={:?} fields={} complete=true",
-        resumed.simulation_time().iteration(),
-        resumed.simulation_time().physical_time(),
+        resumed.time().iteration(),
+        resumed.time().physical_time(),
         resumed.populated_field_count()
     );
 
@@ -432,14 +423,11 @@ fn unpublished_tail_is_discarded_and_resume_uses_latest_sealed_checkpoint() {
     let reader = StoredStateSeriesReader::open_completed_recording(&run, decoders()).unwrap();
     let series = reader.read_stream_as_state_series("checkpoint").unwrap();
     assert_eq!(series.len(), 2);
-    assert_eq!(
-        series.last_state().unwrap().simulation_time().iteration(),
-        2
-    );
+    assert_eq!(series.last_state().unwrap().time().iteration(), 2);
     assert_eq!(
         series
             .iter()
-            .map(|state| state.simulation_time().iteration())
+            .map(|state| state.time().iteration())
             .collect::<Vec<_>>(),
         [0, 2]
     );
@@ -453,7 +441,7 @@ fn unpublished_tail_is_discarded_and_resume_uses_latest_sealed_checkpoint() {
 fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     let workspace = TempWorkspace::new("prepared-resume");
     let run = workspace.run();
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
 
     let mut output = builder(&run, &spec).create_new_recording().unwrap();
     output.observe_state(&state(&spec, 4)).unwrap();
@@ -464,14 +452,14 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     let mut manifest = metadata(&run);
     mark_manifest_running(&mut manifest);
     write_metadata(&run, &manifest);
-    let sealed = run.join("checkpoint/chunk-000000.jsonl");
-    let open = run.join("checkpoint/chunk-000000.jsonl.tmp");
+    let sealed = run.join("stream_0000/chunk-000000.jsonl");
+    let open = run.join("stream_0000/chunk-000000.jsonl.tmp");
     fs::rename(&sealed, &open).unwrap();
 
     let (mut output, resumed) = builder(&run, &spec)
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .unwrap();
-    assert_eq!(resumed.simulation_time().iteration(), 4);
+    assert_eq!(resumed.time().iteration(), 4);
     assert!(sealed.is_file());
     assert!(!open.exists());
     assert!(matches!(
@@ -489,7 +477,7 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
     assert_eq!(
         series
             .iter()
-            .map(|state| state.simulation_time().iteration())
+            .map(|state| state.time().iteration())
             .collect::<Vec<_>>(),
         [4, 5]
     );
@@ -503,14 +491,14 @@ fn prepared_tail_finishes_rename_and_exclusive_lease_rejects_competitors() {
 fn sealed_checkpoint_integrity_is_mandatory_before_continuation() {
     let size_workspace = TempWorkspace::new("resume-size-integrity");
     let size_run = size_workspace.run();
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
     let mut output = builder(&size_run, &spec).create_new_recording().unwrap();
     output.observe_state(&state(&spec, 1)).unwrap();
     output.complete_recording().unwrap();
     let mut manifest = metadata(&size_run);
     mark_manifest_running(&mut manifest);
     write_metadata(&size_run, &manifest);
-    let size_chunk = size_run.join("checkpoint/chunk-000000.jsonl");
+    let size_chunk = size_run.join("stream_0000/chunk-000000.jsonl");
     OpenOptions::new()
         .append(true)
         .open(&size_chunk)
@@ -535,7 +523,7 @@ fn sealed_checkpoint_integrity_is_mandatory_before_continuation() {
     let mut manifest = metadata(&checksum_run);
     mark_manifest_running(&mut manifest);
     write_metadata(&checksum_run, &manifest);
-    let checksum_chunk = checksum_run.join("checkpoint/chunk-000000.jsonl");
+    let checksum_chunk = checksum_run.join("stream_0000/chunk-000000.jsonl");
     let mut bytes = fs::read(&checksum_chunk).unwrap();
     bytes[0] ^= 1;
     fs::write(&checksum_chunk, bytes).unwrap();
@@ -553,17 +541,16 @@ fn sealed_checkpoint_integrity_is_mandatory_before_continuation() {
 fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
     let workspace = TempWorkspace::new("partial-resume");
     let run = workspace.run();
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
     let partial_builder = || {
-        SystemStateWriter::builder(&run, &spec).add_state_stream(StateStreamConfig::new(
-            "signal",
-            ["population"],
-            SamplingInterval::iterations(1).unwrap(),
-            Some(StateStreamStorage::chunked(
+        SystemStateWriter::builder(run.clone(), &spec)
+            .with_writer(
+                Writer::streams([Stream::fields("signal", ["population"]).unwrap()]).unwrap(),
+            )
+            .with_shared_stream_storage(StateStreamStorage::chunked(
                 NonZeroU64::new(1_000_000).unwrap(),
                 NonZeroU64::new(1_000_000).unwrap(),
-            )),
-        ))
+            ))
     };
 
     let mut output = partial_builder().create_new_recording().unwrap();
@@ -600,7 +587,7 @@ fn partial_stream_continues_output_but_cannot_construct_a_full_state() {
 fn earlier_sealed_chunks_are_not_scanned_when_discarding_an_unpublished_tail() {
     let workspace = TempWorkspace::new("multi-chunk-resume");
     let run = workspace.run();
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
     let recording_builder = || builder_with_chunk_limit(&run, &spec, 1);
 
     let mut output = recording_builder().create_new_recording().unwrap();
@@ -616,7 +603,7 @@ fn earlier_sealed_chunks_are_not_scanned_when_discarding_an_unpublished_tail() {
     chunks.pop();
     write_metadata(&run, &manifest);
 
-    let stream_directory = run.join("checkpoint");
+    let stream_directory = run.join("stream_0000");
     let sealed_zero = stream_directory.join("chunk-000000.jsonl");
     let sealed_two = stream_directory.join("chunk-000002.jsonl");
     let open_two = stream_directory.join("chunk-000002.jsonl.tmp");
@@ -626,7 +613,7 @@ fn earlier_sealed_chunks_are_not_scanned_when_discarding_an_unpublished_tail() {
     let (mut output, resumed) = recording_builder()
         .continue_recording_from_latest_checkpoint("checkpoint", decoders())
         .expect("resume must discard the open tail and decode the latest sealed chunk");
-    assert_eq!(resumed.simulation_time().iteration(), 1);
+    assert_eq!(resumed.time().iteration(), 1);
     assert_eq!(
         resumed.payload::<String>("activity").unwrap(),
         "iteration-1"
@@ -659,7 +646,7 @@ fn earlier_sealed_chunks_are_not_scanned_when_discarding_an_unpublished_tail() {
 #[test]
 fn continuation_rejects_terminal_mismatched_and_empty_recordings() {
     let workspace = TempWorkspace::new("resume-rejections");
-    let spec = SystemStateSchema::load_json_template(fixture_path()).unwrap();
+    let spec = SystemStateSchema::load_json_template(&fixture_path()).unwrap();
 
     let terminal = workspace.root.join("terminal");
     builder(&terminal, &spec)
@@ -676,7 +663,12 @@ fn continuation_rejects_terminal_mismatched_and_empty_recordings() {
     drop(builder(&mismatched, &spec).create_new_recording().unwrap());
     assert!(matches!(
         builder(&mismatched, &spec)
-            .with_time_axis_metadata(TimeAxisMetadata::new("cycle"))
+            .with_writer(
+                Writer::streams([Stream::all_fields("checkpoint").unwrap()])
+                    .unwrap()
+                    .with_iteration_unit("cycle")
+                    .unwrap(),
+            )
             .continue_existing_recording(),
         Err(StorageError::RecordingConfigurationMismatch { path, .. })
             if path == mismatched.join("metadata.json")

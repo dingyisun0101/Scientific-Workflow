@@ -1,10 +1,10 @@
 //! Errors produced by persistent scientific-workflow storage.
 //!
 //! This module owns diagnostic context for the complete storage boundary:
-//! versioned metadata, record encoding and decoding, output directories,
+//! versioned metadata, writer integration, record decoding, output directories,
 //! immutable chunk files, bounded writer queues, and worker lifecycle. It does
 //! not redefine errors that belong to the in-memory data model. Instead,
-//! [`StorageError`] wraps [`StateError`] or [`StateSeriesError`] when storage adds stream,
+//! [`StorageError`] wraps [`WriterError`] or [`StateSeriesError`] when storage adds stream,
 //! record, or filesystem context to one of those failures.
 //!
 //! # Context ownership
@@ -37,8 +37,8 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::system_state::StateError;
-use crate::time_series::StateSeriesError;
+use crate::state::advanced::StateSeriesError;
+use crate::writer::advanced::WriterError;
 
 /// A failure encountered while encoding, writing, reading, or decoding a run.
 ///
@@ -52,6 +52,14 @@ use crate::time_series::StateSeriesError;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// The scientific writer rejected a definition or live observation.
+    #[error("scientific writer rejected the recording operation: {source}")]
+    Writer {
+        /// Original writer-layer failure.
+        #[source]
+        source: WriterError,
+    },
+
     /// Existing incomplete output contains no full-state checkpoint.
     #[error("recording contains no complete-state checkpoint from which execution can resume")]
     NoCompleteCheckpoint,
@@ -250,36 +258,6 @@ pub enum StorageError {
     // ---------------------------------------------------------------------
     // State borrowing, encoding, and decoding
     // ---------------------------------------------------------------------
-    /// The encoder could not borrow one declared field from the live state.
-    #[error(
-        "cannot sample field `{field}` for stream `{stream}` at iteration {iteration}: {source}"
-    )]
-    StateAccess {
-        /// Logical output stream being sampled.
-        stream: String,
-        /// Iteration of the sampled state.
-        iteration: u64,
-        /// Declared stream field that could not be borrowed.
-        field: String,
-        /// Original SystemState access failure.
-        #[source]
-        source: StateError,
-    },
-
-    /// Serde failed while encoding one borrowed payload.
-    #[error("failed to encode field `{field}` for stream `{stream}` at iteration {iteration}")]
-    EncodeField {
-        /// Logical output stream being encoded.
-        stream: String,
-        /// Iteration of the sampled state.
-        iteration: u64,
-        /// Field whose payload serializer failed.
-        field: String,
-        /// Underlying JSON serializer failure.
-        #[source]
-        source: serde_json::Error,
-    },
-
     /// A decoder registration attempted to reuse one field key.
     #[error("a payload decoder is already registered for field `{field}`")]
     DuplicateDecoder {

@@ -15,7 +15,7 @@ use super::phase::{Phase, PhaseId, TaskKey, TaskMode};
 use super::renderer::{ProgressSummary, TaskExecutionSnapshot};
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
 
-const STUDY_RECORD_FORMAT: &str = "scientific-workflow.study-record.v1";
+const STUDY_RECORD_FORMAT: &str = "scientific-workflow.study-record.v2";
 
 /// Durable lifecycle summary for one study execution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -33,11 +33,16 @@ pub struct StudyRecord {
 }
 
 /// Lifecycle facts for one selected phase.
+///
+/// `disposition` distinguishes normal task execution from application-verified
+/// whole-phase reuse. Reused task statuses inherit that phase verdict and do
+/// not imply task-level examination by Workflow.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PhaseRecord {
     id: u64,
     label: String,
     status: &'static str,
+    disposition: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     started_at_utc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +145,7 @@ impl StudyRecorder {
                 id: phase.id().get(),
                 label: phase.label().to_owned(),
                 status: "pending",
+                disposition: "pending",
                 started_at_utc: None,
                 ended_at_utc: None,
                 duration_ns: None,
@@ -176,8 +182,31 @@ impl StudyRecorder {
         let mut state = lock(&self.inner);
         let position = state.phase_positions[&id];
         state.record.phases[position].status = "running";
+        state.record.phases[position].disposition = "executed";
         state.record.phases[position].started_at_utc = Some(timestamp);
         state.phase_started.insert(id, Instant::now());
+        persist_state(&state)
+    }
+
+    /// Records whole-phase reuse without pretending that Workflow examined or
+    /// scheduled the phase's individual tasks.
+    pub(crate) fn phase_reused(&self, id: PhaseId) -> Result<(), StudyError> {
+        let ended_at_utc = timestamp("record reused phase")?;
+        let mut state = lock(&self.inner);
+        let position = state.phase_positions[&id];
+        let phase = &mut state.record.phases[position];
+        let total = phase.tasks.len() as u64;
+        phase.status = "completed";
+        phase.disposition = "reused";
+        phase.ended_at_utc = Some(ended_at_utc);
+        phase.progress = TaskCounts {
+            total,
+            completed: total,
+            ..TaskCounts::default()
+        };
+        for task in &mut phase.tasks {
+            task.status = "reused";
+        }
         persist_state(&state)
     }
 

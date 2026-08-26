@@ -3,7 +3,7 @@
 //! `scientific-workflow` provides the data and execution foundations needed to
 //! describe scientific systems, record their evolution, and organize scoped
 //! computational work. The crate is intentionally divided by responsibility:
-//! state representation, in-memory state time series, storage, orchestration, and
+//! state representation and series, scientific observation, storage, orchestration, and
 //! language bridges remain separate modules rather than accumulating behind
 //! one monolithic interface.
 //!
@@ -20,8 +20,10 @@
 //!   `parameters.json`, phase-scoped expansion, named paths, and resolved
 //!   combinations. It owns input validation and parameter expansion only. It
 //!   does not own task construction, state schemas, or persistence.
-//! - `system_state`: typed heterogeneous fielded state values and schema.
-//! - `time_series`: ordered in-memory complete-state collections for analysis.
+//! - `state`: typed heterogeneous state values, schema, scientific time, and
+//!   ordered in-memory collections.
+//! - `writer`: minimal application definitions for scientific streams and the
+//!   advanced observation/backend integration boundary.
 //! - `storage`: asynchronous buffered persistence and completed-run reconstruction.
 //! - `execution`: replicate subprocess dispatch, isolated output scopes, and
 //!   directory-scoped recording path derivation.
@@ -57,7 +59,7 @@
 //! [`rng_record`] stores validated RNG provenance while leaving random
 //! generation to applications.
 //!
-//! [`system_state`] provides:
+//! [`state`] provides:
 //!
 //! - JSON-defined, immutable field layouts;
 //! - optional natural-language field descriptions without persisted Rust types;
@@ -69,38 +71,38 @@
 //! Type erasure and boxing remain internal to that module. Consumer crates
 //! work with their original concrete payload types.
 //!
-//! [`time_series`] provides the in-memory analysis collection for complete,
-//! ordered states. It enforces shared-layout identity and increasing simulation
-//! indices, offers a lightweight borrowed view, and permits field-level
-//! mutation without exposing mutable state time. It deliberately performs no
-//! serialization, chunking, or filesystem IO.
+//! The same module provides the in-memory analysis collection for complete,
+//! ordered states. It enforces shared-layout identity and increasing
+//! iterations, supports ordinary immutable borrowing, and permits field-level
+//! mutation without exposing mutable state time. It performs no serialization,
+//! chunking, or filesystem IO.
 //!
-//! [`storage`] provides named partial-state streams with writer-owned sampling
-//! intervals, borrowed JSON encoding only when due, bounded asynchronous
-//! persistence through one worker per recording, byte-targeted chunking, atomic recording
+//! [`writer`] provides inferred all-field observation, optional named partial
+//! streams and positive iteration cadences, schema-bound descriptors, and
+//! clone-free borrowed encoding. [`storage`] adapts those owned encoded
+//! observations into bounded asynchronous persistence through one worker per
+//! recording, byte-targeted chunking, atomic recording
 //! metadata, automatic operational timing, terminal summaries, name-selected payload
 //! decoders, and verified full-series or latest-state reconstruction.
-//! Import [`prelude::basics`] for these scientific primitives and
+//! Import [`prelude::basic`] for these scientific primitives and
 //! [`prelude::study`] only at orchestration boundaries.
 //!
 //! # Basic use
 //!
 //! ```no_run
-//! use scientific_workflow::prelude::basics::*;
+//! use std::path::Path;
+//!
+//! use scientific_workflow::prelude::basic::*;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let spec = SystemStateSchema::load_json_template("state.json")?;
-//! let mut state = spec.create_empty_state(SimulationTime::from_iteration(0));
+//! let spec = SystemStateSchema::load_json_template(Path::new("state.json"))?;
+//! let mut state = spec.create_empty_state(StateTime::from_iteration(0));
 //!
-//! assert!(
-//!     state
-//!         .insert_payload("population", vec![10_u64, 20, 30])?
-//!         .is_none()
-//! );
+//! state.initialize_payload("population", vec![10_u64, 20, 30])?;
 //! state
 //!     .payload_mut::<Vec<u64>>("population")?
 //!     .push(40);
-//! let time = state.advance_simulation_time(None)?;
+//! let time = state.advance_time(None)?;
 //! assert_eq!(time.iteration(), 1);
 //! let population = state.take_payload::<Vec<u64>>("population")?;
 //!
@@ -120,8 +122,8 @@
 //! ## Downstream no-overlap policy
 //!
 //! For downstream consumers, preserve boundary ownership:
-//! keep orchestration in `study`, persistence in `storage`, and pure state in
-//! `system_state`/`time_series`. Do not implement overlapping behavior in a
+//! keep orchestration in `study`, observation policy in `writer`, persistence
+//! in `storage`, and pure state in `state`. Do not implement overlapping behavior in a
 //! downstream layer; if a seam is missing, negotiate an explicit API addition.
 
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
@@ -133,8 +135,8 @@ pub mod configuration;
 pub mod execution;
 pub mod prelude;
 pub mod rng_record;
+pub mod state;
 pub mod storage;
 #[path = "study.rs"]
 pub mod study;
-pub mod system_state;
-pub mod time_series;
+pub mod writer;

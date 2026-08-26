@@ -138,6 +138,20 @@ pub enum StudyError {
         /// Omitted dependency identity.
         dependency: u64,
     },
+    /// Application examination found invalid whole-phase state.
+    #[error("phase {phase} completion is invalid: {reason}")]
+    InvalidPhaseCompletion {
+        /// Phase whose application-owned result was rejected.
+        phase: u64,
+        /// Concise application-supplied validation reason.
+        reason: String,
+    },
+    /// A phase completion examiner panicked before execution started.
+    #[error("phase {phase} completion examination panicked")]
+    PhaseCompletionExaminationPanicked {
+        /// Phase whose examiner panicked.
+        phase: u64,
+    },
     /// Interactive confirmation input ended before another phase could start.
     #[error("confirmation input ended after phase {phase} before the next phase could start")]
     PhaseConfirmationEof {

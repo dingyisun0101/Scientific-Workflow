@@ -1,4 +1,4 @@
-//! Errors produced while defining and manipulating system states.
+//! Errors produced while defining and manipulating states.
 //!
 //! This module keeps the SystemState error surface in one place so template
 //! loading, layout validation, time advancement, and typed payload access
@@ -119,9 +119,20 @@ pub enum StateError {
         actual: &'static str,
     },
 
+    /// Initial assembly attempted to bind an already initialized field.
+    ///
+    /// Use [`SystemState::insert_payload`](super::state::SystemState::insert_payload)
+    /// when replacement is deliberate. The incoming payload remains available
+    /// through [`PayloadInsertError`].
+    #[error("state field `{field}` has already been initialized")]
+    PayloadAlreadyInitialized {
+        /// Field whose retained type contract was already established.
+        field: String,
+    },
+
     /// Incrementing the authoritative iteration would overflow `u64`.
     ///
-    /// `SystemState::advance_simulation_time` will detect this condition before mutating the
+    /// `SystemState::advance_time` will detect this condition before mutating the
     /// state, so the original time point remains unchanged.
     #[error("cannot advance state iteration {iteration}: the next iteration exceeds u64::MAX")]
     IterationOverflow {
@@ -156,6 +167,46 @@ pub enum StateError {
         current: f64,
         /// Requested delta, which may itself be non-finite.
         delta: f64,
+    },
+}
+
+/// A failure produced while maintaining or mutating an in-memory state series.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum StateSeriesError {
+    /// The rejected state does not share the series' canonical schema instance.
+    #[error("state at iteration {iteration} does not share the series schema")]
+    SchemaMismatch {
+        /// Iteration carried by the rejected state.
+        iteration: u64,
+    },
+
+    /// The rejected state would violate strictly increasing iteration order.
+    #[error("state iteration {next} must be greater than the previous iteration {previous}")]
+    NonIncreasingIteration {
+        /// Iteration of the series' current final state.
+        previous: u64,
+        /// Iteration carried by the rejected state.
+        next: u64,
+    },
+
+    /// A mutable analysis request selected no stored state.
+    #[error("state-series position {position} is out of bounds for length {len}")]
+    PositionOutOfBounds {
+        /// Zero-based series position requested by the caller.
+        position: usize,
+        /// Number of states stored when the request was evaluated.
+        len: usize,
+    },
+
+    /// Typed mutable access failed inside the selected state.
+    #[error("cannot access state-series position {position}: {source}")]
+    PayloadAccess {
+        /// Zero-based position of the selected state.
+        position: usize,
+        /// Original typed state access failure.
+        #[source]
+        source: StateError,
     },
 }
 

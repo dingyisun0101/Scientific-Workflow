@@ -186,7 +186,7 @@ impl StateWriterWorker {
             });
         }
 
-        let iteration = record.simulation_time().iteration();
+        let iteration = record.time().iteration();
         loop {
             ensure_accepting(&state)?;
             let stream_state = state
@@ -454,7 +454,7 @@ impl StateStreamSink {
         if self.active.is_none() {
             self.active = Some(BufferedChunkState::new(
                 self.next_ordinal,
-                record.simulation_time().iteration(),
+                record.time().iteration(),
             ));
             self.next_ordinal = self.next_ordinal.checked_add(1).ok_or_else(|| {
                 StorageError::ByteCountOverflow {
@@ -530,7 +530,7 @@ impl BufferedChunkState {
                 .ok_or_else(|| StorageError::ByteCountOverflow {
                     stream: stream.to_owned(),
                 })?;
-        self.last_iteration = record.simulation_time().iteration();
+        self.last_iteration = record.time().iteration();
         Ok(())
     }
 

@@ -13,7 +13,8 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
+use scientific_workflow::state::advanced::StateMaintenance;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -69,23 +70,32 @@ fn fixture_path() -> PathBuf {
 }
 
 fn spec() -> SystemStateSchema {
-    SystemStateSchema::load_json_template(fixture_path()).unwrap()
+    SystemStateSchema::load_json_template(&fixture_path()).unwrap()
 }
 
-fn stream(queue_bytes: u64) -> StateStreamConfig {
-    StateStreamConfig::new(
-        "signal",
-        ["population", "activity"],
-        SamplingInterval::iterations(1).unwrap(),
-        Some(StateStreamStorage::chunked(
+fn writer(every_iterations: u64) -> Writer {
+    Writer::streams([Stream::fields("signal", ["population", "activity"])
+        .unwrap()
+        .every_iterations(every_iterations)
+        .unwrap()])
+    .unwrap()
+}
+
+fn recording_builder(
+    root: PathBuf,
+    state: &SystemState,
+    queue_bytes: u64,
+) -> SystemStateWriterBuilder {
+    SystemStateWriter::builder(root, state)
+        .with_writer(writer(1))
+        .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(128).unwrap(),
             NonZeroU64::new(queue_bytes).unwrap(),
-        )),
-    )
+        ))
 }
 
 fn populated_state(spec: &SystemStateSchema, index: u64) -> SystemState {
-    let mut state = spec.create_empty_state(SimulationTime::from_iteration(index));
+    let mut state = spec.create_empty_state(StateTime::from_iteration(index));
     state
         .insert_payload("population", vec![index as f64, 2.5])
         .unwrap();
@@ -110,8 +120,7 @@ fn decoders() -> JsonPayloadDecoderRegistry {
 fn write_valid_run(workspace: &TempWorkspace) {
     let spec = spec();
     let initial_state = populated_state(&spec, 0);
-    let mut output = SystemStateWriter::builder(workspace.run(), &initial_state)
-        .add_state_stream(stream(4_096))
+    let mut output = recording_builder(workspace.run(), &initial_state, 4_096)
         .create_new_recording()
         .unwrap();
     output.observe_state(&populated_state(&spec, 2)).unwrap();
@@ -155,8 +164,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let existing = TempWorkspace::new("existing");
     fs::create_dir(existing.run()).unwrap();
     assert!(matches!(
-        SystemStateWriter::builder(existing.run(), &writer_state)
-            .add_state_stream(stream(4_096))
+        recording_builder(existing.run(), &writer_state, 4_096)
             .create_new_recording(),
         Err(StorageError::RecordingDirectoryExists { path }) if path == existing.run()
     ));
@@ -164,50 +172,39 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let invalid = TempWorkspace::new("invalid");
     assert!(matches!(
         SystemStateWriter::builder(invalid.run(), &writer_state)
-            .add_state_stream(StateStreamConfig::new(
-                "signal",
-                ["absent"],
-                SamplingInterval::iterations(1).unwrap(),
-                Some(StateStreamStorage::chunked(
-                    NonZeroU64::new(1).unwrap(),
-                    NonZeroU64::new(1).unwrap()
-                )),
-            ))
+            .with_writer(Writer::fields(["absent"]).unwrap())
             .create_new_recording(),
-        Err(StorageError::InvalidConfiguration {
-            setting: "fields",
-            ..
-        })
+        Err(StorageError::Writer {
+            source: WriterError::UnknownField { field, .. }
+        }) if field == "absent"
     ));
     assert!(!invalid.run().exists());
 
     let duplicate = TempWorkspace::new("duplicate");
     assert!(matches!(
-        SystemStateWriter::builder(duplicate.run(), &writer_state)
-            .add_state_stream(stream(4_096))
-            .add_state_stream(stream(4_096))
-            .create_new_recording(),
-        Err(StorageError::DuplicateStateStream { stream }) if stream == "signal"
+        Writer::streams([
+            Stream::all_fields("signal").unwrap(),
+            Stream::all_fields("signal").unwrap(),
+        ]),
+        Err(WriterError::DuplicateStreamName { stream }) if stream == "signal"
     ));
+    assert!(!duplicate.run().exists());
 
     let invalid_time = TempWorkspace::new("time");
     assert!(matches!(
-        SystemStateWriter::builder(invalid_time.run(), &writer_state)
-            .with_time_axis_metadata(
-                TimeAxisMetadata::new("iteration").with_physical_time_unit("s"),
-            )
-            .add_state_stream(stream(4_096))
-            .create_new_recording(),
-        Err(StorageError::InvalidMetadata { .. })
+        Writer::all_fields().with_physical_time_unit(" "),
+        Err(WriterError::EmptyAxisUnit {
+            axis: "physical_time"
+        })
     ));
+    assert!(!invalid_time.run().exists());
     println!("[configuration] existing=true fields=true duplicate=true time=true");
 
     let oversized = TempWorkspace::new("oversized");
-    let mut output = SystemStateWriter::builder(oversized.run(), &writer_state)
-        .add_state_stream(stream(64))
+    let mut output = recording_builder(oversized.run(), &writer_state, 64)
         .create_new_recording()
         .unwrap();
-    let mut huge = state_spec.create_empty_state(SimulationTime::from_iteration(1));
+    let mut huge = state_spec.create_empty_state(StateTime::from_iteration(1));
     huge.insert_payload("population", vec![1.0]).unwrap();
     huge.insert_payload("activity", "x".repeat(512)).unwrap();
     assert!(matches!(
@@ -219,30 +216,30 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         .unwrap();
 
     let ordering = TempWorkspace::new("ordering");
-    let mut output = SystemStateWriter::builder(ordering.run(), &writer_state)
-        .add_state_stream(stream(4_096))
+    let mut output = recording_builder(ordering.run(), &writer_state, 4_096)
         .create_new_recording()
         .unwrap();
     let mut state = populated_state(&state_spec, 5);
     output.observe_state(&state).unwrap();
     output.observe_state(&state).unwrap();
-    state.replace_simulation_time(SimulationTime::from_iteration(4));
+    state.replace_time(StateTime::from_iteration(4));
     assert!(matches!(
         output.observe_state(&state),
-        Err(StorageError::OutOfOrderIteration {
-            iteration: 4,
-            previous: 5,
-            ..
+        Err(StorageError::Writer {
+            source: WriterError::NonIncreasingObservation {
+                next: 4,
+                previous: 5,
+                ..
+            }
         })
     ));
     output.complete_recording().unwrap();
 
     let terminal = TempWorkspace::new("terminal");
-    let mut output = SystemStateWriter::builder(terminal.run(), &writer_state)
-        .add_state_stream(stream(4_096))
+    let mut output = recording_builder(terminal.run(), &writer_state, 4_096)
         .create_new_recording()
         .unwrap();
-    fs::remove_dir(terminal.run().join("signal")).unwrap();
+    fs::remove_dir(terminal.run().join("stream_0000")).unwrap();
     output
         .observe_state(&populated_state(&state_spec, 1))
         .unwrap();
@@ -256,23 +253,21 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
 
     let encoding = TempWorkspace::new("encoding");
     let mut output = SystemStateWriter::builder(encoding.run(), &writer_state)
-        .add_state_stream(StateStreamConfig::new(
-            "signal",
-            ["population", "activity"],
-            SamplingInterval::iterations(2).unwrap(),
-            Some(StateStreamStorage::chunked(
-                NonZeroU64::new(128).unwrap(),
-                NonZeroU64::new(4_096).unwrap(),
-            )),
+        .with_writer(writer(2))
+        .with_shared_stream_storage(StateStreamStorage::chunked(
+            NonZeroU64::new(128).unwrap(),
+            NonZeroU64::new(4_096).unwrap(),
         ))
         .create_new_recording()
         .unwrap();
-    let mut empty = state_spec.create_empty_state(SimulationTime::from_iteration(3));
+    let mut empty = state_spec.create_empty_state(StateTime::from_iteration(3));
     output.observe_state(&empty).unwrap();
-    empty.replace_simulation_time(SimulationTime::from_iteration(4));
+    empty.replace_time(StateTime::from_iteration(4));
     assert!(matches!(
         output.observe_state(&empty),
-        Err(StorageError::StateAccess { iteration: 4, .. })
+        Err(StorageError::Writer {
+            source: WriterError::StateAccess { iteration: 4, .. }
+        })
     ));
     empty.insert_payload("population", RejectEncoding).unwrap();
     empty
@@ -281,15 +276,17 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     let encode_error = output.observe_state(&empty).unwrap_err();
     assert!(matches!(
         &encode_error,
-        StorageError::EncodeField {
-            stream,
-            iteration: 4,
-            field,
-            ..
+        StorageError::Writer {
+            source: WriterError::EncodeField {
+                stream,
+                iteration: 4,
+                field,
+                ..
+            }
         } if stream == "signal" && field == "population"
     ));
     assert_eq!(
-        encode_error.source().unwrap().to_string(),
+        encode_error.source().unwrap().source().unwrap().to_string(),
         "deliberate resilience failure"
     );
     output
@@ -297,8 +294,7 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
         .unwrap();
 
     let running = TempWorkspace::new("running");
-    let output = SystemStateWriter::builder(running.run(), &writer_state)
-        .add_state_stream(stream(4_096))
+    let output = recording_builder(running.run(), &writer_state, 4_096)
         .create_new_recording()
         .unwrap();
     assert!(matches!(

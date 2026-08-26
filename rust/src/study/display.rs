@@ -10,6 +10,8 @@ use std::io::{self, BufRead, Write};
 
 use super::phase::{Phase, PhaseId};
 
+const WITHIN_PHASE_WARNING: &str = "Workflow will invoke the phase normally; validation, reuse, cleanup, and continuation within this phase are application-owned";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DisplayMode {
     Auto,
@@ -59,6 +61,32 @@ pub(crate) fn phase_start(output: DisplayMode, phase: &Phase, position: usize, t
             phase.failure_policy().as_str(),
             phase.requires_confirmation(),
         );
+    }
+}
+
+pub(crate) fn completion_examination_disabled(output: DisplayMode) {
+    if output != DisplayMode::Hidden {
+        eprintln!(
+            "[completion] mode=disabled action=execute-selected warning={WITHIN_PHASE_WARNING:?}"
+        );
+    }
+}
+
+pub(crate) fn phase_incomplete(output: DisplayMode, phase: PhaseId, label: &str, detail: &str) {
+    if output != DisplayMode::Hidden {
+        eprintln!("{}", phase_incomplete_message(phase, label, detail));
+    }
+}
+
+fn phase_incomplete_message(phase: PhaseId, label: &str, detail: &str) -> String {
+    format!(
+        "[phase-completion] phase={phase} label={label} status=incomplete action=execute detail={detail:?} warning={WITHIN_PHASE_WARNING:?}"
+    )
+}
+
+pub(crate) fn phase_reused(output: DisplayMode, phase: PhaseId, label: &str) {
+    if output != DisplayMode::Hidden {
+        eprintln!("[phase-completion] phase={phase} label={label} status=complete action=reuse");
     }
 }
 
@@ -127,13 +155,35 @@ pub(crate) fn phase_complete(output: DisplayMode, phase: PhaseId, label: &str, s
     }
 }
 
-pub(crate) fn study_complete(output: DisplayMode, phases: usize, tasks: usize, success: bool) {
+pub(crate) fn study_complete(
+    output: DisplayMode,
+    phases: usize,
+    reused_phases: usize,
+    tasks: usize,
+    success: bool,
+) {
     if output != DisplayMode::Hidden {
         eprintln!(
-            "[study] status={} phases={} tasks={}",
+            "[study] status={} phases={} reused={} tasks={}",
             if success { "completed" } else { "failed" },
             phases,
+            reused_phases,
             tasks,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_phase_warning_states_the_application_ownership_boundary() {
+        let message =
+            phase_incomplete_message(PhaseId::new(20), "model dynamics", "checkpoint available");
+
+        assert!(message.contains("status=incomplete action=execute"));
+        assert!(message.contains("checkpoint available"));
+        assert!(message.contains("continuation within this phase are application-owned"));
     }
 }

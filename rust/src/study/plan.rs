@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::{Phase, StudyError, TaskMode};
 
-const STUDY_PLAN_FORMAT: &str = "scientific-workflow.study-plan.v1";
+const STUDY_PLAN_FORMAT: &str = "scientific-workflow.study-plan.v2";
 
 /// Complete serializable phase/task graph registered with one study.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -34,6 +34,7 @@ struct StudyPlanPhase {
     deadline_after_ns: Option<u128>,
     failure_policy: &'static str,
     requires_confirmation: bool,
+    examines_completion: bool,
     tasks: Vec<StudyPlanTask>,
 }
 
@@ -114,6 +115,7 @@ impl StudyPlan {
                         deadline_after_ns: phase.deadline_after().map(|value| value.as_nanos()),
                         failure_policy: phase.failure_policy().as_str(),
                         requires_confirmation: phase.requires_confirmation(),
+                        examines_completion: phase.examines_completion(),
                         tasks,
                     }
                 })

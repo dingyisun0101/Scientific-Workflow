@@ -11,7 +11,7 @@ use std::error::Error;
 use std::path::Path;
 use std::time::Duration;
 
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
 use scientific_workflow::prelude::study::*;
 
 use attractor_run::AttractorRun;
@@ -37,7 +37,8 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
     let study_configuration = StudyConfiguration::load(study_root)?;
     let simulation_configurations = study_configuration.workload("attractor", "dynamics")?;
     let validation_configurations = study_configuration.workload("attractor", "validation")?;
-    let schema = SystemStateSchema::load_json_template(study_root.join("config/state.json"))?;
+    let schema =
+        SystemStateSchema::load_json_template(&study_root.join("config/state.json"))?;
 
     // Replicate dispatch created this isolated scope before starting the worker.
     // It does not create task recordings: each simulation task remains

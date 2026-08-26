@@ -18,18 +18,38 @@ the application that understands them.
 
 ## Installation
 
-Scientific Workflow 0.8 requires Rust 1.97 or newer. Use the registry release
+Scientific Workflow 0.10 requires Rust 1.97 or newer. Use the registry release
 in application crates:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.9.0"
+scientific-workflow = "0.10.0"
 ```
 
 The dependency intentionally has no Cargo features. All public modules use one
 implementation and one dependency graph; applications import only the module
 boundaries they need. Commit the application's `Cargo.lock` when it is an
 executable so every deployment resolves the same compatible release.
+
+### Migrating from 0.9
+
+Version 0.10 introduces application-owned whole-phase completion examination:
+
+1. Attach validation directly to a phase with
+   `PhaseBuilder::examine_completion`. Return `PhaseCompletion::Complete` only
+   after validating the entire result represented by that phase.
+2. Remove `StudyBuilder::satisfied_phase_verifier`. Exact selection and
+   dependency-inclusive selection now consume the same cached phase verdict.
+3. Completion examination is enabled by default. Use
+   `StudyBuilder::without_completion_examination` for an explicit launch that
+   must invoke every selected phase.
+4. Treat `PhaseCompletion::Incomplete` as a whole-phase decision only. Workflow
+   warns and invokes the phase normally; its workloads remain solely
+   responsible for validation, reuse, cleanup, and continuation within it.
+5. Study plans and records now use formats v2. Plans declare whether each phase
+   has an examiner; records distinguish executed and reused phase disposition.
+
+Version 0.10 provides no compatibility alias for the removed verifier.
 
 ### Migrating from 0.8
 
@@ -114,9 +134,10 @@ of scientific meaning.
 ### One owner for each concern
 
 Each public module has one primary responsibility. Orchestration belongs to
-`study`, durable state belongs to `storage`, filesystem run identity belongs to
-`execution`, and scientific values belong to `system_state`. The same behavior
-should not be implemented again in a neighboring layer.
+`study`, scientific observation definitions belong to `writer`, durable state
+belongs to `storage`, filesystem run identity belongs to `execution`, and
+scientific values belong to `state`. The same behavior should not be
+implemented again in a neighboring layer.
 
 This is more than code organization. It makes failures attributable. A bad
 parameter document is a configuration error; an incompatible state payload is
@@ -281,7 +302,7 @@ a `ReplicateContext`; only that branch constructs and runs the scientific
 study:
 
 ```rust,no_run
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
 
 # fn run_one_replicate(_replicate: &ReplicateContext) -> Result<(), Box<dyn std::error::Error>> {
 # Ok(())
@@ -468,7 +489,15 @@ the renderer, coordinates cancellation, and writes a durable `StudyRecord`.
 
 A `Phase` owns a deterministic list of tasks and workload-local execution policy:
 maximum active tasks, prepared queue capacity, start interval, per-task timeout,
-phase deadline, dependencies, failure behavior, and optional confirmation.
+phase deadline, dependencies, failure behavior, optional confirmation, and an
+optional application-owned whole-phase completion examiner.
+
+Completion examination is deliberately phase-level. A complete result reuses
+the whole phase and satisfies it as an omitted dependency. Missing output runs
+normally. Incomplete output emits a warning and also runs normally. Invalid
+output fails before execution begins. Workflow never infers how individual
+tasks inside an incomplete phase should validate, reuse, clean up, or resume.
+Those decisions remain entirely with the phase's application workloads.
 
 A `Task` owns identity, category, label, mode, immutable metadata, and exactly
 one application workload. Progress and one-shot tasks share the same type.
@@ -513,6 +542,10 @@ let phase = Phase::builder(1, "simulations")
     .tasks(tasks)
     .max_active_tasks(4)
     .prepared_task_queue_capacity(4)
+    .examine_completion(|| {
+        // Validate the complete application-owned phase result here.
+        PhaseCompletion::Missing
+    })
     .build()?;
 
 let summary = Study::builder("study-record.json")
@@ -533,13 +566,45 @@ The terminal renderer is centralized so worker threads never compete for
 stdout. Automatic, interactive, plain, and hidden display modes change
 presentation without changing scheduling semantics.
 
-### `system_state`: typed scientific state
+An examiner is a small read-only closure and may capture application paths and
+expected configuration directly:
 
-The `system_state` module defines heterogeneous state schemas and values.
+```rust,no_run
+use scientific_workflow::prelude::study::*;
+
+# fn validate_result() -> Result<bool, String> { Ok(false) }
+# fn main() -> Result<(), StudyError> {
+let phase = Phase::builder(20, "model dynamics")
+    .task(Task::one_shot("model", "model", |_| Ok(())))
+    .examine_completion(|| match validate_result() {
+        Ok(true) => PhaseCompletion::Complete,
+        Ok(false) => PhaseCompletion::incomplete("partial model output exists"),
+        Err(reason) => PhaseCompletion::invalid(reason),
+    })
+    .build()?;
+
+Study::builder("study-record.json")
+    .phase(phase)
+    .hidden()
+    .build()?
+    .run_phases([20])?;
+# Ok(())
+# }
+```
+
+Use `.without_completion_examination()` on `Study::builder(...)` only when the
+launch intentionally wants every selected phase invoked. This switch does not
+define overwrite behavior and does not make existing application output safe
+to replace.
+
+### `state`: typed scientific state and in-memory series
+
+The `state` module defines heterogeneous state schemas and values.
 `SystemStateSchema` declares the ordered fields in a complete scientific state.
-Each `StateFieldSchema` owns a stable name and payload specification.
+Each advanced `StateFieldSchema` describes a stable name, template position,
+and optional scientific description.
 `SystemState` stores values that have been checked against that schema, and
-`SimulationTime` gives iteration and optional physical-time identity.
+`StateTime` gives iteration and optional physical-time identity.
 
 Payload support is type-erased at the storage boundary but remains validated by
 its specification. This permits one state to contain several scientific value
@@ -550,26 +615,47 @@ schema checks.
 This module owns in-memory shape and value compatibility. It does not choose
 equations, mutate a model, schedule observation, or write files.
 
-### `time_series`: ordered in-memory observations
-
-The `time_series` module stores an ordered collection of compatible
-`SystemState` values for analysis that should remain in memory. `StateSeries`
-owns the observations, while `StateSeriesView` provides borrowed access without
-copying payloads.
+The same module stores an ordered collection of compatible `SystemState`
+values for analysis that should remain in memory. `StateSeries` owns the
+observations; borrowing `&StateSeries` provides access without copying
+payloads or introducing a separate view type.
 
 Insertion checks schema and time ordering. The module is useful for small
 trajectories, derived windows, and analysis inputs where filesystem persistence
 would be unnecessary. It intentionally has no codecs, background writer,
 sampling policy, or execution-directory behavior; durable or large trajectories
-belong in `storage`.
+belong at the `writer` and `storage` boundaries.
+
+### `writer`: inferred scientific observation
+
+The `writer` module lets application code express only scientific output
+intent. `Writer::all_fields()` infers one stream named `state`, selects every
+schema field, and samples every iteration. `Writer::fields(...)` keeps that
+default stream while narrowing its payloads. Applications use named `Stream`
+values only when several scientifically distinct outputs or cadences are
+needed.
+
+Axis names, schema order, checkpoint eligibility, final-state deduplication,
+stream directories, paths, buffering, provenance, and lifecycle are inferred
+or owned outside the basic API. The only basic types are `Writer`, `Stream`,
+and `WriterError`. `writer::advanced` adds schema-bound descriptors, checked
+borrowed observations, owned encoded handoffs, and a replaceable sink port;
+the concrete writer session remains private.
 
 ### `storage`: durable bounded recordings
 
 The `storage` module turns complete typed states into recoverable on-disk
-recordings. `SystemStateWriterBuilder` configures streams, sampling intervals,
-buffer limits, time-axis metadata, and caller metadata. `SystemStateWriter`
-accepts states, writes bounded chunks, maintains recording metadata, and seals a
-terminal result.
+recordings. During migration to the target `record` subsystem,
+`SystemStateWriterBuilder` accepts one application `Writer`, optional caller
+metadata, and transitional persistence tuning. It binds the writer to the
+state schema and infers axis names, canonical field order, checkpoint coverage,
+stream directories, and a safe default buffering policy. `SystemStateWriter`
+accepts states, writes bounded chunks, maintains recording metadata, and seals
+a terminal result.
+
+Filesystem APIs use typed paths. Builders retain an owned `PathBuf`, while
+recording and reader inspection returns borrowed `&Path` values. Logical
+stream names never double as filesystem paths.
 
 Recordings distinguish running, complete, and failed lifecycle states.
 Continuation validates the existing metadata, schemas, chunks, checksums, and
@@ -582,9 +668,9 @@ rewritten.
 payload decoder APIs allow caller-owned types to participate in JSON-backed
 storage without making the storage layer understand their scientific meaning.
 
-Storage owns persistence integrity and reconstruction. The application still
-owns what to record, when an observation is scientifically meaningful, and why
-a run terminates.
+Storage owns persistence integrity and reconstruction. The application owns
+what to record and any non-default cadence through `Writer`; the runtime will
+own why and when a run reaches its terminal lifecycle state.
 
 ### `execution`: replicate isolation and filesystem identity
 
@@ -646,10 +732,12 @@ provided provenance record.
 
 ### `prelude`: narrow imports, no new behavior
 
-The prelude is split by responsibility:
+The prelude uses tiered scope management:
 
-- `prelude::basics` re-exports configuration, state, storage, execution,
-  artifact, and RNG primitives used by scientific code.
+- `prelude::basic` re-exports ordinary configuration, state, storage,
+  execution, artifact, and RNG primitives used by scientific code.
+- `prelude::advanced` is a strict superset that adds supported state
+  integration and inspection traits.
 - `prelude::study` re-exports orchestration types used at the application
   boundary.
 

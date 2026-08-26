@@ -36,8 +36,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
-use crate::system_state::{SimulationTime, SystemState, SystemStateSchema};
-use crate::time_series::StateSeries;
+use crate::state::advanced::{
+    StateSchemaAccess, StateSeries, StateTime, SystemState, SystemStateSchema,
+};
 
 use super::RecordingTiming;
 use super::error::StorageError;
@@ -261,13 +262,13 @@ impl StoredStateSeriesReader {
         let spec = stream_spec(&self.metadata_path, declaration)?;
         let state =
             decode_state_record_with_decoders(record, &path, declaration, &spec, &self.decoders)?;
-        if state.simulation_time().iteration() != chunk.last_iteration {
+        if state.time().iteration() != chunk.last_iteration {
             return Err(invalid_record(
                 &path,
                 chunk.records,
                 format!(
                     "latest record iteration {} differs from chunk descriptor {}",
-                    state.simulation_time().iteration(),
+                    state.time().iteration(),
                     chunk.last_iteration
                 ),
             ));
@@ -351,12 +352,12 @@ impl StoredStateSeriesReader {
 
             let time = match record.physical_time {
                 Some(physical_time) => {
-                    SimulationTime::from_iteration_and_physical_time(iteration, physical_time)
+                    StateTime::from_iteration_and_physical_time(iteration, physical_time)
                         .ok_or_else(|| {
                             invalid_record(&path, line_number, "physical time must be finite")
                         })?
                 }
-                None => SimulationTime::from_iteration(iteration),
+                None => StateTime::from_iteration(iteration),
             };
             let mut state = series.schema().create_empty_state(time);
             decode_values(
@@ -369,7 +370,7 @@ impl StoredStateSeriesReader {
             )?;
             series.push_state(state).map_err(|rejection| {
                 let (source, state) = rejection.into_parts();
-                let index = state.simulation_time().iteration();
+                let index = state.time().iteration();
                 drop(state);
                 StorageError::StateSeriesInvariant {
                     stream: stream.name.clone(),
@@ -459,13 +460,13 @@ pub(crate) fn decode_resume_state(
     let bytes = read_verified_chunk(metadata_path, &path, chunk)?;
     let record = final_jsonl_record(&path, &bytes)?;
     let state = decode_state_record_with_decoders(record, &path, stream, full_spec, decoders)?;
-    if state.simulation_time().iteration() != chunk.last_iteration {
+    if state.time().iteration() != chunk.last_iteration {
         return Err(invalid_record(
             &path,
             chunk.records,
             format!(
                 "latest record iteration {} differs from chunk descriptor {}",
-                state.simulation_time().iteration(),
+                state.time().iteration(),
                 chunk.last_iteration
             ),
         ));
@@ -561,10 +562,10 @@ fn decode_state_record_with_decoders(
         .map_err(|source| invalid_record(path, 1, format!("invalid JSON record: {source}")))?;
     let time = match record.physical_time {
         Some(physical_time) => {
-            SimulationTime::from_iteration_and_physical_time(record.iteration, physical_time)
+            StateTime::from_iteration_and_physical_time(record.iteration, physical_time)
                 .ok_or_else(|| invalid_record(path, 1, "physical time must be finite"))?
         }
-        None => SimulationTime::from_iteration(record.iteration),
+        None => StateTime::from_iteration(record.iteration),
     };
     let mut state = full_spec.create_empty_state(time);
     decode_values(decoders, stream, path, 1, record.values, &mut state)?;
@@ -734,7 +735,7 @@ fn decode_values(
     path: &Path,
     line: u64,
     values: BorrowedValues<'_>,
-    state: &mut crate::system_state::SystemState,
+    state: &mut crate::state::advanced::SystemState,
 ) -> Result<(), StorageError> {
     if values.entries.len() != stream.fields.len() {
         return Err(invalid_record(
@@ -751,7 +752,7 @@ fn decode_values(
     for (field, raw) in stream.fields.iter().zip(values.entries) {
         decoders.decode_into(
             &stream.name,
-            state.simulation_time().iteration(),
+            state.time().iteration(),
             &field.name,
             raw.get(),
             state,

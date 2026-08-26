@@ -1,6 +1,6 @@
 //! Internal wall-clock formatting and monotonic-duration helpers.
 //!
-//! Scientific coordinates live in [`crate::system_state::SimulationTime`].
+//! Scientific coordinates live in [`crate::state::advanced::StateTime`].
 //! This module exists only for operational workflow timing: it obtains a UTC
 //! timestamp for durable metadata and converts a process-local monotonic
 //! [`std::time::Duration`] into an exact integer nanosecond count.

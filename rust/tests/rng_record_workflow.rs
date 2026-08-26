@@ -3,7 +3,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
 use serde_json::{Map, Value, json};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -34,7 +34,7 @@ impl Drop for TempWorkspace {
 
 fn state_schema() -> SystemStateSchema {
     SystemStateSchema::load_json_template(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state.json"),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state.json"),
     )
     .unwrap()
 }
@@ -82,17 +82,12 @@ fn writer_builder(
     schema: &SystemStateSchema,
     metadata: Map<String, Value>,
 ) -> SystemStateWriterBuilder {
-    SystemStateWriter::builder(run, schema)
+    SystemStateWriter::builder(run.to_path_buf(), schema)
+        .with_writer(Writer::streams([Stream::fields("signal", ["population"]).unwrap()]).unwrap())
         .with_user_metadata(metadata)
         .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(1_024).unwrap(),
             NonZeroU64::new(4_096).unwrap(),
-        ))
-        .add_state_stream(StateStreamConfig::new(
-            "signal",
-            ["population"],
-            SamplingInterval::iterations(1).unwrap(),
-            None,
         ))
 }
 

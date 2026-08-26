@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::completion::{PhaseCompletion, PhaseCompletionExaminer};
 use super::error::StudyError;
 use super::task::{TaskContext, TaskResult, Workload};
 use crate::configuration::{ProjectPaths, ResolvedConfiguration};
@@ -374,6 +375,7 @@ pub struct Phase {
     dependencies: Vec<PhaseId>,
     failure_policy: PhaseFailurePolicy,
     require_confirm: bool,
+    completion_examiner: Option<PhaseCompletionExaminer>,
 }
 
 /// Scheduling behavior after the first workload failure in a phase.
@@ -412,6 +414,7 @@ impl Phase {
             dependencies: Vec::new(),
             failure_policy: PhaseFailurePolicy::FailFast,
             require_confirm: false,
+            completion_examiner: None,
         }
     }
 
@@ -471,6 +474,14 @@ impl Phase {
         self.require_confirm
     }
 
+    pub(crate) fn examines_completion(&self) -> bool {
+        self.completion_examiner.is_some()
+    }
+
+    pub(crate) fn completion_examiner(&self) -> Option<&PhaseCompletionExaminer> {
+        self.completion_examiner.as_ref()
+    }
+
     pub(crate) fn into_tasks(self) -> Vec<Task> {
         self.tasks
     }
@@ -510,6 +521,7 @@ pub struct PhaseBuilder {
     dependencies: Vec<PhaseId>,
     failure_policy: PhaseFailurePolicy,
     require_confirm: bool,
+    completion_examiner: Option<PhaseCompletionExaminer>,
 }
 
 impl PhaseBuilder {
@@ -588,6 +600,25 @@ impl PhaseBuilder {
         self
     }
 
+    /// Attaches read-only application validation for the complete phase result.
+    ///
+    /// A [`PhaseCompletion::Complete`] verdict lets Workflow reuse this whole
+    /// phase when selected and satisfy it when omitted as a dependency.
+    /// [`PhaseCompletion::Incomplete`] invokes the phase normally after warning
+    /// that recovery within the phase belongs to its workloads. Missing state
+    /// also executes normally, while invalid state fails before execution.
+    ///
+    /// The examiner is called at most once for this phase during one study
+    /// launch. It must not create, repair, remove, or otherwise mutate
+    /// application state.
+    pub fn examine_completion<F>(mut self, examiner: F) -> Self
+    where
+        F: Fn() -> PhaseCompletion + Send + Sync + 'static,
+    {
+        self.completion_examiner = Some(PhaseCompletionExaminer::new(examiner));
+        self
+    }
+
     /// Validates and creates one immutable nonempty phase.
     pub fn build(mut self) -> Result<Phase, StudyError> {
         if self.label.trim().is_empty() {
@@ -655,6 +686,7 @@ impl PhaseBuilder {
             dependencies: self.dependencies,
             failure_policy: self.failure_policy,
             require_confirm: self.require_confirm,
+            completion_examiner: self.completion_examiner,
         })
     }
 }
@@ -677,6 +709,7 @@ impl fmt::Debug for Phase {
             .field("dependencies", &self.dependencies)
             .field("failure_policy", &self.failure_policy)
             .field("require_confirm", &self.require_confirm)
+            .field("examines_completion", &self.examines_completion())
             .finish()
     }
 }
@@ -698,6 +731,7 @@ impl fmt::Debug for PhaseBuilder {
             .field("deadline_after", &self.deadline_after)
             .field("dependencies", &self.dependencies)
             .field("require_confirm", &self.require_confirm)
+            .field("examines_completion", &self.completion_examiner.is_some())
             .finish_non_exhaustive()
     }
 }

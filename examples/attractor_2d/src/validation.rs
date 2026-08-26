@@ -1,4 +1,4 @@
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
 
 use crate::{
     AppResult,
@@ -31,7 +31,7 @@ pub(crate) fn validate_recording(
     if point.len() != 2 || *radius != point[0].hypot(point[1]) {
         return Err("checkpoint radius is inconsistent with its point".into());
     }
-    if state.simulation_time().iteration() != expected_iteration {
+    if state.time().iteration() != expected_iteration {
         return Err("checkpoint does not contain the configured final iteration".into());
     }
     context.set_detail("checkpoint verified");

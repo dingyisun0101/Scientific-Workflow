@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 
 use crate::AppResult;
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
 use scientific_workflow::prelude::study::TaskContext;
 
 use crate::hopf_model::{POINT_FIELD, RADIUS_FIELD};
@@ -33,11 +33,11 @@ pub(crate) fn record_task(
 
     // Observe the initial condition before stepping, then the completed state
     // after every step. Each stream independently filters these observations by
-    // its configured SamplingInterval.
+    // its iteration cadence.
     writer.observe_state(model.state())?;
     for _ in 0..step_count {
         model.step()?;
-        context.set_iteration(model.state().simulation_time().iteration())?;
+        context.set_iteration(model.state().time().iteration())?;
         writer.observe_state(model.state())?;
     }
     // Completion flushes queued records and atomically publishes terminal
@@ -54,9 +54,9 @@ fn build_writer(
     // Grouped decoding keeps related policy together while retaining precise
     // concrete Rust types, including non-zero limits validated at decode time.
     let (trajectory_interval, radius_interval, checkpoint_interval, chunk_bytes, queue_bytes): (
-        SamplingInterval,
-        SamplingInterval,
-        SamplingInterval,
+        u64,
+        u64,
+        u64,
         NonZeroU64,
         NonZeroU64,
     ) = configuration.decode_values((
@@ -68,39 +68,26 @@ fn build_writer(
     ))?;
     // Iteration and physical time belong to the scientific record. Operational
     // UTC timestamps and active duration are added by the writer itself.
-    let time_axis = TimeAxisMetadata::new("iteration")
-        .with_iteration_unit("iteration")
-        .with_physical_axis("physical_time", "dimensionless_model_time");
+    let writer_definition = Writer::streams([
+        Stream::fields(TRAJECTORY_STREAM, [POINT_FIELD])?
+            .every_iterations(trajectory_interval)?,
+        Stream::fields(RADIUS_STREAM, [RADIUS_FIELD])?
+            .every_iterations(radius_interval)?,
+        Stream::fields(CHECKPOINT_STREAM, [POINT_FIELD, RADIUS_FIELD])?
+            .every_iterations(checkpoint_interval)?,
+    ])?
+    .with_iteration_unit("iteration")?
+    .with_physical_time_unit("dimensionless_model_time")?;
 
     // Writer construction is also where the task takes ownership of its I/O
     // lifecycle. Merely constructing a Phase or ExecutionScope writes no data.
-    let writer = SystemStateWriter::builder(directory, state)
-        .with_time_axis_metadata(time_axis)
+    let writer = SystemStateWriter::builder(directory.to_path_buf(), state)
+        .with_writer(writer_definition)
         // Persisting resolved parameters makes each task output independently
         // interpretable without duplicating them in every state record.
         .with_configuration(configuration)
         // Queue bytes bound memory and apply backpressure; chunk bytes govern
         // file rollover without ever splitting one encoded state record.
-        .add_state_stream(StateStreamConfig::new(
-            TRAJECTORY_STREAM,
-            // Values are stored in schema order; field names live once in the
-            // recording metadata instead of being repeated in every record.
-            [POINT_FIELD],
-            trajectory_interval,
-            None,
-        ))
-        .add_state_stream(StateStreamConfig::new(
-            RADIUS_STREAM,
-            [RADIUS_FIELD],
-            radius_interval,
-            None,
-        ))
-        .add_state_stream(StateStreamConfig::new(
-            CHECKPOINT_STREAM,
-            [POINT_FIELD, RADIUS_FIELD],
-            checkpoint_interval,
-            None,
-        ))
         .with_shared_stream_storage(StateStreamStorage::chunked(chunk_bytes, queue_bytes))
         .create_new_recording()?;
 

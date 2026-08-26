@@ -28,7 +28,7 @@ use std::marker::PhantomData;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::system_state::{StateError, SystemState};
+use crate::state::advanced::{StateError, SystemState};
 
 use super::error::StorageError;
 

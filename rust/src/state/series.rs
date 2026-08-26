@@ -1,10 +1,8 @@
-//! Owned and borrowed in-memory collections of scientific system states.
+//! Owned in-memory collections of scientific system states.
 //!
 //! [`StateSeries`] is the analysis-facing growable array for complete
 //! [`SystemState`] snapshots. It owns states, preserves one canonical
-//! [`SystemStateSchema`], and maintains strictly increasing simulation indices.
-//! [`StateSeriesView`] provides a lightweight read-only view without cloning states
-//! or payloads.
+//! [`SystemStateSchema`], and maintains strictly increasing state iterations.
 //!
 //! # Scope
 //!
@@ -21,8 +19,8 @@
 //! A rejected append returns [`StateSeriesPushError`], which retains the unchanged state.
 //!
 //! Explicitly cloning a `StateSeries` is intentionally expensive: every
-//! populated payload is deep-cloned through [`SystemState::clone`]. Prefer
-//! [`StateSeries::as_view`] for scoped immutable access or an application-owned
+//! populated payload is deep-cloned through [`SystemState::clone`]. Prefer a
+//! borrowed `&StateSeries` for scoped immutable access or an application-owned
 //! `Arc<StateSeries>` when shared ownership is required.
 //!
 //! # Invariants
@@ -42,9 +40,9 @@ use std::any::Any;
 use std::error::Error;
 use std::fmt;
 
-use crate::system_state::{SystemState, SystemStateSchema};
-
 use super::error::StateSeriesError;
+use super::schema::{StateSchemaAccess, SystemStateSchema};
+use super::state::SystemState;
 
 /// A growable homogeneous array of owned, time-ordered system states.
 ///
@@ -85,15 +83,6 @@ impl StateSeries {
     /// Returns the canonical immutable specification for this collection.
     pub fn schema(&self) -> &SystemStateSchema {
         &self.spec
-    }
-
-    /// Creates a copyable read-only view over the complete collection.
-    ///
-    /// The view contains only borrowed references to the canonical
-    /// specification and state slice. Constructing, copying, or cloning it
-    /// never clones a state, layout, payload, or vector allocation.
-    pub fn as_view(&self) -> StateSeriesView<'_> {
-        StateSeriesView::new(&self.spec, &self.states)
     }
 
     /// Returns the number of states currently owned by the collection.
@@ -145,7 +134,7 @@ impl StateSeries {
     /// Returns [`StateSeriesError::PositionOutOfBounds`] when no state exists at
     /// `position`. An unknown key, empty field, or concrete type mismatch is
     /// returned as [`StateSeriesError::PayloadAccess`] with the original
-    /// [`crate::system_state::StateError`] preserved as its source.
+    /// [`StateError`](super::error::StateError) preserved as its source.
     pub fn payload_mut_at<T>(
         &mut self,
         position: usize,
@@ -205,17 +194,14 @@ impl StateSeries {
         if !self.spec.shares_schema_instance(state.schema()) {
             return Err(StateSeriesPushError::new(
                 StateSeriesError::SchemaMismatch {
-                    iteration: state.simulation_time().iteration(),
+                    iteration: state.time().iteration(),
                 },
                 state,
             ));
         }
 
-        if let Some(previous) = self
-            .last_state()
-            .map(|state| state.simulation_time().iteration())
-        {
-            let next = state.simulation_time().iteration();
+        if let Some(previous) = self.last_state().map(|state| state.time().iteration()) {
+            let next = state.time().iteration();
             if next <= previous {
                 return Err(StateSeriesPushError::new(
                     StateSeriesError::NonIncreasingIteration { previous, next },
@@ -263,7 +249,7 @@ impl Clone for StateSeries {
     /// Cost scales with the complete populated payload volume and may involve
     /// gigabytes of allocation and copying. This method is appropriate only
     /// when analysis requires independent mutable payload ownership. Use
-    /// [`StateSeries::as_view`] or an `Arc<StateSeries>` for lightweight sharing.
+    /// borrowing `&StateSeries` or an `Arc<StateSeries>` for lightweight sharing.
     /// The immutable specification allocation remains shared.
     fn clone(&self) -> Self {
         Self {
@@ -282,15 +268,11 @@ impl fmt::Debug for StateSeries {
             .field("states", &self.len())
             .field(
                 "first_iteration",
-                &self
-                    .first_state()
-                    .map(|state| state.simulation_time().iteration()),
+                &self.first_state().map(|state| state.time().iteration()),
             )
             .field(
                 "last_iteration",
-                &self
-                    .last_state()
-                    .map(|state| state.simulation_time().iteration()),
+                &self.last_state().map(|state| state.time().iteration()),
             )
             .finish_non_exhaustive()
     }
@@ -313,99 +295,6 @@ impl IntoIterator for StateSeries {
     /// Consumes the series and moves each owned state out in iteration order.
     fn into_iter(self) -> Self::IntoIter {
         self.states.into_iter()
-    }
-}
-
-/// A lightweight immutable view over a canonical specification and state slice.
-///
-/// Both `Copy` and `Clone` copy only two references. Neither operation clones a
-/// specification, state, payload, or vector allocation. The private
-/// constructor ensures every public view originates from a validated
-/// [`StateSeries`].
-#[must_use = "a series view has no effect unless it is inspected"]
-#[derive(Clone, Copy)]
-pub struct StateSeriesView<'a> {
-    spec: &'a SystemStateSchema,
-    states: &'a [SystemState],
-}
-
-impl<'a> StateSeriesView<'a> {
-    /// Creates an invariant-preserving view over one complete state series.
-    fn new(spec: &'a SystemStateSchema, states: &'a [SystemState]) -> Self {
-        Self { spec, states }
-    }
-
-    /// Returns the canonical specification shared by the borrowed states.
-    pub fn schema(self) -> &'a SystemStateSchema {
-        self.spec
-    }
-
-    /// Returns the number of borrowed states.
-    pub fn len(self) -> usize {
-        self.states.len()
-    }
-
-    /// Reports whether the view contains no states.
-    pub fn is_empty(self) -> bool {
-        self.states.is_empty()
-    }
-
-    /// Returns a state by zero-based view position.
-    pub fn state_at(self, position: usize) -> Option<&'a SystemState> {
-        self.states.get(position)
-    }
-
-    /// Returns the earliest borrowed state, or `None` for an empty view.
-    pub fn first_state(self) -> Option<&'a SystemState> {
-        self.states.first()
-    }
-
-    /// Returns the latest borrowed state, or `None` for an empty view.
-    pub fn last_state(self) -> Option<&'a SystemState> {
-        self.states.last()
-    }
-
-    /// Returns the complete immutable state slice.
-    pub fn as_state_slice(self) -> &'a [SystemState] {
-        self.states
-    }
-
-    /// Returns an iterator over borrowed states in increasing iteration order.
-    pub fn iter(self) -> std::slice::Iter<'a, SystemState> {
-        self.states.iter()
-    }
-}
-
-impl fmt::Debug for StateSeriesView<'_> {
-    /// Formats bounded structural context without traversing payload values.
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("StateSeriesView")
-            .field("source", &self.spec.template_path())
-            .field("states", &self.len())
-            .field(
-                "first_iteration",
-                &self
-                    .first_state()
-                    .map(|state| state.simulation_time().iteration()),
-            )
-            .field(
-                "last_iteration",
-                &self
-                    .last_state()
-                    .map(|state| state.simulation_time().iteration()),
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-impl<'a> IntoIterator for StateSeriesView<'a> {
-    type Item = &'a SystemState;
-    type IntoIter = std::slice::Iter<'a, SystemState>;
-
-    /// Iterates over the borrowed states without cloning payloads.
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
     }
 }
 

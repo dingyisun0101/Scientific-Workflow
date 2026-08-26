@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::basics::{
-    JsonPayloadDecoderRegistry, SamplingInterval, SimulationTime, StateStreamConfig,
-    StateStreamStorage, StoredStateSeriesReader, SystemStateSchema, SystemStateWriterBuilder,
-    TimeAxisMetadata,
+use scientific_workflow::prelude::basic::{
+    JsonPayloadDecoderRegistry, StateStreamStorage, StateTime, StoredStateSeriesReader, Stream,
+    SystemStateSchema, SystemStateWriterBuilder, Writer,
 };
 use serde_json::{Map, Value};
 
@@ -80,26 +79,22 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
     )
     .unwrap();
     let schema = SystemStateSchema::load_json_template(schema_path).unwrap();
-    let stream = StateStreamConfig::new(
-        "signal",
-        ["population", "label"],
-        SamplingInterval::iterations(1).unwrap(),
-        Some(StateStreamStorage::chunked(
-            NonZeroU64::new(96).unwrap(),
-            NonZeroU64::new(4096).unwrap(),
-        )),
-    )
-    .with_relative_directory("streams/signal");
+    let writer_definition =
+        Writer::streams([Stream::fields("signal", ["population", "label"]).unwrap()])
+            .unwrap()
+            .with_physical_time_unit("s")
+            .unwrap();
     let mut user_metadata = Map::new();
     user_metadata.insert("producer".to_owned(), Value::from("rust-public-writer"));
-    let mut state = schema
-        .create_empty_state(SimulationTime::from_iteration_and_physical_time(0, 0.0).unwrap());
-    let mut writer = SystemStateWriterBuilder::new(root, &state)
-        .with_time_axis_metadata(
-            TimeAxisMetadata::new("iteration").with_physical_axis("physical_time", "s"),
-        )
+    let mut state =
+        schema.create_empty_state(StateTime::from_iteration_and_physical_time(0, 0.0).unwrap());
+    let mut writer = SystemStateWriterBuilder::new(root.to_path_buf(), &state)
+        .with_writer(writer_definition)
         .with_user_metadata(user_metadata)
-        .add_state_stream(stream)
+        .with_shared_stream_storage(StateStreamStorage::chunked(
+            NonZeroU64::new(96).unwrap(),
+            NonZeroU64::new(4096).unwrap(),
+        ))
         .create_new_recording()
         .unwrap();
 
@@ -110,7 +105,7 @@ fn write_rust_recording(root: &Path, schema_path: &Path, sensitive: f64) {
         .insert_payload("label", String::from("rust → python 世界"))
         .unwrap();
     writer.observe_state(&state).unwrap();
-    state.advance_simulation_time(Some(0.25)).unwrap();
+    state.advance_time(Some(0.25)).unwrap();
     state.payload_mut::<Vec<f64>>("population").unwrap()[1] = -2.5;
     *state.payload_mut::<String>("label").unwrap() = String::from("python → rust λ");
     writer.observe_state(&state).unwrap();
@@ -137,8 +132,8 @@ fn rust_and_python_readers_share_one_format_v7_fixture() {
 
     let series = reader.read_stream_as_state_series("signal").unwrap();
     assert_eq!(series.len(), 2);
-    assert_eq!(series.state_at(0).unwrap().simulation_time().iteration(), 0);
-    assert_eq!(series.state_at(1).unwrap().simulation_time().iteration(), 2);
+    assert_eq!(series.state_at(0).unwrap().time().iteration(), 0);
+    assert_eq!(series.state_at(1).unwrap().time().iteration(), 2);
     assert_eq!(
         series
             .state_at(1)
@@ -221,10 +216,10 @@ fn rust_writes_python_reads_and_writes_then_rust_reads_exactly() {
     assert_eq!(series.len(), 2);
     let first = series.state_at(0).unwrap();
     let second = series.state_at(1).unwrap();
-    assert_eq!(first.simulation_time().iteration(), 0);
-    assert_eq!(first.simulation_time().physical_time(), Some(0.0));
-    assert_eq!(second.simulation_time().iteration(), 1);
-    assert_eq!(second.simulation_time().physical_time(), Some(0.25));
+    assert_eq!(first.time().iteration(), 0);
+    assert_eq!(first.time().physical_time(), Some(0.0));
+    assert_eq!(second.time().iteration(), 1);
+    assert_eq!(second.time().physical_time(), Some(0.25));
     assert_eq!(
         first.payload::<Vec<f64>>("population").unwrap()[0].to_bits(),
         sensitive.to_bits()

@@ -1,4 +1,4 @@
-//! Private type erasure for values stored in a system state.
+//! Private type erasure for heterogeneous state payloads.
 //!
 //! [`SystemState`](super::state::SystemState) must hold unrelated Rust types in
 //! one fixed-layout collection while preserving ordinary ownership semantics.

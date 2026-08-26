@@ -16,6 +16,16 @@
 //! [`ResolvedConfiguration`](crate::configuration::ResolvedConfiguration)
 //! values, capture each value in a workload, and construct tasks explicitly.
 //!
+//! # Phase completion
+//!
+//! An application may attach a read-only completion examiner with
+//! [`PhaseBuilder::examine_completion`]. Workflow uses the resulting
+//! [`PhaseCompletion`] verdict only for whole-phase reuse and dependency
+//! satisfaction. An incomplete phase is invoked normally: recovery, reuse,
+//! cleanup, and validation within that phase remain application-owned.
+//! Examination is enabled by default and may be disabled for a launch with
+//! [`StudyBuilder::without_completion_examination`].
+//!
 //! ```no_run
 //! use scientific_workflow::prelude::study::*;
 //!
@@ -48,6 +58,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[path = "study/command.rs"]
 mod command;
+#[path = "study/completion.rs"]
+mod completion;
 #[path = "study/display.rs"]
 mod display;
 #[path = "study/error.rs"]
@@ -69,6 +81,7 @@ mod timing;
 #[path = "study/tui.rs"]
 mod tui;
 
+pub use completion::PhaseCompletion;
 pub use error::StudyError;
 pub use phase::{
     Phase, PhaseBuilder, PhaseFailurePolicy, PhaseId, Task, TaskId, TaskKey, TaskMode, TaskSelector,
@@ -83,13 +96,11 @@ use renderer::StudyRenderer;
 
 static STUDY_OWNED: AtomicBool = AtomicBool::new(false);
 
-type SatisfiedPhaseVerifier = Arc<dyn Fn(PhaseId) -> bool + Send + Sync + 'static>;
-
 /// Builder for one immutable study plan.
 pub struct StudyBuilder {
     phases: Vec<Phase>,
     output: DisplayMode,
-    satisfied_phase: Option<SatisfiedPhaseVerifier>,
+    examine_completion: bool,
     record_path: std::path::PathBuf,
 }
 
@@ -109,12 +120,14 @@ impl StudyBuilder {
         self
     }
 
-    /// Supplies application verification for an omitted completed dependency.
-    pub fn satisfied_phase_verifier<F>(mut self, verifier: F) -> Self
-    where
-        F: Fn(PhaseId) -> bool + Send + Sync + 'static,
-    {
-        self.satisfied_phase = Some(Arc::new(verifier));
+    /// Disables all application-supplied phase completion examiners.
+    ///
+    /// Completion examination is enabled by default. Disabling it invokes all
+    /// selected phases and makes omitted dependencies unsatisfied exactly as if
+    /// no phase had an examiner. Workflow emits a warning because reuse and
+    /// continuation within invoked phases remain application-owned.
+    pub fn without_completion_examination(mut self) -> Self {
+        self.examine_completion = false;
         self
     }
 
@@ -148,7 +161,7 @@ impl StudyBuilder {
         Ok(Study {
             phases: self.phases,
             output: self.output,
-            satisfied_phase: self.satisfied_phase,
+            examine_completion: self.examine_completion,
             cancellation: CancellationToken::new(),
             record_path: self.record_path,
         })
@@ -162,10 +175,7 @@ impl fmt::Debug for StudyBuilder {
             .field("phases", &self.phases.len())
             .field("output", &self.output)
             .field("record_path", &self.record_path)
-            .field(
-                "has_satisfied_phase_verifier",
-                &self.satisfied_phase.is_some(),
-            )
+            .field("examine_completion", &self.examine_completion)
             .finish_non_exhaustive()
     }
 }
@@ -174,7 +184,7 @@ impl fmt::Debug for StudyBuilder {
 pub struct Study {
     phases: Vec<Phase>,
     output: DisplayMode,
-    satisfied_phase: Option<SatisfiedPhaseVerifier>,
+    examine_completion: bool,
     cancellation: CancellationToken,
     record_path: std::path::PathBuf,
 }
@@ -185,7 +195,7 @@ impl Study {
         StudyBuilder {
             phases: Vec::new(),
             output: DisplayMode::Auto,
-            satisfied_phase: None,
+            examine_completion: true,
             record_path: record_path.into(),
         }
     }
@@ -239,55 +249,75 @@ impl Study {
         Ok(first)
     }
 
-    /// Runs every registered phase in dependency order.
+    /// Runs every registered phase in dependency order, reusing any phase whose
+    /// enabled application examiner reports complete.
     pub fn run(self) -> Result<StudySummary, StudyError> {
-        let selected = topological_positions(&self.phases)?;
-        self.execute(&selected)
+        let phases = self.phases.iter().map(Phase::id).collect::<Vec<_>>();
+        let selected = self.select_phases(phases, false)?;
+        self.execute(selected)
     }
 
-    /// Runs exactly the selected phases; omitted unsatisfied dependencies fail.
+    /// Runs exactly the selected phases; omitted dependencies must examine as
+    /// complete or selection fails.
     pub fn run_phases<I, P>(self, phases: I) -> Result<StudySummary, StudyError>
     where
         I: IntoIterator<Item = P>,
         P: Into<PhaseId>,
     {
         let selected = self.select_phases(phases, false)?;
-        self.execute(&selected)
+        self.execute(selected)
     }
 
-    /// Adds unsatisfied dependencies and runs the deterministic closure.
+    /// Adds only non-complete dependencies and runs the deterministic closure.
     pub fn run_phases_with_dependencies<I, P>(self, phases: I) -> Result<StudySummary, StudyError>
     where
         I: IntoIterator<Item = P>,
         P: Into<PhaseId>,
     {
         let selected = self.select_phases(phases, true)?;
-        self.execute(&selected)
+        self.execute(selected)
     }
 
     fn select_phases<I, P>(
         &self,
         phases: I,
         include_dependencies: bool,
-    ) -> Result<Vec<usize>, StudyError>
+    ) -> Result<PhaseSelection, StudyError>
     where
         I: IntoIterator<Item = P>,
         P: Into<PhaseId>,
     {
         let mut selected = selected_ids(&self.phases, phases)?;
+        let mut examination = completion::CompletionExamination::new(self.examine_completion);
+        let positions: HashMap<_, _> = self
+            .phases
+            .iter()
+            .enumerate()
+            .map(|(position, phase)| (phase.id(), position))
+            .collect();
+        for position in topological_positions(&self.phases)? {
+            let phase = &self.phases[position];
+            if selected.contains(&phase.id()) {
+                examination.examine(phase)?;
+            }
+        }
         if include_dependencies {
-            let positions: HashMap<_, _> = self
-                .phases
-                .iter()
-                .enumerate()
-                .map(|(position, phase)| (phase.id(), position))
-                .collect();
-            let mut pending: Vec<_> = selected.iter().copied().collect();
-            while let Some(id) = pending.pop() {
+            let mut pending = topological_positions(&self.phases)?
+                .into_iter()
+                .map(|position| self.phases[position].id())
+                .filter(|phase| selected.contains(phase))
+                .collect::<VecDeque<_>>();
+            while let Some(id) = pending.pop_front() {
                 let phase = &self.phases[positions[&id]];
+                if examination.examine(phase)?.is_complete() {
+                    continue;
+                }
                 for dependency in phase.dependencies() {
-                    if !self.is_satisfied(*dependency) && selected.insert(*dependency) {
-                        pending.push(*dependency);
+                    let dependency_phase = &self.phases[positions[dependency]];
+                    if !examination.examine(dependency_phase)?.is_complete()
+                        && selected.insert(*dependency)
+                    {
+                        pending.push_back(*dependency);
                     }
                 }
             }
@@ -297,8 +327,14 @@ impl Study {
                 .iter()
                 .filter(|phase| selected.contains(&phase.id()))
             {
+                if examination.examine(phase)?.is_complete() {
+                    continue;
+                }
                 for dependency in phase.dependencies() {
-                    if !selected.contains(dependency) && !self.is_satisfied(*dependency) {
+                    let dependency_phase = &self.phases[positions[dependency]];
+                    if !selected.contains(dependency)
+                        && !examination.examine(dependency_phase)?.is_complete()
+                    {
                         return Err(StudyError::UnsatisfiedPhaseDependency {
                             phase: phase.id().get(),
                             dependency: dependency.get(),
@@ -307,27 +343,29 @@ impl Study {
                 }
             }
         }
-        Ok(topological_positions(&self.phases)?
+        let positions = topological_positions(&self.phases)?
             .into_iter()
             .filter(|position| selected.contains(&self.phases[*position].id()))
-            .collect())
+            .collect();
+        let examination_enabled = examination.is_enabled();
+        Ok(PhaseSelection {
+            positions,
+            completion: examination.into_outcomes(),
+            examination_enabled,
+        })
     }
 
-    fn is_satisfied(&self, phase: PhaseId) -> bool {
-        self.satisfied_phase
-            .as_ref()
-            .is_some_and(|verify| verify(phase))
-    }
-
-    fn execute(self, selected: &[usize]) -> Result<StudySummary, StudyError> {
+    fn execute(self, selected: PhaseSelection) -> Result<StudySummary, StudyError> {
         let _lease = StudyLease::acquire()?;
-        let total_phases = selected.len();
+        let total_phases = selected.positions.len();
         let total_tasks = selected
+            .positions
             .iter()
             .map(|position| self.phases[*position].tasks().len())
             .sum();
         let execution = {
             let selected_phases = selected
+                .positions
                 .iter()
                 .map(|position| &self.phases[*position])
                 .collect::<Vec<_>>();
@@ -335,14 +373,43 @@ impl Study {
         };
         let mut summaries = Vec::with_capacity(total_phases);
         let mut phases = self.phases.into_iter().map(Some).collect::<Vec<_>>();
+        let executable_phases = selected
+            .positions
+            .iter()
+            .filter(|position| {
+                !selected.completion[&phases[**position].as_ref().unwrap().id()].is_complete()
+            })
+            .count();
+        let mut execution_position = 0;
+        let mut reused_phases = 0;
+        if !selected.examination_enabled {
+            display::completion_examination_disabled(self.output);
+        }
 
-        for (selection_position, phase_position) in selected.iter().copied().enumerate() {
+        for (selection_position, phase_position) in selected.positions.iter().copied().enumerate() {
             let phase = phases[phase_position]
                 .take()
                 .expect("selected phase positions are unique");
+            let completion = &selected.completion[&phase.id()];
+            if completion.is_complete() {
+                execution.phase_reused(phase.id())?;
+                display::phase_reused(self.output, phase.id(), phase.label());
+                summaries.push(PhaseSummary {
+                    id: phase.id(),
+                    label: phase.label().into(),
+                    progress: ProgressSummary::fully_completed(phase.tasks().len() as u64),
+                    reused: true,
+                });
+                reused_phases += 1;
+                continue;
+            }
+            if let PhaseCompletion::Incomplete(detail) = completion {
+                display::phase_incomplete(self.output, phase.id(), phase.label(), detail);
+            }
+            execution_position += 1;
             execution.phase_started(phase.id())?;
-            display::phase_start(self.output, &phase, selection_position + 1, total_phases);
-            let heading = display::phase_heading(&phase, selection_position + 1, total_phases);
+            display::phase_start(self.output, &phase, execution_position, executable_phases);
+            let heading = display::phase_heading(&phase, execution_position, executable_phases);
             let builder = StudyRenderer::for_phase(&phase, &heading)?
                 .cancellation_token(self.cancellation.clone());
             let renderer = match self.output {
@@ -369,20 +436,23 @@ impl Study {
                 id: phase_id,
                 label: phase_label,
                 progress,
+                reused: false,
             });
             if let Err(error) = result {
                 return Err(Self::fail_phase_with_summary(
                     self.output,
                     &execution,
                     summaries,
+                    reused_phases,
                     total_tasks,
                     error,
                 )?);
             }
-            if require_confirm && selection_position + 1 < total_phases {
-                let next = phases[selected[selection_position + 1]]
-                    .as_ref()
-                    .expect("the next selected phase has not executed");
+            let next = selected.positions[selection_position + 1..]
+                .iter()
+                .filter_map(|position| phases[*position].as_ref())
+                .find(|phase| !selected.completion[&phase.id()].is_complete());
+            if require_confirm && let Some(next) = next {
                 let confirmed = match display::confirm_transition(phase_id, next) {
                     Ok(confirmed) => confirmed,
                     Err(source) => {
@@ -390,6 +460,7 @@ impl Study {
                             self.output,
                             &execution,
                             summaries,
+                            reused_phases,
                             total_tasks,
                             StudyError::PhaseConfirmationInput {
                                 phase: phase_id.get(),
@@ -403,6 +474,7 @@ impl Study {
                         self.output,
                         &execution,
                         summaries,
+                        reused_phases,
                         total_tasks,
                         StudyError::PhaseConfirmationEof {
                             phase: phase_id.get(),
@@ -412,7 +484,13 @@ impl Study {
             }
         }
 
-        display::study_complete(self.output, summaries.len(), total_tasks, true);
+        display::study_complete(
+            self.output,
+            summaries.len(),
+            reused_phases,
+            total_tasks,
+            true,
+        );
         let record = execution.finish(true)?;
         Ok(StudySummary {
             phases: summaries.into(),
@@ -424,10 +502,11 @@ impl Study {
         output: DisplayMode,
         execution: &record::StudyRecorder,
         summaries: Vec<PhaseSummary>,
+        reused_phases: usize,
         total_tasks: usize,
         source: StudyError,
     ) -> Result<StudyError, StudyError> {
-        display::study_complete(output, summaries.len(), total_tasks, false);
+        display::study_complete(output, summaries.len(), reused_phases, total_tasks, false);
         let record = execution.finish(false)?;
         Ok(StudyError::PhaseExecutionFailed {
             summary: StudySummary {
@@ -437,6 +516,13 @@ impl Study {
             source: Box::new(source),
         })
     }
+}
+
+/// Prepared phase selection plus its single launch-local completion snapshot.
+struct PhaseSelection {
+    positions: Vec<usize>,
+    completion: HashMap<PhaseId, PhaseCompletion>,
+    examination_enabled: bool,
 }
 
 impl fmt::Debug for Study {
@@ -449,6 +535,7 @@ impl fmt::Debug for Study {
                 &self.phases.iter().map(|p| p.tasks().len()).sum::<usize>(),
             )
             .field("output", &self.output)
+            .field("examine_completion", &self.examine_completion)
             .finish_non_exhaustive()
     }
 }
@@ -459,6 +546,7 @@ pub struct PhaseSummary {
     id: PhaseId,
     label: Arc<str>,
     progress: ProgressSummary,
+    reused: bool,
 }
 
 impl PhaseSummary {
@@ -472,9 +560,19 @@ impl PhaseSummary {
         &self.label
     }
 
-    /// Borrows the aggregate terminal task progress for this phase.
+    /// Borrows aggregate task progress for this phase outcome.
+    ///
+    /// For a reused phase, every declared task is represented as completed by
+    /// the application's whole-phase verdict. Workflow did not examine those
+    /// tasks individually; [`Self::was_reused`] preserves that distinction.
     pub fn progress(&self) -> &ProgressSummary {
         &self.progress
+    }
+
+    /// Reports whether Workflow reused a whole application-verified phase
+    /// without entering its task scheduler.
+    pub const fn was_reused(&self) -> bool {
+        self.reused
     }
 
     /// Reports whether every task in the phase completed successfully.
@@ -506,7 +604,8 @@ impl StudySummary {
         self.phases.iter().map(|phase| phase.progress.total()).sum()
     }
 
-    /// Reports whether at least one phase ran and every phase succeeded.
+    /// Reports whether at least one phase was selected and every selected phase
+    /// either executed successfully or was reused after examination.
     pub fn is_success(&self) -> bool {
         !self.phases.is_empty() && self.phases.iter().all(PhaseSummary::is_success)
     }

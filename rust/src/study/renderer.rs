@@ -144,6 +144,20 @@ pub struct ProgressSummary {
 }
 
 impl ProgressSummary {
+    /// Builds the aggregate used when whole-phase examination certified every
+    /// declared task without entering the renderer or scheduler.
+    pub(crate) const fn fully_completed(total: u64) -> Self {
+        Self {
+            total,
+            pending: 0,
+            running: 0,
+            completed: total,
+            failed: 0,
+            cancelled: 0,
+            skipped: 0,
+        }
+    }
+
     /// Returns the number of registered tasks.
     pub fn total(&self) -> u64 {
         self.total

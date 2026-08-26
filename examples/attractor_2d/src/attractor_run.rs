@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use scientific_workflow::prelude::basics::{ExecutionScope, ResolvedConfiguration};
+use scientific_workflow::prelude::basic::{ExecutionScope, ResolvedConfiguration};
 
 use crate::AppResult;
 

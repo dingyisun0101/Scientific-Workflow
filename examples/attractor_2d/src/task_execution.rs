@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{AppResult, hopf_model::HopfModel, recording};
-use scientific_workflow::prelude::basics::*;
+use scientific_workflow::prelude::basic::*;
 use scientific_workflow::prelude::study::*;
 
 pub(crate) fn run_task(

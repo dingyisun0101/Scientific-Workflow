@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::clock::is_utc_rfc3339;
-use crate::system_state::SimulationTime;
+use crate::state::advanced::StateTime;
 
 use super::error::StorageError;
 use super::{SamplingInterval, StateStreamLayout, StateStreamStorage};
@@ -577,7 +577,7 @@ impl ChunkMetadata {
 /// encoder, moved through bounded queue ownership, and appended as one
 /// indivisible unit by the writer.
 pub(crate) struct EncodedStateRecord {
-    time: SimulationTime,
+    time: StateTime,
     bytes: Vec<u8>,
 }
 
@@ -587,13 +587,13 @@ impl EncodedStateRecord {
     /// `json` must contain one complete compact object produced by the encoder.
     /// The framing newline is appended here so [`EncodedStateRecord::len`] exactly
     /// matches the bytes presented to chunk rollover and file writing.
-    pub(crate) fn new(time: SimulationTime, mut json: Vec<u8>) -> Self {
+    pub(crate) fn new(time: StateTime, mut json: Vec<u8>) -> Self {
         json.push(b'\n');
         Self { time, bytes: json }
     }
 
     /// Returns the record's complete temporal coordinate.
-    pub(crate) fn simulation_time(&self) -> SimulationTime {
+    pub(crate) fn time(&self) -> StateTime {
         self.time
     }
 

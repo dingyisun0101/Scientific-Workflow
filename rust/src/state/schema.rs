@@ -1,4 +1,4 @@
-//! Immutable field specifications loaded from a JSON state template.
+//! Immutable state schemas loaded from JSON templates.
 //!
 //! A scientific program establishes its SystemState layout before constructing
 //! states. This module loads that layout, validates field declarations, assigns
@@ -51,53 +51,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::error::StateError;
-use super::state::{SimulationTime, SystemState};
-
-/// One validated field in a state template.
-///
-/// A field specification is immutable after template loading. Its index is the
-/// position of the corresponding payload slot in every `SystemState` created
-/// from the same [`SystemStateSchema`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StateFieldSchema {
-    #[serde(skip)]
-    index: usize,
-    name: Box<str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<Box<str>>,
-}
-
-impl StateFieldSchema {
-    /// Constructs one normalized field definition.
-    fn new(index: usize, name: &str, description: Option<&str>) -> Self {
-        Self {
-            index,
-            name: name.trim().into(),
-            description: description
-                .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(Into::into),
-        }
-    }
-
-    /// Returns the zero-based payload-slot index assigned by template order.
-    pub fn position(&self) -> usize {
-        self.index
-    }
-
-    /// Returns the field name used by typed SystemState accessors.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the optional natural-language description of the payload.
-    ///
-    /// Descriptions are documentation only. They do not identify a Rust type,
-    /// select a decoder, or affect typed access through `SystemState`.
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
-}
+use super::field::StateFieldSchema;
+use super::state::SystemState;
+use super::time::StateTime;
 
 /// A validated, shareable SystemState layout.
 ///
@@ -125,8 +81,8 @@ impl SystemStateSchema {
     /// - [`StateError::TemplateParse`] when JSON syntax or structure is invalid;
     /// - [`StateError::EmptyFieldName`] for an empty normalized field name;
     /// - [`StateError::DuplicateField`] for repeated normalized names.
-    pub fn load_json_template(path: impl AsRef<Path>) -> Result<Self, StateError> {
-        let source = path.as_ref().to_path_buf();
+    pub fn load_json_template(path: &Path) -> Result<Self, StateError> {
+        let source = path.to_path_buf();
         let bytes = fs::read(&source).map_err(|error| StateError::TemplateRead {
             path: source.clone(),
             source: error,
@@ -166,65 +122,8 @@ impl SystemStateSchema {
     /// Every declared field exists in the returned state's layout, while every
     /// payload slot starts empty. Cloning the specification is constant-time
     /// and does not duplicate layout data.
-    pub fn create_empty_state(&self, time: SimulationTime) -> SystemState {
+    pub fn create_empty_state(&self, time: StateTime) -> SystemState {
         SystemState::new(self.clone(), time)
-    }
-
-    /// Converts this specification into a pretty-printed JSON template.
-    ///
-    /// The generated document has the same strict `fields` structure accepted
-    /// by [`SystemStateSchema::load_json_template`]. Runtime-only field indices and the source path
-    /// are omitted: field indices are reconstructed from array order, and the
-    /// destination path becomes the source when the JSON is loaded again.
-    ///
-    /// Serialization borrows the immutable field slice and does not clone
-    /// field names or descriptions. Absent descriptions are omitted.
-    ///
-    /// # Errors
-    ///
-    /// Returns the underlying [`serde_json::Error`] if JSON serialization
-    /// fails.
-    pub fn to_json_template(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(&StateTemplateRef {
-            fields: self.field_schemas(),
-        })
-    }
-
-    /// Returns the path from which this specification was loaded.
-    ///
-    /// The path is retained exactly as supplied to [`SystemStateSchema::load_json_template`]. It may
-    /// be relative and is not guaranteed to remain accessible after loading.
-    pub fn template_path(&self) -> &Path {
-        &self.inner.source
-    }
-
-    /// Returns field definitions in deterministic template order.
-    pub fn field_schemas(&self) -> &[StateFieldSchema] {
-        &self.inner.fields
-    }
-
-    /// Returns the number of declared fields.
-    pub fn len(&self) -> usize {
-        self.inner.fields.len()
-    }
-
-    /// Reports whether the template declares no fields.
-    ///
-    /// Empty templates are structurally valid and can represent time-bearing
-    /// event records without scientific payloads.
-    pub fn is_empty(&self) -> bool {
-        self.inner.fields.is_empty()
-    }
-
-    /// Looks up a field definition by its normalized name.
-    pub fn field_schema(&self, name: &str) -> Option<&StateFieldSchema> {
-        let index = self.inner.by_name.get(name)?;
-        self.inner.fields.get(*index)
-    }
-
-    /// Reports whether the template declares `name`.
-    pub fn contains_field(&self, name: &str) -> bool {
-        self.inner.by_name.contains_key(name)
     }
 
     /// Reports whether two specification handles share one immutable layout.
@@ -274,7 +173,7 @@ impl SystemStateSchema {
             }
 
             let field = StateFieldSchema::new(index, name, declaration.description.as_deref());
-            by_name.insert(field.name.clone(), index);
+            by_name.insert(field.owned_name(), index);
             fields.push(field);
         }
 
@@ -284,6 +183,66 @@ impl SystemStateSchema {
                 fields,
                 by_name,
             }),
+        })
+    }
+}
+
+/// Advanced inspection and tooling operations for a validated state schema.
+///
+/// Import this trait from [`crate::state::advanced`] when schema metadata is
+/// needed. Ordinary state construction requires only the inherent basic API.
+pub trait StateSchemaAccess {
+    /// Returns the path from which this schema was loaded.
+    fn template_path(&self) -> &Path;
+
+    /// Returns field descriptions in deterministic template order.
+    fn field_schemas(&self) -> &[StateFieldSchema];
+
+    /// Looks up one field description by normalized name.
+    fn field_schema(&self, name: &str) -> Option<&StateFieldSchema>;
+
+    /// Reports whether the schema declares `name`.
+    fn contains_field(&self, name: &str) -> bool;
+
+    /// Returns the number of declared fields.
+    fn len(&self) -> usize;
+
+    /// Reports whether the schema declares no fields.
+    fn is_empty(&self) -> bool;
+
+    /// Converts this schema to the strict, pretty-printed JSON template format.
+    fn to_json_template(&self) -> Result<String, serde_json::Error>;
+}
+
+impl StateSchemaAccess for SystemStateSchema {
+    fn template_path(&self) -> &Path {
+        &self.inner.source
+    }
+
+    fn field_schemas(&self) -> &[StateFieldSchema] {
+        &self.inner.fields
+    }
+
+    fn field_schema(&self, name: &str) -> Option<&StateFieldSchema> {
+        let index = self.inner.by_name.get(name)?;
+        self.inner.fields.get(*index)
+    }
+
+    fn contains_field(&self, name: &str) -> bool {
+        self.inner.by_name.contains_key(name)
+    }
+
+    fn len(&self) -> usize {
+        self.inner.fields.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.fields.is_empty()
+    }
+
+    fn to_json_template(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&StateTemplateRef {
+            fields: self.field_schemas(),
         })
     }
 }

@@ -5,17 +5,17 @@
 > update downstream integrations together with each bump.
 
 The Rust crate lives in [`rust/`](rust/). Its complete public overview is in
-[`rust/README.md`](rust/README.md), and the architectural rationale is in
-[`docs/design.md`](docs/design.md).
+[`rust/README.md`](rust/README.md), and the target architecture is in
+[`docs/architecture.md`](docs/architecture.md).
 
 The current registry release is consumed with:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.9.0"
+scientific-workflow = "0.10.0"
 ```
 
-See the [0.8 migration checklist](rust/README.md#migrating-from-08) before
+See the [0.9 migration checklist](rust/README.md#migrating-from-09) before
 updating an existing application.
 
 ## Vocabulary
@@ -28,8 +28,8 @@ Study → Phase → Task → workload
 
 - `Study` is the largest scope and owns scheduling, display, cancellation,
   `StudyPlan`, `StudyRecord`, and `StudySummary`.
-- `Phase` owns tasks plus concurrency, delay, timeout, dependency, and failure
-  policies.
+- `Phase` owns tasks plus concurrency, delay, timeout, dependency, failure, and
+  optional whole-phase completion-examination policies.
 - `Task` is every registerable workload. Progress and one-shot work are modes
   of the same task type.
 - `TaskContext` is the sole task-to-study communication boundary.
@@ -52,6 +52,11 @@ parameters.json
 Workflow owns the one-subprocess-per-replicate boundary. Applications own study
 paths, schemas, model inputs, recordings, artifacts, networking, and any
 domain-specific subprocesses started by tasks.
+
+Workflow completion examination is intentionally whole-phase only. A verified
+complete phase is reused; an incomplete phase is invoked normally with an
+explicit warning that validation and continuation within the phase remain
+application-owned.
 
 ## Terminal display
 
@@ -101,6 +106,6 @@ cargo test --all-targets --manifest-path rust/Cargo.toml
 ```
 
 The suite covers study scheduling and rendering, configuration expansion,
-state ownership, analysis series, storage resilience and continuation,
+state ownership, writer inference and encoding, analysis series, storage resilience and continuation,
 artifact integrity, RNG records, and Rust/Python format conformance. See
 [`docs/tests.md`](docs/tests.md) for the responsibility-oriented test map.

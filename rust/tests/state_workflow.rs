@@ -5,7 +5,7 @@
 //!
 //! The test connects every current production layer:
 //!
-//! - the crate root and public `system_state` facade;
+//! - the public `state::basic` and `state::advanced` scopes;
 //! - JSON template loading and semantic round-trip serialization;
 //! - fixed field metadata and shared specification ownership;
 //! - time-point and state construction;
@@ -24,15 +24,15 @@
 
 use std::error::Error as _;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use physics_in_parallel::prelude::advanced::Dense;
 use physics_in_parallel::prelude::basic::Tensor;
-use scientific_workflow::system_state::{
-    SimulationTime, StateError, StateFieldSchema, SystemState, SystemStateSchema,
-};
+use scientific_workflow::state::advanced::{StateFieldSchema, StateMaintenance, StateSchemaAccess};
+use scientific_workflow::state::basic::{StateError, StateTime, SystemState, SystemStateSchema};
 use serde::Serialize;
 
 /// Serializable payload whose Clone implementation exposes expensive copying.
@@ -62,9 +62,30 @@ const COUPLED_TEMPLATE: &str = concat!(
 );
 
 #[test]
+fn state_and_prelude_advanced_scopes_are_strict_basic_supersets() {
+    let module_basic = scientific_workflow::state::basic::StateTime::from_iteration(1);
+    let module_advanced: scientific_workflow::state::advanced::StateTime = module_basic;
+    assert_eq!(module_advanced.iteration(), 1);
+
+    let prelude_basic = scientific_workflow::prelude::basic::StateTime::from_iteration(2);
+    let prelude_advanced: scientific_workflow::prelude::advanced::StateTime = prelude_basic;
+    assert_eq!(prelude_advanced.iteration(), 2);
+
+    fn inspect_with_advanced_trait(
+        schema: &scientific_workflow::prelude::advanced::SystemStateSchema,
+    ) -> usize {
+        use scientific_workflow::prelude::advanced::StateSchemaAccess;
+        schema.len()
+    }
+
+    let schema = SystemStateSchema::load_json_template(Path::new(STATE_TEMPLATE)).unwrap();
+    assert_eq!(inspect_with_advanced_trait(&schema), 3);
+}
+
+#[test]
 fn tensor_state_round_trip_integrates_public_modules() {
     // Load the actual canonical template through the public crate API.
-    let specification = SystemStateSchema::load_json_template(STATE_TEMPLATE)
+    let specification = SystemStateSchema::load_json_template(Path::new(STATE_TEMPLATE))
         .expect("canonical state template must load");
 
     assert_eq!(
@@ -159,21 +180,19 @@ fn tensor_state_round_trip_integrates_public_modules() {
         Err(StateError::DuplicateField { field }) if field == "x"
     ));
 
-    assert!(SimulationTime::from_iteration_and_physical_time(0, f64::NAN).is_none());
-    assert!(SimulationTime::from_iteration_and_physical_time(0, f64::INFINITY).is_none());
+    assert!(StateTime::from_iteration_and_physical_time(0, f64::NAN).is_none());
+    assert!(StateTime::from_iteration_and_physical_time(0, f64::INFINITY).is_none());
 
     // State construction retains both the exact integer index and optional
     // finite physical coordinate.
-    let initial_time = SimulationTime::from_iteration_and_physical_time(0, 0.25)
+    let initial_time = StateTime::from_iteration_and_physical_time(0, 0.25)
         .expect("finite physical time must be accepted");
     let mut state: SystemState = specification.create_empty_state(initial_time);
 
-    assert_eq!(state.simulation_time().iteration(), 0);
-    assert_eq!(state.simulation_time().physical_time(), Some(0.25));
-    assert_eq!(state.declared_field_count(), 3);
-    assert!(!state.has_no_declared_fields());
+    assert_eq!(state.time().iteration(), 0);
+    assert_eq!(state.time().physical_time(), Some(0.25));
+    assert_eq!(state.schema().len(), 3);
     assert_eq!(state.populated_field_count(), 0);
-    assert!(state.has_no_payloads());
     assert!(
         !state
             .contains_payload("population")
@@ -182,39 +201,33 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // The owning simulation may replace or advance time without touching
     // payload layout. Checked advancement returns the new complete coordinate.
-    let replacement_time = SimulationTime::from_iteration(10);
-    assert_eq!(
-        state.replace_simulation_time(replacement_time),
-        initial_time
-    );
-    assert_eq!(
-        state.replace_simulation_time(initial_time),
-        replacement_time
-    );
+    let replacement_time = StateTime::from_iteration(10);
+    assert_eq!(state.replace_time(replacement_time), initial_time);
+    assert_eq!(state.replace_time(initial_time), replacement_time);
     let preview = state
-        .simulation_time()
+        .time()
         .checked_advance(Some(0.25))
         .expect("finite physical time must preflight");
     let advanced = state
-        .advance_simulation_time(Some(0.25))
+        .advance_time(Some(0.25))
         .expect("finite physical time must advance");
     assert_eq!(advanced, preview);
     assert_eq!(advanced.iteration(), 1);
     assert_eq!(advanced.physical_time(), Some(0.5));
-    let before_failed_advance = state.simulation_time();
-    assert!(state.advance_simulation_time(Some(f64::INFINITY)).is_err());
-    assert_eq!(state.simulation_time(), before_failed_advance);
-    let mut overflow = specification.create_empty_state(SimulationTime::from_iteration(u64::MAX));
+    let before_failed_advance = state.time();
+    assert!(state.advance_time(Some(f64::INFINITY)).is_err());
+    assert_eq!(state.time(), before_failed_advance);
+    let mut overflow = specification.create_empty_state(StateTime::from_iteration(u64::MAX));
     assert!(matches!(
-        overflow.advance_simulation_time(None),
+        overflow.advance_time(None),
         Err(StateError::IterationOverflow {
             iteration: u64::MAX
         })
     ));
-    assert_eq!(overflow.simulation_time().iteration(), u64::MAX);
-    let mut no_physical = specification.create_empty_state(SimulationTime::from_iteration(3));
+    assert_eq!(overflow.time().iteration(), u64::MAX);
+    let mut no_physical = specification.create_empty_state(StateTime::from_iteration(3));
     assert!(matches!(
-        no_physical.advance_simulation_time(Some(0.25)),
+        no_physical.advance_time(Some(0.25)),
         Err(StateError::MissingPhysicalTime { iteration: 3 })
     ));
 
@@ -263,24 +276,23 @@ fn tensor_state_round_trip_integrates_public_modules() {
     activity.set(&[1], 0);
     activity.set(&[2], 1);
 
-    assert!(
-        state
-            .insert_payload("population", population)
-            .expect("population tensor must move into its declared slot")
-            .is_none()
-    );
-    assert!(
-        state
-            .insert_payload("space", space)
-            .expect("space tensor must move into its declared slot")
-            .is_none()
-    );
-    assert!(
-        state
-            .insert_payload("activity", activity)
-            .expect("activity tensor must move into its declared slot")
-            .is_none()
-    );
+    state
+        .initialize_payload("population", population)
+        .expect("population tensor must initialize its declared slot");
+    state
+        .initialize_payload("space", space)
+        .expect("space tensor must initialize its declared slot");
+    state
+        .initialize_payload("activity", activity)
+        .expect("activity tensor must initialize its declared slot");
+
+    let duplicate_initialization = state
+        .initialize_payload("activity", Tensor::<u8, Dense>::zeros(&[1]))
+        .expect_err("initialization must never replace an established payload");
+    assert!(matches!(
+        duplicate_initialization.error(),
+        StateError::PayloadAlreadyInitialized { field } if field == "activity"
+    ));
 
     let rejection = state
         .insert_payload("population", String::from("wrong concrete type"))
@@ -304,7 +316,6 @@ fn tensor_state_round_trip_integrates_public_modules() {
     );
 
     assert_eq!(state.populated_field_count(), 3);
-    assert!(!state.has_no_payloads());
     assert!(
         state
             .payload_has_type::<Tensor<u64, Dense>>("population")
@@ -462,7 +473,6 @@ fn tensor_state_round_trip_integrates_public_modules() {
     assert_eq!(activity.get(&[1]), 1);
     assert_eq!(activity.get(&[2]), 1);
     assert_eq!(state.populated_field_count(), 0);
-    assert!(state.has_no_payloads());
 
     // Extraction leaves the original slots empty but permanently typed. A
     // different payload type is rejected even though no value is present.
@@ -480,15 +490,12 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // A separately assembled state can bind the same JSON field to a vector.
     // Ordinary vector payloads make allocation identity directly observable.
-    let mut allocation_state = specification.create_empty_state(SimulationTime::from_iteration(2));
+    let mut allocation_state = specification.create_empty_state(StateTime::from_iteration(2));
     let owned = vec![3_u64, 5, 8, 13];
     let owned_pointer = owned.as_ptr();
-    assert!(
-        allocation_state
-            .insert_payload("population", owned)
-            .unwrap()
-            .is_none()
-    );
+    allocation_state
+        .initialize_payload("population", owned)
+        .unwrap();
     let replacement = vec![21_u64, 34];
     let previous = allocation_state
         .insert_payload("population", replacement)
@@ -504,20 +511,17 @@ fn tensor_state_round_trip_integrates_public_modules() {
         .unwrap();
     assert_eq!(extracted.as_ptr(), replacement_pointer);
 
-    let mut clone_state = specification.create_empty_state(SimulationTime::from_iteration(3));
+    let mut clone_state = specification.create_empty_state(StateTime::from_iteration(3));
     let clones = Arc::new(AtomicUsize::new(0));
-    assert!(
-        clone_state
-            .insert_payload(
-                "population",
-                CloneTracked {
-                    values: vec![1, 1, 2, 3, 5],
-                    clones: Arc::clone(&clones),
-                },
-            )
-            .unwrap()
-            .is_none()
-    );
+    clone_state
+        .initialize_payload(
+            "population",
+            CloneTracked {
+                values: vec![1, 1, 2, 3, 5],
+                clones: Arc::clone(&clones),
+            },
+        )
+        .unwrap();
     let mut cloned = clone_state.clone();
     assert_eq!(clones.load(Ordering::Relaxed), 1);
     cloned
@@ -553,11 +557,10 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // Derived states share immutable schema storage and type definitions while
     // beginning with no payloads.
-    let mut later = state.clone_structure_without_payloads(SimulationTime::from_iteration(1));
-    assert_eq!(later.simulation_time().iteration(), 1);
-    assert_eq!(later.simulation_time().physical_time(), None);
-    assert!(later.has_no_payloads());
-    assert_eq!(later.field_schemas(), state.field_schemas());
+    let mut later = state.clone_structure_without_payloads(StateTime::from_iteration(1));
+    assert_eq!(later.time().iteration(), 1);
+    assert_eq!(later.time().physical_time(), None);
+    assert_eq!(later.populated_field_count(), 0);
     assert!(std::ptr::eq(
         later.schema().field_schemas(),
         state.schema().field_schemas()
@@ -613,9 +616,9 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
 #[test]
 fn generated_tuple_arities_two_through_eight_are_available() {
-    let specification = SystemStateSchema::load_json_template(COUPLED_TEMPLATE)
+    let specification = SystemStateSchema::load_json_template(Path::new(COUPLED_TEMPLATE))
         .expect("coupled state fixture must load");
-    let mut state = specification.create_empty_state(SimulationTime::from_iteration(0));
+    let mut state = specification.create_empty_state(StateTime::from_iteration(0));
     for (key, value) in [
         ("a", 1_u64),
         ("b", 2),
@@ -626,7 +629,7 @@ fn generated_tuple_arities_two_through_eight_are_available() {
         ("g", 7),
         ("h", 8),
     ] {
-        assert!(state.insert_payload(key, value).unwrap().is_none());
+        state.initialize_payload(key, value).unwrap();
     }
 
     let _ = state.borrow_payloads::<(u64, u64)>(("a", "b")).unwrap();
