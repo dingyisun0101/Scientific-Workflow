@@ -1,18 +1,17 @@
 //! Complete-workflow error composition.
+//!
+//! [`basic`] exposes the ordinary crate-facade error. [`advanced`] is its
+//! strict superset; detailed Study and Runtime errors remain owned by their
+//! respective subsystem scopes.
 
-use thiserror::Error;
+mod workflow;
 
-use crate::runtime::advanced::RuntimeError;
-use crate::study::advanced::StudyError;
+/// Ordinary application-facing complete-workflow error API.
+pub mod basic {
+    pub use super::workflow::WorkflowError;
+}
 
-/// A failure while loading, preflighting, or executing one project.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum WorkflowError {
-    /// Declarative study compilation failed before output creation.
-    #[error(transparent)]
-    Study(#[from] StudyError),
-    /// Active execution failed after a valid study was available.
-    #[error(transparent)]
-    Runtime(#[from] RuntimeError),
+/// Supported complete-workflow error API for advanced users.
+pub mod advanced {
+    pub use super::basic::*;
 }

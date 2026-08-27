@@ -11,19 +11,21 @@ supported and are preferred in reusable libraries.
 It re-exports:
 
 - every `state::basic` symbol: `StateError`, `StateSeriesError`,
-  `PayloadInsertError`, `StateTime`, `SystemStateSchema`, `SystemState`, and
-  `StateSeries`;
+  `PayloadInsertError`, `StateSeriesPushError`, `StateTime`,
+  `SystemStateSchema`, `SystemState`, and `StateSeries`;
 - every `observation::basic` symbol: `ObservationPlan`, `ObservationStream`,
   and `ObservationError`;
 - every `task::basic` symbol: `ScientificModel` and `TaskResult`;
-- every `runtime::basic` symbol: only `run`;
+- every `error::basic` symbol: only `WorkflowError`;
+- the crate-level `run(&Path)` facade;
 - the crate-level `model` attribute; and
-- crate-level `WorkflowError`.
+- no symbols from the intentionally empty `runtime::basic` scope.
 
-`config::basic`, `study::basic`, and `persistence::basic` are also aggregated
-but intentionally empty: their user-facing declarations are JSON files.
-Re-exporting empty tiers keeps
-the uniform subsystem rule without inventing construction APIs.
+`config::basic`, `study::basic`, `runtime::basic`, `persistence::basic`, and
+`ui::basic` are also aggregated but intentionally empty. Their ordinary
+behavior is reached through project declarations and the crate facade.
+Re-exporting empty tiers keeps the uniform subsystem rule without inventing
+construction APIs.
 
 The Basic prelude deliberately does not export `Task`, `Study`, model catalogs,
 project parsers, resolved inputs, output allocators, persistence writers/readers,
@@ -42,6 +44,7 @@ re-exports the complete supported advanced tiers from:
 
 - `config::advanced`: only `ConfigError`; the compiled declaration graph is
   crate-private;
+- `error::advanced`: the Basic `WorkflowError` and no additional symbols;
 - `state::advanced`: all Basic state types plus `StateFieldSchema`,
   `StateSchemaAccess`, and `StateMaintenance`; the hidden
   generated `PayloadTuple` implementation detail is re-exported only for trait
@@ -54,8 +57,10 @@ re-exports the complete supported advanced tiers from:
   machinery is crate-private;
 - `study::advanced`: only `Study` and `StudyError`; its phase/task graph is
   crate-private; and
-- `runtime::advanced`: `run`, `execute`, `RuntimeError`, `RunSummary`,
-  `ReplicateRunSummary`, `PhaseRunSummary`, and `TaskRunSummary`.
+- `runtime::advanced`: `execute`, `RuntimeError`, `RunSummary`,
+  `ReplicateRunSummary`, `PhaseRunSummary`, and `TaskRunSummary`; and
+- `ui::advanced`: no public additions; its plan, events, session, and renderer
+  remain crate-private.
 
 Each symbol retains its owning module's semantics and canonical documentation.
 The prelude does not resolve name collisions with downstream imports and does

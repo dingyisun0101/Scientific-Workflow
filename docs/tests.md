@@ -6,6 +6,9 @@ types are deliberately not public.
 
 ## Public integration tests
 
+- `rust/tests/integration_surface.rs` verifies the crate-level `run(&Path)`
+  facade, canonical error Basic/Advanced tiers, prelude aggregation, and the
+  Study-only signature of Runtime's Advanced entry point.
 - `rust/tests/state_workflow.rs` exercises Path-based schema loading,
   heterogeneous payload ownership, tuple borrows, time advancement, schema
   inspection, maintenance, and public Basic/Advanced tier behavior.
@@ -29,6 +32,9 @@ types are deliberately not public.
   constants and one-time observation preflight, deterministic internal
   identities, phase composition, replicate/persistence policy, runtime
   scheduling, automatic task recordings, and crate-level `run(&Path)`.
+- `rust/src/ui/terminal.rs` contains pure formatting tests for Runtime-derived
+  task progress and completion facts. Ordinary test capture keeps the automatic
+  UI silent, so UI cannot disturb test output or execution results.
 
 ## Persistence tests
 

@@ -25,6 +25,9 @@ Runtime privately constructs and finalizes each task backend.
 The application does not parse JSON, construct tasks/phases, assign IDs or
 paths, manage threads, report progress, or open persistence writers. Completed
 recordings are created beneath this project's inferred `output` directory.
+When run interactively, Workflow automatically displays inferred task and
+iteration progress on standard error; no example-specific UI code or settings
+exist.
 
 Run it with:
 

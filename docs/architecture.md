@@ -55,11 +55,10 @@ The current first-level library modules are:
 - `study`: effect-free coordinator of all declared intent and preflight;
 - `runtime`: sole coordinator of active execution and output creation;
 - `persistence`: automatic durable recordings and verified reconstruction;
+- `ui`: automatic terminal presentation of Runtime-owned progress facts;
 - `prelude`: central aggregation of module-owned API tiers; and
 - `error`: the complete-workflow error boundary.
 
-There is currently no first-level UI module. Progress can later be inferred
-from runtime-owned task/state boundaries without changing model contracts.
 Legacy `writer`, `storage`, `execution`, `artifact`, and `rng_record`
 modules have been removed; their surviving responsibilities are owned by
 `observation`, `persistence`, or `runtime`.
@@ -70,6 +69,10 @@ modules have been removed; their surviving responsibilities are owned by
 project root: &Path
         │
         ▼
+crate facade: run(&Path)
+  owns complete-workflow composition and error conversion
+        │ Study::load
+        ▼
 config
   strict JSON + duplicate keys + paths + defaults + expansion
         │ private ProjectSpecification / ResolvedTaskInput
@@ -77,19 +80,23 @@ config
 study
   state semantics + model discovery + constants decode
   + one-time observation-plan binding + identities + phases
-        │ immutable Study
+        │ immutable Study returned to the crate facade
         ▼
-runtime
+runtime::execute
   execution directory + replicates + scheduling + cancellation
   + model initialization and stepping
-        │ automatic observation boundaries
-        ▼
-persistence
-  private bounded writer + atomic metadata/chunks + verified reads
+        ├──── automatic observation boundaries ────► persistence
+        │                                             private bounded writer
+        │                                             + atomic metadata/chunks
+        │                                             + verified reads
+        │
+        └──── lifecycle/progress facts ─────────────► ui
+                                                      automatic terminal presentation
 ```
 
-Study is the ultimate coordinator of declared intent. Runtime is the ultimate
-coordinator of active execution. Config never discovers Rust model types.
+The crate facade owns only the transition from project root to Study to
+Runtime. Study is the ultimate coordinator of declared intent. Runtime is the
+ultimate coordinator of active execution. Config never discovers Rust model types.
 Study never creates output or initializes a model. Runtime never reparses or
 rebinds declarations. Persistence never decides scientific observation
 meaning.
@@ -115,7 +122,7 @@ basic
 ├── state construction and manipulation
 ├── ObservationPlan / ObservationStream
 ├── ScientificModel / TaskResult / #[model]
-├── run(&Path)
+├── crate-facade run(&Path)
 └── WorkflowError
 
 advanced additions
@@ -132,11 +139,12 @@ Dependency direction is one-way:
 observation ──► state
 persistence ─► observation + state
 task        ──► config + observation + state
-study       ──► config + observation + persistence + state + task
-runtime     ──► config + persistence + state + study + task
+study       ──► config + observation + persistence + state + task + ui plan
+runtime     ──► config + persistence + state + study + task + ui events
+error       ──► StudyError + RuntimeError
+crate facade──► study + runtime + error
 
 prelude aggregates supported tiers
-error   composes StudyError + RuntimeError
 ```
 
 Peers import another subsystem through its `advanced` boundary. Config does
@@ -162,7 +170,9 @@ workflow/
 │   ├── src/
 │   │   ├── lib.rs                    module declarations; run/macro/error exports
 │   │   ├── clock.rs                  private UTC formatting and duration conversion
-│   │   ├── error.rs                  crate-level WorkflowError composition
+│   │   ├── error.rs                  error root and inline API tiers
+│   │   ├── error/api.md              complete facade-error contract
+│   │   ├── error/workflow.rs         WorkflowError composition
 │   │   ├── prelude.rs                inline Basic/Advanced central aggregation
 │   │   ├── prelude/api.md            exhaustive prelude export contract
 │   │   │
@@ -211,13 +221,20 @@ workflow/
 │   │   ├── study/plan.rs             public Study + private phases/tasks/policies
 │   │   └── study/tests/study_workflow.rs internal binding/runtime tests
 │   │   │
-│   │   ├── runtime.rs                runtime root and inline API tiers
-│   │   ├── runtime/api.md            run/execute/summary/error contract
+│   │   ├── runtime.rs                runtime root; empty Basic, execute Advanced
+│   │   ├── runtime/api.md            execute/summary/error contract
 │   │   ├── runtime/error.rs          active execution RuntimeError
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
 │   │   ├── runtime/host.rs           task-host to persistence-session adapter
-│   │   ├── runtime/execution.rs      replicate/phase/task schedulers and run entry
+│   │   ├── runtime/execution.rs      Study-only replicate/phase/task schedulers
 │   │   └── runtime/summary.rs        successful immutable RunSummary tree
+│   │   │
+│   │   ├── ui.rs                     UI root; empty public Basic/Advanced tiers
+│   │   ├── ui/api.md                 automatic presentation contract
+│   │   ├── ui/plan.rs                private Study-owned inferred UI policy
+│   │   ├── ui/event.rs               borrowed Runtime-to-UI fact vocabulary
+│   │   ├── ui/session.rs             terminal activation and progress throttling
+│   │   └── ui/terminal.rs            best-effort stderr renderer and tests
 │   │   │
 │   │   ├── persistence.rs            persistence root; empty Basic, read Advanced
 │   │   ├── persistence/api.md        complete settings/read/error contract
@@ -236,6 +253,7 @@ workflow/
 │   │       ├── persistence_resilience.rs fault/integrity tests
 │   │       └── python_reader_conformance.rs Rust/Python format compatibility
 │   └── tests/
+│       ├── integration_surface.rs    facade/module/prelude boundary tests
 │       ├── state_workflow.rs          downstream state API/ownership tests
 │       ├── analysis_workflow.rs       in-memory series analysis tests
 │       ├── observation_workflow.rs    public observation declaration tests
@@ -298,8 +316,10 @@ exist only for Runtime.
 
 ### Runtime
 
-`run(&Path)` loads then executes; `execute(Study)` is the advanced split
-boundary. Runtime alone creates `output/execution-<pid>-<sequence>`, isolated
+The crate-level `run(&Path)` loads a Study and passes it to
+`runtime::advanced::execute(Study)`. Runtime has no project-root or loading
+entry point: it consumes only complete immutable intent. Runtime alone creates
+`output/execution-<pid>-<sequence>`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
 topologically schedules phases, applies concurrency/start intervals and
 fail-fast/finish-all policy, checks cooperative cancellation between model
@@ -321,6 +341,33 @@ and StateSeries invariants before publishing owned results. A future local or
 remote adapter belongs behind the private `PersistenceSession`, not in model
 or task APIs.
 
+### UI
+
+Study owns a private zero-configuration `UiPlan`; its current effective policy
+is inferred rather than authored in `study.json`. Runtime constructs one
+clone-cheap `UiSession` after creating the execution output and publishes
+borrowed execution, replicate, phase, task, iteration, outcome, and path facts.
+Task progress comes from the same host boundaries already used for automatic
+persistence, so models supply no UI code or values.
+
+UI renders only when standard error is an interactive terminal and otherwise
+remains silent. Per-task progress is throttled internally, while lifecycle
+boundaries always render. It uses plain best-effort stderr lines, owns no
+thread, queue, or raw terminal mode, never retains scientific payloads, and
+cannot fail execution. Its public Basic and Advanced tiers are both empty.
+
+### Error and prelude integration
+
+`error::basic::WorkflowError` composes the effect-free `StudyError` and active
+`RuntimeError` stages without absorbing either subsystem's detailed
+vocabulary. The crate root re-exports that type and owns the sole ordinary
+`run(&Path)` facade. `error::advanced` is currently the same supported set.
+
+Prelude Basic aggregates all subsystem Basic scopes plus the crate-owned
+`run`, `model`, and `WorkflowError` conveniences. Prelude Advanced is its
+strict superset and aggregates every subsystem Advanced scope. Neither prelude
+owns behavior or creates an alternative canonical implementation path.
+
 ## Core invariants
 
 1. Filesystem APIs borrow `&Path` and retain `PathBuf`; raw strings are not
@@ -333,13 +380,17 @@ or task APIs.
 7. Every successful `step` strictly advances scientific iteration.
 8. Observation plans are deterministic, side-effect-free, evaluated once, and
    stored schema-bound.
-9. Runtime alone creates output and owns scheduling/cancellation.
-10. Persistence writing is private, automatic, bounded, and finalized by
+9. The crate facade alone turns a project root into a Study and then invokes
+   Runtime; Runtime accepts only a completed Study.
+10. Runtime alone creates output and owns scheduling/cancellation.
+11. Persistence writing is private, automatic, bounded, and finalized by
     Runtime; application code cannot flush, resume, or complete it.
-11. Effective paths, identities, labels, and operational defaults are inferred
+12. Effective paths, identities, labels, and operational defaults are inferred
     whenever one safe deterministic answer exists.
-12. Public APIs contain irreducible user intent or a deliberate read/embedding
+13. Public APIs contain irreducible user intent or a deliberate read/embedding
     contract, not internal flexibility for hypothetical use.
+14. UI consumes only Runtime facts, activates automatically, and never turns a
+    presentation failure into scientific failure.
 
 ## Replacement boundaries
 
@@ -357,3 +408,5 @@ or task APIs.
   order, and owns all output/effects.
 - A persistence replacement remains behind the private session and preserves
   bounded submission, terminal evidence/provenance, and verified reads.
+- A UI replacement remains downstream of Runtime, requires no model/config
+  participation, handles concurrent publishers, and stays best-effort.

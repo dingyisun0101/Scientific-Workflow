@@ -3,66 +3,60 @@
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
 admission, dependency scheduling, task concurrency, cooperative timeouts and
-cancellation, model invocation, and automatic persistence lifecycle.
+cancellation, model invocation, automatic persistence lifecycle, and
+publication of inferred UI facts.
 
 Runtime does not parse JSON, discover models, decode constants for planning,
 or let application code construct phases/tasks.
 
 ## Basic API
 
-### `runtime::basic::run`
+`runtime::basic` intentionally exports no symbols. Ordinary applications call
+the crate-level `scientific_workflow::run(&Path)` facade, which loads a Study
+before handing it to Runtime. This keeps project discovery and compilation out
+of the active-execution subsystem.
 
-Canonical signature:
-
-```rust,ignore
-pub fn run(project_root: &Path) -> Result<(), WorkflowError>
-```
-
-`run` is the sole ordinary application entry point and is also re-exported as
-`scientific_workflow::run` and through `prelude::basic`.
-
-It borrows a filesystem `Path` for the call, loads and preflights a Study, then
-executes it. Study/config failures occur before output creation. On successful
-preflight, runtime creates a unique execution directory beneath the inferred
-`<project-root>/output`, creates one isolated directory per replicate, executes
-all phases and tasks, completes their recordings, and returns `()`.
+After successful preflight, Runtime creates a unique execution directory
+beneath the inferred `<project-root>/output`, creates one isolated directory
+per replicate, executes all phases and tasks, and completes their recordings.
 
 For each task, Runtime receives Study's private effective persistence settings,
 derives the destination, constructs the backend, submits initial/step/final
 observations, applies backpressure, commits terminal status, and shuts the
 backend down. Application/model code performs none of these operations.
 
-The call blocks until all admitted work has stopped and all successful
+Runtime also creates one automatic UI session from Study's private inferred UI
+plan. It publishes execution, replicate, phase, task, iteration, target,
+outcome, and recording-path facts. UI renders only to an interactive stderr
+terminal and remains silent when output is redirected or captured. Rendering
+is best-effort and cannot change the Runtime result.
+
+An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. Task/phase timeout cancellation is cooperative: task
 execution checks between model steps. Blocking application code inside one
 step cannot be safely killed by Rust and may delay return.
 
-Failure does not overwrite prior output. A run that fails after output creation
+Failure does not overwrite prior output. Execution that fails after output creation
 retains its unique directory and any failed/running recording evidence for
-diagnosis. `WorkflowError` distinguishes effect-free Study failure from active
-Runtime failure.
-
-### `scientific_workflow::WorkflowError`
-
-The crate-level, non-exhaustive complete-workflow error is re-exported through
-`prelude::basic`. `Study(StudyError)` represents loading/binding/preflight
-failure before output; `Runtime(RuntimeError)` represents active execution
-failure after preflight. Both variants preserve their source chains and support
-automatic `?` conversion from the owning subsystem error.
+diagnosis. The crate-level facade wraps an active `RuntimeError` in
+`WorkflowError::Runtime`; the complete-workflow composition is documented by
+`error::basic`.
 
 ## Advanced API
 
-The Advanced scope re-exports `run` and adds immutable execution inputs,
-summaries, and active error vocabulary.
+The Advanced scope adds the immutable execution input, summaries, and active
+error vocabulary to the empty Basic scope.
 
 ### `runtime::advanced::execute`
 
 `execute(study: Study) -> Result<RunSummary, RuntimeError>` consumes one
-clone-cheap immutable Study and skips loading/discovery/preflight. It is the
-supported embedding seam for callers that inspected a Study first or supplied
-an explicit model catalog.
+clone-cheap immutable Study. It is Runtime's sole execution entry and cannot
+accept a project root, manifest, model catalog, or unresolved declarations.
+It is the supported embedding seam for callers that loaded and optionally
+inspected a Study first.
 
-It creates output and blocks exactly like `run`. It never mutates the supplied
+It performs the same output-producing work reached through the crate facade.
+It never mutates the supplied
 declaration; consuming the handle simply makes accidental double execution
 less likely at the call site. A caller may explicitly clone Study before the
 call when multiple independent runs are intended.
@@ -131,7 +125,8 @@ manifest grammar or model-key preflight failure; those remain `StudyError`.
 
 ## Example
 
-The complete ordinary workflow is one call:
+The complete ordinary workflow uses the crate facade rather than a Runtime
+Basic API:
 
 ```rust,no_run
 use std::path::Path;
@@ -162,8 +157,8 @@ for replicate in summary.replicates() {
 
 Scheduler polling, worker thread names, active task handles, atomic cancellation
 flags, metadata-map assembly, task output ordinals, `RuntimeTaskHost`,
-`PersistenceSession`, backend ownership, and topological-position calculation
-are private.
+`PersistenceSession`, UI events/session, backend ownership, and
+topological-position calculation are private.
 
 Recording metadata keeps complete resolved constants under `model_constants`
 and Workflow identity/source facts under a separate `workflow` object. The

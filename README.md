@@ -21,10 +21,12 @@ one resolved model-input combination becomes one internal task.
 
 ```text
 registered models + project JSON
-    → config parsing and deterministic expansion
+    → crate-level run(&Path) facade
+    → config parsing and deterministic expansion requested by Study
     → immutable Study binding and preflight
     → Study-owned effective persistence plan
-    → runtime scheduling and automatic persistence
+    → runtime::execute(Study)
+    → automatic scheduling, persistence, and terminal UI
 ```
 
 The Rust crate lives in [`rust/`](rust/). Start with its
@@ -36,7 +38,8 @@ The [attractor example](examples/attractor_2d) demonstrates the final workflow:
 its Rust executable is one `run(&Path)` call, while its model owns state and a
 custom observation plan and its JSON owns study organization and constants sweeps.
 Persistence construction, submission, finalization, and shutdown are entirely
-internal.
+internal. Interactive progress is inferred from Runtime facts and requires no
+model callbacks or JSON settings.
 
 > This crate is pre-1.0 test software. Public API behavior may change through
 > coordinated refactor releases.

@@ -26,7 +26,7 @@ tasks, identities, persistence plans, registries, or Study builders.
 `Study` is an immutable, clone-cheap plan backed by `Arc`. It owns the shared
 state schema, internal phases/tasks, resolved constants, schema-bound
 observation plans, inferred output root, replicate policy, and effective
-persistence settings. None of those internal planning types is public.
+persistence/UI settings. None of those internal planning types is public.
 
 - `Study::load(project_root: &Path) -> Result<Study, StudyError>` performs the
   complete effect-free loading and preflight transaction. Config canonicalizes
@@ -47,7 +47,7 @@ constants.
 
 There is no public manual-catalog loader, phase accessor, task accessor, state
 schema accessor, replicate-policy accessor, persistence-plan accessor, source
-document view, or mutable Study operation. Advanced consumers that need to run
+document view, UI-plan accessor, or mutable Study operation. Advanced consumers that need to run
 a preloaded Study pass it to `runtime::advanced::execute`; successful runtime
 summaries provide output paths and task results.
 
@@ -106,8 +106,8 @@ println!("actual execution: {}", summary.output_directory().display());
 
 `ProjectSpecification`, explicit model catalogs, `StudyInner`,
 `StudyPhase`, `StudyTask`, resolved inputs, type-erased task definitions,
-bound observation plans, replicate/persistence policies, global output
-ordinals, identity/label formats, and topological planning data are private.
+bound observation plans, replicate/persistence policies, UI plan, global
+output ordinals, identity/label formats, and topological planning data are private.
 Runtime obtains them through crate-visible `study::advanced` exports.
 
 A replacement Study must remain output-free, consume config exactly once,

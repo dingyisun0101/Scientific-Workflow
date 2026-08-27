@@ -2,8 +2,9 @@
 //!
 //! Config remains the sole parser. Study composes its immutable output with
 //! compiled model registrations, state semantics, deterministic identities,
-//! phase organization, and complete preflight validation. Runtime consumes a
-//! finished [`advanced::Study`] and never reinterprets project JSON.
+//! phase organization, inferred operational plans, and complete preflight
+//! validation. Runtime consumes a finished [`advanced::Study`] and never
+//! reinterprets project JSON.
 
 mod compilation;
 mod error;

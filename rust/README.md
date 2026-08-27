@@ -122,6 +122,11 @@ operational sizing may add:
 Users never provide output paths, construct a backend, submit observations, or
 finalize a recording.
 
+UI is also automatic. No `ui` object or model display fields are required.
+Workflow shows throttled lifecycle and iteration progress only when standard
+error is attached to an interactive terminal; redirected/test output remains
+silent.
+
 Config alone reads these files. `$sweep` creates independent Cartesian choices;
 `$cases` creates correlated alternatives; ordinary arrays remain literal.
 
@@ -137,7 +142,7 @@ That call loads all declarations, discovers models, validates typed constants,
 binds observation plans to the state schema, creates
 immutable tasks and phases, compiles the effective persistence plan, infers
 identities/output paths, schedules work, and persists every model
-automatically.
+automatically while publishing inferred terminal progress.
 
 Output is created beneath `<project-root>/output` only after Study preflight
 succeeds.
@@ -150,9 +155,14 @@ succeeds.
 - `config`: sole JSON parser and typed constants supplier;
 - `study`: effect-free binding and immutable declared intent;
 - `runtime`: active execution and output creation;
-- `persistence`: automatic durable lifecycle and verified reading.
+- `persistence`: automatic durable lifecycle and verified reading;
+- `ui`: automatic best-effort terminal presentation of Runtime facts;
+- `error`: complete-workflow Study/Runtime error composition; and
+- `prelude`: central aggregation of module-owned Basic/Advanced tiers.
 
-Study coordinates declared intent; runtime coordinates active execution.
+The crate-level `run(&Path)` facade loads a Study and then invokes Runtime.
+Study coordinates declared intent; runtime accepts that completed Study and
+coordinates active execution.
 Advanced consumers may use `Study::load` and `runtime::advanced::execute`, but
 ordinary projects should not.
 
@@ -161,11 +171,16 @@ the latter a strict superset. `prelude::basic` contains the small model-author
 surface. Persistence writing is automatic and private; only verified reading
 appears in the Advanced tier.
 
-See [`src/task/api.md`](src/task/api.md),
+See [`src/state/api.md`](src/state/api.md),
+[`src/observation/api.md`](src/observation/api.md),
+[`src/task/api.md`](src/task/api.md),
 [`src/config/api.md`](src/config/api.md),
 [`src/study/api.md`](src/study/api.md),
 [`src/persistence/api.md`](src/persistence/api.md),
-[`src/runtime/api.md`](src/runtime/api.md), and the repository
+[`src/runtime/api.md`](src/runtime/api.md),
+[`src/ui/api.md`](src/ui/api.md),
+[`src/error/api.md`](src/error/api.md),
+[`src/prelude/api.md`](src/prelude/api.md), and the repository
 [`architecture.md`](../docs/architecture.md).
 
 ## Validation

@@ -10,6 +10,7 @@ use crate::observation::advanced::BoundObservationPlan;
 use crate::persistence::advanced::{PersistencePlan, PersistenceSession};
 use crate::state::advanced::{SystemState, SystemStateSchema};
 use crate::task::advanced::{TaskExecutionHost, TaskResult};
+use crate::ui::advanced::TaskUi;
 
 pub(crate) struct RuntimeTaskHost {
     schema: SystemStateSchema,
@@ -19,6 +20,7 @@ pub(crate) struct RuntimeTaskHost {
     metadata: Map<String, Value>,
     persistence: Option<PersistenceSession>,
     final_iteration: Option<u64>,
+    task_ui: TaskUi,
 }
 
 impl RuntimeTaskHost {
@@ -28,6 +30,7 @@ impl RuntimeTaskHost {
         cancellation: Arc<AtomicBool>,
         recording_directory: PathBuf,
         metadata: Map<String, Value>,
+        task_ui: TaskUi,
     ) -> Self {
         Self {
             schema,
@@ -37,6 +40,7 @@ impl RuntimeTaskHost {
             metadata,
             persistence: None,
             final_iteration: None,
+            task_ui,
         }
     }
 
@@ -72,7 +76,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
         &mut self,
         plan: BoundObservationPlan,
         state: &SystemState,
-        _target_iteration: Option<u64>,
+        target_iteration: Option<u64>,
     ) -> TaskResult {
         let persistence = PersistenceSession::start(
             self.recording_directory.clone(),
@@ -83,26 +87,28 @@ impl TaskExecutionHost for RuntimeTaskHost {
         )?;
         self.final_iteration = Some(state.time().iteration());
         self.persistence = Some(persistence);
+        self.publish_progress(state, target_iteration);
         Ok(())
     }
 
     fn observe_model_step(
         &mut self,
         state: &SystemState,
-        _target_iteration: Option<u64>,
+        target_iteration: Option<u64>,
     ) -> TaskResult {
         self.persistence
             .as_mut()
             .expect("begin_model precedes step observation")
             .observe(state)?;
         self.final_iteration = Some(state.time().iteration());
+        self.publish_progress(state, target_iteration);
         Ok(())
     }
 
     fn observe_model_final(
         &mut self,
         state: &SystemState,
-        _target_iteration: Option<u64>,
+        target_iteration: Option<u64>,
     ) -> TaskResult {
         self.persistence
             .as_mut()
@@ -110,6 +116,14 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .complete(state)?;
         self.persistence = None;
         self.final_iteration = Some(state.time().iteration());
+        self.publish_progress(state, target_iteration);
         Ok(())
+    }
+}
+
+impl RuntimeTaskHost {
+    fn publish_progress(&self, state: &SystemState, target_iteration: Option<u64>) {
+        self.task_ui
+            .progress(state.time().iteration(), target_iteration);
     }
 }

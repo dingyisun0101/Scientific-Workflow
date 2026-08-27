@@ -1,4 +1,4 @@
-//! Runtime scheduling and the single ordinary entry point.
+//! Runtime scheduling for a completed immutable Study.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::WorkflowError;
 use crate::config::advanced::{FailurePolicy, ReplicateScheduling};
 use crate::persistence::advanced::PersistencePlan;
 use crate::state::advanced::SystemStateSchema;
 use crate::study::advanced::{Study, StudyPhase, StudyTask};
+use crate::ui::advanced::{UiEvent, UiSession};
 
 use super::error::RuntimeError;
 use super::host::RuntimeTaskHost;
@@ -22,44 +22,56 @@ use super::summary::{PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunSu
 
 const SCHEDULER_POLL: Duration = Duration::from_millis(5);
 
-/// Loads, preflights, and executes the project rooted at `project_root`.
-///
-/// This is the sole ordinary application entry point. Successful completion
-/// returns `()`; advanced integrations may call [`execute`] to retain a
-/// read-only run summary.
-pub fn run(project_root: &Path) -> Result<(), WorkflowError> {
-    let study = Study::load(project_root)?;
-    execute(study)?;
-    Ok(())
-}
-
 /// Executes one already validated immutable study and returns its summary.
 pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
     let output = create_execution(study.output_root())?;
     let count = study.replicate_policy().count();
-    let mut scopes = Vec::new();
-    for index in 0..count {
-        scopes.push((index, create_replicate(&output, index)?));
-    }
+    let task_count_per_replicate = study.phases().iter().map(|phase| phase.tasks().len()).sum();
+    let ui = UiSession::automatic(study.ui_plan());
+    ui.publish(UiEvent::ExecutionStarted {
+        output_directory: &output,
+        replicate_count: count,
+        task_count_per_replicate,
+    });
 
-    let replicates = match study.replicate_policy().scheduling() {
-        ReplicateScheduling::Sequential => run_replicates_sequential(&study, scopes)?,
-        ReplicateScheduling::Parallel => run_replicates_parallel(&study, scopes)?,
-    };
-    Ok(RunSummary {
-        output_directory: output,
-        replicates: replicates.into_boxed_slice(),
-    })
+    let result = (|| {
+        let mut scopes = Vec::new();
+        for index in 0..count {
+            scopes.push((index, create_replicate(&output, index)?));
+        }
+        match study.replicate_policy().scheduling() {
+            ReplicateScheduling::Sequential => run_replicates_sequential(&study, scopes, &ui),
+            ReplicateScheduling::Parallel => run_replicates_parallel(&study, scopes, &ui),
+        }
+    })();
+
+    match result {
+        Ok(replicates) => {
+            ui.publish(UiEvent::ExecutionCompleted {
+                output_directory: &output,
+            });
+            Ok(RunSummary {
+                output_directory: output,
+                replicates: replicates.into_boxed_slice(),
+            })
+        }
+        Err(error) => {
+            let reason = error.to_string();
+            ui.publish(UiEvent::ExecutionFailed { reason: &reason });
+            Err(error)
+        }
+    }
 }
 
 fn run_replicates_sequential(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
+    ui: &UiSession,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut summaries = Vec::with_capacity(scopes.len());
     let mut first_error = None;
     for (index, scope) in scopes {
-        match run_replicate(study, index, scope) {
+        match run_replicate(study, index, scope, ui) {
             Ok(summary) => summaries.push(summary),
             Err(source) => {
                 first_error.get_or_insert(RuntimeError::Replicate {
@@ -81,14 +93,16 @@ fn run_replicates_sequential(
 fn run_replicates_parallel(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
+    ui: &UiSession,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut workers: Vec<(u64, JoinHandle<Result<ReplicateRunSummary, RuntimeError>>)> =
         Vec::with_capacity(scopes.len());
     for (index, scope) in scopes {
         let study = study.clone();
+        let ui = ui.clone();
         let worker = match thread::Builder::new()
             .name(format!("workflow-replicate-{index}"))
-            .spawn(move || run_replicate(&study, index, scope))
+            .spawn(move || run_replicate(&study, index, scope, &ui))
         {
             Ok(worker) => worker,
             Err(source) => {
@@ -130,6 +144,28 @@ fn run_replicate(
     study: &Study,
     index: u64,
     scope: PathBuf,
+    ui: &UiSession,
+) -> Result<ReplicateRunSummary, RuntimeError> {
+    ui.publish(UiEvent::ReplicateStarted { index });
+    let result = run_replicate_inner(study, index, scope, ui);
+    match &result {
+        Ok(_) => ui.publish(UiEvent::ReplicateCompleted { index }),
+        Err(error) => {
+            let reason = error.to_string();
+            ui.publish(UiEvent::ReplicateFailed {
+                index,
+                reason: &reason,
+            });
+        }
+    }
+    result
+}
+
+fn run_replicate_inner(
+    study: &Study,
+    index: u64,
+    scope: PathBuf,
+    ui: &UiSession,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     let positions = topological_positions(study.phases());
     let mut phases = Vec::with_capacity(positions.len());
@@ -139,6 +175,8 @@ fn run_replicate(
             study.state_schema(),
             study.persistence_plan(),
             &scope,
+            index,
+            ui,
         )?);
     }
     Ok(ReplicateRunSummary {
@@ -192,6 +230,46 @@ fn run_phase(
     schema: &SystemStateSchema,
     persistence_plan: PersistencePlan,
     replicate_directory: &Path,
+    replicate: u64,
+    ui: &UiSession,
+) -> Result<PhaseRunSummary, RuntimeError> {
+    ui.publish(UiEvent::PhaseStarted {
+        replicate,
+        name: phase.name(),
+        task_count: phase.tasks().len(),
+    });
+    let result = run_phase_inner(
+        phase,
+        schema,
+        persistence_plan,
+        replicate_directory,
+        replicate,
+        ui,
+    );
+    match &result {
+        Ok(_) => ui.publish(UiEvent::PhaseCompleted {
+            replicate,
+            name: phase.name(),
+        }),
+        Err(error) => {
+            let reason = error.to_string();
+            ui.publish(UiEvent::PhaseFailed {
+                replicate,
+                name: phase.name(),
+                reason: &reason,
+            });
+        }
+    }
+    result
+}
+
+fn run_phase_inner(
+    phase: &StudyPhase,
+    schema: &SystemStateSchema,
+    persistence_plan: PersistencePlan,
+    replicate_directory: &Path,
+    replicate: u64,
+    ui: &UiSession,
 ) -> Result<PhaseRunSummary, RuntimeError> {
     let phase_started = Instant::now();
     let mut pending = phase.tasks().iter().cloned().collect::<VecDeque<_>>();
@@ -220,7 +298,15 @@ fn run_phase(
             && Instant::now() >= next_admission
         {
             let task = pending.pop_front().expect("checked nonempty task queue");
-            match spawn_task(task, schema.clone(), persistence_plan, replicate_directory) {
+            match spawn_task(
+                task,
+                schema.clone(),
+                persistence_plan,
+                replicate_directory,
+                replicate,
+                phase.name(),
+                ui,
+            ) {
                 Ok(task) => active.push(task),
                 Err(error) => {
                     first_error = Some(error);
@@ -251,12 +337,11 @@ fn run_phase(
             }
             let active_task = active.swap_remove(position);
             let identity = active_task.task.identity().to_owned();
-            let result = active_task
-                .worker
-                .join()
-                .map_err(|_| RuntimeError::TaskPanicked {
+            let result = active_task.worker.join().unwrap_or_else(|_| {
+                Err(RuntimeError::TaskPanicked {
                     task: identity.clone(),
-                })?;
+                })
+            });
             let result = if active_task.timed_out {
                 Err(RuntimeError::TaskTimedOut {
                     task: identity,
@@ -266,8 +351,22 @@ fn run_phase(
                 result
             };
             match result {
-                Ok(summary) => completed.push((active_task.task.output_ordinal(), summary)),
+                Ok(summary) => {
+                    ui.publish(UiEvent::TaskCompleted {
+                        replicate,
+                        identity: active_task.task.identity(),
+                        final_iteration: summary.final_iteration(),
+                        recording_directory: summary.recording_directory(),
+                    });
+                    completed.push((active_task.task.output_ordinal(), summary));
+                }
                 Err(error) => {
+                    let reason = error.to_string();
+                    ui.publish(UiEvent::TaskFailed {
+                        replicate,
+                        identity: active_task.task.identity(),
+                        reason: &reason,
+                    });
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
@@ -313,6 +412,9 @@ fn spawn_task(
     schema: SystemStateSchema,
     persistence_plan: PersistencePlan,
     replicate_directory: &Path,
+    replicate: u64,
+    phase: &str,
+    ui: &UiSession,
 ) -> Result<ActiveTask, RuntimeError> {
     let cancellation = Arc::new(AtomicBool::new(false));
     let worker_cancellation = Arc::clone(&cancellation);
@@ -320,21 +422,40 @@ fn spawn_task(
     let recording_directory =
         replicate_directory.join(format!("task-{:06}", worker_task.output_ordinal()));
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
-    let worker = thread::Builder::new()
-        .name(thread_name)
-        .spawn(move || {
-            run_task(
-                worker_task,
-                schema,
-                persistence_plan,
-                worker_cancellation,
-                recording_directory,
-            )
-        })
-        .map_err(|source| RuntimeError::StartWorker {
-            scope: task.identity().to_owned(),
-            source,
-        })?;
+    let worker_ui = ui.clone();
+    let worker = match thread::Builder::new().name(thread_name).spawn(move || {
+        run_task(
+            worker_task,
+            schema,
+            persistence_plan,
+            worker_cancellation,
+            recording_directory,
+            replicate,
+            worker_ui,
+        )
+    }) {
+        Ok(worker) => worker,
+        Err(source) => {
+            let error = RuntimeError::StartWorker {
+                scope: task.identity().to_owned(),
+                source,
+            };
+            let reason = error.to_string();
+            ui.publish(UiEvent::TaskFailed {
+                replicate,
+                identity: task.identity(),
+                reason: &reason,
+            });
+            return Err(error);
+        }
+    };
+    ui.publish(UiEvent::TaskStarted {
+        replicate,
+        phase,
+        identity: task.identity(),
+        label: task.label(),
+        model: task.model(),
+    });
     Ok(ActiveTask {
         task,
         cancellation,
@@ -350,6 +471,8 @@ fn run_task(
     persistence_plan: PersistencePlan,
     cancellation: Arc<AtomicBool>,
     recording_directory: PathBuf,
+    replicate: u64,
+    ui: UiSession,
 ) -> Result<TaskRunSummary, RuntimeError> {
     let metadata = task_metadata(&task, persistence_plan);
     let mut host = RuntimeTaskHost::new(
@@ -358,6 +481,7 @@ fn run_task(
         cancellation,
         recording_directory,
         metadata,
+        ui.task(replicate, task.identity()),
     );
     if let Err(source) = task
         .definition()

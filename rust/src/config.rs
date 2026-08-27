@@ -19,7 +19,7 @@ mod config_workflow_tests;
 /// Ordinary application-facing configuration API.
 ///
 /// This scope is intentionally empty. Configuration's user interface is the
-/// documented project file grammar, while the runtime owns loading.
+/// documented project file grammar, while Study owns coordinated loading.
 pub mod basic {}
 
 /// Supported configuration API for advanced users and Workflow subsystems.

@@ -58,11 +58,14 @@
 //! - [`state`] owns canonical scientific state and schema.
 //! - [`observation`] owns scientific observation meaning, not persistence mechanics.
 //! - [`persistence`] owns automatic durable output and verified reading.
+//! - [`ui`] owns automatic terminal presentation of Runtime facts.
+//! - [`error`] owns complete-workflow Study/Runtime error composition.
 //!
-//! `Study` is the ultimate coordinator of declared intent; runtime is the
-//! ultimate coordinator of active execution. Advanced integrations use each
-//! module's `advanced` scope. [`prelude`] only aggregates those module-owned
-//! APIs.
+//! The crate-level [`run`] facade performs the sole ordinary transition from
+//! project root to Study to Runtime. `Study` is the ultimate coordinator of
+//! declared intent; runtime is the ultimate coordinator of active execution.
+//! Advanced integrations use each module's `advanced` scope. [`prelude`] only
+//! aggregates those module-owned APIs and crate conveniences.
 //!
 //! Persistence write construction and output allocation are internal and are
 //! not available to model authors.
@@ -74,7 +77,7 @@
 extern crate self as scientific_workflow;
 
 mod clock;
-mod error;
+pub mod error;
 
 pub mod config;
 pub mod observation;
@@ -84,10 +87,24 @@ pub mod runtime;
 pub mod state;
 pub mod study;
 pub mod task;
+pub mod ui;
 
-pub use error::WorkflowError;
-pub use runtime::basic::run;
+pub use error::basic::WorkflowError;
 pub use scientific_workflow_macros::model;
+
+/// Loads, preflights, and executes the Workflow project rooted at
+/// `project_root`.
+///
+/// This is the sole ordinary application entry point. Project loading and
+/// Study compilation finish before Runtime receives the validated immutable
+/// Study. Successful completion returns `()`; advanced integrations can load
+/// a [`study::advanced::Study`] and call [`runtime::advanced::execute`] to
+/// retain a read-only run summary.
+pub fn run(project_root: &std::path::Path) -> Result<(), WorkflowError> {
+    let study = study::advanced::Study::load(project_root)?;
+    runtime::advanced::execute(study)?;
+    Ok(())
+}
 
 /// Implementation details used by Workflow's declaration macros.
 ///
