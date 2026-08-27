@@ -9,7 +9,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use super::error::ConfigError;
-use super::input::ResolvedTaskInput;
+use super::input::ResolvedTask;
+use super::python::PythonTaskDeclaration;
 
 /// Effective policy for isolated study replicates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,12 +93,12 @@ impl PersistenceSpecification {
     }
 }
 
-/// One validated phase with resolved task inputs and effective policy.
+/// One validated phase with resolved generic tasks and effective policy.
 #[derive(Clone, Debug)]
 pub struct PhaseSpecification {
     pub(crate) name: Box<str>,
     pub(crate) dependencies: Box<[Box<str>]>,
-    pub(crate) tasks: Box<[ResolvedTaskInput]>,
+    pub(crate) tasks: Box<[ResolvedTask]>,
     pub(crate) max_concurrency: usize,
     pub(crate) start_interval: Duration,
     pub(crate) timeout: Option<Duration>,
@@ -115,8 +116,8 @@ impl PhaseSpecification {
         self.dependencies.iter().map(Box::as_ref)
     }
 
-    /// Returns fully expanded task inputs in deterministic execution order.
-    pub fn tasks(&self) -> &[ResolvedTaskInput] {
+    /// Returns resolved tasks in deterministic execution order.
+    pub fn tasks(&self) -> &[ResolvedTask] {
         &self.tasks
     }
 
@@ -156,10 +157,21 @@ pub(crate) struct ParsedPhase {
     pub(crate) failure_policy: FailurePolicy,
 }
 
-pub(crate) struct ParsedTask {
-    pub(crate) model: Box<str>,
-    pub(crate) input: PathBuf,
-    pub(crate) timeout: Option<Duration>,
+pub(crate) enum ParsedTask {
+    Model {
+        model: Box<str>,
+        input: PathBuf,
+        timeout: Option<Duration>,
+    },
+    Program {
+        program: PathBuf,
+        args: Box<[Box<str>]>,
+        timeout: Option<Duration>,
+    },
+    Python {
+        declaration: PythonTaskDeclaration,
+        timeout: Option<Duration>,
+    },
 }
 
 pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigError> {
@@ -249,12 +261,44 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         let mut tasks = Vec::with_capacity(raw.tasks.len());
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("/phases/{name}/tasks/{index}");
-            validate_identifier(path, &format!("{pointer}/model"), &task.model, "model")?;
-            tasks.push(ParsedTask {
-                model: task.model.into_boxed_str(),
-                input: task.input,
-                timeout: task.timeout_ms.map(Duration::from_millis),
-            });
+            let timeout = task.timeout_ms.map(Duration::from_millis);
+            match (task.model, task.input, task.program, task.python) {
+                (Some(model), Some(input), None, None) if task.args.is_empty() => {
+                    validate_identifier(path, &format!("{pointer}/model"), &model, "model")?;
+                    tasks.push(ParsedTask::Model {
+                        model: model.into_boxed_str(),
+                        input,
+                        timeout,
+                    });
+                }
+                (None, None, Some(program), None) => {
+                    if program.as_os_str().is_empty() {
+                        return Err(ConfigError::invalid(
+                            path,
+                            format!("{pointer}/program"),
+                            "program path must be nonempty",
+                        ));
+                    }
+                    tasks.push(ParsedTask::Program {
+                        program,
+                        args: task.args.into_iter().map(String::into_boxed_str).collect(),
+                        timeout,
+                    });
+                }
+                (None, None, None, Some(declaration)) if task.args.is_empty() => {
+                    tasks.push(ParsedTask::Python {
+                        declaration,
+                        timeout,
+                    });
+                }
+                _ => {
+                    return Err(ConfigError::invalid(
+                        path,
+                        pointer,
+                        "a task must declare exactly `model` + `input`, `program`, or `python`; top-level `args` are valid only for a program",
+                    ));
+                }
+            }
         }
 
         phases.push(ParsedPhase {
@@ -401,8 +445,16 @@ const fn default_max_concurrency() -> usize {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTask {
-    model: String,
-    input: PathBuf,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    input: Option<PathBuf>,
+    #[serde(default)]
+    program: Option<PathBuf>,
+    #[serde(default)]
+    python: Option<PythonTaskDeclaration>,
+    #[serde(default)]
+    args: Vec<String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
 }

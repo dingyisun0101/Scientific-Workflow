@@ -8,6 +8,14 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::error::ConfigError;
+use super::program::ResolvedProgramTask;
+
+/// One centrally resolved generic task declaration.
+#[derive(Clone, Debug)]
+pub(crate) enum ResolvedTask {
+    Model(ResolvedTaskInput),
+    Program(ResolvedProgramTask),
+}
 
 /// One complete task input after deterministic selection expansion.
 #[derive(Clone)]

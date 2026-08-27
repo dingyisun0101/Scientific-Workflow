@@ -9,16 +9,19 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::config::advanced::{FailurePolicy, ReplicateScheduling};
+use crate::config::advanced::{Config, FailurePolicy, ReplicateScheduling};
 use crate::persistence::advanced::PersistencePlan;
 use crate::state::advanced::SystemStateSchema;
 use crate::study::advanced::{Study, StudyPhase, StudyTask};
+use crate::task::advanced::TaskKind;
 use crate::ui::advanced::{UiEvent, UiSession};
 
 use super::error::RuntimeError;
-use super::host::RuntimeTaskHost;
+use super::host::{RuntimeTaskEnvironment, RuntimeTaskHost};
 use super::output::{create_execution, create_replicate};
-use super::summary::{PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunSummary};
+use super::summary::{
+    PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
+};
 
 const SCHEDULER_POLL: Duration = Duration::from_millis(5);
 
@@ -170,14 +173,16 @@ fn run_replicate_inner(
     let positions = topological_positions(study.phases());
     let mut phases = Vec::with_capacity(positions.len());
     for position in positions {
-        phases.push(run_phase(
-            &study.phases()[position],
-            study.state_schema(),
-            study.persistence_plan(),
-            &scope,
-            index,
+        let phase = &study.phases()[position];
+        let dependencies_json = dependency_snapshot(phase, &phases);
+        let context = PhaseRuntime {
+            study,
+            replicate_directory: &scope,
+            dependencies_json,
+            replicate: index,
             ui,
-        )?);
+        };
+        phases.push(run_phase(phase, &context)?);
     }
     Ok(ReplicateRunSummary {
         index,
@@ -225,36 +230,44 @@ struct ActiveTask {
     worker: JoinHandle<Result<TaskRunSummary, RuntimeError>>,
 }
 
+struct PhaseRuntime<'a> {
+    study: &'a Study,
+    replicate_directory: &'a Path,
+    dependencies_json: Box<[u8]>,
+    replicate: u64,
+    ui: &'a UiSession,
+}
+
+struct TaskRuntime {
+    schema: SystemStateSchema,
+    persistence_plan: PersistencePlan,
+    config: Config,
+    project_root: PathBuf,
+    replicate_directory: PathBuf,
+    dependencies_json: Box<[u8]>,
+    replicate: u64,
+    ui: UiSession,
+}
+
 fn run_phase(
     phase: &StudyPhase,
-    schema: &SystemStateSchema,
-    persistence_plan: PersistencePlan,
-    replicate_directory: &Path,
-    replicate: u64,
-    ui: &UiSession,
+    context: &PhaseRuntime<'_>,
 ) -> Result<PhaseRunSummary, RuntimeError> {
-    ui.publish(UiEvent::PhaseStarted {
-        replicate,
+    context.ui.publish(UiEvent::PhaseStarted {
+        replicate: context.replicate,
         name: phase.name(),
         task_count: phase.tasks().len(),
     });
-    let result = run_phase_inner(
-        phase,
-        schema,
-        persistence_plan,
-        replicate_directory,
-        replicate,
-        ui,
-    );
+    let result = run_phase_inner(phase, context);
     match &result {
-        Ok(_) => ui.publish(UiEvent::PhaseCompleted {
-            replicate,
+        Ok(_) => context.ui.publish(UiEvent::PhaseCompleted {
+            replicate: context.replicate,
             name: phase.name(),
         }),
         Err(error) => {
             let reason = error.to_string();
-            ui.publish(UiEvent::PhaseFailed {
-                replicate,
+            context.ui.publish(UiEvent::PhaseFailed {
+                replicate: context.replicate,
                 name: phase.name(),
                 reason: &reason,
             });
@@ -265,11 +278,7 @@ fn run_phase(
 
 fn run_phase_inner(
     phase: &StudyPhase,
-    schema: &SystemStateSchema,
-    persistence_plan: PersistencePlan,
-    replicate_directory: &Path,
-    replicate: u64,
-    ui: &UiSession,
+    context: &PhaseRuntime<'_>,
 ) -> Result<PhaseRunSummary, RuntimeError> {
     let phase_started = Instant::now();
     let mut pending = phase.tasks().iter().cloned().collect::<VecDeque<_>>();
@@ -298,15 +307,7 @@ fn run_phase_inner(
             && Instant::now() >= next_admission
         {
             let task = pending.pop_front().expect("checked nonempty task queue");
-            match spawn_task(
-                task,
-                schema.clone(),
-                persistence_plan,
-                replicate_directory,
-                replicate,
-                phase.name(),
-                ui,
-            ) {
+            match spawn_task(task, phase.name(), context) {
                 Ok(task) => active.push(task),
                 Err(error) => {
                     first_error = Some(error);
@@ -352,18 +353,18 @@ fn run_phase_inner(
             };
             match result {
                 Ok(summary) => {
-                    ui.publish(UiEvent::TaskCompleted {
-                        replicate,
+                    context.ui.publish(UiEvent::TaskCompleted {
+                        replicate: context.replicate,
                         identity: active_task.task.identity(),
                         final_iteration: summary.final_iteration(),
-                        recording_directory: summary.recording_directory(),
+                        output_directory: summary.output_directory(),
                     });
                     completed.push((active_task.task.output_ordinal(), summary));
                 }
                 Err(error) => {
                     let reason = error.to_string();
-                    ui.publish(UiEvent::TaskFailed {
-                        replicate,
+                    context.ui.publish(UiEvent::TaskFailed {
+                        replicate: context.replicate,
                         identity: active_task.task.identity(),
                         reason: &reason,
                     });
@@ -409,31 +410,30 @@ fn run_phase_inner(
 
 fn spawn_task(
     task: StudyTask,
-    schema: SystemStateSchema,
-    persistence_plan: PersistencePlan,
-    replicate_directory: &Path,
-    replicate: u64,
     phase: &str,
-    ui: &UiSession,
+    context: &PhaseRuntime<'_>,
 ) -> Result<ActiveTask, RuntimeError> {
     let cancellation = Arc::new(AtomicBool::new(false));
     let worker_cancellation = Arc::clone(&cancellation);
     let worker_task = task.clone();
-    let recording_directory =
-        replicate_directory.join(format!("task-{:06}", worker_task.output_ordinal()));
+    let output_directory = context
+        .replicate_directory
+        .join(format!("task-{:06}", worker_task.output_ordinal()));
+    let runtime = TaskRuntime {
+        schema: context.study.state_schema().clone(),
+        persistence_plan: context.study.persistence_plan(),
+        config: context.study.config().clone(),
+        project_root: context.study.project_root().to_path_buf(),
+        replicate_directory: context.replicate_directory.to_path_buf(),
+        dependencies_json: context.dependencies_json.clone(),
+        replicate: context.replicate,
+        ui: context.ui.clone(),
+    };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
-    let worker_ui = ui.clone();
-    let worker = match thread::Builder::new().name(thread_name).spawn(move || {
-        run_task(
-            worker_task,
-            schema,
-            persistence_plan,
-            worker_cancellation,
-            recording_directory,
-            replicate,
-            worker_ui,
-        )
-    }) {
+    let worker = match thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || run_task(worker_task, runtime, worker_cancellation, output_directory))
+    {
         Ok(worker) => worker,
         Err(source) => {
             let error = RuntimeError::StartWorker {
@@ -441,20 +441,21 @@ fn spawn_task(
                 source,
             };
             let reason = error.to_string();
-            ui.publish(UiEvent::TaskFailed {
-                replicate,
+            context.ui.publish(UiEvent::TaskFailed {
+                replicate: context.replicate,
                 identity: task.identity(),
                 reason: &reason,
             });
             return Err(error);
         }
     };
-    ui.publish(UiEvent::TaskStarted {
-        replicate,
+    context.ui.publish(UiEvent::TaskStarted {
+        replicate: context.replicate,
         phase,
         identity: task.identity(),
         label: task.label(),
-        model: task.model(),
+        kind: task.kind_name(),
+        subject: task.subject(),
     });
     Ok(ActiveTask {
         task,
@@ -467,26 +468,27 @@ fn spawn_task(
 
 fn run_task(
     task: StudyTask,
-    schema: SystemStateSchema,
-    persistence_plan: PersistencePlan,
+    runtime: TaskRuntime,
     cancellation: Arc<AtomicBool>,
-    recording_directory: PathBuf,
-    replicate: u64,
-    ui: UiSession,
+    output_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
-    let metadata = task_metadata(&task, persistence_plan);
-    let mut host = RuntimeTaskHost::new(
-        schema,
-        persistence_plan,
-        cancellation,
-        recording_directory,
-        metadata,
-        ui.task(replicate, task.identity()),
+    let metadata = task_metadata(&task, runtime.persistence_plan);
+    let environment = RuntimeTaskEnvironment::new(
+        runtime.config,
+        runtime.project_root,
+        runtime.replicate_directory,
+        runtime.dependencies_json,
     );
-    if let Err(source) = task
-        .definition()
-        .execute(task.input(), task.observation_plan(), &mut host)
-    {
+    let mut host = RuntimeTaskHost::new(
+        runtime.schema,
+        runtime.persistence_plan,
+        cancellation,
+        output_directory,
+        metadata,
+        runtime.ui.task(runtime.replicate, task.identity()),
+        environment,
+    );
+    if let Err(source) = task.definition().execute(&mut host) {
         host.fail(&source.to_string());
         return Err(RuntimeError::Task {
             task: task.identity().to_owned(),
@@ -499,47 +501,107 @@ fn run_task(
             task: task.identity().to_owned(),
         });
     }
-    let final_iteration = host.final_iteration().unwrap_or(0);
+    let (kind, model, program, program_kind, python_script, final_iteration) = match task.kind() {
+        TaskKind::Model => (
+            TaskRunKind::Model,
+            task.model().map(Into::into),
+            None,
+            None,
+            None,
+            host.final_iteration(),
+        ),
+        TaskKind::Program => {
+            let program = task
+                .task()
+                .program()
+                .expect("program task retains its resolved invocation");
+            (
+                TaskRunKind::Program,
+                None,
+                Some(program.program().to_path_buf()),
+                Some(program.kind_name().into()),
+                program.python_script().map(Path::to_path_buf),
+                None,
+            )
+        }
+    };
     Ok(TaskRunSummary {
         identity: task.identity().into(),
-        model: task.model().into(),
+        kind,
+        model,
+        program,
+        program_kind,
+        python_script,
         final_iteration,
-        recording_directory: host.recording_directory().to_path_buf(),
+        output_directory: host.output_directory().to_path_buf(),
     })
 }
 
 fn task_metadata(task: &StudyTask, persistence_plan: PersistencePlan) -> Map<String, Value> {
-    let constants = serde_json::from_slice(task.input().resolved_json())
-        .expect("config retains valid resolved JSON");
-    let workflow = Value::Object(Map::from_iter([
-        ("task_identity".to_owned(), task.identity().into()),
-        ("model".to_owned(), task.model().into()),
-        ("input_ordinal".to_owned(), task.input().ordinal().into()),
+    let persistence = Value::Object(Map::from_iter([
+        ("backend".to_owned(), "local".into()),
         (
-            "input_source".to_owned(),
-            task.input()
-                .source_path()
-                .to_string_lossy()
-                .into_owned()
-                .into(),
+            "chunk_target_bytes".to_owned(),
+            persistence_plan.chunk_target().get().into(),
         ),
         (
-            "persistence".to_owned(),
-            Value::Object(Map::from_iter([
-                ("backend".to_owned(), "local".into()),
-                (
-                    "chunk_target_bytes".to_owned(),
-                    persistence_plan.chunk_target().get().into(),
-                ),
-                (
-                    "queue_capacity_bytes".to_owned(),
-                    persistence_plan.queue_capacity().get().into(),
-                ),
-            ])),
+            "queue_capacity_bytes".to_owned(),
+            persistence_plan.queue_capacity().get().into(),
         ),
     ]));
-    Map::from_iter([
-        ("model_constants".to_owned(), constants),
-        ("workflow".to_owned(), workflow),
-    ])
+    match task.task().input() {
+        Some(input) => {
+            let constants = serde_json::from_slice(input.resolved_json())
+                .expect("config retains valid resolved JSON");
+            let workflow = Value::Object(Map::from_iter([
+                ("task_identity".to_owned(), task.identity().into()),
+                ("kind".to_owned(), "model".into()),
+                ("model".to_owned(), input.model().into()),
+                ("input_ordinal".to_owned(), input.ordinal().into()),
+                (
+                    "input_source".to_owned(),
+                    input.source_path().to_string_lossy().into_owned().into(),
+                ),
+                ("persistence".to_owned(), persistence),
+            ]));
+            Map::from_iter([
+                ("model_constants".to_owned(), constants),
+                ("workflow".to_owned(), workflow),
+            ])
+        }
+        None => Map::new(),
+    }
+}
+
+fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box<[u8]> {
+    let dependencies = phase
+        .dependencies()
+        .collect::<std::collections::HashSet<_>>();
+    let values = completed
+        .iter()
+        .filter(|summary| dependencies.contains(summary.name()))
+        .map(|summary| {
+            serde_json::json!({
+                "phase": summary.name(),
+                "tasks": summary.tasks().iter().map(|task| {
+                    serde_json::json!({
+                        "identity": task.identity(),
+                        "kind": match task.kind() {
+                            TaskRunKind::Model => "model",
+                            TaskRunKind::Program => "program",
+                        },
+                        "model": task.model(),
+                        "program": task.program().map(|path| path.to_string_lossy()),
+                        "program_kind": task.program_kind.as_deref(),
+                        "python_script": task.python_script.as_deref().map(|path| path.to_string_lossy()),
+                        "final_iteration": task.final_iteration(),
+                        "output_directory": task.output_directory().to_string_lossy()
+                    })
+                }).collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec_pretty(&values)
+        .expect("serializing runtime dependency summaries cannot fail")
+        .into_boxed_slice()
 }

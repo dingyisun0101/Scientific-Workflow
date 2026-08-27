@@ -32,11 +32,16 @@ The automatic terminal output includes:
 
 - execution start, inferred replicate count, task count, and output directory;
 - replicate and phase start/completion/failure;
-- task identity, inferred label, model key, and phase;
-- current scientific iteration and optional model target iteration;
+- task identity, inferred label, workload kind, model key or executable, and
+  phase;
+- current scientific iteration and optional target for model tasks;
 - percentage only when the model supplies a target;
 - task failure reasons; and
-- successful final iteration and recording directory.
+- successful optional final iteration and generic task output directory.
+
+Program tasks—including Python scripts, presented by their script filename—
+publish lifecycle start/failure/completion but no fabricated iteration
+progress. Model tasks continue to publish observations as progress.
 
 UI displays structural and operational facts only. It never serializes or
 formats scientific payload values. Rendering uses standard error so standard

@@ -1,12 +1,13 @@
 # Scientific Workflow
 
-Scientific Workflow turns registered Rust scientific models and declarative
-JSON into validated, recorded studies.
+Scientific Workflow turns registered Rust scientific models, arbitrary
+executable programs, and declarative JSON into validated, recorded studies.
 
 The user workflow is intentionally limited to:
 
-1. implement and register each scientific model;
-2. write `study.json`, `config/state.json`, and `config/inputs/*.json`; and
+1. implement/register each stateful Rust model and provide any standalone task
+   programs or Python scripts;
+2. write `study.json` and all project JSON beneath `config/`; and
 3. call `scientific_workflow::run(project_root)`.
 
 ```rust
@@ -16,13 +17,16 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 ```
 
 Users do not construct tasks, phases, studies, runtimes, output paths,
-recording sessions, progress counters, or messages. One registered model plus
-one resolved model-input combination becomes one internal task.
+recording sessions, progress counters, or messages. A task is either one
+registered model plus one resolved model-input combination, one executable
+declared directly in `study.json`, or one `.py` script with its environment
+declared inside the task's `python` object. Neither program form needs a Rust
+wrapper.
 
 ```text
-registered models + project JSON
+registered models and/or programs + project JSON
     → crate-level run(&Path) facade
-    → config parsing and deterministic expansion requested by Study
+    → one central immutable parse of all JSON requested by Study
     → immutable Study binding and preflight
     → Study-owned effective persistence plan
     → runtime::execute(Study)

@@ -1,11 +1,12 @@
-//! Typed application work behind one uniform runtime definition.
+//! Generic application workloads behind one uniform runtime definition.
 //!
 //! Application authors import [`basic`], implement [`basic::ScientificModel`],
 //! and register the implementation with `#[scientific_workflow::model("key")]`.
-//! Study combines each registered model with config-supplied constants and
-//! creates the internal task automatically. [`advanced`] retains that same
-//! supported public surface; discovery, catalogs, and execution ports remain crate-private. Scheduling,
-//! identity, paths, lifecycle persistence, and display remain outside this module.
+//! Study creates model tasks from registered models plus resolved constants and
+//! creates program tasks directly from declarative executable paths. Python
+//! declarations are lowered by Config to the same program boundary. All use
+//! one internal Task definition. [`advanced`] retains the same supported
+//! public surface; adapters and execution ports remain crate-private.
 
 mod catalog;
 mod definition;
@@ -26,6 +27,6 @@ pub mod advanced {
     #[doc(hidden)]
     pub use super::catalog::ModelRegistration;
     pub(crate) use super::catalog::{ModelCatalog, ModelCatalogError};
-    pub(crate) use super::definition::Task;
+    pub(crate) use super::definition::{Task, TaskKind};
     pub(crate) use super::execution::{TaskDefinition, TaskExecutionHost};
 }

@@ -31,4 +31,10 @@ fn runtime_advanced_accepts_only_a_completed_study() {
 
     #[allow(unused_imports)]
     use scientific_workflow::runtime::basic::*;
+
+    let kind = scientific_workflow::prelude::advanced::TaskRunKind::Model;
+    assert_eq!(
+        kind,
+        scientific_workflow::runtime::advanced::TaskRunKind::Model
+    );
 }

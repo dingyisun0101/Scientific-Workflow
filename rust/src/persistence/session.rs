@@ -1,6 +1,9 @@
-//! Private automatic persistence session used by Runtime.
+//! Private automatic model-recording and program-workspace sessions.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
@@ -12,6 +15,188 @@ use super::plan::PersistencePlan;
 
 pub(crate) struct PersistenceSession {
     writer: Option<SystemStateWriter>,
+}
+
+/// Durable workspace prepared for one external-program or Python task.
+pub(crate) struct ProgramPersistenceSession {
+    directory: PathBuf,
+    artifacts: PathBuf,
+    config_path: PathBuf,
+    dependencies_path: PathBuf,
+    stdout: Option<File>,
+    stderr: Option<File>,
+    program: PathBuf,
+    args: Box<[String]>,
+    program_kind: Box<str>,
+    python_script: Option<PathBuf>,
+    python_environment_manager: Option<Box<str>>,
+}
+
+/// Borrowed resolved launcher provenance used to construct a program workspace.
+pub(crate) struct ProgramLaunch<'a> {
+    pub(crate) executable: &'a Path,
+    pub(crate) args: &'a [OsString],
+    pub(crate) kind: &'a str,
+    pub(crate) python_script: Option<&'a Path>,
+    pub(crate) python_environment_manager: Option<&'a str>,
+}
+
+impl ProgramPersistenceSession {
+    pub(crate) fn start(
+        directory: PathBuf,
+        config_json: &[u8],
+        dependencies_json: &[u8],
+        launch: ProgramLaunch<'_>,
+    ) -> Result<Self, PersistenceError> {
+        create_directory(&directory)?;
+        let artifacts = directory.join("artifacts");
+        create_directory(&artifacts)?;
+        let config_path = directory.join("workflow-config.json");
+        let dependencies_path = directory.join("workflow-dependencies.json");
+        write_new(
+            &config_path,
+            config_json,
+            "write program configuration snapshot",
+        )?;
+        write_new(
+            &dependencies_path,
+            dependencies_json,
+            "write program dependency snapshot",
+        )?;
+        let stdout_path = directory.join("stdout.log");
+        let stderr_path = directory.join("stderr.log");
+        let stdout = create_file(&stdout_path, "create program standard-output log")?;
+        let stderr = create_file(&stderr_path, "create program standard-error log")?;
+
+        let mut session = Self {
+            directory,
+            artifacts,
+            config_path,
+            dependencies_path,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            program: launch.executable.to_path_buf(),
+            args: launch
+                .args
+                .iter()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect(),
+            program_kind: launch.kind.into(),
+            python_script: launch.python_script.map(Path::to_path_buf),
+            python_environment_manager: launch.python_environment_manager.map(Into::into),
+        };
+        session.write_status("running", None, None)?;
+        Ok(session)
+    }
+
+    pub(crate) fn artifacts_directory(&self) -> &Path {
+        &self.artifacts
+    }
+
+    pub(crate) fn config_path(&self) -> &Path {
+        &self.config_path
+    }
+
+    pub(crate) fn dependencies_path(&self) -> &Path {
+        &self.dependencies_path
+    }
+
+    pub(crate) fn take_stdout(&mut self) -> File {
+        self.stdout
+            .take()
+            .expect("program stdout is transferred exactly once")
+    }
+
+    pub(crate) fn take_stderr(&mut self) -> File {
+        self.stderr
+            .take()
+            .expect("program stderr is transferred exactly once")
+    }
+
+    pub(crate) fn complete(&mut self, exit_code: Option<i32>) -> Result<(), PersistenceError> {
+        self.write_status("complete", exit_code, None)
+    }
+
+    pub(crate) fn fail(&mut self, exit_code: Option<i32>, reason: &str) {
+        let _ = self.write_status("failed", exit_code, Some(reason));
+    }
+
+    fn write_status(
+        &mut self,
+        status: &str,
+        exit_code: Option<i32>,
+        reason: Option<&str>,
+    ) -> Result<(), PersistenceError> {
+        let metadata_path = self.directory.join("program.json");
+        let temporary_path = self.directory.join(".program.json.tmp");
+        let value = serde_json::json!({
+            "format": "scientific-workflow-program-v1",
+            "status": status,
+            "kind": self.program_kind,
+            "program": self.program,
+            "args": self.args,
+            "python_script": self.python_script,
+            "python_environment_manager": self.python_environment_manager,
+            "exit_code": exit_code,
+            "reason": reason,
+            "config": "workflow-config.json",
+            "dependencies": "workflow-dependencies.json",
+            "artifacts": "artifacts",
+            "stdout": "stdout.log",
+            "stderr": "stderr.log"
+        });
+        let bytes = serde_json::to_vec_pretty(&value).map_err(|source| PersistenceError::Json {
+            operation: "serialize program metadata",
+            path: metadata_path.clone(),
+            source,
+        })?;
+        let _ = fs::remove_file(&temporary_path);
+        write_new(&temporary_path, &bytes, "write temporary program metadata")?;
+        fs::rename(&temporary_path, &metadata_path).map_err(|source| PersistenceError::Io {
+            operation: "commit program metadata",
+            path: metadata_path,
+            source,
+        })
+    }
+}
+
+fn create_directory(path: &Path) -> Result<(), PersistenceError> {
+    fs::create_dir(path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::AlreadyExists {
+            PersistenceError::RecordingDirectoryExists {
+                path: path.to_path_buf(),
+            }
+        } else {
+            PersistenceError::Io {
+                operation: "create program workspace directory",
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })
+}
+
+fn create_file(path: &Path, operation: &'static str) -> Result<File, PersistenceError> {
+    OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|source| PersistenceError::Io {
+            operation,
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+fn write_new(path: &Path, bytes: &[u8], operation: &'static str) -> Result<(), PersistenceError> {
+    let mut file = create_file(path, operation)?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|source| PersistenceError::Io {
+            operation,
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 impl PersistenceSession {

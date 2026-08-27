@@ -1,10 +1,11 @@
 # Study API
 
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
-config to load one project root, asks state to validate the centrally parsed
-schema, discovers linked models, binds each expanded constants value to its
-model, binds each observation plan to the schema, and produces one immutable
-execution plan.
+config to capture one project root, retains that central immutable Config,
+asks state to validate the centrally parsed schema, discovers linked models,
+binds each expanded constants value to its model, resolves external programs
+and Python environments, binds observation plans to the schema, and produces
+one immutable execution plan of generic tasks.
 
 Study creates no output, starts no worker, initializes no model, and writes no
 recording. Runtime alone owns active effects.
@@ -24,14 +25,16 @@ tasks, identities, persistence plans, registries, or Study builders.
 ### `study::advanced::Study`
 
 `Study` is an immutable, clone-cheap plan backed by `Arc`. It owns the shared
-state schema, internal phases/tasks, resolved constants, schema-bound
-observation plans, inferred output root, replicate policy, and effective
-persistence/UI settings. None of those internal planning types is public.
+central Config, state schema, internal phases/tasks, resolved constants,
+resolved executable/script/environment paths, schema-bound observation plans,
+inferred output root, replicate policy, and effective persistence/UI settings. None of those
+internal planning types is public.
 
 - `Study::load(project_root: &Path) -> Result<Study, StudyError>` performs the
   complete effect-free loading and preflight transaction. Config canonicalizes
   paths and parses JSON. Study validates registration keys and duplicates,
-  resolves every manifest model key, decodes every concrete constants value,
+  resolves every manifest model key, program path, Python script, interpreter,
+  and environment manager, decodes every concrete constants value,
   calls each model's side-effect-free `observation_plan` exactly once, and
   binds that plan to the shared schema. It does not call
   `ScientificModel::initialize`.
@@ -40,7 +43,7 @@ persistence/UI settings. None of those internal planning types is public.
   `<canonical-project-root>/output`. The path need not exist until Runtime
   starts.
 
-`Clone` increments one reference count; it does not reread files, repeat
+`Clone` increments shared reference counts; it does not reread files, repeat
 preflight, clone scientific payloads, or duplicate constants documents.
 `Debug` prints bounded root/plan information and never model captures or raw
 constants.
@@ -68,8 +71,10 @@ summaries provide output paths and task results.
 - `TaskIdentityOverflow` prevents a plan whose deterministic global task
   ordinal cannot fit in `u64`.
 
-Every variant occurs before output creation and model initialization. Source
-errors remain available through `std::error::Error::source`. A failed load
+Every variant occurs before output creation and model initialization. An
+invalid program or Python declaration is reported through the wrapped
+`ConfigError`.
+Source errors remain available through `std::error::Error::source`. A failed load
 publishes no partial Study, so the user can correct code or JSON and retry
 without cleaning output.
 
@@ -105,12 +110,15 @@ println!("actual execution: {}", summary.output_directory().display());
 ## Not API
 
 `ProjectSpecification`, explicit model catalogs, `StudyInner`,
-`StudyPhase`, `StudyTask`, resolved inputs, type-erased task definitions,
+`StudyPhase`, `StudyTask`, central `Config`, resolved model inputs/programs and
+Python launchers,
+type-erased task definitions,
 bound observation plans, replicate/persistence policies, UI plan, global
 output ordinals, identity/label formats, and topological planning data are private.
 Runtime obtains them through crate-visible `study::advanced` exports.
 
-A replacement Study must remain output-free, consume config exactly once,
-perform complete model/constants/observation preflight, infer deterministic
-identities and roots, retain immutable execution intent, and expose no mutable
-lifecycle to applications.
+A replacement Study must remain output-free, consume and retain config exactly
+once, perform complete model/constants/observation and program/Python preflight, infer
+deterministic identities and roots, retain immutable execution intent, and
+expose no mutable lifecycle to applications. Runtime must be able to execute
+the retained snapshot after project JSON changes without rereading it.

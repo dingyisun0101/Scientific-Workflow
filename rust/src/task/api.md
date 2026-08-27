@@ -1,10 +1,10 @@
 # Task API
 
-The `task` subsystem owns the irreducible bridge between typed application
-science and uniform Workflow execution. Users define registered
-`ScientificModel` implementations. Study combines a registration with one
-config-owned resolved input to create an internal task; users never construct
-tasks, pass constants, or coordinate recording themselves.
+The `task` subsystem owns one uniform unit of scientific workload. A task is
+either a registered stateful Rust model combined with one config-owned input,
+or a resolved external executable. Python declarations are resolved into the
+same executable boundary. Users never construct Rust `Task` values; they
+implement and register models or declare programs/Python in `study.json`.
 
 Task owns model-contract enforcement and observation boundaries. It does not
 own manifest parsing, model-key matching, phase membership, identities, labels,
@@ -110,6 +110,15 @@ type-erased task, and execution-host ports through this scope. The procedural
 macro reaches registration metadata only through the crate's documentation-hidden
 `__private` expansion namespace.
 
+Program and Python tasks add no Rust export to either tier. A user declares an
+executable or nested Python environment in `study.json`; Config resolves it,
+Study places it in the same phase graph as model tasks, and Runtime invokes it
+through task's private execution-host port.
+Its arguments are passed directly without a shell. The program receives the
+captured central configuration and completed dependency facts through files
+and environment variables documented by `runtime::api`; task itself performs
+no filesystem or process operation.
+
 ## Example
 
 This example shows the complete ordinary model surface. After it, the user
@@ -163,10 +172,13 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 `ModelRegistration`, `ModelCatalog`, `ModelCatalogError`, `Task`,
 `TaskDefinition`, `TaskExecutionHost`, `StatefulDefinition`, registration
 lookup, function pointers, model-contract errors, state-address tracking,
-target-progress validation, and concrete execution loops are private. Hidden
+target-progress validation, `ProgramDefinition`, executable dispatch, and
+concrete execution loops are private. Hidden
 crate `__private` re-exports exist solely for macro expansion and are not a
 supported API.
 
 Replacement task implementations must preserve config-owned decode, direct
-state ownership checks, deterministic observation-plan binding, observation ordering,
-and runtime-owned cancellation/lifecycle.
+state ownership checks, deterministic observation-plan binding, observation
+ordering, generic model/program dispatch, and runtime-owned
+cancellation/lifecycle. Programs and Python scripts must remain declarative
+tasks rather than requiring a Rust wrapper or public registration API.

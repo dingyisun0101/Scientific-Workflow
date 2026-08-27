@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::config::advanced::ResolvedTaskInput;
+use crate::config::advanced::{ResolvedProgramTask, ResolvedTaskInput};
 use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::{StateSchemaAccess, SystemState, SystemStateSchema};
 
@@ -21,6 +21,10 @@ pub(crate) trait TaskExecutionHost {
 
     /// Reports whether cooperative cancellation has been requested.
     fn cancellation_requested(&self) -> bool;
+
+    /// Executes one validated external program in Runtime's standardized task
+    /// workspace and configuration environment.
+    fn execute_program(&mut self, program: &ResolvedProgramTask) -> TaskResult;
 
     /// Accepts the validated observation plan and emits the initial observation and
     /// automatic initialized snapshot for `state`.
@@ -59,15 +63,12 @@ pub(crate) trait TaskDefinition: Send + Sync {
     /// Returning `Ok(())` while `host.cancellation_requested()` is true means
     /// cooperative cancellation, not successful completion; lifecycle status
     /// remains the runtime's responsibility.
-    fn execute(
-        &self,
-        input: &ResolvedTaskInput,
-        observation_plan: &BoundObservationPlan,
-        host: &mut dyn TaskExecutionHost,
-    ) -> TaskResult;
+    fn execute(&self, host: &mut dyn TaskExecutionHost) -> TaskResult;
 }
 
 pub(crate) struct StatefulDefinition<M> {
+    input: ResolvedTaskInput,
+    observation_plan: BoundObservationPlan,
     marker: std::marker::PhantomData<fn() -> M>,
 }
 
@@ -75,8 +76,10 @@ impl<M> StatefulDefinition<M>
 where
     M: ScientificModel,
 {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(input: ResolvedTaskInput, observation_plan: BoundObservationPlan) -> Self {
         Self {
+            input,
+            observation_plan,
             marker: std::marker::PhantomData,
         }
     }
@@ -86,17 +89,12 @@ impl<M> TaskDefinition for StatefulDefinition<M>
 where
     M: ScientificModel,
 {
-    fn execute(
-        &self,
-        input: &ResolvedTaskInput,
-        observation_plan: &BoundObservationPlan,
-        host: &mut dyn TaskExecutionHost,
-    ) -> TaskResult {
+    fn execute(&self, host: &mut dyn TaskExecutionHost) -> TaskResult {
         if host.cancellation_requested() {
             return Ok(());
         }
 
-        let constants: M::Constants = input.decode()?;
+        let constants: M::Constants = self.input.decode()?;
         let schema = host.state_schema()?.clone();
 
         let mut model = M::initialize(constants, &schema)?;
@@ -104,7 +102,7 @@ where
         validate_state(model.state(), &schema, state_address)?;
         let mut target = validate_target(model.state(), model.target_iteration())?;
 
-        host.begin_model(observation_plan.clone(), model.state(), target)?;
+        host.begin_model(self.observation_plan.clone(), model.state(), target)?;
 
         while !model.is_complete() {
             if host.cancellation_requested() {
@@ -134,6 +132,25 @@ where
         let final_target = validate_target(model.state(), model.target_iteration())?;
         validate_target_progress(target, final_target)?;
         host.observe_model_final(model.state(), final_target)
+    }
+}
+
+pub(crate) struct ProgramDefinition {
+    program: ResolvedProgramTask,
+}
+
+impl ProgramDefinition {
+    pub(crate) fn new(program: ResolvedProgramTask) -> Self {
+        Self { program }
+    }
+}
+
+impl TaskDefinition for ProgramDefinition {
+    fn execute(&self, host: &mut dyn TaskExecutionHost) -> TaskResult {
+        if host.cancellation_requested() {
+            return Ok(());
+        }
+        host.execute_program(&self.program)
     }
 }
 

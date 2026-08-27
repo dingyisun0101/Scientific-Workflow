@@ -1,12 +1,14 @@
 # Persistence API
 
-The `persistence` subsystem owns automatic durable task recordings and
-verified reconstruction. Config parses optional operational sizing, Study
-retains the effective private plan, and Runtime constructs and drives one
-private session for every task. Models and applications never receive a
-writer, destination, queue, flush operation, or lifecycle handle.
+The `persistence` subsystem owns every Workflow-managed durable task output and
+verified model-state reconstruction. Config parses optional operational sizing,
+Study retains the effective private plan, and Runtime constructs and drives one
+private session for every task. A model session records observed state; a
+program session—including a Config-lowered Python invocation—prepares one
+isolated workspace, snapshots inputs, captures logs, and commits status. Models and applications never receive a writer,
+destination, queue, flush operation, or lifecycle handle.
 
-Observation decides which scientific fields and cadences matter. Persistence
+For model tasks, Observation decides which scientific fields and cadences matter. Persistence
 only stores the resulting encoded observations, lifecycle metadata, and
 Workflow provenance. It does not parse project JSON, bind tasks, or schedule
 execution.
@@ -27,7 +29,31 @@ Both fields are optional positive integers and default independently to 64
 MiB. The first is an approximate encoded-byte chunk rollover target; the
 second is the per-stream queued-byte backpressure capacity. The backend and
 all destinations are inferred. Invalid settings fail during Config/Study
-loading before output exists.
+loading before output exists. These settings apply to model-state streams;
+external program workspaces require no separate user setting.
+
+Program persistence is equally automatic. Each program task gets this private
+durable layout:
+
+```text
+task-NNNNNN/
+├── program.json
+├── workflow-config.json
+├── workflow-dependencies.json
+├── stdout.log
+├── stderr.log
+└── artifacts/
+```
+
+`program.json` is atomically replaced from `running` to `complete` or `failed`
+and records `kind` (`program` or `python`), the resolved launcher executable,
+arguments, exit code/reason, format name, and fixed workspace filenames. For
+Python it additionally records the canonical `python_script` and declared
+`python_environment_manager`; those fields are null for a generic program.
+Runtime passes the other paths to the child;
+the child writes its own scientific artifacts inside `artifacts/`. Persistence
+owns and isolates the durable destination, while an external program
+necessarily emits its assigned artifacts there.
 
 ## Advanced API
 
@@ -42,6 +68,11 @@ consumes a `JsonPayloadDecoderRegistry`, reads `metadata.json`, validates the
 format and successful terminal status, and retains one immutable metadata
 snapshot. The reader is intentionally non-`Clone` because custom decoders may
 not have meaningful clone semantics.
+
+This reader opens only completed model recording directories. It does not
+interpret program workspaces, `program.json`, logs, or arbitrary artifacts;
+program results are ordinary files discovered from
+`TaskRunSummary::output_directory()`.
 
 Inspection and reconstruction methods:
 
@@ -167,15 +198,18 @@ The example path is discovered programmatically from a successful
 
 ## Not API
 
-The effective persistence plan, backend selection, `PersistenceSession`,
-`SystemStateWriter`, stream storage/layout values, queue worker, chunk
+The effective persistence plan, backend selection, model `PersistenceSession`,
+`ProgramPersistenceSession`, borrowed `ProgramLaunch`, `SystemStateWriter`,
+stream storage/layout values, queue worker, chunk
 publisher, metadata mutation, directory lease, filenames, and atomic temporary
 files are private. There is one internal constructor consuming Study's
 already-bound observation plan, provenance, destination, and shared storage
 policy. There is no builder, resume/continuation API, per-stream storage
 override, explicit flush, or public completion result.
 
-Future local or remote adapters belong behind `PersistenceSession`; adding
+Future local or remote adapters belong behind the private session boundary; adding
 one must not broaden the model/task API. A replacement backend must preserve
-observation order, bounded backpressure, failure evidence, terminal metadata,
-effective-setting provenance, and the verified reader contract.
+observation order, bounded backpressure, program/Python input/log/status and
+launcher-provenance capture,
+failure evidence, terminal metadata, effective-setting provenance, and the
+verified reader contract.

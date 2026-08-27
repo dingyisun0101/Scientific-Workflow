@@ -4,13 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::advanced::{
-    FailurePolicy, ProjectSpecification, ReplicatePolicy, ResolvedTaskInput,
-};
-use crate::observation::advanced::BoundObservationPlan;
+use crate::config::advanced::{Config, FailurePolicy, ProjectSpecification, ReplicatePolicy};
 use crate::persistence::advanced::PersistencePlan;
 use crate::state::advanced::SystemStateSchema;
-use crate::task::advanced::{ModelCatalog, Task, TaskDefinition};
+use crate::task::advanced::{ModelCatalog, Task, TaskDefinition, TaskKind};
 use crate::ui::advanced::UiPlan;
 
 use super::compilation;
@@ -50,6 +47,7 @@ impl Study {
         phases: Box<[StudyPhase]>,
     ) -> Self {
         let project_root = project.project_root().to_path_buf();
+        let config = project.config().clone();
         let output_root = project_root.join("output");
         let replicate_policy = project.manifest().replicate_policy();
         let persistence = project.manifest().persistence();
@@ -61,6 +59,7 @@ impl Study {
         Self {
             inner: Arc::new(StudyInner {
                 project_root,
+                config,
                 schema,
                 phases,
                 output_root,
@@ -84,6 +83,11 @@ impl Study {
     /// Returns the semantically validated shared state schema.
     pub(crate) fn state_schema(&self) -> &SystemStateSchema {
         &self.inner.schema
+    }
+
+    /// Returns the immutable central configuration captured at Study load.
+    pub(crate) fn config(&self) -> &Config {
+        &self.inner.config
     }
 
     /// Returns immutable phases in manifest declaration order.
@@ -113,6 +117,7 @@ impl std::fmt::Debug for Study {
             .debug_struct("Study")
             .field("project_root", &self.project_root())
             .field("output_root", &self.output_root())
+            .field("config", &self.config())
             .field("persistence", &self.persistence_plan())
             .field("ui", &self.ui_plan())
             .field("phases", &self.phases().len())
@@ -122,6 +127,7 @@ impl std::fmt::Debug for Study {
 
 struct StudyInner {
     project_root: PathBuf,
+    config: Config,
     schema: SystemStateSchema,
     phases: Box<[StudyPhase]>,
     output_root: PathBuf,
@@ -153,7 +159,7 @@ impl StudyPhase {
         self.dependencies.iter().map(Box::as_ref)
     }
 
-    /// Returns bound model invocations in deterministic expansion order.
+    /// Returns bound model/program invocations in deterministic plan order.
     pub(crate) fn tasks(&self) -> &[StudyTask] {
         &self.tasks
     }
@@ -168,7 +174,7 @@ impl StudyPhase {
         self.start_interval
     }
 
-    /// Returns the optional phase-wide cooperative timeout.
+    /// Returns the optional phase-wide timeout.
     pub(crate) const fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
@@ -179,15 +185,13 @@ impl StudyPhase {
     }
 }
 
-/// One model bound to one complete config-owned constants input.
+/// One generic model or program task compiled from project configuration.
 #[derive(Clone)]
 pub(crate) struct StudyTask {
     pub(crate) identity: Box<str>,
     pub(crate) label: Box<str>,
     pub(crate) output_ordinal: u64,
-    pub(crate) input: ResolvedTaskInput,
-    pub(crate) definition: Task,
-    pub(crate) observation_plan: BoundObservationPlan,
+    pub(crate) task: Task,
 }
 
 impl StudyTask {
@@ -201,19 +205,27 @@ impl StudyTask {
         &self.label
     }
 
-    /// Returns the registered model key selected by the manifest.
-    pub(crate) fn model(&self) -> &str {
-        self.input.model()
+    pub(crate) fn kind(&self) -> TaskKind {
+        self.task.kind()
     }
 
-    /// Returns the config-owned resolved task input.
-    pub(crate) fn input(&self) -> &ResolvedTaskInput {
-        &self.input
+    pub(crate) fn kind_name(&self) -> &'static str {
+        self.task.kind_name()
+    }
+
+    /// Returns the model key when this is a model task.
+    pub(crate) fn model(&self) -> Option<&str> {
+        self.task.model()
+    }
+
+    /// Returns the generic task subject used in lifecycle presentation.
+    pub(crate) fn subject(&self) -> &str {
+        self.task.subject()
     }
 
     /// Returns the optional task-specific cooperative timeout.
     pub(crate) fn timeout(&self) -> Option<Duration> {
-        self.input.timeout()
+        self.task.timeout()
     }
 
     pub(crate) fn output_ordinal(&self) -> u64 {
@@ -221,11 +233,11 @@ impl StudyTask {
     }
 
     pub(crate) fn definition(&self) -> &dyn TaskDefinition {
-        &self.definition
+        &self.task
     }
 
-    pub(crate) fn observation_plan(&self) -> &BoundObservationPlan {
-        &self.observation_plan
+    pub(crate) fn task(&self) -> &Task {
+        &self.task
     }
 }
 
@@ -235,8 +247,8 @@ impl std::fmt::Debug for StudyTask {
             .debug_struct("StudyTask")
             .field("identity", &self.identity())
             .field("label", &self.label())
-            .field("model", &self.model())
-            .field("input", &self.input)
+            .field("kind", &self.kind())
+            .field("subject", &self.subject())
             .finish_non_exhaustive()
     }
 }

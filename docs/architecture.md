@@ -6,18 +6,21 @@ every source file does.
 
 ## User workflow
 
-An application author supplies only scientific Rust models and project JSON:
+An application author supplies scientific Rust models and/or executable
+programs plus project JSON:
 
 ```text
 <project-root>/
 ├── src/
 │   ├── main.rs                 calls scientific_workflow::run(&Path)
 │   └── <models>.rs             registered ScientificModel implementations
+├── scripts/                     optional executable and `.py` task programs
 ├── study.json                  phases, tasks, replicates, operational policy
 └── config/
     ├── state.json              canonical state schema
-    └── inputs/
-        └── <model>.json        constants, sweeps, or correlated cases
+    ├── inputs/
+    │   └── <model>.json        constants, sweeps, or correlated cases
+    └── **/*.json               arbitrary program/application configuration
 ```
 
 Each model directly owns its canonical `SystemState` and is linked by a stable
@@ -39,7 +42,10 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 ```
 
 The application never constructs tasks, phases, a Study, Runtime, output
-paths, persistence, progress counters, messages, or worker threads.
+paths, persistence, progress counters, messages, or worker threads. Any
+executable can be a task by declaring `program`; a `.py` file can declare its
+environment manager inside nested `python`. Neither needs a Rust wrapper or
+registration.
 
 ## First-level modules
 
@@ -49,9 +55,12 @@ The current first-level library modules are:
   series;
 - `observation`: application-authored scientific selection, cadence, units,
   and private encoding;
-- `task`: the `ScientificModel` contract, linked registration, and uniform
-  private execution;
-- `config`: sole project-JSON reader/parser and sole typed constants supplier;
+- `task`: generic model/program workload abstraction (including Python
+  lowering), `ScientificModel`
+  contract, linked model registration, and uniform private execution;
+- `config`: sole reader/parser of all project JSON, immutable central snapshot,
+  executable/Python-environment resolution, and sole typed model-constants
+  supplier;
 - `study`: effect-free coordinator of all declared intent and preflight;
 - `runtime`: sole coordinator of active execution and output creation;
 - `persistence`: automatic durable recordings and verified reconstruction;
@@ -74,21 +83,24 @@ crate facade: run(&Path)
         │ Study::load
         ▼
 config
-  strict JSON + duplicate keys + paths + defaults + expansion
-        │ private ProjectSpecification / ResolvedTaskInput
+  all project JSON captured once + strict Workflow grammar
+  + paths + defaults + expansion + executable/Python resolution
+        │ private Config / ProjectSpecification / ResolvedTask
         ▼
 study
-  state semantics + model discovery + constants decode
-  + one-time observation-plan binding + identities + phases
+  retained Config + state semantics + model discovery + constants decode
+  + generic program/Python tasks + one-time observation-plan binding
+  + identities + phases
         │ immutable Study returned to the crate facade
         ▼
 runtime::execute
   execution directory + replicates + scheduling + cancellation
-  + model initialization and stepping
-        ├──── automatic observation boundaries ────► persistence
+  + model initialization/stepping or direct program/Python invocation
+        ├──── model observation boundaries ────────► persistence
         │                                             private bounded writer
         │                                             + atomic metadata/chunks
         │                                             + verified reads
+        ├──── program snapshot/log/status/artifacts ─► persistence
         │
         └──── lifecycle/progress facts ─────────────► ui
                                                       automatic terminal presentation
@@ -96,10 +108,10 @@ runtime::execute
 
 The crate facade owns only the transition from project root to Study to
 Runtime. Study is the ultimate coordinator of declared intent. Runtime is the
-ultimate coordinator of active execution. Config never discovers Rust model types.
-Study never creates output or initializes a model. Runtime never reparses or
-rebinds declarations. Persistence never decides scientific observation
-meaning.
+ultimate coordinator of active execution. Config never discovers Rust model
+types. Study never creates output or initializes a model. Study and Runtime
+never reparse the captured documents. Persistence never decides scientific
+observation meaning.
 
 ## API tiers and dependency direction
 
@@ -129,7 +141,7 @@ advanced additions
 ├── state schema inspection and deliberate maintenance
 ├── ConfigError
 ├── Study / StudyError
-├── execute(Study), RuntimeError, and successful summaries
+├── execute(Study), RuntimeError, and successful summaries including TaskRunKind
 └── completed-recording readers, decoders, timing, and PersistenceError
 ```
 
@@ -150,7 +162,8 @@ prelude aggregates supported tiers
 Peers import another subsystem through its `advanced` boundary. Config does
 not depend on task: it treats model keys as opaque. Study owns the cross-domain
 match. Task asks a config-owned resolved input for one complete typed constants
-value. Runtime receives only a fully preflighted Study.
+value or delegates one resolved program. Runtime receives only a fully
+preflighted Study and its retained Config.
 
 ## Source tree and file responsibilities
 
@@ -201,16 +214,19 @@ workflow/
 │   │   ├── task/model.rs             ScientificModel and direct-state requirements
 │   │   ├── task/result.rs            boxed application error alias
 │   │   ├── task/catalog.rs           linked registrations and sorted validation
-│   │   ├── task/definition.rs        type-erased constants/preflight/execution bridge
+│   │   ├── task/definition.rs        type-erased model/program execution definitions
 │   │   └── task/execution.rs         host port and model invariant enforcement
 │   │   │
 │   │   ├── config.rs                 config root; empty Basic, error-only Advanced
 │   │   ├── config/api.md             complete project grammar/error contract
 │   │   ├── config/error.rs           owned contextual ConfigError
 │   │   ├── config/document.rs        strict JSON and duplicate-key parser
+│   │   ├── config/store.rs           central immutable all-document Config snapshot
 │   │   ├── config/manifest.rs        study grammar, defaults, dependency checks
 │   │   ├── config/expansion.rs       deterministic $sweep/$cases compiler
-│   │   ├── config/input.rs           private resolved input and typed decode
+│   │   ├── config/input.rs           generic resolved task + model typed decode
+│   │   ├── config/program.rs         validated resolved executable declaration
+│   │   ├── config/python.rs          nested Python environment validation/lowering
 │   │   ├── config/specification.rs   one-root loading transaction
 │   │   └── config/tests/config_workflow.rs internal compiler/grammar tests
 │   │   │
@@ -225,7 +241,7 @@ workflow/
 │   │   ├── runtime/api.md            execute/summary/error contract
 │   │   ├── runtime/error.rs          active execution RuntimeError
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
-│   │   ├── runtime/host.rs           task-host to persistence-session adapter
+│   │   ├── runtime/host.rs           model/program execution and persistence adapter
 │   │   ├── runtime/execution.rs      Study-only replicate/phase/task schedulers
 │   │   └── runtime/summary.rs        successful immutable RunSummary tree
 │   │   │
@@ -239,7 +255,7 @@ workflow/
 │   │   ├── persistence.rs            persistence root; empty Basic, read Advanced
 │   │   ├── persistence/api.md        complete settings/read/error contract
 │   │   ├── persistence/plan.rs       private effective operational settings
-│   │   ├── persistence/session.rs    private automatic Runtime lifecycle port
+│   │   ├── persistence/session.rs    model recording/program workspace lifecycle
 │   │   ├── persistence/local.rs      private local recording coordinator/lease
 │   │   ├── persistence/local/error.rs exact read/write persistence failures
 │   │   ├── persistence/local/jsonl_format.rs metadata/chunk wire structures
@@ -288,29 +304,37 @@ buffers, files, or lifecycle.
 
 ### Task
 
-`ScientificModel` is the irreducible user contract. The model consumes typed
-constants, initializes from the shared schema, directly owns the stable state
-returned by `state()`, reports completion, and performs one iteration-advancing
-`step`. Task enforces what Rust can observe: state address/schema stability,
+`ScientificModel` is the irreducible user contract for stateful Rust science.
+Task itself is generic: Study may instead bind a resolved executable with
+direct arguments and no public Rust adapter. Config lowers a nested Python
+script/environment declaration to that same executable boundary. A model
+consumes typed constants, initializes from the shared schema, and directly owns
+the stable state returned by `state()`. It reports completion and performs one
+iteration-advancing `step`. Task enforces what Rust can observe: state address/schema stability,
 strict iteration progress, and monotonic optional target. The macro submits
 immutable registration metadata; the private catalog rejects bad/duplicate
 keys and ignores linker order.
 
 ### Config
 
-Config canonicalizes the project and `config` roots, parses each required JSON
-file with duplicate-key rejection, validates the exact study grammar and safe
-input containment, caches parsed input values, and expands selections
-deterministically. It retains only values needed by Study; exact source bytes,
-duplicate public graph views, and a cloneable top-level `Arc` were removed.
-The public Advanced API is only `ConfigError`.
+Config canonicalizes the project and `config` roots and parses `study.json`
+plus every `.json` file recursively beneath `config/` with duplicate-key
+rejection. One clone-cheap immutable Config retains the entire value graph. It
+validates the exact study grammar and safe model-input containment, expands
+selections deterministically, resolves program paths and Python
+scripts/environment managers once, and creates a
+deterministic language-neutral snapshot for external tasks. Reserved Workflow
+documents and arbitrary application documents use the same lookup graph. The
+public Advanced API is only `ConfigError`.
 
 ### Study
 
 `Study::load(&Path)` performs all cross-domain checks before output: state
-semantics, linked registration validation, model-key resolution, constants
-decoding, and observation/schema binding. It infers stable identities, labels,
-the output root, and private operational policy. Public inspection is limited
+semantics, linked registration validation, model-key resolution, generic
+program and Python-environment resolution, constants decoding, and
+observation/schema binding. It retains
+the central Config, infers stable identities, labels, the output root, and
+private operational policy. Public inspection is limited
 to project/output roots; phases, tasks, schema, resolved inputs, and policies
 exist only for Runtime.
 
@@ -321,14 +345,16 @@ The crate-level `run(&Path)` loads a Study and passes it to
 entry point: it consumes only complete immutable intent. Runtime alone creates
 `output/execution-<pid>-<sequence>`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
-topologically schedules phases, applies concurrency/start intervals and
+topologically schedules generic tasks, applies concurrency/start intervals and
 fail-fast/finish-all policy, checks cooperative cancellation between model
-steps, and returns deterministic successful summaries. A blocking user
-`step` cannot be forcibly killed safely.
+steps, directly starts programs and resolved Python launchers without a shell,
+and returns deterministic successful summaries. A blocking user `step` cannot
+be forcibly killed safely; an external child is killed and reaped on observed
+cancellation.
 
 ### Persistence
 
-Persistence is constructed and run only by Runtime. One internal constructor
+Persistence is constructed and run only by Runtime. The model constructor
 accepts an inferred destination, the already-bound observation plan, provenance,
 and one effective shared chunk/queue policy. A bounded worker owns all stream
 writes and commits immutable JSONL chunks plus one authoritative
@@ -339,7 +365,11 @@ Advanced users can only open completed recordings with a decoder registry.
 Readers verify metadata, sizes, hashes, framing, ordering, schema, decoding,
 and StateSeries invariants before publishing owned results. A future local or
 remote adapter belongs behind the private `PersistenceSession`, not in model
-or task APIs.
+or task APIs. A separate private program session creates an isolated artifacts
+directory, freezes central config and dependency JSON, captures stdout/stderr,
+records generic-program or Python launcher provenance, and atomically publishes
+running/complete/failed metadata. The program or Python script writes only its
+assigned artifacts; there is no public workspace builder.
 
 ### UI
 
@@ -347,8 +377,9 @@ Study owns a private zero-configuration `UiPlan`; its current effective policy
 is inferred rather than authored in `study.json`. Runtime constructs one
 clone-cheap `UiSession` after creating the execution output and publishes
 borrowed execution, replicate, phase, task, iteration, outcome, and path facts.
-Task progress comes from the same host boundaries already used for automatic
-persistence, so models supply no UI code or values.
+Model progress comes from the same host boundaries already used for automatic
+persistence. Programs publish generic lifecycle facts without invented
+iteration values, so neither workload supplies UI code or values.
 
 UI renders only when standard error is an interactive terminal and otherwise
 remains silent. Per-task progress is throttled internally, while lifecycle
@@ -372,8 +403,10 @@ owns behavior or creates an alternative canonical implementation path.
 
 1. Filesystem APIs borrow `&Path` and retain `PathBuf`; raw strings are not
    path parameters.
-2. Config is the sole project JSON reader/parser and typed constants supplier.
-3. Study completes all model/constants/observation binding before output.
+2. Config is the sole project JSON reader/parser, central immutable snapshot,
+   executable/Python-environment resolver, and typed constants supplier.
+3. Study completes all model/constants/observation and program/Python binding
+   before output and retains the exact Config snapshot.
 4. Model registration keys are authored stable semantics, never Rust type names.
 5. Models are initialized only during active Runtime execution.
 6. A model directly owns one stable canonical `SystemState`.
@@ -382,7 +415,8 @@ owns behavior or creates an alternative canonical implementation path.
    stored schema-bound.
 9. The crate facade alone turns a project root into a Study and then invokes
    Runtime; Runtime accepts only a completed Study.
-10. Runtime alone creates output and owns scheduling/cancellation.
+10. Runtime alone creates output and owns scheduling/cancellation and external
+    process invocation.
 11. Persistence writing is private, automatic, bounded, and finalized by
     Runtime; application code cannot flush, resume, or complete it.
 12. Effective paths, identities, labels, and operational defaults are inferred
@@ -391,6 +425,12 @@ owns behavior or creates an alternative canonical implementation path.
     contract, not internal flexibility for hypothetical use.
 14. UI consumes only Runtime facts, activates automatically, and never turns a
     presentation failure into scientific failure.
+15. Model and external-program tasks share phase, dependency, timeout, failure,
+    summary, persistence-workspace, and UI lifecycle semantics without forcing
+    fake state or iteration onto programs.
+16. A Python environment is declared inside its task's `python` object and is
+    completely resolved during Study loading; there is no global environment
+    registry or runtime environment discovery.
 
 ## Replacement boundaries
 
@@ -399,14 +439,18 @@ owns behavior or creates an alternative canonical implementation path.
 - An observation replacement preserves declaration meaning, one-time binding,
   cadence, clone-free borrowing, and deterministic encoded order.
 - A task replacement preserves config-owned constants decode, direct state
-  ownership checks, and automatic observation boundaries.
+  ownership checks, automatic observation boundaries, and generic program
+  delegation without public adapters.
 - A config replacement preserves the grammar, typed-path containment,
-  duplicate-key rejection, deterministic expansion, and centralized parsing.
+  duplicate-key rejection, deterministic expansion, all-document immutable
+  snapshots, direct-program and nested Python-environment resolution, and
+  centralized parsing.
 - A Study replacement remains effect-free and performs complete binding before
   publishing immutable intent.
 - A Runtime replacement consumes only Study, preserves policy and summary
   order, and owns all output/effects.
 - A persistence replacement remains behind the private session and preserves
-  bounded submission, terminal evidence/provenance, and verified reads.
+  bounded model submission, program workspace isolation/snapshots/logs,
+  terminal evidence/provenance, and verified model reads.
 - A UI replacement remains downstream of Runtime, requires no model/config
   participation, handles concurrent publishers, and stays best-effort.

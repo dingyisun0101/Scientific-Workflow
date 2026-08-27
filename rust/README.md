@@ -1,7 +1,7 @@
 # Scientific Workflow Rust crate
 
 Scientific Workflow is an inference-first library for typed scientific state,
-configuration-driven model execution, and durable observations.
+configuration-driven model or program execution, and durable outputs.
 
 ## Installation
 
@@ -67,15 +67,24 @@ deterministic and side-effect-free.
 The stable attribute key is the only bridge from `study.json` to compiled Rust
 behavior. There is no separate registry list in `main`.
 
+Standalone executable and Python tasks require no Rust trait or wrapper.
+Declare them in `study.json`; they receive the same captured central project
+configuration and dependency results at runtime. A Python task declares its
+environment locally inside its nested `python` object—there is no global
+environment registry.
+
 ### 2. Write project JSON
 
 ```text
 project/
 ├── study.json
+├── scripts/
+│   └── plot.py
 └── config/
     ├── state.json
-    └── inputs/
-        └── population.json
+    ├── inputs/
+    │   └── population.json
+    └── plot.json
 ```
 
 `config/state.json`:
@@ -103,6 +112,18 @@ project/
         {"model":"population", "input":"inputs/population.json"}
       ],
       "max_concurrency": 2
+    },
+    "plot": {
+      "after": ["simulate"],
+      "tasks": [{
+        "python": {
+          "script": "scripts/plot.py",
+          "environment": {
+            "manager": "mamba",
+            "name": "DSES"
+          }
+        }
+      }]
     }
   }
 }
@@ -127,8 +148,16 @@ Workflow shows throttled lifecycle and iteration progress only when standard
 error is attached to an interactive terminal; redirected/test output remains
 silent.
 
-Config alone reads these files. `$sweep` creates independent Cartesian choices;
-`$cases` creates correlated alternatives; ordinary arrays remain literal.
+Config alone reads `study.json` and every `.json` file recursively beneath
+`config/`, once. Reserved Workflow documents and arbitrary application files
+share the same immutable lookup graph. `$sweep` creates independent Cartesian
+choices; `$cases` creates correlated alternatives; ordinary arrays remain
+literal. Program arguments are optional opaque strings and executables are
+started directly without a shell. Python-specific `script`, `environment`, and
+`args` stay nested beneath `python`; generic timeout policy remains on the
+containing task. Supported managers are `system`, `venv`, `mamba`, `conda`,
+`uv`, and `poetry`, with manager-specific paths/names validated during Study
+loading.
 
 ### 3. Run
 
@@ -139,10 +168,17 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 ```
 
 That call loads all declarations, discovers models, validates typed constants,
-binds observation plans to the state schema, creates
-immutable tasks and phases, compiles the effective persistence plan, infers
-identities/output paths, schedules work, and persists every model
+binds observation plans to the state schema, resolves program paths and Python
+environments, creates immutable generic tasks and phases, compiles the
+effective persistence plan,
+infers identities/output paths, schedules work, and persists every task
 automatically while publishing inferred terminal progress.
+
+Each program or Python script receives absolute `WORKFLOW_CONFIG_PATH` and
+`WORKFLOW_DEPENDENCIES_PATH` snapshot files plus project, execution, replicate,
+and task-output paths through `WORKFLOW_*` environment variables. It runs in an
+isolated `artifacts/` directory; Workflow captures stdout, stderr, and terminal
+status. Editing project JSON after `Study::load` does not alter that execution.
 
 Output is created beneath `<project-root>/output` only after Study preflight
 succeeds.
@@ -151,8 +187,10 @@ succeeds.
 
 - `state`: canonical typed scientific state and schema;
 - `observation`: observation meaning and borrowed encoding;
-- `task`: `ScientificModel`, registration, and uniform invocation;
-- `config`: sole JSON parser and typed constants supplier;
+- `task`: generic model/program tasks (including Python), `ScientificModel`,
+  registration, and uniform invocation;
+- `config`: sole all-JSON parser, immutable snapshot, executable/Python
+  environment resolver, and typed constants supplier;
 - `study`: effect-free binding and immutable declared intent;
 - `runtime`: active execution and output creation;
 - `persistence`: automatic durable lifecycle and verified reading;

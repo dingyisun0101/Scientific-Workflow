@@ -3,11 +3,13 @@
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
 admission, dependency scheduling, task concurrency, cooperative timeouts and
-cancellation, model invocation, automatic persistence lifecycle, and
+cancellation, model or external-program invocation (including Config-lowered
+Python environments), automatic persistence lifecycle, and
 publication of inferred UI facts.
 
 Runtime does not parse JSON, discover models, decode constants for planning,
-or let application code construct phases/tasks.
+or let application code construct phases/tasks. It never reparses the central
+Config retained by Study.
 
 ## Basic API
 
@@ -18,12 +20,14 @@ of the active-execution subsystem.
 
 After successful preflight, Runtime creates a unique execution directory
 beneath the inferred `<project-root>/output`, creates one isolated directory
-per replicate, executes all phases and tasks, and completes their recordings.
+per replicate, executes all phases and tasks, and completes their model
+recordings or program workspaces.
 
-For each task, Runtime receives Study's private effective persistence settings,
-derives the destination, constructs the backend, submits initial/step/final
-observations, applies backpressure, commits terminal status, and shuts the
-backend down. Application/model code performs none of these operations.
+For each task, Runtime derives the destination and constructs its private
+persistence session. Model tasks submit initial/step/final observations with
+bounded backpressure. Program tasks receive frozen input snapshots, logs, and
+an artifacts workspace. Runtime commits terminal status and shuts the session
+down; application/model code performs none of this coordination.
 
 Runtime also creates one automatic UI session from Study's private inferred UI
 plan. It publishes execution, replicate, phase, task, iteration, target,
@@ -32,9 +36,10 @@ terminal and remains silent when output is redirected or captured. Rendering
 is best-effort and cannot change the Runtime result.
 
 An execution blocks until all admitted work has stopped and all successful
-persistence sessions have durably completed. Task/phase timeout cancellation is cooperative: task
-execution checks between model steps. Blocking application code inside one
-step cannot be safely killed by Rust and may delay return.
+persistence sessions have durably completed. Model cancellation is cooperative
+between steps, so blocking application code inside one step may delay return.
+External programs, including Python interpreters/environment managers, are
+polled and are killed and reaped when cancellation or a timeout is observed.
 
 Failure does not overwrite prior output. Execution that fails after output creation
 retains its unique directory and any failed/running recording evidence for
@@ -94,15 +99,65 @@ index.
 - `tasks() -> &[TaskRunSummary]`: successful tasks restored to deterministic
   Study plan order, independent of concurrent completion order.
 
+### `runtime::advanced::TaskRunKind`
+
+`TaskRunKind` is a non-exhaustive `Copy + Eq` enum distinguishing `Model` and
+`Program`. Callers matching it must retain a fallback for future workload
+kinds.
+
 ### `runtime::advanced::TaskRunSummary`
 
 - `identity() -> &str`: Study-inferred task identity;
-- `model() -> &str`: registered model key;
-- `final_iteration() -> u64`: last successfully completed scientific iteration;
-- `recording_directory() -> &Path`: completed durable recording path.
+- `kind() -> TaskRunKind`: generic workload kind;
+- `model() -> Option<&str>`: registered key for model tasks only;
+- `program() -> Option<&Path>`: resolved launcher executable for program tasks
+  only. For a Python declaration this is its interpreter or environment
+  manager, while `program.json` retains the resolved script;
+- `final_iteration() -> Option<u64>`: last scientific iteration for model
+  tasks only; and
+- `output_directory() -> &Path`: completed model recording or program
+  workspace.
 
-Summary paths are owned `PathBuf` internally and borrowed as `&Path`. Summary
-values do not authorize append/resume and carry no live model or state.
+Summary paths are owned `PathBuf` internally and borrowed as `&Path`. The
+model/program option pair and optional iteration agree with `kind`. Summary
+values do not authorize append/resume and carry no live task, process, model,
+or state.
+
+### External program and Python contract
+
+Runtime starts a resolved executable directly, without a shell, inside its
+private `artifacts/` directory. Standard input is closed. Standard output and
+error are captured as `stdout.log` and `stderr.log`. Runtime supplies absolute
+paths through:
+
+- `WORKFLOW_CONFIG_PATH`: immutable `workflow-config.json`, containing the
+  captured `study` value and all `config/` JSON documents;
+- `WORKFLOW_DEPENDENCIES_PATH`: immutable `workflow-dependencies.json`, with
+  completed task summaries from declared dependency phases;
+- `WORKFLOW_PROJECT_ROOT`: canonical project root;
+- `WORKFLOW_EXECUTION_ROOT`: unique execution directory;
+- `WORKFLOW_REPLICATE_ROOT`: current replicate directory; and
+- `WORKFLOW_TASK_OUTPUT`: the task's `artifacts/` directory, also its working
+  directory.
+
+Programs may read any central configuration keys they understand and write
+their artifacts only through the supplied task workspace. A Study uses its
+captured snapshot: editing JSON after `Study::load` cannot alter these files.
+On completion Runtime writes terminal `program.json`; nonzero exit status is a
+task failure. Dependency JSON is deterministic and contains each dependency
+phase, task identity/kind, optional model/program/final iteration, and output
+directory. Program entries additionally carry private-protocol
+`program_kind` (`program` or `python`) and the optional canonical
+`python_script`, without adding Rust summary accessors. It is a data handoff,
+not a shell command protocol.
+
+A nested Python task follows this exact runtime contract after Config lowers
+its environment to one invocation. Runtime has no Python-specific scheduler,
+active-environment lookup, package installer, or import-path mutation. The
+script reads the same `WORKFLOW_*` files/paths as any program and writes to the
+same artifacts directory. Its `.py` file need not be executable. The selected
+manager/interpreter, manager arguments, canonical script, and script arguments
+are fixed before output creation.
 
 ### `runtime::advanced::RuntimeError`
 
@@ -110,12 +165,14 @@ This non-exhaustive enum reports failures after a valid Study is available:
 
 - `OutputScope { path, source }`: unique execution or replicate directory could
   not be created;
-- `Task { task, source }`: application/model, state, observation, config decode,
+- `Task { task, source }`: model, program, state, observation, config decode,
   or persistence operation failed during invocation;
 - `TaskPanicked { task }`: task worker unwound unexpectedly;
-- `TaskTimedOut { task, timeout }`: task stopped after its cooperative deadline;
+- `TaskTimedOut { task, timeout }`: a model observed its cooperative deadline
+  or an external process was terminated after its deadline;
 - `TaskCancelled { task }`: runtime cancelled an active sibling;
-- `PhaseTimedOut { phase, timeout }`: phase exceeded its cooperative deadline;
+- `PhaseTimedOut { phase, timeout }`: phase exceeded its deadline; active
+  models stop cooperatively and active external programs are terminated;
 - `StartWorker { scope, source }`: OS thread creation failed;
 - `ReplicatePanicked { index }`: parallel replicate worker unwound; and
 - `Replicate { index, source }`: contextual wrapper for a failed replicate.
@@ -140,7 +197,7 @@ An advanced integration can retain completion paths:
 
 ```rust,no_run
 use std::path::Path;
-use scientific_workflow::runtime::advanced::execute;
+use scientific_workflow::runtime::advanced::{execute, TaskRunKind};
 use scientific_workflow::study::advanced::Study;
 
 # fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -148,6 +205,15 @@ let study = Study::load(Path::new("."))?;
 let summary = execute(study)?;
 for replicate in summary.replicates() {
     println!("replicate {}: {}", replicate.index(), replicate.output_directory().display());
+    for phase in replicate.phases() {
+        for task in phase.tasks() {
+            match task.kind() {
+                TaskRunKind::Model => println!("model {}", task.model().unwrap()),
+                TaskRunKind::Program => println!("program {}", task.program().unwrap().display()),
+                _ => println!("another task kind"),
+            }
+        }
+    }
 }
 # Ok(())
 # }
@@ -157,7 +223,8 @@ for replicate in summary.replicates() {
 
 Scheduler polling, worker thread names, active task handles, atomic cancellation
 flags, metadata-map assembly, task output ordinals, `RuntimeTaskHost`,
-`PersistenceSession`, UI events/session, backend ownership, and
+model/program task environments, child-process polling, `PersistenceSession`,
+UI events/session, backend ownership, and
 topological-position calculation are private.
 
 Recording metadata keeps complete resolved constants under `model_constants`

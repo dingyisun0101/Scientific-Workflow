@@ -25,5 +25,7 @@ pub mod advanced {
     pub use super::basic::*;
     pub use super::error::RuntimeError;
     pub use super::execution::execute;
-    pub use super::summary::{PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunSummary};
+    pub use super::summary::{
+        PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
+    };
 }

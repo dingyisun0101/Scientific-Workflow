@@ -52,9 +52,10 @@ fn format_event(event: &UiEvent<'_>) -> String {
             phase,
             identity,
             label,
-            model,
+            kind,
+            subject,
         } => format!(
-            "[replicate {replicate}] task {identity}: started {label} (model {model}, phase {phase})"
+            "[replicate {replicate}] task {identity}: started {label} ({kind} {subject}, phase {phase})"
         ),
         UiEvent::TaskProgress {
             replicate,
@@ -78,11 +79,17 @@ fn format_event(event: &UiEvent<'_>) -> String {
             replicate,
             identity,
             final_iteration,
-            recording_directory,
-        } => format!(
-            "[replicate {replicate}] task {identity}: completed at iteration {final_iteration} -> {}",
-            recording_directory.display()
-        ),
+            output_directory,
+        } => match final_iteration {
+            Some(iteration) => format!(
+                "[replicate {replicate}] task {identity}: completed at iteration {iteration} -> {}",
+                output_directory.display()
+            ),
+            None => format!(
+                "[replicate {replicate}] task {identity}: completed -> {}",
+                output_directory.display()
+            ),
+        },
         UiEvent::TaskFailed {
             replicate,
             identity,
@@ -112,8 +119,8 @@ mod tests {
             format_event(&UiEvent::TaskCompleted {
                 replicate: 2,
                 identity: "simulate/000003/model-000000",
-                final_iteration: 100,
-                recording_directory: Path::new("output/task-000003"),
+                final_iteration: Some(100),
+                output_directory: Path::new("output/task-000003"),
             }),
             "[replicate 2] task simulate/000003/model-000000: completed at iteration 100 -> output/task-000003"
         );

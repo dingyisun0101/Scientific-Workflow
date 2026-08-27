@@ -65,13 +65,27 @@ impl PhaseRunSummary {
     }
 }
 
-/// Successful completion facts for one bound model invocation.
+/// Kind of workload completed by a task.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskRunKind {
+    /// A registered `ScientificModel` invocation.
+    Model,
+    /// An external executable program invocation.
+    Program,
+}
+
+/// Successful completion facts for one generic task invocation.
 #[derive(Clone, Debug)]
 pub struct TaskRunSummary {
     pub(crate) identity: Box<str>,
-    pub(crate) model: Box<str>,
-    pub(crate) final_iteration: u64,
-    pub(crate) recording_directory: PathBuf,
+    pub(crate) kind: TaskRunKind,
+    pub(crate) model: Option<Box<str>>,
+    pub(crate) program: Option<PathBuf>,
+    pub(crate) program_kind: Option<Box<str>>,
+    pub(crate) python_script: Option<PathBuf>,
+    pub(crate) final_iteration: Option<u64>,
+    pub(crate) output_directory: PathBuf,
 }
 
 impl TaskRunSummary {
@@ -80,18 +94,31 @@ impl TaskRunSummary {
         &self.identity
     }
 
-    /// Returns the registered model key.
-    pub fn model(&self) -> &str {
-        &self.model
+    /// Returns whether this task executed a model or a program.
+    pub const fn kind(&self) -> TaskRunKind {
+        self.kind
     }
 
-    /// Returns the final scientific iteration recorded by the model.
-    pub const fn final_iteration(&self) -> u64 {
+    /// Returns the registered model key for a model task.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// Returns the resolved launcher executable for a program task.
+    ///
+    /// For a nested Python declaration this is its interpreter or environment
+    /// manager; durable `program.json` retains the canonical script path.
+    pub fn program(&self) -> Option<&Path> {
+        self.program.as_deref()
+    }
+
+    /// Returns the final scientific iteration for a model task.
+    pub const fn final_iteration(&self) -> Option<u64> {
         self.final_iteration
     }
 
-    /// Returns the completed task recording directory.
-    pub fn recording_directory(&self) -> &Path {
-        &self.recording_directory
+    /// Returns the completed model recording or program workspace directory.
+    pub fn output_directory(&self) -> &Path {
+        &self.output_directory
     }
 }

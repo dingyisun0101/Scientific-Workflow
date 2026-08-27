@@ -16,7 +16,7 @@ use super::result::TaskResult;
 #[derive(Clone, Copy)]
 pub struct ModelRegistration {
     key: &'static str,
-    make_task: fn() -> Task,
+    make_task: fn(ResolvedTaskInput, BoundObservationPlan) -> Task,
     preflight: fn(&ResolvedTaskInput, &SystemStateSchema) -> TaskResult<BoundObservationPlan>,
 }
 
@@ -42,8 +42,12 @@ impl ModelRegistration {
         self.key
     }
 
-    pub(crate) fn make_task(self) -> Task {
-        (self.make_task)()
+    pub(crate) fn make_task(
+        self,
+        input: ResolvedTaskInput,
+        observation_plan: BoundObservationPlan,
+    ) -> Task {
+        (self.make_task)(input, observation_plan)
     }
 
     pub(crate) fn preflight(

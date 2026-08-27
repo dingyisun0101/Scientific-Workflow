@@ -8,7 +8,8 @@ types are deliberately not public.
 
 - `rust/tests/integration_surface.rs` verifies the crate-level `run(&Path)`
   facade, canonical error Basic/Advanced tiers, prelude aggregation, and the
-  Study-only signature of Runtime's Advanced entry point.
+  Study-only signature of Runtime's Advanced entry point, including
+  `TaskRunKind` through `prelude::advanced`.
 - `rust/tests/state_workflow.rs` exercises Path-based schema loading,
   heterogeneous payload ownership, tuple borrows, time advancement, schema
   inspection, maintenance, and public Basic/Advanced tier behavior.
@@ -25,15 +26,24 @@ types are deliberately not public.
 
 - `rust/src/config/tests/config_workflow.rs` covers duplicate keys, strict
   unknown-field rejection, safe Path containment, manifest/persistence
-  defaults, positive limits, dependencies, deterministic `$sweep`/`$cases`
-  expansion, private typed constants decoding, and contextual errors.
+  defaults, positive limits, dependencies, generic model/program/Python task grammar,
+  executable resolution, nested Python/mamba command lowering and executable
+  preflight, deterministic `$sweep`/`$cases` expansion, private
+  typed constants decoding, central recursive arbitrary-document capture, and
+  contextual errors. Even an unreferenced JSON document is strict-parsed.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
   invalid/duplicate registrations, effect-free loading, unknown models, typed
   constants and one-time observation preflight, deterministic internal
   identities, phase composition, replicate/persistence policy, runtime
-  scheduling, automatic task recordings, and crate-level `run(&Path)`.
-- `rust/src/ui/terminal.rs` contains pure formatting tests for Runtime-derived
-  task progress and completion facts. Ordinary test capture keeps the automatic
+  scheduling, automatic task recordings, and crate-level `run(&Path)`. Its
+  Unix program-task test verifies the frozen central Config after source files
+  change, dependency-summary handoff, direct executable invocation, artifacts,
+  logs, metadata, and generic runtime summaries. A separate direct Python task
+  verifies that a non-executable `.py` script runs through its nested `system`
+  environment without any Rust wrapper and records Python launcher provenance.
+- `rust/src/ui/terminal.rs` contains pure formatting tests for generic
+  model/program lifecycle plus model progress and optional completion facts.
+  Ordinary test capture keeps the automatic
   UI silent, so UI cannot disturb test output or execution results.
 
 ## Persistence tests

@@ -58,7 +58,8 @@ re-exports the complete supported advanced tiers from:
 - `study::advanced`: only `Study` and `StudyError`; its phase/task graph is
   crate-private; and
 - `runtime::advanced`: `execute`, `RuntimeError`, `RunSummary`,
-  `ReplicateRunSummary`, `PhaseRunSummary`, and `TaskRunSummary`; and
+  `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunKind`, and
+  `TaskRunSummary`; and
 - `ui::advanced`: no public additions; its plan, events, session, and renderer
   remain crate-private.
 

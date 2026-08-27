@@ -83,6 +83,20 @@ fn manifest() -> &'static str {
     }"#
 }
 
+fn model_task(task: &ResolvedTask) -> &ResolvedTaskInput {
+    match task {
+        ResolvedTask::Model(input) => input,
+        ResolvedTask::Program(_) => panic!("expected a model task"),
+    }
+}
+
+fn program_task(task: &ResolvedTask) -> &ResolvedProgramTask {
+    match task {
+        ResolvedTask::Model(_) => panic!("expected a program task"),
+        ResolvedTask::Program(program) => program,
+    }
+}
+
 #[test]
 fn one_project_root_compiles_every_document_into_a_resolved_specification() {
     let project = TestProject::new(
@@ -133,6 +147,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
     let decoded = simulation
         .tasks()
         .iter()
+        .map(model_task)
         .map(ResolvedTaskInput::decode::<Constants>)
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -169,14 +184,17 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
             },
         ]
     );
-    assert_eq!(simulation.tasks()[3].model(), "model");
-    assert_eq!(simulation.tasks()[3].ordinal(), 3);
+    assert_eq!(model_task(&simulation.tasks()[3]).model(), "model");
+    assert_eq!(model_task(&simulation.tasks()[3]).ordinal(), 3);
     assert_eq!(
-        simulation.tasks()[3].timeout(),
+        model_task(&simulation.tasks()[3]).timeout(),
         Some(Duration::from_millis(250))
     );
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(simulation.tasks()[3].resolved_json()).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(
+            model_task(&simulation.tasks()[3]).resolved_json()
+        )
+        .unwrap(),
         serde_json::json!({
             "shape": [64, 64],
             "temperature": 300.0,
@@ -231,6 +249,7 @@ fn correlated_cases_become_complete_typed_constant_values() {
     let values = specification.phases()[0]
         .tasks()
         .iter()
+        .map(model_task)
         .map(|input| input.decode::<Constants>().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(values.len(), 2);
@@ -344,11 +363,139 @@ fn typed_decode_errors_retain_model_source_and_combination() {
         steps: u64,
     }
     assert!(matches!(
-        specification.phases()[0].tasks()[0].decode::<Constants>(),
+        model_task(&specification.phases()[0].tasks()[0]).decode::<Constants>(),
         Err(ConfigError::DecodeModelConstants {
             model,
             ordinal: 0,
             ..
         }) if model == "model"
     ));
+}
+
+#[test]
+fn central_config_captures_reserved_and_arbitrary_documents_in_one_namespace() {
+    let project = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
+        &[("run.json", r#"{"steps":1}"#)],
+    );
+    fs::create_dir_all(project.path().join("config/visualization")).unwrap();
+    fs::write(
+        project.path().join("config/visualization/plot.json"),
+        r#"{"title":"Captured configuration","dpi":160}"#,
+    )
+    .unwrap();
+
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(specification.config().snapshot_json()).unwrap();
+    assert_eq!(
+        snapshot["study"]["phases"]["only"]["tasks"][0]["model"],
+        "model"
+    );
+    assert_eq!(
+        snapshot["config"]["state.json"]["fields"][0]["name"],
+        "population"
+    );
+    assert_eq!(
+        snapshot["config"]["visualization/plot.json"]["title"],
+        "Captured configuration"
+    );
+}
+
+#[test]
+fn invalid_unreferenced_json_is_rejected_because_config_manages_all_documents() {
+    let project = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
+        &[("run.json", "{}")],
+    );
+    fs::write(
+        project.path().join("config/unreferenced.json"),
+        r#"{"duplicate":1,"duplicate":2}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(project.path()),
+        Err(ConfigError::DuplicateKey { key, .. }) if key == "duplicate"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn program_resolution_rejects_a_regular_file_without_execute_permission() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let project = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"program":"scripts/analyze"}]}}}"#,
+        &[],
+    );
+    fs::create_dir_all(project.path().join("scripts")).unwrap();
+    let program = project.path().join("scripts/analyze");
+    fs::write(&program, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(matches!(
+        ProjectSpecification::load(project.path()),
+        Err(ConfigError::InvalidProgram { path, reason })
+            if path == Path::new("scripts/analyze") && reason.contains("executable")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn nested_python_task_resolves_its_mamba_environment_during_loading() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let project = TestProject::new(
+        r#"{
+          "phases": {
+            "analyze": {
+              "tasks": [{
+                "python": {
+                  "script": "scripts/analyze.py",
+                  "environment": {
+                    "manager": "mamba",
+                    "name": "DSES",
+                    "executable": "tools/mamba"
+                  },
+                  "args": ["--publication"]
+                },
+                "timeout_ms": 9000
+              }]
+            }
+          }
+        }"#,
+        &[],
+    );
+    fs::create_dir_all(project.path().join("scripts")).unwrap();
+    fs::create_dir_all(project.path().join("tools")).unwrap();
+    let script = project.path().join("scripts/analyze.py");
+    fs::write(&script, "print('analysis')\n").unwrap();
+    let manager = project.path().join("tools/mamba");
+    fs::write(&manager, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&manager, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    let program = program_task(&specification.phases()[0].tasks()[0]);
+    let script = fs::canonicalize(script).unwrap();
+    assert_eq!(program.program(), fs::canonicalize(manager).unwrap());
+    assert_eq!(program.kind_name(), "python");
+    assert_eq!(program.subject(), "analyze.py");
+    assert_eq!(program.python_script(), Some(script.as_path()));
+    assert_eq!(program.python_environment_manager(), Some("mamba"));
+    assert_eq!(program.timeout(), Some(Duration::from_millis(9000)));
+    assert_eq!(
+        program
+            .args()
+            .iter()
+            .map(|argument| argument.to_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "run",
+            "-n",
+            "DSES",
+            "python",
+            script.to_str().unwrap(),
+            "--publication"
+        ]
+    );
 }

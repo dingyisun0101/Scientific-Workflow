@@ -45,7 +45,8 @@ pub(crate) enum UiEvent<'a> {
         phase: &'a str,
         identity: &'a str,
         label: &'a str,
-        model: &'a str,
+        kind: &'a str,
+        subject: &'a str,
     },
     TaskProgress {
         replicate: u64,
@@ -56,8 +57,8 @@ pub(crate) enum UiEvent<'a> {
     TaskCompleted {
         replicate: u64,
         identity: &'a str,
-        final_iteration: u64,
-        recording_directory: &'a Path,
+        final_iteration: Option<u64>,
+        output_directory: &'a Path,
     },
     TaskFailed {
         replicate: u64,

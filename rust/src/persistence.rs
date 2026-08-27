@@ -1,9 +1,11 @@
-//! Automatic durable output and verified reconstruction.
+//! Automatic durable model recordings and program workspaces.
 //!
 //! Ordinary applications configure persistence only through `study.json`.
 //! Study owns an immutable effective plan, while Runtime privately constructs
-//! and drives persistence. The Basic API is intentionally empty; Advanced
-//! exposes verified reading contracts, never write-session construction.
+//! and drives persistence. Model tasks receive structured state recordings;
+//! generic program and Python tasks receive config/dependency snapshots,
+//! captured logs, launcher provenance, and an artifact directory. The Basic API is intentionally empty; Advanced exposes
+//! verified state-recording readers, never write-session construction.
 
 mod local;
 mod plan;
@@ -33,5 +35,5 @@ pub mod advanced {
         PersistenceError, RecordingTiming, StoredStateSeriesReader,
     };
     pub(crate) use super::plan::PersistencePlan;
-    pub(crate) use super::session::PersistenceSession;
+    pub(crate) use super::session::{PersistenceSession, ProgramLaunch, ProgramPersistenceSession};
 }

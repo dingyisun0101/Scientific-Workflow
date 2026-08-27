@@ -58,6 +58,16 @@ pub enum ConfigError {
         config_root: PathBuf,
     },
 
+    /// A program or Python task did not resolve to a valid executable, script,
+    /// or environment.
+    #[error("invalid program task path `{path}`: {reason}")]
+    InvalidProgram {
+        /// Authored program path or command name.
+        path: PathBuf,
+        /// Stable resolution or validation failure.
+        reason: String,
+    },
+
     /// A phase dependency does not name a declared phase.
     #[error("phase `{phase}` depends on unknown phase `{dependency}`")]
     UnknownDependency {
