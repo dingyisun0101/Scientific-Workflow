@@ -1,9 +1,4 @@
 {
-  "replicates": {
-    "count": 1,
-    "scheduling": "sequential",
-    "failure_policy": "fail_fast"
-  },
   "phases": {
     "simulate": {
       "tasks": [
@@ -12,8 +7,20 @@
           "input": "inputs/run.json"
         }
       ],
-      "max_concurrency": 3,
-      "start_interval_ms": 3000
+      "max_concurrency": 3
+    },
+    "plot": {
+      "after": ["simulate"],
+      "tasks": [
+        {
+          "python": {
+            "script": "scripts/plot.py",
+            "environment": {
+              "manager": "system"
+            }
+          }
+        }
+      ]
     }
   }
 }

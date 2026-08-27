@@ -38,12 +38,13 @@ The Rust crate lives in [`rust/`](rust/). Start with its
 [architecture](docs/architecture.md), [test map](docs/tests.md), and each
 subsystem's `src/<module>/api.md` for exhaustive contracts.
 
-The [attractor example](examples/attractor_2d) demonstrates the final workflow:
-its Rust executable is one `run(&Path)` call, while its model owns state and a
-custom observation plan and its JSON owns study organization and constants sweeps.
-Persistence construction, submission, finalization, and shutdown are entirely
-internal. Interactive progress is inferred from Runtime facts and requires no
-model callbacks or JSON settings.
+The [attractor example](examples/attractor_2d) demonstrates the final workflow
+as one realistic project. Its Rust executable is one `run(&Path)` call, its
+model owns state and a custom observation plan, its JSON owns constants sweeps
+and phase organization, and its final phase declares a Python plotter directly.
+The plotter reads verified model recordings and central plot configuration,
+then writes an SVG through its automatic artifact workspace. Persistence,
+scheduling, Python launching, and interactive progress remain internal.
 
 > This crate is pre-1.0 test software. Public API behavior may change through
 > coordinated refactor releases.

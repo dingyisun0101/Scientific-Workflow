@@ -204,6 +204,10 @@ coordinates active execution.
 Advanced consumers may use `Study::load` and `runtime::advanced::execute`, but
 ordinary projects should not.
 
+The repository's [`attractor_2d`](../examples/attractor_2d) project combines
+these pieces end to end: six swept Rust model tasks feed one directly declared
+Python plotting phase that opens the verified recordings and emits an SVG.
+
 Each target subsystem publishes `module::basic` and `module::advanced`, with
 the latter a strict superset. `prelude::basic` contains the small model-author
 surface. Persistence writing is automatic and private; only verified reading

@@ -279,8 +279,11 @@ workflow/
     ├── Cargo.toml / Cargo.lock         standalone example package
     ├── src/main.rs                     one run(&Path) call
     ├── src/hopf_model.rs               registered state-owning model
-    ├── study.json                      phases/tasks/replicates
-    └── config/                         schema and model constants
+    ├── study.json                      swept simulation then Python plot phase
+    ├── config/state.json               canonical model state schema
+    ├── config/inputs/run.json          constants and Cartesian sweeps
+    ├── config/plot.json                arbitrary plotter settings
+    └── scripts/plot.py                 direct verified-recording SVG task
 ```
 
 ## Subsystem details

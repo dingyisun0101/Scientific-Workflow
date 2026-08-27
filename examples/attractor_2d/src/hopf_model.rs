@@ -5,7 +5,7 @@ const POINT_FIELD: &str = "point";
 
 const RADIUS_FIELD: &str = "radius";
 
-/// Minimal scientific owner for one generated task.
+/// Scientific owner for one generated parameter-sweep task.
 ///
 /// The evolving fields live in Workflow's dynamic `SystemState`; the model
 /// stores only the coefficients needed to advance them. This deliberately

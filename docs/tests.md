@@ -78,3 +78,10 @@ python3 -m unittest discover -s python/tests
 
 Package inspection must also verify that every first-level module's `api.md`,
 `docs/architecture.md`, and proc-macro support are included where required.
+
+The attractor example is an executable integration demonstration, not merely a
+compile fixture. A manual or release validation run should confirm that its six
+model tasks produce completed recordings and its dependent Python task writes
+`attractor-sweep.svg` plus `plot-summary.json` beneath its inferred artifacts
+directory. The Python task uses the public verified reader and central
+`config/plot.json`; it has no Rust caller wrapper.
