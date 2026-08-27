@@ -450,22 +450,13 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         clones.load(Ordering::SeqCst)
     );
 
-    let configurations = StudyConfiguration::load(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/configuration/cartesian_study"),
-    )
-    .unwrap()
-    .workload("test", "dynamics")
-    .unwrap();
-    let configuration = configurations.combination(0).unwrap();
     let task_metadata_run = workspace.root.join("task-metadata-run");
     SystemStateWriter::builder(task_metadata_run.clone(), &live)
         .with_writer(Writer::streams([Stream::all_fields("checkpoint").unwrap()]).unwrap())
-        .with_user_metadata(Map::from_iter([(
-            "experiment".to_owned(),
-            Value::from("metadata-merge"),
-        )]))
-        .with_configuration(&configuration)
+        .with_user_metadata(Map::from_iter([
+            ("experiment".to_owned(), Value::from("metadata-merge")),
+            ("ordinal".to_owned(), Value::from(0)),
+        ]))
         .with_shared_stream_storage(StateStreamStorage::chunked(
             NonZeroU64::new(4_096).unwrap(),
             NonZeroU64::new(16_384).unwrap(),
@@ -478,8 +469,6 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         serde_json::from_slice(&fs::read(task_metadata_run.join("metadata.json")).unwrap())
             .unwrap();
     assert_eq!(task_metadata["user_metadata"]["ordinal"], 0);
-    assert_eq!(task_metadata["user_metadata"]["temperature"], 280.0);
-    assert_eq!(task_metadata["user_metadata"]["seed"], 7);
     assert_eq!(
         task_metadata["user_metadata"]["experiment"],
         "metadata-merge"
@@ -489,7 +478,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         task_metadata["streams"][0]["sampling_interval"],
         serde_json::json!({"iterations": 1})
     );
-    println!("[task-metadata] ordinal=0 temperature=280 seed=7");
+    println!("[task-metadata] generic_user_metadata=true ordinal=0");
     println!("[result] storage_workflow=passed");
 }
 

@@ -55,25 +55,6 @@ second file read, effective policies, dependency validation, Cartesian sweeps,
 correlated cases, literal arrays, deterministic ordinals, config-owned typed
 decoding, contextual errors, and advanced-prelude exports.
 
-`configuration_workflow.rs` continues to verify the transitional legacy
-configuration contract:
-
-```text
-parameters.json → StudyConfiguration → WorkloadConfiguration → ResolvedConfiguration values
-```
-
-Coverage includes:
-
-- strict Workflow-owned `study.json` fields, typed application settings, and
-  rejection of unknown or invalid policy fields;
-- nested fixed values;
-- Cartesian sweep products and deterministic ordinal order;
-- explicit cases;
-- indexed combination access;
-- typed value and tuple decoding;
-- missing values and type errors retaining the combination ordinal;
-- malformed JSON, duplicate keys, invalid documents, and fixed/sweep conflicts.
-
 Target config tests deliberately stop before compiled-task matching,
 state-schema semantics, scheduling, display-field/schema validation, output,
 and execution. Those compositions belong to runtime and the participating
@@ -120,8 +101,8 @@ The repository also checks:
 - Simulator-owned `SimulatorInputs` and `SimulatorConfiguration` grouping into
   ensemble tasks;
 - Dispatcher-owned study directories, inputs, paths, phases, and plans;
-- the attractor example's direct mapping from `WorkloadConfiguration`
-  combinations into explicitly named transitional `StudyTask` values.
+- the attractor example's temporary mapping from config-owned resolved task
+  inputs into explicitly named transitional `StudyTask` values.
 
 These builds ensure downstream programs retain ownership of model-specific
 inputs while the runtime migration replaces the transitional

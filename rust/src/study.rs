@@ -12,9 +12,9 @@
 //! not define scientific state schema, persistence formats, artifact identity, or
 //! RNG strategy. Applications feed workloads and state objects into the study.
 //!
-//! Configuration remains independent: applications iterate
-//! [`ResolvedConfiguration`](crate::configuration::ResolvedConfiguration)
-//! values, capture each value in a workload, and construct tasks explicitly.
+//! Project declaration parsing belongs exclusively to [`crate::config`]. The
+//! transitional study API receives already constructed workloads and does not
+//! load, expand, or decode task inputs.
 //!
 //! # Phase completion
 //!

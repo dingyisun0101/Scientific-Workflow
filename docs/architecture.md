@@ -4,8 +4,8 @@
 
 This document describes the target architecture for the current Scientific
 Workflow refactor. `state`, `writer`, `task`, and `config` now implement their
-target boundaries. Current orchestration, legacy configuration, and storage
-modules coexist with the remaining target modules until their behavior has
+target boundaries. Current orchestration and storage modules coexist with the
+remaining target modules until their behavior has
 been migrated and verified.
 
 The architecture has one overriding usability goal:
@@ -882,9 +882,10 @@ document grammar, containment, dependency references, expansion, and complete
 typed-input decoding. Errors retain typed paths, JSON locations, definition
 and ordinal context, and underlying I/O/Serde chains.
 
-The old `configuration` module remains only as a temporary compatibility
-surface for unmigrated study/execution/example code. It is not an alias and is
-not part of the target config tiers.
+The former `configuration` module has been removed. `config` is now the sole
+project-declaration parser and constants supplier. Transitional execution
+consumes its validated `ReplicatePolicy`; study and storage no longer contain
+configuration-specific convenience APIs.
 
 ## `runtime`: inferred orchestration
 
@@ -1331,7 +1332,7 @@ The refactor consolidates the current boundaries as follows:
 | `time_series` | `state::series` |
 | public storage writer configuration | `writer` definition |
 | storage queues, chunks, continuation, and readers | `record` |
-| `configuration` | self-contained `config` tiers with private parser implementation |
+| former `configuration` module | removed; behavior is owned solely by the self-contained `config` tiers |
 | `study`, phases, tasks, plans, and scheduling | `task` definition plus `runtime` tiers with private scheduling implementation |
 | `execution` and replicate scopes | `runtime`, with scopes private and replacement ports advanced |
 | `artifact` | `record::artifact` |

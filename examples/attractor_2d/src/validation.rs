@@ -9,7 +9,7 @@ use scientific_workflow::prelude::study::TaskContext;
 
 pub(crate) fn validate_recording(
     recording_directory: &Path,
-    producer_configuration: &ResolvedConfiguration,
+    expected_iteration: u64,
     context: &TaskContext,
 ) -> AppResult<()> {
     context.set_detail("checking final checkpoint");
@@ -25,8 +25,6 @@ pub(crate) fn validate_recording(
         .read_latest_state_from_stream(CHECKPOINT_STREAM)?;
     let point = state.payload::<Vec<f64>>(POINT_FIELD)?;
     let radius = state.payload::<f64>(RADIUS_FIELD)?;
-    let expected_iteration: u64 = producer_configuration.decode_value("/step_count")?;
-
     // Check durable scientific invariants rather than rerunning the solver.
     if point.len() != 2 || *radius != point[0].hypot(point[1]) {
         return Err("checkpoint radius is inconsistent with its point".into());

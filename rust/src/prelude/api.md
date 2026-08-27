@@ -7,8 +7,8 @@ only places re-exported names in scope.
 
 The canonical behavioral contract for each symbol remains in its owning
 module. During the staged architecture migration, the prelude also aggregates
-the existing configuration, storage, execution, artifact, RNG, and study
-surfaces. As each becomes a first-level tiered subsystem, its module-owned
+the existing storage, execution, artifact, RNG, and study surfaces. As each
+becomes a first-level tiered subsystem, its module-owned
 `basic` or `advanced` scope replaces that transitional direct inventory.
 
 ## Basic API
@@ -49,8 +49,8 @@ message, or recording administration. Their complete execution and ownership
 contract is documented in `task/api.md`.
 
 It also re-exports the complete `config::basic` scope, which is intentionally
-empty. Ordinary applications
-write a study manifest, state schema, and task input documents; they do not
+empty. Ordinary applications write a study manifest, state schema, and task
+input documents; they do not
 load or query them through Rust. Consequently, it contributes no names to
 `prelude::basic`.
 
@@ -60,10 +60,6 @@ await the same tier refactor:
 - artifact: `ArtifactDescriptor`, `ArtifactDisposition`, `ArtifactError`,
   `ArtifactLoadError`, `PersistedArtifact`, `VerifiedArtifact`,
   `load_verified_artifact`, and `persist_artifact`;
-- configuration: `ConfigurationError`, `ConfigurationIter`, `ProjectPaths`,
-  `ReplicateFailurePolicy`, `ReplicateScheduling`, `ReplicateSettings`,
-  `ResolvedConfiguration`, `StudyConfiguration`, `StudySettings`, and
-  `WorkloadConfiguration`;
 - execution: `ExecutionScope`, `ExecutionScopeError`, `ReplicateContext`,
   `ReplicateExecutionError`, and `ReplicateExecutor`;
 - RNG provenance: `DerivedSeed`, `RNG_RECORDS_METADATA_KEY`,
@@ -139,10 +135,10 @@ boundary:
 - `ConfigError` for contextual loading, strict parsing, path-containment,
   expansion, dependency, and typed-decode failures.
 
-These target config names coexist temporarily with the old
-`configuration::*` inventory in `prelude::basic` while legacy study and
-execution code is migrated. The old types are not aliases for the new config
-boundary.
+This is the only project-declaration boundary. The former flat
+`configuration` inventory has been removed; no duplicate parser, manual
+combination iterator, or named-path table is re-exported through either
+prelude.
 
 The advanced scope grants supported integration responsibility, not access to
 private implementation files. Peer subsystems should import the narrow owning

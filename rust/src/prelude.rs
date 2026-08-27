@@ -13,11 +13,6 @@ pub mod basic {
     };
     #[allow(unused_imports)]
     pub use crate::config::basic::*;
-    pub use crate::configuration::{
-        ConfigurationError, ConfigurationIter, ProjectPaths, ReplicateFailurePolicy,
-        ReplicateScheduling, ReplicateSettings, ResolvedConfiguration, StudyConfiguration,
-        StudySettings, WorkloadConfiguration,
-    };
     pub use crate::execution::{
         ExecutionScope, ExecutionScopeError, ReplicateContext, ReplicateExecutionError,
         ReplicateExecutor,

@@ -1,8 +1,35 @@
 {
-  "replicate_settings": {
-    "replicates": 1,
+  "replicates": {
+    "count": 1,
     "scheduling": "sequential",
     "failure_policy": "fail_fast",
     "base_seed": 1101
+  },
+  "phases": {
+    "simulate": {
+      "tasks": [
+        {
+          "definition": "attractor",
+          "input": "inputs/run.json",
+          "display": {"include": ["point", "radius"]}
+        }
+      ],
+      "max_concurrency": 3,
+      "start_interval_ms": 3000
+    },
+    "validate": {
+      "after": ["simulate"],
+      "tasks": [
+        {"definition": "validation", "input": "inputs/run.json"}
+      ],
+      "max_concurrency": 3,
+      "start_interval_ms": 3000
+    },
+    "render": {
+      "after": ["validate"],
+      "tasks": [
+        {"definition": "render", "input": "inputs/render.json"}
+      ]
+    }
   }
 }

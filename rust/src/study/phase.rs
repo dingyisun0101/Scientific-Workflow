@@ -12,7 +12,6 @@ use sha2::{Digest, Sha256};
 use super::completion::{PhaseCompletion, PhaseCompletionExaminer};
 use super::error::StudyError;
 use super::task::{TaskContext, TaskResult, Workload};
-use crate::configuration::{ProjectPaths, ResolvedConfiguration};
 
 /// Stable numeric identity of one execution phase.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -149,40 +148,6 @@ impl Task {
         )
     }
 
-    /// Creates a one-shot task using the conventional configuration identity.
-    pub fn one_shot_for_configuration<W>(
-        category: impl Into<String>,
-        configuration: &ResolvedConfiguration,
-        workload: W,
-    ) -> Self
-    where
-        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
-    {
-        Self::for_configuration(
-            category,
-            configuration,
-            TaskMode::OneShot,
-            Box::new(workload),
-        )
-    }
-
-    /// Creates a progress task using the conventional configuration identity.
-    pub fn progress_for_configuration<W>(
-        category: impl Into<String>,
-        configuration: &ResolvedConfiguration,
-        workload: W,
-    ) -> Self
-    where
-        W: FnOnce(&TaskContext) -> TaskResult + Send + 'static,
-    {
-        Self::for_configuration(
-            category,
-            configuration,
-            TaskMode::Progress,
-            Box::new(workload),
-        )
-    }
-
     /// Creates an application-verified task that is already satisfied.
     pub fn completed(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self::new(id, label, TaskMode::OneShot, None, true)
@@ -206,25 +171,6 @@ impl Task {
         }
     }
 
-    fn for_configuration(
-        category: impl Into<String>,
-        configuration: &ResolvedConfiguration,
-        mode: TaskMode,
-        workload: Workload,
-    ) -> Self {
-        let category = category.into();
-        let ordinal = configuration.ordinal();
-        Self::new(
-            format!("{category}-{ordinal}"),
-            format!("{category} {ordinal}"),
-            mode,
-            Some(workload),
-            false,
-        )
-        .category(category)
-        .with_configuration(configuration)
-    }
-
     /// Sets the optional application-defined task category.
     #[must_use]
     pub fn category(mut self, category: impl Into<String>) -> Self {
@@ -236,35 +182,6 @@ impl Task {
     #[must_use]
     pub fn metadata(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
         Arc::make_mut(&mut self.metadata).insert(key.into(), value.into());
-        self
-    }
-
-    /// Attaches a complete resolved scientific configuration to task provenance.
-    #[must_use]
-    pub fn with_configuration(mut self, configuration: &ResolvedConfiguration) -> Self {
-        let metadata = Arc::make_mut(&mut self.metadata);
-        metadata.insert(
-            "configuration_ordinal".to_owned(),
-            Value::from(configuration.ordinal()),
-        );
-        metadata.insert(
-            "configuration_identity".to_owned(),
-            serde_json::json!({
-                "component": configuration.component(),
-                "workload": configuration.workload(),
-                "global_ordinal": configuration.global_ordinal(),
-                "component_ordinal": configuration.component_ordinal(),
-                "workload_ordinal": configuration.workload_ordinal(),
-            }),
-        );
-        metadata.insert("configuration".to_owned(), configuration.to_json_value());
-        self
-    }
-
-    /// Attaches the complete named project path table to task provenance.
-    #[must_use]
-    pub fn with_project_paths(mut self, paths: &ProjectPaths) -> Self {
-        Arc::make_mut(&mut self.metadata).insert("project_paths".to_owned(), paths.to_json_value());
         self
     }
 

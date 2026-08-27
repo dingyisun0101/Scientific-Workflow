@@ -1,5 +1,0 @@
-{
-  "input_data": "data/input.json",
-  "output_root": "results",
-  "cache": "scratch/cache"
-}

@@ -25,9 +25,6 @@
 //! - `study`: transitional declarative study/phase/task planning and run
 //!   execution. It owns declaration validation, scheduling, cancellation,
 //!   execution timing, and progress summaries until `runtime` replaces it.
-//! - `configuration`: transitional parameter and named-path APIs retained only
-//!   for unmigrated orchestration and examples. It is not the target `config`
-//!   boundary.
 //! - `storage`: asynchronous buffered persistence and completed-run reconstruction.
 //! - `execution`: replicate subprocess dispatch, isolated output scopes, and
 //!   directory-scoped recording path derivation.
@@ -58,8 +55,10 @@
 //!
 //! # Supporting modules
 //!
-//! [`execution`] dispatches isolated replicate subprocesses, creates their
-//! output scopes, and derives deterministic task recording paths. [`artifact`]
+//! [`execution`] consumes config's validated replicate policy, dispatches
+//! isolated subprocesses, creates their output scopes, and derives
+//! deterministic task recording paths. A replicate exposes a seed deriver only
+//! when the study manifest declares a base seed. [`artifact`]
 //! atomically publishes and verifies content-addressed immutable bytes.
 //! [`rng_record`] stores validated RNG provenance while leaving random
 //! generation to applications.
@@ -140,7 +139,6 @@ mod clock;
 
 pub mod artifact;
 pub mod config;
-pub mod configuration;
 pub mod execution;
 pub mod prelude;
 pub mod rng_record;

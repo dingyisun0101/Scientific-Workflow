@@ -18,7 +18,7 @@ const REQUIRED_STEP_DISPLAY_PAUSE: Duration = Duration::from_millis(1);
 ///
 /// The evolving fields live in Workflow's dynamic `SystemState`; the model
 /// stores only the coefficients needed to advance them. This deliberately
-/// avoids defining an application-specific state/configuration mirror.
+/// avoids defining an application-specific state mirror.
 pub(crate) struct HopfModel {
     state: SystemState,
     mu: f64,

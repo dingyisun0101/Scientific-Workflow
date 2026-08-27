@@ -484,14 +484,12 @@ The following are intentionally private and replaceable:
 - dependency graph traversal state; and
 - concrete defaulting implementation.
 
-There is no public `StudyConfiguration`, `WorkloadConfiguration`,
-`ResolvedConfiguration`, `ConfigurationIter`, `ProjectPaths`, JSON Pointer
-lookup, individual-value decoder, component/workload hierarchy, configuration
-builder, source mutation API, arbitrary document loader, task registry,
-scheduler, state-schema interpreter, output path, or execution method in this
-subsystem.
+There is no public manual combination space or iterator, JSON Pointer lookup,
+individual-value decoder, named-path table, component/workload hierarchy,
+configuration builder, source mutation API, arbitrary document loader, task
+registry, scheduler, state-schema interpreter, output path, or execution method
+in this subsystem.
 
-The legacy `configuration` module remains temporarily available only for the
-unmigrated study/execution/example implementation. It is not part of the target
-`config::basic` or `config::advanced` contract and will be removed when runtime
-adopts `ProjectSpecification`.
+The former flat `configuration` module and its manual combination APIs have
+been removed. `config::basic` and `config::advanced` are the sole supported
+project-declaration scopes.

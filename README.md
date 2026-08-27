@@ -1,111 +1,69 @@
 # Scientific Workflow
 
-> Warning: this crate is test software. API shape and guarantees are unstable.
-> Treat all releases as potentially breaking until a stable line is announced and
-> update downstream integrations together with each bump.
+> This crate is test software. Its API and guarantees may change before 1.0.
 
-The Rust crate lives in [`rust/`](rust/). Its complete public overview is in
-[`rust/README.md`](rust/README.md), and the target architecture is in
-[`docs/architecture.md`](docs/architecture.md).
+Scientific Workflow provides typed state, configuration-driven scientific
+tasks, observation definitions, durable recording infrastructure, replicate
+isolation, and reproducibility support for Rust applications.
 
-The current registry release is consumed with:
+The target user workflow is deliberately small:
 
-```toml
-[dependencies]
-scientific-workflow = "0.10.0"
-```
+1. define scientific state and its writer;
+2. define typed task behavior; and
+3. write `study.json`, `config/state.json`, and task input documents beneath
+   `config/inputs/`.
 
-See the [0.9 migration checklist](rust/README.md#migrating-from-09) before
-updating an existing application.
+Workflow will infer identities, paths, task instances, scheduling, progress,
+messages, provenance, and recording lifecycle from those declarations.
 
-## Vocabulary
+## Project declarations
 
-The orchestration hierarchy is:
+There is one project-declaration subsystem: `config`.
 
 ```text
-Study → Phase → Task → workload
+<project-root>/
+├── study.json                  study manifest
+└── config/
+    ├── state.json              state schema document
+    └── inputs/*.json           task input documents
 ```
 
-- `Study` is the largest scope and owns scheduling, display, cancellation,
-  `StudyPlan`, `StudyRecord`, and `StudySummary`.
-- `Phase` owns tasks plus concurrency, delay, timeout, dependency, failure, and
-  optional whole-phase completion-examination policies.
-- `Task` is every registerable workload. Progress and one-shot work are modes
-  of the same task type.
-- `TaskContext` is the sole task-to-study communication boundary.
+`config` centrally parses all three document kinds, expands `$sweep` and
+`$cases` internally, and supplies one complete typed constants value to each
+task invocation. The former `configuration` module and its manual combination
+API have been removed.
 
-Configuration is independent:
+The implemented target boundaries are currently `state`, `writer`, `task`, and
+`config`. Existing `study`, `execution`, and `storage` code remains
+transitional while the next passes introduce `runtime`, `record`, and `ui`.
 
-```text
-study.json
-→ StudySettings
-├── replicate_settings → ReplicateExecutor → output_root/replicate_<index>
-└── application → application-owned typed settings
-
-parameters.json
-→ StudyConfiguration
-→ selected WorkloadConfiguration
-→ ResolvedConfiguration combinations
-→ application-defined Tasks
-```
-
-Workflow owns the one-subprocess-per-replicate boundary. Applications own study
-paths, schemas, model inputs, recordings, artifacts, networking, and any
-domain-specific subprocesses started by tasks.
-
-Workflow completion examination is intentionally whole-phase only. A verified
-complete phase is reused; an incomplete phase is invoked normally with an
-explicit warning that validation and continuation within the phase remain
-application-owned.
-
-## Terminal display
-
-The study renderer owns all terminal writes and preserves the established task
-progress bar. The display separates study, phase, task, message, and command
-sections. The command input module currently accepts one command:
-
-```text
-exit
-```
-
-It requests cooperative study cancellation.
+The Rust crate lives in [`rust/`](rust/). Read its
+[public overview](rust/README.md), the complete
+[target architecture](docs/architecture.md), and the
+[test map](docs/tests.md).
 
 ## Attractor example
 
-[`examples/attractor_2d`](examples/attractor_2d) demonstrates the complete
-boundary. The application loads its single-replicate `StudySettings`, enters
-the isolated output scope, loads `StudyConfiguration`, selects the dynamics
-and validation workload configurations, maps each
-`ResolvedConfiguration` into simulation and validation tasks, builds phases,
-and runs one study. A final one-shot task uses Python to render the verified
-trajectories. Each task owns its scientific state, recording I/O, or derived
-visualization output.
+[`examples/attractor_2d`](examples/attractor_2d) demonstrates the current
+migration boundary. It loads one project root through `ProjectSpecification`,
+uses resolved task inputs and typed constants, reuses the centrally parsed
+state schema, and passes the manifest's replicate policy to the current
+execution adapter. It still maps those declarations into transitional study
+phases until runtime owns that composition.
 
 ```bash
 mamba run -n DSES cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
-Use the maintained `DSES` Mamba environment: the example's final phase invokes
-Matplotlib through `mamba run -n DSES`.
+The final phase uses Matplotlib from the maintained `DSES` Mamba environment.
 
-## Storage integrity
-
-Every sealed recording chunk carries a SHA-256 checksum. Completed-recording
-read paths always validate lifecycle, framing, schema, byte count, and digest
-before treating a selected chunk as scientific output.
-
-The official Python reader in [`python`](python) follows the same format and
-integrity rules as Rust's `StoredStateSeriesReader`.
-
-## Tests
-
-Run the Rust suite with:
+## Validation
 
 ```bash
 cargo test --all-targets --manifest-path rust/Cargo.toml
 ```
 
-The suite covers study scheduling and rendering, configuration expansion,
-state ownership, writer inference and encoding, analysis series, storage resilience and continuation,
-artifact integrity, RNG records, and Rust/Python format conformance. See
-[`docs/tests.md`](docs/tests.md) for the responsibility-oriented test map.
+The suite covers centralized project parsing and expansion, typed task
+execution, state ownership, writer inference, study scheduling, replicate
+dispatch, storage recovery, artifact integrity, RNG provenance, and Rust/Python
+format conformance.

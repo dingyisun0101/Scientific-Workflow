@@ -8,7 +8,7 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::Duration;
 
-use crate::configuration::{ReplicateFailurePolicy, ReplicateScheduling, ReplicateSettings};
+use crate::config::advanced::{FailurePolicy, ReplicatePolicy, ReplicateScheduling};
 use crate::rng_record::ReplicateSeedDeriver;
 
 use super::{ExecutionScope, ExecutionScopeError};
@@ -24,16 +24,16 @@ const PARALLEL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// returns `Some`.
 #[derive(Clone, Debug)]
 pub struct ReplicateExecutor {
-    settings: ReplicateSettings,
+    policy: ReplicatePolicy,
     output_root: PathBuf,
 }
 
 impl ReplicateExecutor {
-    /// Creates a dispatcher for validated settings and an application-resolved output root.
-    pub fn new(settings: ReplicateSettings, output_root: impl Into<PathBuf>) -> Self {
+    /// Creates a dispatcher for a validated replicate policy and owned output root.
+    pub fn new(policy: ReplicatePolicy, output_root: PathBuf) -> Self {
         Self {
-            settings,
-            output_root: output_root.into(),
+            policy,
+            output_root,
         }
     }
 
@@ -53,7 +53,7 @@ impl ReplicateExecutor {
         let executable = env::current_exe().map_err(ReplicateExecutionError::CurrentExecutable)?;
         let arguments = env::args_os().skip(1).collect::<Vec<_>>();
         self.prepare_output_scopes()?;
-        match self.settings.scheduling() {
+        match self.policy.scheduling() {
             ReplicateScheduling::Sequential => {
                 self.run_sequential(&executable, &arguments)?;
             }
@@ -76,10 +76,10 @@ impl ReplicateExecutor {
                     variable: REPLICATE_INDEX_ENVIRONMENT_VARIABLE,
                     value: display,
                 })?;
-        if index >= self.settings.replicates() {
+        if index >= self.policy.count() {
             return Err(ReplicateExecutionError::WorkerIndexOutOfRange {
                 index,
-                replicates: self.settings.replicates(),
+                replicates: self.policy.count(),
             });
         }
         let directory = self.output_root.join(replicate_directory_name(index));
@@ -87,9 +87,12 @@ impl ReplicateExecutor {
             .map_err(|source| ReplicateExecutionError::PrepareOutput { index, source })?;
         Ok(ReplicateContext {
             index,
-            count: self.settings.replicates(),
+            count: self.policy.count(),
             execution_scope,
-            seed_deriver: ReplicateSeedDeriver::new(self.settings.base_seed(), index),
+            seed_deriver: self
+                .policy
+                .base_seed()
+                .map(|base_seed| ReplicateSeedDeriver::new(base_seed, index)),
         })
     }
 
@@ -99,14 +102,14 @@ impl ReplicateExecutor {
         arguments: &[OsString],
     ) -> Result<(), ReplicateExecutionError> {
         let mut failures = Vec::new();
-        for index in 0..self.settings.replicates() {
+        for index in 0..self.policy.count() {
             let status = self
                 .child_command(executable, arguments, index)
                 .status()
                 .map_err(|source| ReplicateExecutionError::RunProcess { index, source })?;
             if !status.success() {
                 failures.push(index);
-                if self.settings.failure_policy() == ReplicateFailurePolicy::FailFast {
+                if self.policy.failure_policy() == FailurePolicy::FailFast {
                     break;
                 }
             }
@@ -120,7 +123,7 @@ impl ReplicateExecutor {
         arguments: &[OsString],
     ) -> Result<(), ReplicateExecutionError> {
         let mut active = Vec::new();
-        for index in 0..self.settings.replicates() {
+        for index in 0..self.policy.count() {
             let child = match self.child_command(executable, arguments, index).spawn() {
                 Ok(child) => child,
                 Err(source) => {
@@ -152,7 +155,7 @@ impl ReplicateExecutor {
                 let completed = active.swap_remove(position);
                 if !status.success() {
                     failures.push(completed.index);
-                    if self.settings.failure_policy() == ReplicateFailurePolicy::FailFast {
+                    if self.policy.failure_policy() == FailurePolicy::FailFast {
                         terminate_children(&mut active);
                         failures.sort_unstable();
                         return finish_batch(failures);
@@ -169,7 +172,7 @@ impl ReplicateExecutor {
 
     fn prepare_output_scopes(&self) -> Result<(), ReplicateExecutionError> {
         let mut created = Vec::new();
-        for index in 0..self.settings.replicates() {
+        for index in 0..self.policy.count() {
             match ExecutionScope::create_named(&self.output_root, replicate_directory_name(index)) {
                 Ok(scope) => created.push(scope),
                 Err(source) => {
@@ -198,7 +201,7 @@ pub struct ReplicateContext {
     index: u64,
     count: u64,
     execution_scope: ExecutionScope,
-    seed_deriver: ReplicateSeedDeriver,
+    seed_deriver: Option<ReplicateSeedDeriver>,
 }
 
 impl ReplicateContext {
@@ -222,8 +225,8 @@ impl ReplicateContext {
         self.execution_scope.directory()
     }
 
-    /// Returns the lazy, namespace-separated seed deriver for this replicate.
-    pub const fn seed_deriver(&self) -> ReplicateSeedDeriver {
+    /// Returns the lazy seed deriver when the study manifest declares a base seed.
+    pub const fn seed_deriver(&self) -> Option<ReplicateSeedDeriver> {
         self.seed_deriver
     }
 }

@@ -76,7 +76,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
-use crate::configuration::ResolvedConfiguration;
 use crate::state::advanced::{StateSchemaSource, SystemState, SystemStateSchema};
 use crate::writer::WriterSession;
 use crate::writer::advanced::{StreamDescriptor, Writer, WriterDescriptor};
@@ -414,22 +413,6 @@ impl SystemStateWriterBuilder {
     #[must_use]
     pub fn with_shared_stream_storage(mut self, storage: StateStreamStorage) -> Self {
         self.shared_stream_storage = Some(storage);
-        self
-    }
-
-    /// Merges one resolved configuration into the recording's user metadata.
-    ///
-    /// Fixed and swept values retain their resolved JSON representation.
-    /// The synthetic `ordinal` entry is always set from the configuration and
-    /// therefore replaces any same-named input entry. Configuration values also replace
-    /// same-named caller metadata, while unrelated metadata and RNG records are
-    /// preserved. On a key collision, the most recently supplied source wins.
-    #[must_use]
-    pub fn with_configuration(mut self, configuration: &ResolvedConfiguration) -> Self {
-        self.user_metadata
-            .extend(configuration.resolved_object().clone());
-        self.user_metadata
-            .insert("ordinal".to_owned(), Value::from(configuration.ordinal()));
         self
     }
 

@@ -1,4 +1,4 @@
-//! Compact configuration-to-rendering scientific study.
+//! Compact project-input-to-rendering scientific study.
 
 mod attractor_run;
 mod hopf_model;
@@ -9,35 +9,45 @@ mod validation;
 
 use std::error::Error;
 use std::path::Path;
-use std::time::Duration;
 
+use scientific_workflow::config::advanced::{
+    PhaseSpecification, ProjectSpecification, ResolvedTaskInput,
+};
 use scientific_workflow::prelude::basic::*;
 use scientific_workflow::prelude::study::*;
+use scientific_workflow::state::advanced::StateSchemaAccess;
 use scientific_workflow::study::Task as StudyTask;
 
 use attractor_run::AttractorRun;
 
 /// Error boundary shared by the example's application.
 pub(crate) type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
-const TASK_START_DELAY: Duration = Duration::from_secs(3);
 
 fn main() -> AppResult<()> {
     let study_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let settings = StudySettings::load(study_root)?;
-    let output_root = ProjectPaths::load(study_root)?.resolve_path("output_root")?;
-    let Some(replicate) = ReplicateExecutor::new(settings.replicate_settings(), output_root)
-        .dispatch_current_executable()?
+    let project = ProjectSpecification::load(study_root)?;
+    let output_root = study_root.join("target/output");
+    let Some(replicate) =
+        ReplicateExecutor::new(project.manifest().replicate_policy(), output_root)
+            .dispatch_current_executable()?
     else {
         return Ok(());
     };
-    run_replicate(study_root, &replicate)
+    run_replicate(study_root, &replicate, &project)
 }
 
-fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<()> {
-    let study_configuration = StudyConfiguration::load(study_root)?;
-    let simulation_configurations = study_configuration.workload("attractor", "dynamics")?;
-    let validation_configurations = study_configuration.workload("attractor", "validation")?;
-    let schema = SystemStateSchema::load_json_template(&study_root.join("config/state.json"))?;
+fn run_replicate(
+    study_root: &Path,
+    replicate: &ReplicateContext,
+    project: &ProjectSpecification,
+) -> AppResult<()> {
+    let simulation_specification = phase_specification(project, "simulate")?;
+    let validation_specification = phase_specification(project, "validate")?;
+    let state_document = project.state_schema();
+    let schema = <SystemStateSchema as StateSchemaAccess>::from_json_template_value(
+        state_document.path(),
+        state_document.json_value(),
+    )?;
 
     // Replicate dispatch created this isolated scope before starting the worker.
     // It does not create task recordings: each simulation task remains
@@ -45,12 +55,13 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
     let execution = replicate.execution_scope();
     let record = execution.directory().join("study-record.json");
 
-    // Producer descriptors decode configuration once and carry the exact output
-    // path into every consumer. Phase-local ordinals are never compared across
-    // independently expanded workload configuration spaces.
-    let producer_runs = simulation_configurations
-        .combinations()
-        .map(|configuration| AttractorRun::new(execution, configuration))
+    // Producer descriptors decode each resolved input once and carry the exact
+    // output path into every consumer.
+    let producer_runs = simulation_specification
+        .tasks()
+        .iter()
+        .cloned()
+        .map(|input| AttractorRun::new(execution, input))
         .collect::<AppResult<Vec<_>>>()?;
     let producer_count = u64::try_from(producer_runs.len())?;
     let rendering_recordings = producer_runs
@@ -65,23 +76,22 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
         .tasks(simulation_tasks)
         // These are phase-local scheduling bounds. Machine-level CPU and memory
         // policy belongs to the external service manager running this process.
-        .max_active_tasks(3)
-        .prepared_task_queue_capacity(2)
+        .max_active_tasks(simulation_specification.max_concurrency())
+        .prepared_task_queue_capacity(simulation_specification.max_concurrency())
         // Admission remains pending until each dense phase-local rank starts.
         // This staggers recording creation without sleeping inside workloads.
-        .delay_per_task(TASK_START_DELAY)
+        .delay_per_task(simulation_specification.start_interval())
         .build()?;
 
-    // Each validation configuration is paired explicitly with every producer
-    // from the same global and group-shared selection. Independent phase-local
-    // sweeps may therefore change cardinality without redirecting a consumer.
-    let validation_tasks = validation_tasks(&producer_runs, &validation_configurations)?;
+    // Each validation input is paired explicitly with the producer having the
+    // same scientific parameter values.
+    let validation_tasks = validation_tasks(&producer_runs, validation_specification.tasks())?;
     let validation = Phase::builder(2, "recording validation")
         .tasks(validation_tasks)
         .depends_on(1)
-        .max_active_tasks(3)
-        .prepared_task_queue_capacity(2)
-        .delay_per_task(TASK_START_DELAY)
+        .max_active_tasks(validation_specification.max_concurrency())
+        .prepared_task_queue_capacity(validation_specification.max_concurrency())
+        .delay_per_task(validation_specification.start_interval())
         .build()?;
 
     // Rendering is one ordinary application task. The study knows only that it
@@ -119,43 +129,42 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
 }
 
 fn simulation_task(run: AttractorRun, schema: SystemStateSchema) -> StudyTask {
-    let provenance = run.configuration().clone();
     let task_id = run.task_id().to_owned();
+    let input_ordinal = run.input().ordinal();
+    let resolved_input: serde_json::Value =
+        serde_json::from_slice(run.input().resolved_json()).expect("config produced valid JSON");
     let label = format!(
         "attractor mu={} omega={}",
         run.mu(),
         run.angular_frequency()
     );
     StudyTask::progress(task_id, label, move |context| {
-        task_execution::run_task(
-            &schema,
-            run.recording_directory(),
-            run.configuration(),
-            context,
-        )
+        task_execution::run_task(&schema, run.recording_directory(), &run, context)
     })
     .category("attractor")
-    .with_configuration(&provenance)
+    .metadata("input_ordinal", input_ordinal)
+    .metadata("resolved_task_input", resolved_input)
 }
 
 fn validation_tasks(
     producers: &[AttractorRun],
-    configurations: &WorkloadConfiguration,
+    inputs: &[ResolvedTaskInput],
 ) -> AppResult<Vec<StudyTask>> {
     let mut tasks = Vec::new();
-    for configuration in configurations.combinations() {
+    for input in inputs {
+        let constants = input.decode::<attractor_run::AttractorConstants>()?;
         let mut matched = false;
         for producer in producers
             .iter()
-            .filter(|producer| producer.matches_validation(&configuration))
+            .filter(|producer| producer.matches_validation(&constants))
         {
             matched = true;
-            tasks.push(validation_task(producer.clone(), configuration.clone()));
+            tasks.push(validation_task(producer.clone(), input.clone()));
         }
         if !matched {
             return Err(format!(
-                "validation configuration {} has no producer in the same global/group selection",
-                configuration.ordinal()
+                "validation input {} has no matching producer",
+                input.ordinal()
             )
             .into());
         }
@@ -163,13 +172,8 @@ fn validation_tasks(
     Ok(tasks)
 }
 
-fn validation_task(producer: AttractorRun, configuration: ResolvedConfiguration) -> StudyTask {
-    let provenance = configuration.clone();
-    let task_id = format!(
-        "validate-{}-v{:06}",
-        producer.task_id(),
-        configuration.workload_ordinal()
-    );
+fn validation_task(producer: AttractorRun, input: ResolvedTaskInput) -> StudyTask {
+    let task_id = format!("validate-{}-v{:06}", producer.task_id(), input.ordinal());
     let label = format!(
         "validate mu={} omega={}",
         producer.mu(),
@@ -177,17 +181,29 @@ fn validation_task(producer: AttractorRun, configuration: ResolvedConfiguration)
     );
     let producer_metadata = serde_json::json!({
         "task_id": producer.task_id(),
-        "configuration_ordinal": producer.configuration().ordinal(),
+        "input_ordinal": producer.input().ordinal(),
         "recording_directory": producer.recording_directory(),
     });
+    let resolved_input: serde_json::Value =
+        serde_json::from_slice(input.resolved_json()).expect("config produced valid JSON");
+    let input_ordinal = input.ordinal();
+    let expected_iteration = producer.constants().step_count;
     StudyTask::one_shot(task_id, label, move |context| {
-        validation::validate_recording(
-            producer.recording_directory(),
-            producer.configuration(),
-            context,
-        )
+        validation::validate_recording(producer.recording_directory(), expected_iteration, context)
     })
     .category("validation")
     .metadata("producer", producer_metadata)
-    .with_configuration(&provenance)
+    .metadata("input_ordinal", input_ordinal)
+    .metadata("resolved_task_input", resolved_input)
+}
+
+fn phase_specification<'a>(
+    project: &'a ProjectSpecification,
+    name: &str,
+) -> AppResult<&'a PhaseSpecification> {
+    project
+        .phases()
+        .iter()
+        .find(|phase| phase.name() == name)
+        .ok_or_else(|| format!("study manifest does not declare phase `{name}`").into())
 }
