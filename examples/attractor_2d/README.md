@@ -14,8 +14,7 @@ attractor_2d/
 ├── study.json                  simulate phase followed by plot phase
 ├── config/
 │   ├── state.json              canonical scientific state schema
-│   ├── inputs/run.json         model constants and parameter sweeps
-│   └── plot.json               arbitrary Python plotting configuration
+│   └── parameters.json         every model and plotting parameter
 └── scripts/
     └── plot.py                 directly declared Python task
 ```
@@ -31,8 +30,9 @@ Its custom `ObservationPlan` records:
 - radius every 5 iterations; and
 - a combined checkpoint every 1,000 iterations.
 
-`config/inputs/run.json` sweeps three growth parameters and two angular
-frequencies. Config expands their Cartesian product into six model tasks;
+The `attractor` section of `config/parameters.json` sweeps three growth
+parameters and two angular frequencies. Config selects that section from the
+registered model key and expands its Cartesian product into six model tasks;
 Runtime executes up to three concurrently and automatically records every
 observation stream.
 
@@ -54,12 +54,13 @@ Study loading, captures stdout/stderr, and supplies the central configuration,
 completed simulation outputs, and isolated artifact directory through the
 standard `WORKFLOW_*` contract.
 
-The plotter retrieves its visual settings from `config/plot.json`, opens every
+The plotter retrieves its visual settings from the `plot` section of
+`config/parameters.json`, opens every
 dependency recording with the official verified
 `scientific_workflow_reader`, and produces:
 
 ```text
-<plot-task-output>/artifacts/
+output/plots/
 ├── attractor-sweep.svg
 └── plot-summary.json
 ```
@@ -76,10 +77,12 @@ From the repository root:
 cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
-Workflow creates a unique execution beneath `examples/attractor_2d/output`.
-The terminal UI appears automatically only on interactive standard error. The
-model and plotter do not construct tasks, phases, output paths, persistence
-sessions, progress counters, or message channels.
+Workflow creates a unique Rust execution beneath `examples/attractor_2d/output`.
+Python owns its configured `output/plots` destination directly. When stdin and
+stderr are interactive, the automatic Ratatui dashboard shows task rows,
+progress, timing, messages, and an `exit` command; redirected runs use plain
+lifecycle lines. The model and plotter do not construct tasks, phases,
+persistence sessions, progress counters, or message channels.
 
 The omitted replicate, timeout, UI, and persistence settings use Workflow's
 validated defaults. Only the scientifically meaningful observation cadence,

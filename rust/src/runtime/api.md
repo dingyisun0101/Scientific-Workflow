@@ -25,15 +25,17 @@ recordings or program workspaces.
 
 For each task, Runtime derives the destination and constructs its private
 persistence session. Model tasks submit initial/step/final observations with
-bounded backpressure. Program tasks receive frozen input snapshots, logs, and
+bounded backpressure. Program tasks receive frozen configuration snapshots, logs, and
 an artifacts workspace. Runtime commits terminal status and shuts the session
 down; application/model code performs none of this coordination.
 
 Runtime also creates one automatic UI session from Study's private inferred UI
 plan. It publishes execution, replicate, phase, task, iteration, target,
-outcome, and recording-path facts. UI renders only to an interactive stderr
-terminal and remains silent when output is redirected or captured. Rendering
-is best-effort and cannot change the Runtime result.
+outcome, and recording-path facts. Interactive stdin plus stderr selects the
+Ratatui dashboard; otherwise UI emits stable plain lifecycle lines. Typing
+`exit` or pressing Ctrl+C in the dashboard requests cooperative execution
+cancellation. Rendering is best-effort and cannot otherwise change the Runtime
+result.
 
 An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. Model cancellation is cooperative
@@ -73,6 +75,10 @@ Phases run in stable topological order. Within a phase, runtime respects
 failure policy. Fail-fast stops further admission and requests cancellation of
 active siblings; finish-all continues admitting declared siblings and returns
 an error after they finish.
+
+An interactive exit request stops further admission across the execution,
+cancels active model/program workers, waits for their cleanup, restores the
+terminal, and returns `RuntimeError::ExecutionCancelled`.
 
 ### `runtime::advanced::RunSummary`
 
@@ -140,9 +146,14 @@ paths through:
 - `WORKFLOW_TASK_OUTPUT`: the task's `artifacts/` directory, also its working
   directory.
 
-Programs may read any central configuration keys they understand and write
-their artifacts only through the supplied task workspace. A Study uses its
-captured snapshot: editing JSON after `Study::load` cannot alter these files.
+Programs may read any central configuration keys they understand. The supplied
+workspace is their default location for temporary or task-scoped artifacts,
+but an external program owns its domain-specific IO and may resolve a
+project-relative destination from `parameters.json`. For example, the bundled
+Python plotter writes directly to the configured `output/plots`. Rust
+Persistence does not relocate or publish those Python-owned files. A Study uses
+its captured snapshot: editing JSON after `Study::load` cannot alter these
+files.
 On completion Runtime writes terminal `program.json`; nonzero exit status is a
 task failure. Dependency JSON is deterministic and contains each dependency
 phase, task identity/kind, optional model/program/final iteration, and output
@@ -154,8 +165,9 @@ not a shell command protocol.
 A nested Python task follows this exact runtime contract after Config lowers
 its environment to one invocation. Runtime has no Python-specific scheduler,
 active-environment lookup, package installer, or import-path mutation. The
-script reads the same `WORKFLOW_*` files/paths as any program and writes to the
-same artifacts directory. Its `.py` file need not be executable. The selected
+script reads the same `WORKFLOW_*` files/paths as any program. It may use
+`WORKFLOW_TASK_OUTPUT` or a validated destination from its project parameters.
+Its `.py` file need not be executable. The selected
 manager/interpreter, manager arguments, canonical script, and script arguments
 are fixed before output creation.
 
@@ -163,6 +175,8 @@ are fixed before output creation.
 
 This non-exhaustive enum reports failures after a valid Study is available:
 
+- `ExecutionCancelled`: the interactive `exit` command or Ctrl+C requested
+  cooperative cancellation;
 - `OutputScope { path, source }`: unique execution or replicate directory could
   not be created;
 - `Task { task, source }`: model, program, state, observation, config decode,
@@ -229,9 +243,10 @@ topological-position calculation are private.
 
 Recording metadata keeps complete resolved constants under `model_constants`
 and Workflow identity/source facts under a separate `workflow` object. The
-effective backend and byte settings are recorded under `workflow.persistence`.
-These namespaces never overwrite one another even when scientific constants
-use the same field names.
+workflow object names the selected model, `parameter_ordinal`, and canonical
+`parameter_source`; the effective backend and byte settings are recorded under
+`workflow.persistence`. These namespaces never overwrite one another even
+when scientific constants use the same field names.
 
 The private output-directory allocator and local persistence adapter are
 implementation details. A future backend may change internal construction

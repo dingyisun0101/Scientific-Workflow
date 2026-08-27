@@ -3,77 +3,77 @@
 The `ui` subsystem owns automatic presentation of execution facts already
 known by Runtime. It does not inspect models, scientific payloads, project JSON,
 or persistence files. Models never define display fields, format messages,
-increment progress counters, or receive a UI handle.
+increment counters, or receive a UI handle.
 
-Study owns a private immutable effective UI plan. The current plan is inferred
-completely: progress rendering is checked at runtime and progress updates are
-throttled to at most once per task every 100 milliseconds. Runtime supplies
-live lifecycle facts; UI owns activation, throttling, formatting, and output.
+Study owns a private inferred UI policy. Runtime publishes planned-task,
+lifecycle, progress, path, and outcome facts. UI alone owns terminal detection,
+the Ratatui dashboard state, command editing, message history, refresh timing,
+and the internal exit request observed by Runtime.
 
 ## Basic API
 
-`scientific_workflow::ui::basic` intentionally exports no Rust symbols.
-Interactive progress is automatic whenever the application calls
-`scientific_workflow::run(&Path)` or `runtime::advanced::execute(Study)`.
+`scientific_workflow::ui::basic` intentionally exports no Rust symbols. The UI
+starts automatically through `scientific_workflow::run(&Path)` or
+`runtime::advanced::execute(Study)`.
 
-The activation rule is inferred without configuration:
+When both standard input and standard error are terminals, UI enters a
+Crossterm alternate screen and renders a Ratatui dashboard containing:
 
-- when standard error is attached to an interactive terminal, UI prints
-  progress;
-- when standard error is redirected, captured by tests, or used in ordinary
-  noninteractive CI, UI remains silent.
+- inferred replicate, phase, task, label, kind, and subject rows in declared
+  study order;
+- pending, running, completed, failed, cancelled, and skipped counts;
+- model iteration gauges when `ScientificModel::target_iteration` is known;
+- model spinners when the target is unknown;
+- one-shot spinners while generic programs and Python tasks are running;
+- elapsed time and inferred ETA where enough progress exists;
+- the execution output path;
+- a bounded 100-line lifecycle/error message panel; and
+- the command editor.
 
-There is no `ui` object in `study.json`. Consequently there are no user-defined
-refresh rates, enable flags, themes, field lists, templates, callbacks, or
-message channels. If genuine customization is added later, Config must remain
-its sole JSON parser and Study must own the fully defaulted effective settings.
+Runtime lifecycle lines are appended to the message panel instead of scrolling
+the interactive terminal. Scientific payloads are never rendered. When either
+standard stream is not interactive, the same lifecycle messages use the former
+stable line-oriented standard-error fallback, so redirected runs and CI retain
+diagnostics without terminal control sequences.
 
-The automatic terminal output includes:
+The command editor supports character insertion, Left/Right, Home/End,
+Backspace/Delete, Escape to clear, and Enter to submit. Exact lowercase `exit`
+(surrounding whitespace allowed) and Ctrl+C request cooperative cancellation.
+Unknown commands appear in the message panel. Once exit is requested, Runtime
+stops admission, asks active models to stop between steps, terminates active
+external programs, waits for cleanup, publishes cancellation, and then UI
+restores the terminal.
 
-- execution start, inferred replicate count, task count, and output directory;
-- replicate and phase start/completion/failure;
-- task identity, inferred label, workload kind, model key or executable, and
-  phase;
-- current scientific iteration and optional target for model tasks;
-- percentage only when the model supplies a target;
-- task failure reasons; and
-- successful optional final iteration and generic task output directory.
-
-Program tasks—including Python scripts, presented by their script filename—
-publish lifecycle start/failure/completion but no fabricated iteration
-progress. Model tasks continue to publish observations as progress.
-
-UI displays structural and operational facts only. It never serializes or
-formats scientific payload values. Rendering uses standard error so standard
-output remains available for application results and pipelines.
+There is no `ui` object in `study.json`: no refresh rate, theme, field list,
+message callback, progress counter, renderer, or cancellation handle is
+user-defined. Terminal setup/drawing failure is best-effort and cannot turn
+valid scientific work into failure.
 
 ## Advanced API
 
-`scientific_workflow::ui::advanced` is the strict public superset of the empty
-Basic scope and currently adds no public symbols. There is no public event,
-session, renderer, snapshot, sink, command, or configuration type.
+`scientific_workflow::ui::advanced` is the strict public superset of Basic and
+adds no public symbols. Runtime and Study use crate-visible boundaries:
 
-Runtime uses crate-visible exports from this scope:
+- `UiPlan` is the immutable inferred refresh policy;
+- `UiEvent` is the borrowed synchronous fact vocabulary;
+- `UiSession` owns shared reduced state, terminal selection, the renderer
+  thread, and cancellation request; and
+- `TaskUi` publishes iteration/target facts for one inferred task.
 
-- `UiPlan` is the immutable Study-owned inferred policy;
-- `UiSession` is a clone-cheap, thread-safe runtime session; and
-- `TaskUi` is the task-scoped progress publisher held by Runtime's host;
-- `UiEvent` is the borrowed synchronous fact vocabulary.
+These are peer-subsystem contracts, not downstream API. Event strings and
+paths are copied into small UI-owned presentation snapshots as required; UI
+never retains a model, `SystemState`, payload, `Study`, recording writer, or
+runtime summary. Concurrent Runtime workers share one clone-cheap session. A
+mutex protects only dashboard presentation state, and a single bounded-refresh
+thread owns interactive terminal input and drawing.
 
-These are peer-subsystem boundaries, not downstream API. An event borrows its
-strings and paths only for the synchronous `publish` call. The session retains
-only task identities and monotonic timestamps needed for throttling; it never
-retains a state, payload, model, Study, runtime summary, or recording handle.
-
-Concurrent replicate and task workers share one `UiSession`. A mutex protects
-only the small per-task throttle map, and terminal writes are serialized by the
-standard-error lock. UI starts no thread, queue, async runtime, or terminal raw
-mode. Rendering failures are deliberately best-effort and cannot turn a valid
-scientific execution into a Runtime failure.
+`UiSession::finish` is called internally after the terminal execution event.
+It joins the renderer before Runtime returns, so alternate-screen, raw-mode,
+cursor, and mouse state are restored on success, failure, or cancellation.
 
 ## Example
 
-The complete user interaction is unchanged:
+The complete user interaction remains one call:
 
 ```rust,no_run
 use std::path::Path;
@@ -83,26 +83,20 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 }
 ```
 
-Running this executable directly in a terminal shows progress. Redirecting
-standard error disables UI automatically:
-
-```text
-scientific-program 2>workflow.log
-```
-
-No model or JSON change is required in either case.
+Running it in a terminal shows the dashboard. Typing `exit` and pressing Enter
+requests cancellation. Redirecting standard error selects plain lifecycle
+lines automatically. No model or JSON change is involved.
 
 ## Not API
 
-Event variants, inferred refresh timing, terminal-detection mechanics, line
-format, prefixes, percentage precision, throttle-map structure, stderr
-locking, and best-effort write handling are private implementation details.
-Applications must not parse rendered lines as a machine-readable protocol;
-durable facts belong to Runtime summaries and persistence metadata.
+Ratatui/Crossterm types, event variants, dashboard snapshots, task statuses,
+command parser/editor, renderer thread, alternate-screen lease, message
+capacity, layout, colors, glyphs, refresh interval, ETA formula, plain-line
+format, and cancellation atomics are private. Applications must not parse the
+human display as a machine protocol; durable facts belong to Runtime summaries
+and persistence metadata.
 
 A replacement UI must remain downstream of Runtime facts, require no model
-participation, avoid retaining scientific payloads, preserve noninteractive
-silence, tolerate concurrent publishers, and never make presentation failure
-fail scientific work. Commands, cancellation input, full-screen rendering, or
-remote presentation require separate justification and must remain outside the
-model/task contracts.
+participation, tolerate concurrent publishers, preserve plain noninteractive
+diagnostics, support cooperative `exit`, restore terminal state, and never make
+presentation failure fail scientific execution.

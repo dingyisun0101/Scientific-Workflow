@@ -25,26 +25,31 @@ types are deliberately not public.
 ## Internal compiler and execution tests
 
 - `rust/src/config/tests/config_workflow.rs` covers duplicate keys, strict
-  unknown-field rejection, safe Path containment, manifest/persistence
+  unknown-field rejection, canonical `parameters.json`, automatic model-key
+  section selection, rejection of legacy task input paths, manifest/persistence
   defaults, positive limits, dependencies, generic model/program/Python task grammar,
   executable resolution, nested Python/mamba command lowering and executable
   preflight, deterministic `$sweep`/`$cases` expansion, private
-  typed constants decoding, central recursive arbitrary-document capture, and
+  typed constants decoding, central arbitrary-parameter capture, and
   contextual errors. Even an unreferenced JSON document is strict-parsed.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
   invalid/duplicate registrations, effect-free loading, unknown models, typed
   constants and one-time observation preflight, deterministic internal
   identities, phase composition, replicate/persistence policy, runtime
   scheduling, automatic task recordings, and crate-level `run(&Path)`. Its
+  recording checks require canonical `parameter_ordinal`/`parameter_source`
+  provenance and reject legacy input-path fields. Its
   Unix program-task test verifies the frozen central Config after source files
   change, dependency-summary handoff, direct executable invocation, artifacts,
   logs, metadata, and generic runtime summaries. A separate direct Python task
   verifies that a non-executable `.py` script runs through its nested `system`
   environment without any Rust wrapper and records Python launcher provenance.
-- `rust/src/ui/terminal.rs` contains pure formatting tests for generic
-  model/program lifecycle plus model progress and optional completion facts.
-  Ordinary test capture keeps the automatic
-  UI silent, so UI cannot disturb test output or execution results.
+- `rust/src/ui/command.rs` verifies the former editor and exact lowercase
+  `exit` contract. `ui/state.rs` verifies declaration-ordered event-reduced
+  rows, progress, bounded message history, and cancelled/skipped outcomes. PTY validation
+  confirms alternate-screen Ratatui rendering, keyboard exit, cooperative
+  Runtime cancellation, and terminal restoration. Noninteractive tests receive
+  stable plain lifecycle diagnostics rather than terminal control sequences.
 
 ## Persistence tests
 
@@ -82,6 +87,7 @@ Package inspection must also verify that every first-level module's `api.md`,
 The attractor example is an executable integration demonstration, not merely a
 compile fixture. A manual or release validation run should confirm that its six
 model tasks produce completed recordings and its dependent Python task writes
-`attractor-sweep.svg` plus `plot-summary.json` beneath its inferred artifacts
-directory. The Python task uses the public verified reader and central
-`config/plot.json`; it has no Rust caller wrapper.
+`attractor-sweep.svg` plus `plot-summary.json` beneath the configured
+`output/plots` directory. The Python task uses the public verified reader and
+the `plot` section of central `config/parameters.json`; it has no Rust caller
+wrapper.

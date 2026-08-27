@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
-use crate::config::advanced::ResolvedTaskInput;
+use crate::config::advanced::ResolvedModelParameters;
 use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::SystemStateSchema;
 
@@ -16,8 +16,8 @@ use super::result::TaskResult;
 #[derive(Clone, Copy)]
 pub struct ModelRegistration {
     key: &'static str,
-    make_task: fn(ResolvedTaskInput, BoundObservationPlan) -> Task,
-    preflight: fn(&ResolvedTaskInput, &SystemStateSchema) -> TaskResult<BoundObservationPlan>,
+    make_task: fn(ResolvedModelParameters, BoundObservationPlan) -> Task,
+    preflight: fn(&ResolvedModelParameters, &SystemStateSchema) -> TaskResult<BoundObservationPlan>,
 }
 
 impl ModelRegistration {
@@ -44,18 +44,18 @@ impl ModelRegistration {
 
     pub(crate) fn make_task(
         self,
-        input: ResolvedTaskInput,
+        parameters: ResolvedModelParameters,
         observation_plan: BoundObservationPlan,
     ) -> Task {
-        (self.make_task)(input, observation_plan)
+        (self.make_task)(parameters, observation_plan)
     }
 
     pub(crate) fn preflight(
         self,
-        input: &ResolvedTaskInput,
+        parameters: &ResolvedModelParameters,
         schema: &SystemStateSchema,
     ) -> TaskResult<BoundObservationPlan> {
-        (self.preflight)(input, schema)
+        (self.preflight)(parameters, schema)
     }
 }
 
@@ -136,13 +136,13 @@ fn validate_key(key: &str) -> Result<(), ModelCatalogError> {
 }
 
 fn preflight_model<M>(
-    input: &ResolvedTaskInput,
+    parameters: &ResolvedModelParameters,
     schema: &SystemStateSchema,
 ) -> TaskResult<BoundObservationPlan>
 where
     M: ScientificModel,
 {
-    let constants: M::Constants = input.decode()?;
+    let constants: M::Constants = parameters.decode()?;
     let plan = M::observation_plan(&constants)?;
     Ok(BoundObservationPlan::bind(plan, schema)?)
 }

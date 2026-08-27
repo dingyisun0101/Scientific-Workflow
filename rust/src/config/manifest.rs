@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use super::error::ConfigError;
-use super::input::ResolvedTask;
+use super::parameters::ResolvedTask;
 use super::python::PythonTaskDeclaration;
 
 /// Effective policy for isolated study replicates.
@@ -160,7 +160,6 @@ pub(crate) struct ParsedPhase {
 pub(crate) enum ParsedTask {
     Model {
         model: Box<str>,
-        input: PathBuf,
         timeout: Option<Duration>,
     },
     Program {
@@ -262,16 +261,15 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("/phases/{name}/tasks/{index}");
             let timeout = task.timeout_ms.map(Duration::from_millis);
-            match (task.model, task.input, task.program, task.python) {
-                (Some(model), Some(input), None, None) if task.args.is_empty() => {
+            match (task.model, task.program, task.python) {
+                (Some(model), None, None) if task.args.is_empty() => {
                     validate_identifier(path, &format!("{pointer}/model"), &model, "model")?;
                     tasks.push(ParsedTask::Model {
                         model: model.into_boxed_str(),
-                        input,
                         timeout,
                     });
                 }
-                (None, None, Some(program), None) => {
+                (None, Some(program), None) => {
                     if program.as_os_str().is_empty() {
                         return Err(ConfigError::invalid(
                             path,
@@ -285,7 +283,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                         timeout,
                     });
                 }
-                (None, None, None, Some(declaration)) if task.args.is_empty() => {
+                (None, None, Some(declaration)) if task.args.is_empty() => {
                     tasks.push(ParsedTask::Python {
                         declaration,
                         timeout,
@@ -295,7 +293,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `model` + `input`, `program`, or `python`; top-level `args` are valid only for a program",
+                        "a task must declare exactly `model`, `program`, or `python`; top-level `args` are valid only for a program",
                     ));
                 }
             }
@@ -447,8 +445,6 @@ const fn default_max_concurrency() -> usize {
 struct RawTask {
     #[serde(default)]
     model: Option<String>,
-    #[serde(default)]
-    input: Option<PathBuf>,
     #[serde(default)]
     program: Option<PathBuf>,
     #[serde(default)]

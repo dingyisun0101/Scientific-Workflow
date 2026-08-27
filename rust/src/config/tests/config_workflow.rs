@@ -1,4 +1,4 @@
-//! Target project-specification and resolved-input configuration boundary.
+//! Target project-specification and resolved-parameter configuration boundary.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,13 +14,13 @@ static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
 struct TestProject(PathBuf);
 
 impl TestProject {
-    fn new(study: &str, inputs: &[(&str, &str)]) -> Self {
+    fn new(study: &str, parameter_sections: &[(&str, &str)]) -> Self {
         let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "scientific-workflow-config-{sequence}-{}",
             std::process::id()
         ));
-        fs::create_dir_all(root.join("config/inputs")).unwrap();
+        fs::create_dir_all(root.join("config")).unwrap();
         fs::write(root.join("study.json"), study).unwrap();
         fs::write(
             root.join("config/state.json"),
@@ -32,9 +32,16 @@ impl TestProject {
             }"#,
         )
         .unwrap();
-        for (name, source) in inputs {
-            fs::write(root.join("config/inputs").join(name), source).unwrap();
-        }
+        let parameters = parameter_sections
+            .iter()
+            .map(|(name, source)| format!("{name:?}:{source}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            root.join("config/parameters.json"),
+            format!("{{{parameters}}}"),
+        )
+        .unwrap();
         Self(root)
     }
 
@@ -64,7 +71,6 @@ fn manifest() -> &'static str {
         "simulate": {
           "tasks": [{
             "model": "model",
-            "input": "inputs/run.json",
             "timeout_ms": 250
           }],
           "max_concurrency": 2,
@@ -73,8 +79,7 @@ fn manifest() -> &'static str {
         "analyze": {
           "after": ["simulate"],
           "tasks": [{
-            "model": "analysis",
-            "input": "inputs/analysis.json"
+            "model": "analysis"
           }],
           "timeout_ms": 500,
           "failure_policy": "finish_all"
@@ -83,9 +88,9 @@ fn manifest() -> &'static str {
     }"#
 }
 
-fn model_task(task: &ResolvedTask) -> &ResolvedTaskInput {
+fn model_task(task: &ResolvedTask) -> &ResolvedModelParameters {
     match task {
-        ResolvedTask::Model(input) => input,
+        ResolvedTask::Model(parameters) => parameters,
         ResolvedTask::Program(_) => panic!("expected a model task"),
     }
 }
@@ -103,14 +108,14 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
         manifest(),
         &[
             (
-                "run.json",
+                "model",
                 r#"{
                   "shape": [64, 64],
                   "temperature": {"$sweep": [280.0, 300.0]},
                   "solver": {"method": {"$sweep": ["rk4", "euler"]}}
                 }"#,
             ),
-            ("analysis.json", r#"{"minimum": 0.25}"#),
+            ("analysis", r#"{"minimum": 0.25}"#),
         ],
     );
 
@@ -148,7 +153,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
         .tasks()
         .iter()
         .map(model_task)
-        .map(ResolvedTaskInput::decode::<Constants>)
+        .map(ResolvedModelParameters::decode::<Constants>)
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(
@@ -211,8 +216,8 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
 #[test]
 fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
-        &[("run.json", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        &[("model", "{}")],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
     let document = specification.state_schema();
@@ -227,9 +232,9 @@ fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() 
 #[test]
 fn correlated_cases_become_complete_typed_constant_values() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
         &[(
-            "run.json",
+            "model",
             r#"{
               "shape": [64],
               "$cases": [
@@ -250,7 +255,7 @@ fn correlated_cases_become_complete_typed_constant_values() {
         .tasks()
         .iter()
         .map(model_task)
-        .map(|input| input.decode::<Constants>().unwrap())
+        .map(|parameters| parameters.decode::<Constants>().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(values.len(), 2);
     assert_eq!(values[0].shape, [64]);
@@ -267,8 +272,8 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let unknown = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json","mystery":true}]}}}"#,
-        &[("x.json", "{}")],
+        r#"{"phases":{"one":{"tasks":[{"model":"x","mystery":true}]}}}"#,
+        &[("x", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(unknown.path()),
@@ -276,47 +281,54 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let invalid_persistence = TestProject::new(
-        r#"{"persistence":{"chunk_target_bytes":0},"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
-        &[("x.json", "{}")],
+        r#"{"persistence":{"chunk_target_bytes":0},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        &[("x", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(invalid_persistence.path()),
         Err(ConfigError::InvalidDocument { pointer, .. }) if pointer == "/"
     ));
 
-    let duplicate_input = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
-        &[("x.json", r#"{"value":1,"value":2}"#)],
+    let duplicate_parameters = TestProject::new(
+        r#"{"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        &[("x", r#"{"value":1,"value":2}"#)],
     );
     assert!(matches!(
-        ProjectSpecification::load(duplicate_input.path()),
+        ProjectSpecification::load(duplicate_parameters.path()),
         Err(ConfigError::DuplicateKey { key, .. }) if key == "value"
     ));
 }
 
 #[test]
-fn task_inputs_cannot_escape_the_config_inputs_directory() {
-    for input in ["../outside.json", "state.json", "/absolute.json"] {
-        let study = serde_json::json!({
-            "phases": {
-                "one": {
-                    "tasks": [{"model": "x", "input": input}]
-                }
-            }
-        });
-        let project = TestProject::new(&study.to_string(), &[]);
-        assert!(matches!(
-            ProjectSpecification::load(project.path()),
-            Err(ConfigError::PathOutsideConfig { .. })
-        ));
-    }
+fn legacy_model_input_paths_are_rejected() {
+    let project = TestProject::new(
+        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
+        &[("x", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(project.path()),
+        Err(ConfigError::InvalidDocument { .. })
+    ));
+}
+
+#[test]
+fn every_model_key_requires_its_canonical_parameter_section() {
+    let project = TestProject::new(
+        r#"{"phases":{"one":{"tasks":[{"model":"missing"}]}}}"#,
+        &[("another_model", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(project.path()),
+        Err(ConfigError::InvalidDocument { pointer, reason, .. })
+            if pointer == "/missing" && reason.contains("no parameter section")
+    ));
 }
 
 #[test]
 fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     let missing = TestProject::new(
-        r#"{"phases":{"one":{"after":["absent"],"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
-        &[("x.json", "{}")],
+        r#"{"phases":{"one":{"after":["absent"],"tasks":[{"model":"x"}]}}}"#,
+        &[("x", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(missing.path()),
@@ -326,11 +338,11 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     let cycle = TestProject::new(
         r#"{
           "phases": {
-            "one": {"after":["two"],"tasks":[{"model":"x","input":"inputs/x.json"}]},
-            "two": {"after":["one"],"tasks":[{"model":"x","input":"inputs/x.json"}]}
+            "one": {"after":["two"],"tasks":[{"model":"x"}]},
+            "two": {"after":["one"],"tasks":[{"model":"x"}]}
           }
         }"#,
-        &[("x.json", "{}")],
+        &[("x", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(cycle.path()),
@@ -338,9 +350,9 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     ));
 
     let mixed = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
         &[(
-            "x.json",
+            "x",
             r#"{"choice":{"$sweep":[1,2]},"$cases":[{"value":1},{"value":2}]}"#,
         )],
     );
@@ -353,8 +365,8 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
 #[test]
 fn typed_decode_errors_retain_model_source_and_combination() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"model","input":"inputs/x.json"}]}}}"#,
-        &[("x.json", r#"{"steps":"wrong"}"#)],
+        r#"{"phases":{"one":{"tasks":[{"model":"model"}]}}}"#,
+        &[("model", r#"{"steps":"wrong"}"#)],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
     #[derive(Deserialize)]
@@ -373,17 +385,14 @@ fn typed_decode_errors_retain_model_source_and_combination() {
 }
 
 #[test]
-fn central_config_captures_reserved_and_arbitrary_documents_in_one_namespace() {
+fn central_config_captures_all_project_parameters_in_one_namespace() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
-        &[("run.json", r#"{"steps":1}"#)],
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        &[
+            ("model", r#"{"steps":1}"#),
+            ("plot", r#"{"title":"Captured configuration","dpi":160}"#),
+        ],
     );
-    fs::create_dir_all(project.path().join("config/visualization")).unwrap();
-    fs::write(
-        project.path().join("config/visualization/plot.json"),
-        r#"{"title":"Captured configuration","dpi":160}"#,
-    )
-    .unwrap();
 
     let specification = ProjectSpecification::load(project.path()).unwrap();
     let snapshot: serde_json::Value =
@@ -397,7 +406,7 @@ fn central_config_captures_reserved_and_arbitrary_documents_in_one_namespace() {
         "population"
     );
     assert_eq!(
-        snapshot["config"]["visualization/plot.json"]["title"],
+        snapshot["config"]["parameters.json"]["plot"]["title"],
         "Captured configuration"
     );
 }
@@ -405,8 +414,8 @@ fn central_config_captures_reserved_and_arbitrary_documents_in_one_namespace() {
 #[test]
 fn invalid_unreferenced_json_is_rejected_because_config_manages_all_documents() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
-        &[("run.json", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        &[("model", "{}")],
     );
     fs::write(
         project.path().join("config/unreferenced.json"),

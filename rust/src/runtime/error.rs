@@ -9,6 +9,10 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// Interactive UI requested cooperative cancellation of the execution.
+    #[error("workflow execution was cancelled by the user")]
+    ExecutionCancelled,
+
     /// Runtime could not create an inferred execution or replicate scope.
     #[error("failed to create inferred output scope `{path}`")]
     OutputScope {

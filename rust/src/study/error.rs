@@ -35,13 +35,15 @@ pub enum StudyError {
     },
 
     /// Typed constants or observation-plan binding failed during model preflight.
-    #[error("model `{model}` failed preflight for resolved input {ordinal} in phase `{phase}`")]
+    #[error(
+        "model `{model}` failed preflight for resolved parameters {ordinal} in phase `{phase}`"
+    )]
     ModelPreflight {
         /// Phase containing the rejected invocation.
         phase: String,
         /// Stable compiled model key.
         model: String,
-        /// Deterministic input expansion ordinal.
+        /// Deterministic parameter expansion ordinal.
         ordinal: u64,
         /// Original config, observation, or model-declaration error.
         #[source]

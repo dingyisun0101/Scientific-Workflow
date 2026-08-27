@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::config::advanced::{ResolvedProgramTask, ResolvedTaskInput};
+use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
 use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::{StateSchemaAccess, SystemState, SystemStateSchema};
 
@@ -56,9 +56,9 @@ pub(crate) trait TaskExecutionHost {
 ///
 /// Study ordinarily constructs [`super::definition::Task`] from a registered
 /// model. Application code does not implement this trait. Replacement runtimes
-/// may execute a task from a resolved task input through this boundary.
+/// may execute a task from resolved model parameters through this boundary.
 pub(crate) trait TaskDefinition: Send + Sync {
-    /// Obtains typed constants from `input` and executes through `host`.
+    /// Obtains typed constants from resolved parameters and executes through `host`.
     ///
     /// Returning `Ok(())` while `host.cancellation_requested()` is true means
     /// cooperative cancellation, not successful completion; lifecycle status
@@ -67,7 +67,7 @@ pub(crate) trait TaskDefinition: Send + Sync {
 }
 
 pub(crate) struct StatefulDefinition<M> {
-    input: ResolvedTaskInput,
+    parameters: ResolvedModelParameters,
     observation_plan: BoundObservationPlan,
     marker: std::marker::PhantomData<fn() -> M>,
 }
@@ -76,9 +76,12 @@ impl<M> StatefulDefinition<M>
 where
     M: ScientificModel,
 {
-    pub(crate) fn new(input: ResolvedTaskInput, observation_plan: BoundObservationPlan) -> Self {
+    pub(crate) fn new(
+        parameters: ResolvedModelParameters,
+        observation_plan: BoundObservationPlan,
+    ) -> Self {
         Self {
-            input,
+            parameters,
             observation_plan,
             marker: std::marker::PhantomData,
         }
@@ -94,7 +97,7 @@ where
             return Ok(());
         }
 
-        let constants: M::Constants = self.input.decode()?;
+        let constants: M::Constants = self.parameters.decode()?;
         let schema = host.state_schema()?.clone();
 
         let mut model = M::initialize(constants, &schema)?;

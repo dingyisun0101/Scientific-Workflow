@@ -4,9 +4,11 @@
 //! immutable plan, Runtime publishes lifecycle facts, and UI decides whether
 //! the current process has an interactive terminal worth rendering to.
 
+mod command;
 mod event;
 mod plan;
 mod session;
+mod state;
 mod terminal;
 
 /// Ordinary application-facing UI API.

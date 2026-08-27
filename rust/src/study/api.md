@@ -3,7 +3,8 @@
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
 config to capture one project root, retains that central immutable Config,
 asks state to validate the centrally parsed schema, discovers linked models,
-binds each expanded constants value to its model, resolves external programs
+selects `parameters.json[model-key]`, binds each expanded constants value to
+its model, resolves external programs
 and Python environments, binds observation plans to the schema, and produces
 one immutable execution plan of generic tasks.
 
@@ -110,7 +111,7 @@ println!("actual execution: {}", summary.output_directory().display());
 ## Not API
 
 `ProjectSpecification`, explicit model catalogs, `StudyInner`,
-`StudyPhase`, `StudyTask`, central `Config`, resolved model inputs/programs and
+`StudyPhase`, `StudyTask`, central `Config`, resolved model parameters/programs and
 Python launchers,
 type-erased task definitions,
 bound observation plans, replicate/persistence policies, UI plan, global

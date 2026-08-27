@@ -18,9 +18,7 @@ programs plus project JSON:
 ├── study.json                  phases, tasks, replicates, operational policy
 └── config/
     ├── state.json              canonical state schema
-    ├── inputs/
-    │   └── <model>.json        constants, sweeps, or correlated cases
-    └── **/*.json               arbitrary program/application configuration
+    └── parameters.json         every custom-project parameter namespace
 ```
 
 Each model directly owns its canonical `SystemState` and is linked by a stable
@@ -103,7 +101,7 @@ runtime::execute
         ├──── program snapshot/log/status/artifacts ─► persistence
         │
         └──── lifecycle/progress facts ─────────────► ui
-                                                      automatic terminal presentation
+                                                      Ratatui + exit cancellation
 ```
 
 The crate facade owns only the transition from project root to Study to
@@ -161,8 +159,8 @@ prelude aggregates supported tiers
 
 Peers import another subsystem through its `advanced` boundary. Config does
 not depend on task: it treats model keys as opaque. Study owns the cross-domain
-match. Task asks a config-owned resolved input for one complete typed constants
-value or delegates one resolved program. Runtime receives only a fully
+match. Task asks config-owned resolved model parameters for one complete typed
+constants value or delegates one resolved program. Runtime receives only a fully
 preflighted Study and its retained Config.
 
 ## Source tree and file responsibilities
@@ -224,7 +222,7 @@ workflow/
 │   │   ├── config/store.rs           central immutable all-document Config snapshot
 │   │   ├── config/manifest.rs        study grammar, defaults, dependency checks
 │   │   ├── config/expansion.rs       deterministic $sweep/$cases compiler
-│   │   ├── config/input.rs           generic resolved task + model typed decode
+│   │   ├── config/parameters.rs      resolved model parameters + typed decode
 │   │   ├── config/program.rs         validated resolved executable declaration
 │   │   ├── config/python.rs          nested Python environment validation/lowering
 │   │   ├── config/specification.rs   one-root loading transaction
@@ -249,8 +247,10 @@ workflow/
 │   │   ├── ui/api.md                 automatic presentation contract
 │   │   ├── ui/plan.rs                private Study-owned inferred UI policy
 │   │   ├── ui/event.rs               borrowed Runtime-to-UI fact vocabulary
-│   │   ├── ui/session.rs             terminal activation and progress throttling
-│   │   └── ui/terminal.rs            best-effort stderr renderer and tests
+│   │   ├── ui/command.rs             former command editor and exact exit parser
+│   │   ├── ui/state.rs               event-reduced rows/messages/status snapshot
+│   │   ├── ui/session.rs             renderer thread and cancellation bridge
+│   │   └── ui/terminal.rs            Ratatui dashboard + plain fallback
 │   │   │
 │   │   ├── persistence.rs            persistence root; empty Basic, read Advanced
 │   │   ├── persistence/api.md        complete settings/read/error contract
@@ -281,8 +281,7 @@ workflow/
     ├── src/hopf_model.rs               registered state-owning model
     ├── study.json                      swept simulation then Python plot phase
     ├── config/state.json               canonical model state schema
-    ├── config/inputs/run.json          constants and Cartesian sweeps
-    ├── config/plot.json                arbitrary plotter settings
+    ├── config/parameters.json          model sweeps + plotter settings
     └── scripts/plot.py                 direct verified-recording SVG task
 ```
 
@@ -320,11 +319,12 @@ keys and ignores linker order.
 
 ### Config
 
-Config canonicalizes the project and `config` roots and parses `study.json`
-plus every `.json` file recursively beneath `config/` with duplicate-key
-rejection. One clone-cheap immutable Config retains the entire value graph. It
-validates the exact study grammar and safe model-input containment, expands
-selections deterministically, resolves program paths and Python
+Config canonicalizes the project and `config` roots and parses `study.json`,
+`config/state.json`, and the complete arbitrary `config/parameters.json`
+namespace with duplicate-key rejection. One clone-cheap immutable Config
+retains the entire value graph. A model key automatically selects its same-name
+parameter section; no manifest input path exists. Config expands selections
+deterministically, resolves program paths and Python
 scripts/environment managers once, and creates a
 deterministic language-neutral snapshot for external tasks. Reserved Workflow
 documents and arbitrary application documents use the same lookup graph. The
@@ -338,7 +338,7 @@ program and Python-environment resolution, constants decoding, and
 observation/schema binding. It retains
 the central Config, infers stable identities, labels, the output root, and
 private operational policy. Public inspection is limited
-to project/output roots; phases, tasks, schema, resolved inputs, and policies
+to project/output roots; phases, tasks, schema, resolved parameters, and policies
 exist only for Runtime.
 
 ### Runtime
@@ -371,8 +371,15 @@ remote adapter belongs behind the private `PersistenceSession`, not in model
 or task APIs. A separate private program session creates an isolated artifacts
 directory, freezes central config and dependency JSON, captures stdout/stderr,
 records generic-program or Python launcher provenance, and atomically publishes
-running/complete/failed metadata. The program or Python script writes only its
-assigned artifacts; there is no public workspace builder.
+running/complete/failed metadata. The workspace remains the external task's
+default working area, but Python or another external program owns its
+domain-specific IO and may write to a safe project-relative destination from
+`parameters.json`; the attractor plotter uses `output/plots`.
+
+Model recording provenance calls the selected combination
+`parameter_ordinal` and its canonical `parameters.json` document
+`parameter_source`; the removed per-task input-file vocabulary is not retained
+on disk.
 
 ### UI
 
@@ -384,11 +391,15 @@ Model progress comes from the same host boundaries already used for automatic
 persistence. Programs publish generic lifecycle facts without invented
 iteration values, so neither workload supplies UI code or values.
 
-UI renders only when standard error is an interactive terminal and otherwise
-remains silent. Per-task progress is throttled internally, while lifecycle
-boundaries always render. It uses plain best-effort stderr lines, owns no
-thread, queue, or raw terminal mode, never retains scientific payloads, and
-cannot fail execution. Its public Basic and Advanced tiers are both empty.
+Interactive stdin and stderr select the Ratatui/Crossterm alternate-screen
+dashboard; noninteractive runs use stable plain lifecycle lines. The dashboard
+owns declaration-ordered persistent task rows, progress gauges/spinners,
+elapsed/ETA fields, a bounded message panel, and the former command editor.
+Exact lowercase `exit` or Ctrl+C requests cooperative Runtime cancellation,
+stops further admission, and waits for active model/program cleanup before
+terminal restoration. One private refresh thread retains presentation facts
+but never scientific payloads. Its public Basic and Advanced tiers remain
+empty.
 
 ### Error and prelude integration
 

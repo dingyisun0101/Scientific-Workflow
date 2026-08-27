@@ -5,8 +5,10 @@ verified model-state reconstruction. Config parses optional operational sizing,
 Study retains the effective private plan, and Runtime constructs and drives one
 private session for every task. A model session records observed state; a
 program session—including a Config-lowered Python invocation—prepares one
-isolated workspace, snapshots inputs, captures logs, and commits status. Models and applications never receive a writer,
-destination, queue, flush operation, or lifecycle handle.
+isolated bookkeeping workspace, snapshots inputs, captures logs, and commits
+status. Models never receive a writer, destination, queue, flush operation, or
+lifecycle handle. External programs own their domain-specific filesystem IO;
+Rust Persistence manages only their workspace and launch evidence.
 
 For model tasks, Observation decides which scientific fields and cadences matter. Persistence
 only stores the resulting encoded observations, lifecycle metadata, and
@@ -50,10 +52,12 @@ and records `kind` (`program` or `python`), the resolved launcher executable,
 arguments, exit code/reason, format name, and fixed workspace filenames. For
 Python it additionally records the canonical `python_script` and declared
 `python_environment_manager`; those fields are null for a generic program.
-Runtime passes the other paths to the child;
-the child writes its own scientific artifacts inside `artifacts/`. Persistence
-owns and isolates the durable destination, while an external program
-necessarily emits its assigned artifacts there.
+Runtime passes the other paths to the child. `artifacts/` is the default
+working directory and remains available for temporary or task-scoped results.
+An external program may instead read a project-relative destination from the
+frozen `parameters.json` snapshot and write there directly. The bundled Python
+plotter uses `output/plots`. Such files are program-owned: Persistence does not
+move, publish, validate, or reconstruct them.
 
 ## Advanced API
 
@@ -71,8 +75,9 @@ not have meaningful clone semantics.
 
 This reader opens only completed model recording directories. It does not
 interpret program workspaces, `program.json`, logs, or arbitrary artifacts;
-program results are ordinary files discovered from
-`TaskRunSummary::output_directory()`.
+workspace results are ordinary files discovered from
+`TaskRunSummary::output_directory()`; configured external destinations are
+interpreted by the program that owns them.
 
 Inspection and reconstruction methods:
 

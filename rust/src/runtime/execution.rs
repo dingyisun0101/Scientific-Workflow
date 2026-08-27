@@ -31,6 +31,20 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
     let count = study.replicate_policy().count();
     let task_count_per_replicate = study.phases().iter().map(|phase| phase.tasks().len()).sum();
     let ui = UiSession::automatic(study.ui_plan());
+    for replicate in 0..count {
+        for phase in study.phases() {
+            for task in phase.tasks() {
+                ui.publish(UiEvent::TaskPlanned {
+                    replicate,
+                    phase: phase.name(),
+                    identity: task.identity(),
+                    label: task.label(),
+                    kind: task.kind_name(),
+                    subject: task.subject(),
+                });
+            }
+        }
+    }
     ui.publish(UiEvent::ExecutionStarted {
         output_directory: &output,
         replicate_count: count,
@@ -48,7 +62,12 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
         }
     })();
 
-    match result {
+    let result = if ui.cancellation_requested() {
+        Err(RuntimeError::ExecutionCancelled)
+    } else {
+        result
+    };
+    let outcome = match result {
         Ok(replicates) => {
             ui.publish(UiEvent::ExecutionCompleted {
                 output_directory: &output,
@@ -59,11 +78,17 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
             })
         }
         Err(error) => {
-            let reason = error.to_string();
-            ui.publish(UiEvent::ExecutionFailed { reason: &reason });
+            if matches!(error, RuntimeError::ExecutionCancelled) {
+                ui.publish(UiEvent::ExecutionCancelled);
+            } else {
+                let reason = error.to_string();
+                ui.publish(UiEvent::ExecutionFailed { reason: &reason });
+            }
             Err(error)
         }
-    }
+    };
+    ui.finish();
+    outcome
 }
 
 fn run_replicates_sequential(
@@ -153,6 +178,9 @@ fn run_replicate(
     let result = run_replicate_inner(study, index, scope, ui);
     match &result {
         Ok(_) => ui.publish(UiEvent::ReplicateCompleted { index }),
+        Err(RuntimeError::ExecutionCancelled) => {
+            ui.publish(UiEvent::ReplicateCancelled { index });
+        }
         Err(error) => {
             let reason = error.to_string();
             ui.publish(UiEvent::ReplicateFailed {
@@ -264,6 +292,12 @@ fn run_phase(
             replicate: context.replicate,
             name: phase.name(),
         }),
+        Err(RuntimeError::ExecutionCancelled) => {
+            context.ui.publish(UiEvent::PhaseCancelled {
+                replicate: context.replicate,
+                name: phase.name(),
+            });
+        }
         Err(error) => {
             let reason = error.to_string();
             context.ui.publish(UiEvent::PhaseFailed {
@@ -287,8 +321,16 @@ fn run_phase_inner(
     let mut next_admission = phase_started;
     let mut first_error = None;
     let mut phase_timed_out = false;
+    let mut execution_cancelled = false;
 
     while !pending.is_empty() || !active.is_empty() {
+        if context.ui.cancellation_requested() && !execution_cancelled {
+            execution_cancelled = true;
+            pending.clear();
+            for task in &active {
+                task.cancellation.store(true, Ordering::Release);
+            }
+        }
         if let Some(timeout) = phase.timeout()
             && phase_started.elapsed() >= timeout
         {
@@ -300,6 +342,7 @@ fn run_phase_inner(
         }
 
         let may_admit = !phase_timed_out
+            && !execution_cancelled
             && (first_error.is_none() || phase.failure_policy() == FailurePolicy::FinishAll);
         while may_admit
             && active.len() < phase.max_concurrency()
@@ -362,12 +405,19 @@ fn run_phase_inner(
                     completed.push((active_task.task.output_ordinal(), summary));
                 }
                 Err(error) => {
-                    let reason = error.to_string();
-                    context.ui.publish(UiEvent::TaskFailed {
-                        replicate: context.replicate,
-                        identity: active_task.task.identity(),
-                        reason: &reason,
-                    });
+                    if matches!(error, RuntimeError::TaskCancelled { .. }) {
+                        context.ui.publish(UiEvent::TaskCancelled {
+                            replicate: context.replicate,
+                            identity: active_task.task.identity(),
+                        });
+                    } else {
+                        let reason = error.to_string();
+                        context.ui.publish(UiEvent::TaskFailed {
+                            replicate: context.replicate,
+                            identity: active_task.task.identity(),
+                            reason: &reason,
+                        });
+                    }
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
@@ -388,6 +438,9 @@ fn run_phase_inner(
         }
     }
 
+    if execution_cancelled {
+        return Err(RuntimeError::ExecutionCancelled);
+    }
     if phase_timed_out {
         return Err(RuntimeError::PhaseTimedOut {
             phase: phase.name().to_owned(),
@@ -549,18 +602,22 @@ fn task_metadata(task: &StudyTask, persistence_plan: PersistencePlan) -> Map<Str
             persistence_plan.queue_capacity().get().into(),
         ),
     ]));
-    match task.task().input() {
-        Some(input) => {
-            let constants = serde_json::from_slice(input.resolved_json())
+    match task.task().parameters() {
+        Some(parameters) => {
+            let constants = serde_json::from_slice(parameters.resolved_json())
                 .expect("config retains valid resolved JSON");
             let workflow = Value::Object(Map::from_iter([
                 ("task_identity".to_owned(), task.identity().into()),
                 ("kind".to_owned(), "model".into()),
-                ("model".to_owned(), input.model().into()),
-                ("input_ordinal".to_owned(), input.ordinal().into()),
+                ("model".to_owned(), parameters.model().into()),
+                ("parameter_ordinal".to_owned(), parameters.ordinal().into()),
                 (
-                    "input_source".to_owned(),
-                    input.source_path().to_string_lossy().into_owned().into(),
+                    "parameter_source".to_owned(),
+                    parameters
+                        .source_path()
+                        .to_string_lossy()
+                        .into_owned()
+                        .into(),
                 ),
                 ("persistence".to_owned(), persistence),
             ]));

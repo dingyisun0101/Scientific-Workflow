@@ -1,4 +1,4 @@
-//! Deterministic expansion of task input selections.
+//! Deterministic expansion of model-parameter selections.
 
 use std::path::Path;
 
@@ -53,7 +53,7 @@ fn expand_at(path: &Path, pointer: &str, value: &Value) -> Result<Vec<Value>, Co
             return Err(ConfigError::invalid(
                 path,
                 child_pointer(pointer, key),
-                format!("unknown reserved input marker `{key}`"),
+                format!("unknown reserved parameter marker `{key}`"),
             ));
         }
         let expanded = expand_at(path, &child_pointer(pointer, key), value)?;
@@ -92,7 +92,7 @@ fn expand_cases(
             return Err(ConfigError::invalid(
                 path,
                 child_pointer(pointer, key),
-                format!("unknown reserved input marker `{key}`"),
+                format!("unknown reserved parameter marker `{key}`"),
             ));
         }
         reject_reserved_markers(path, &child_pointer(pointer, key), value)?;
@@ -182,7 +182,7 @@ fn merge_objects(
                 return Err(ConfigError::invalid(
                     path,
                     child_pointer(pointer, key),
-                    "fixed input and `$cases` define overlapping fields",
+                    "fixed parameters and `$cases` define overlapping fields",
                 ));
             }
         }

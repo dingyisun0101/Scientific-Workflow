@@ -18,7 +18,8 @@ Rust 1.97 or newer is required. Executables should commit `Cargo.lock`.
 ### 1. Define a model
 
 The model directly owns its canonical `SystemState`. Its associated constants
-type is the complete typed form of one expanded input document.
+type is the complete typed form of one expanded section selected from
+`config/parameters.json` by the model's registration key.
 
 ```rust,no_run
 use serde::Deserialize;
@@ -82,9 +83,7 @@ project/
 │   └── plot.py
 └── config/
     ├── state.json
-    ├── inputs/
-    │   └── population.json
-    └── plot.json
+    └── parameters.json
 ```
 
 `config/state.json`:
@@ -93,12 +92,18 @@ project/
 {"fields":[{"name":"population"}]}
 ```
 
-`config/inputs/population.json`:
+`config/parameters.json`:
 
 ```json
 {
-  "initial_population": 10,
-  "steps": {"$sweep":[100, 200]}
+  "population": {
+    "initial_population": 10,
+    "steps": {"$sweep":[100, 200]}
+  },
+  "plot": {
+    "output_directory": "output/plots",
+    "dpi": 180
+  }
 }
 ```
 
@@ -109,7 +114,7 @@ project/
   "phases": {
     "simulate": {
       "tasks": [
-        {"model":"population", "input":"inputs/population.json"}
+        {"model":"population"}
       ],
       "max_concurrency": 2
     },
@@ -140,17 +145,17 @@ operational sizing may add:
 }
 ```
 
-Users never provide output paths, construct a backend, submit observations, or
-finalize a recording.
+Users never provide Rust recording paths, construct a backend, submit
+observations, or finalize a recording. External programs may own a
+project-relative domain output such as the Python plotter's `output/plots`.
 
 UI is also automatic. No `ui` object or model display fields are required.
-Workflow shows throttled lifecycle and iteration progress only when standard
-error is attached to an interactive terminal; redirected/test output remains
-silent.
+Interactive stdin and stderr select the Ratatui dashboard with inferred task
+rows, progress, timing, lifecycle messages, and the `exit` command. Redirected
+execution uses stable plain lifecycle lines.
 
-Config alone reads `study.json` and every `.json` file recursively beneath
-`config/`, once. Reserved Workflow documents and arbitrary application files
-share the same immutable lookup graph. `$sweep` creates independent Cartesian
+Config alone reads `study.json`, `config/state.json`, and the complete arbitrary
+`config/parameters.json` namespace once. `$sweep` creates independent Cartesian
 choices; `$cases` creates correlated alternatives; ordinary arrays remain
 literal. Program arguments are optional opaque strings and executables are
 started directly without a shell. Python-specific `script`, `environment`, and
@@ -177,8 +182,10 @@ automatically while publishing inferred terminal progress.
 Each program or Python script receives absolute `WORKFLOW_CONFIG_PATH` and
 `WORKFLOW_DEPENDENCIES_PATH` snapshot files plus project, execution, replicate,
 and task-output paths through `WORKFLOW_*` environment variables. It runs in an
-isolated `artifacts/` directory; Workflow captures stdout, stderr, and terminal
-status. Editing project JSON after `Study::load` does not alter that execution.
+isolated `artifacts/` working directory; Workflow captures stdout, stderr, and
+terminal status. A program may instead write domain outputs to a safe
+project-relative destination it reads from `parameters.json`. Editing project
+JSON after `Study::load` does not alter that execution.
 
 Output is created beneath `<project-root>/output` only after Study preflight
 succeeds.
@@ -206,7 +213,8 @@ ordinary projects should not.
 
 The repository's [`attractor_2d`](../examples/attractor_2d) project combines
 these pieces end to end: six swept Rust model tasks feed one directly declared
-Python plotting phase that opens the verified recordings and emits an SVG.
+Python plotting phase that opens the verified recordings and emits an SVG in
+the configured `output/plots` directory.
 
 Each target subsystem publishes `module::basic` and `module::advanced`, with
 the latter a strict superset. `prelude::basic` contains the small model-author

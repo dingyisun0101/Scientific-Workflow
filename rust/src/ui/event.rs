@@ -5,6 +5,14 @@ use std::path::Path;
 /// One borrowed lifecycle or progress fact published synchronously by Runtime.
 #[derive(Debug)]
 pub(crate) enum UiEvent<'a> {
+    TaskPlanned {
+        replicate: u64,
+        phase: &'a str,
+        identity: &'a str,
+        label: &'a str,
+        kind: &'a str,
+        subject: &'a str,
+    },
     ExecutionStarted {
         output_directory: &'a Path,
         replicate_count: u64,
@@ -16,6 +24,7 @@ pub(crate) enum UiEvent<'a> {
     ExecutionFailed {
         reason: &'a str,
     },
+    ExecutionCancelled,
     ReplicateStarted {
         index: u64,
     },
@@ -25,6 +34,9 @@ pub(crate) enum UiEvent<'a> {
     ReplicateFailed {
         index: u64,
         reason: &'a str,
+    },
+    ReplicateCancelled {
+        index: u64,
     },
     PhaseStarted {
         replicate: u64,
@@ -39,6 +51,10 @@ pub(crate) enum UiEvent<'a> {
         replicate: u64,
         name: &'a str,
         reason: &'a str,
+    },
+    PhaseCancelled {
+        replicate: u64,
+        name: &'a str,
     },
     TaskStarted {
         replicate: u64,
@@ -64,5 +80,9 @@ pub(crate) enum UiEvent<'a> {
         replicate: u64,
         identity: &'a str,
         reason: &'a str,
+    },
+    TaskCancelled {
+        replicate: u64,
+        identity: &'a str,
     },
 }

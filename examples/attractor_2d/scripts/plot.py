@@ -50,7 +50,28 @@ def _settings() -> dict[str, Any]:
     snapshot = json.loads(Path(os.environ["WORKFLOW_CONFIG_PATH"]).read_text())
     config = _object(snapshot, "configuration snapshot").get("config")
     documents = _object(config, "configuration snapshot.config")
-    return _object(documents.get("plot.json"), "config/plot.json")
+    parameters = _object(
+        documents.get("parameters.json"), "config/parameters.json"
+    )
+    return _object(parameters.get("plot"), "config/parameters.json.plot")
+
+
+def _output_directory(settings: dict[str, Any]) -> Path:
+    authored = Path(
+        _string(settings.get("output_directory"), "plot.output_directory")
+    )
+    if authored.is_absolute() or not authored.parts or any(
+        part in {"", ".", ".."} for part in authored.parts
+    ):
+        raise ValueError(
+            "plot.output_directory must be a normalized project-relative path"
+        )
+    project_root = Path(os.environ["WORKFLOW_PROJECT_ROOT"]).resolve(strict=True)
+    output = (project_root / authored).resolve()
+    if not output.is_relative_to(project_root):
+        raise ValueError("plot.output_directory escapes the project root")
+    output.mkdir(parents=True, exist_ok=True)
+    return output
 
 
 def _recordings() -> list[Path]:
@@ -175,7 +196,7 @@ def main() -> None:
     settings = _settings()
     stream = _string(settings.get("stream"), "plot.stream")
     trajectories = _trajectories(stream)
-    output = Path(os.environ["WORKFLOW_TASK_OUTPUT"])
+    output = _output_directory(settings)
     output_file = _string(settings.get("output_file"), "plot.output_file")
     if Path(output_file).name != output_file or not output_file.endswith(".svg"):
         raise ValueError("plot.output_file must be a plain `.svg` filename")

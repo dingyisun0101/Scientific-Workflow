@@ -1,13 +1,14 @@
-//! Automatic activation and progress-event throttling.
+//! Automatic dashboard activation, command handling, and event publication.
 
-use std::collections::HashMap;
-use std::io::{IsTerminal, stderr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::thread::{self, JoinHandle};
 
+use super::command::{CommandSubmission, UiCommand};
 use super::event::UiEvent;
 use super::plan::UiPlan;
-use super::terminal;
+use super::state::DashboardState;
+use super::terminal::{self, DashboardTerminal};
 
 /// Clone-cheap, thread-safe UI session shared by Runtime workers.
 #[derive(Clone)]
@@ -23,29 +24,54 @@ pub(crate) struct TaskUi {
 }
 
 struct UiSessionInner {
-    enabled: bool,
+    interactive: bool,
+    plain_fallback: AtomicBool,
     plan: UiPlan,
-    progress: Mutex<HashMap<u64, HashMap<Box<str>, Instant>>>,
+    state: Mutex<DashboardState>,
+    cancellation_requested: AtomicBool,
+    finished: AtomicBool,
+    renderer: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl UiSession {
-    /// Activates only when standard error is attached to an interactive terminal.
+    /// Selects the Ratatui dashboard for a terminal and plain lines otherwise.
     pub(crate) fn automatic(plan: UiPlan) -> Self {
-        Self {
-            inner: Arc::new(UiSessionInner {
-                enabled: stderr().is_terminal(),
-                plan,
-                progress: Mutex::new(HashMap::new()),
-            }),
+        let interactive = terminal::interactive();
+        let inner = Arc::new(UiSessionInner {
+            interactive,
+            plain_fallback: AtomicBool::new(false),
+            plan,
+            state: Mutex::new(DashboardState::new()),
+            cancellation_requested: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            renderer: Mutex::new(None),
+        });
+        if interactive {
+            let renderer_inner = Arc::clone(&inner);
+            let renderer = thread::Builder::new()
+                .name("scientific-workflow-ui".to_owned())
+                .spawn(move || render_loop(&renderer_inner));
+            match renderer {
+                Ok(renderer) => {
+                    *lock(&inner.renderer) = Some(renderer);
+                }
+                Err(source) => {
+                    inner.plain_fallback.store(true, Ordering::Release);
+                    lock(&inner.state).push_message(format!(
+                        "workflow: failed to start terminal renderer: {source}"
+                    ));
+                }
+            }
         }
+        Self { inner }
     }
 
     /// Publishes one event without allowing presentation failure to fail science.
     pub(crate) fn publish(&self, event: UiEvent<'_>) {
-        if !self.inner.enabled || !self.should_render(&event) {
-            return;
+        lock(&self.inner.state).apply(&event);
+        if !self.inner.interactive || self.inner.plain_fallback.load(Ordering::Acquire) {
+            terminal::render_plain(&event);
         }
-        terminal::render(&event);
     }
 
     pub(crate) fn task(&self, replicate: u64, identity: impl Into<Box<str>>) -> TaskUi {
@@ -56,51 +82,17 @@ impl UiSession {
         }
     }
 
-    fn should_render(&self, event: &UiEvent<'_>) -> bool {
-        let mut progress = self
-            .inner
-            .progress
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match event {
-            UiEvent::TaskProgress {
-                replicate,
-                identity,
-                ..
-            } => {
-                let now = Instant::now();
-                let tasks = progress.entry(*replicate).or_default();
-                match tasks.get_mut(*identity) {
-                    Some(last) if last.elapsed() < self.inner.plan.refresh_interval() => false,
-                    Some(last) => {
-                        *last = now;
-                        true
-                    }
-                    None => {
-                        tasks.insert((*identity).into(), now);
-                        true
-                    }
-                }
-            }
-            UiEvent::TaskCompleted {
-                replicate,
-                identity,
-                ..
-            }
-            | UiEvent::TaskFailed {
-                replicate,
-                identity,
-                ..
-            } => {
-                if let Some(tasks) = progress.get_mut(replicate) {
-                    tasks.remove(*identity);
-                    if tasks.is_empty() {
-                        progress.remove(replicate);
-                    }
-                }
-                true
-            }
-            _ => true,
+    pub(crate) fn cancellation_requested(&self) -> bool {
+        self.inner.cancellation_requested.load(Ordering::Acquire)
+    }
+
+    /// Stops the renderer after Runtime has published the terminal outcome.
+    pub(crate) fn finish(&self) {
+        if self.inner.finished.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(renderer) = lock(&self.inner.renderer).take() {
+            let _ = renderer.join();
         }
     }
 }
@@ -114,4 +106,52 @@ impl TaskUi {
             target_iteration,
         });
     }
+}
+
+fn render_loop(inner: &Arc<UiSessionInner>) {
+    let mut terminal = match DashboardTerminal::enter() {
+        Ok(terminal) => terminal,
+        Err(source) => {
+            inner.plain_fallback.store(true, Ordering::Release);
+            lock(&inner.state).push_message(format!(
+                "workflow: terminal dashboard unavailable: {source}"
+            ));
+            eprintln!("[workflow: terminal dashboard unavailable: {source}]");
+            return;
+        }
+    };
+    loop {
+        match terminal.poll_command() {
+            Ok(Some(CommandSubmission::Parsed(UiCommand::Exit))) => {
+                inner.cancellation_requested.store(true, Ordering::Release);
+                let mut state = lock(&inner.state);
+                state.request_exit();
+                terminal.clear_command();
+            }
+            Ok(Some(CommandSubmission::Unknown(command))) => {
+                lock(&inner.state).push_message(format!("unknown command: {command}"));
+            }
+            Ok(Some(CommandSubmission::Empty)) | Ok(None) => {}
+            Err(source) => {
+                inner.cancellation_requested.store(true, Ordering::Release);
+                lock(&inner.state).push_message(format!(
+                    "workflow: terminal input failed; cancellation requested: {source}"
+                ));
+            }
+        }
+        let snapshot = lock(&inner.state).snapshot();
+        if terminal.draw(&snapshot).is_err() {
+            break;
+        }
+        if inner.finished.load(Ordering::Acquire) {
+            break;
+        }
+        thread::sleep(inner.plan.refresh_interval());
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

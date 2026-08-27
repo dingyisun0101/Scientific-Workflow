@@ -3,8 +3,7 @@
     "simulate": {
       "tasks": [
         {
-          "model": "attractor",
-          "input": "inputs/run.json"
+          "model": "attractor"
         }
       ],
       "max_concurrency": 3

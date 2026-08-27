@@ -7,7 +7,8 @@ The user workflow is intentionally limited to:
 
 1. implement/register each stateful Rust model and provide any standalone task
    programs or Python scripts;
-2. write `study.json` and all project JSON beneath `config/`; and
+2. write `study.json`, `config/state.json`, and the single project-wide
+   `config/parameters.json`; and
 3. call `scientific_workflow::run(project_root)`.
 
 ```rust
@@ -18,7 +19,7 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 
 Users do not construct tasks, phases, studies, runtimes, output paths,
 recording sessions, progress counters, or messages. A task is either one
-registered model plus one resolved model-input combination, one executable
+registered model plus one resolved model-parameter combination, one executable
 declared directly in `study.json`, or one `.py` script with its environment
 declared inside the task's `python` object. Neither program form needs a Rust
 wrapper.
@@ -42,9 +43,10 @@ The [attractor example](examples/attractor_2d) demonstrates the final workflow
 as one realistic project. Its Rust executable is one `run(&Path)` call, its
 model owns state and a custom observation plan, its JSON owns constants sweeps
 and phase organization, and its final phase declares a Python plotter directly.
-The plotter reads verified model recordings and central plot configuration,
-then writes an SVG through its automatic artifact workspace. Persistence,
-scheduling, Python launching, and interactive progress remain internal.
+The plotter reads verified model recordings and the `plot` section of the
+central `parameters.json`, then writes an SVG to its configured `output/plots`.
+Rust persistence, scheduling, Python launching, and the Ratatui dashboard
+remain automatic.
 
 > This crate is pre-1.0 test software. Public API behavior may change through
 > coordinated refactor releases.

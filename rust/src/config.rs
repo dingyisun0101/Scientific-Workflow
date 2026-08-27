@@ -1,16 +1,16 @@
-//! Central parsing and resolution of declarative Workflow project inputs.
+//! Central parsing and resolution of declarative Workflow project parameters.
 //!
 //! Ordinary applications do not call this subsystem: they write a study
-//! manifest plus arbitrary JSON beneath `config`. Config parses every document
-//! once into one immutable namespaced graph. Study retains that graph, uses
+//! manifest, one state schema, and one arbitrary `parameters.json`. Config
+//! parses them once into one immutable namespaced graph. Study retains that graph, uses
 //! typed reserved views for workflow procedure, and binds model, generic
 //! program, or environment-managed Python tasks from it.
 
 mod document;
 mod error;
 mod expansion;
-mod input;
 mod manifest;
+mod parameters;
 mod program;
 mod python;
 mod specification;
@@ -31,8 +31,8 @@ pub mod advanced {
     #[allow(unused_imports)]
     pub use super::basic::*;
     pub use super::error::ConfigError;
-    pub(crate) use super::input::{ResolvedTask, ResolvedTaskInput};
     pub(crate) use super::manifest::{FailurePolicy, ReplicatePolicy, ReplicateScheduling};
+    pub(crate) use super::parameters::{ResolvedModelParameters, ResolvedTask};
     pub(crate) use super::program::ResolvedProgramTask;
     pub(crate) use super::specification::ProjectSpecification;
     pub(crate) use super::store::Config;

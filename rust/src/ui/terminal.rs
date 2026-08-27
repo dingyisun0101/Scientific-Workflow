@@ -1,128 +1,439 @@
-//! Best-effort plain terminal rendering.
+//! Ratatui dashboard and noninteractive line fallback.
 
-use std::fmt::Write as _;
-use std::io::{Write as _, stderr};
+use std::io::{self, IsTerminal, Write as _};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+};
+use crossterm::execute;
+use crossterm::terminal::{
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
+
+use super::command::{CommandInput, CommandSubmission, EditAction, UiCommand};
 use super::event::UiEvent;
+use super::state::{DashboardSnapshot, TaskSnapshot, TaskStatus, event_message};
 
-pub(crate) fn render(event: &UiEvent<'_>) {
-    let line = format_event(event);
-    let mut terminal = stderr().lock();
-    let _ = writeln!(terminal, "{line}");
+static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
+const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+pub(super) fn interactive() -> bool {
+    io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
-fn format_event(event: &UiEvent<'_>) -> String {
-    match event {
-        UiEvent::ExecutionStarted {
-            output_directory,
-            replicate_count,
-            task_count_per_replicate,
-        } => format!(
-            "[workflow] started: {replicate_count} replicate(s), {task_count_per_replicate} task(s) each -> {}",
-            output_directory.display()
-        ),
-        UiEvent::ExecutionCompleted { output_directory } => {
-            format!("[workflow] completed -> {}", output_directory.display())
+pub(super) fn render_plain(event: &UiEvent<'_>) {
+    if let Some(message) = event_message(event) {
+        eprintln!("[{message}]");
+    }
+}
+
+pub(super) struct DashboardTerminal {
+    terminal: Terminal<CrosstermBackend<io::Stderr>>,
+    command: CommandInput,
+    tick: usize,
+    lease: TerminalLease,
+}
+
+impl DashboardTerminal {
+    pub(super) fn enter() -> io::Result<Self> {
+        TERMINAL_OWNED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| io::Error::other("another Workflow dashboard owns the terminal"))?;
+        let lease = TerminalLease;
+        if let Err(source) = enable_raw_mode() {
+            drop(lease);
+            return Err(source);
         }
-        UiEvent::ExecutionFailed { reason } => format!("[workflow] failed: {reason}"),
-        UiEvent::ReplicateStarted { index } => {
-            format!("[replicate {index}] started")
+        let mut stderr = io::stderr();
+        if let Err(source) = execute!(
+            stderr,
+            EnterAlternateScreen,
+            Clear(ClearType::All),
+            MoveTo(0, 0),
+            Hide,
+            EnableMouseCapture
+        ) {
+            restore_terminal();
+            drop(lease);
+            return Err(source);
         }
-        UiEvent::ReplicateCompleted { index } => {
-            format!("[replicate {index}] completed")
-        }
-        UiEvent::ReplicateFailed { index, reason } => {
-            format!("[replicate {index}] failed: {reason}")
-        }
-        UiEvent::PhaseStarted {
-            replicate,
-            name,
-            task_count,
-        } => format!("[replicate {replicate}] phase {name}: started ({task_count} task(s))"),
-        UiEvent::PhaseCompleted { replicate, name } => {
-            format!("[replicate {replicate}] phase {name}: completed")
-        }
-        UiEvent::PhaseFailed {
-            replicate,
-            name,
-            reason,
-        } => format!("[replicate {replicate}] phase {name}: failed: {reason}"),
-        UiEvent::TaskStarted {
-            replicate,
-            phase,
-            identity,
-            label,
-            kind,
-            subject,
-        } => format!(
-            "[replicate {replicate}] task {identity}: started {label} ({kind} {subject}, phase {phase})"
-        ),
-        UiEvent::TaskProgress {
-            replicate,
-            identity,
-            iteration,
-            target_iteration,
-        } => {
-            let mut line =
-                format!("[replicate {replicate}] task {identity}: iteration {iteration}");
-            if let Some(target) = target_iteration {
-                let percent = if *target == 0 {
-                    100.0
-                } else {
-                    (*iteration as f64 / *target as f64) * 100.0
-                };
-                let _ = write!(line, "/{target} ({percent:.1}%)");
+        let backend = CrosstermBackend::new(io::stderr());
+        let terminal = match Terminal::new(backend) {
+            Ok(terminal) => terminal,
+            Err(source) => {
+                restore_terminal();
+                drop(lease);
+                return Err(source);
             }
-            line
+        };
+        Ok(Self {
+            terminal,
+            command: CommandInput::default(),
+            tick: 0,
+            lease,
+        })
+    }
+
+    pub(super) fn poll_command(&mut self) -> io::Result<Option<CommandSubmission>> {
+        while event::poll(Duration::ZERO)? {
+            match event::read()? {
+                Event::Key(key)
+                    if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+                {
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        return Ok(Some(CommandSubmission::Parsed(UiCommand::Exit)));
+                    }
+                    if let Some(action) = edit_action(key.code, key.modifiers)
+                        && let Some(submission) = self.command.edit(action)
+                    {
+                        return Ok(Some(submission));
+                    }
+                }
+                _ => {}
+            }
         }
-        UiEvent::TaskCompleted {
-            replicate,
-            identity,
-            final_iteration,
-            output_directory,
-        } => match final_iteration {
-            Some(iteration) => format!(
-                "[replicate {replicate}] task {identity}: completed at iteration {iteration} -> {}",
-                output_directory.display()
-            ),
-            None => format!(
-                "[replicate {replicate}] task {identity}: completed -> {}",
-                output_directory.display()
-            ),
-        },
-        UiEvent::TaskFailed {
-            replicate,
-            identity,
-            reason,
-        } => format!("[replicate {replicate}] task {identity}: failed: {reason}"),
+        Ok(None)
+    }
+
+    pub(super) fn clear_command(&mut self) {
+        self.command.clear();
+    }
+
+    pub(super) fn draw(&mut self, snapshot: &DashboardSnapshot) -> io::Result<()> {
+        let tick = self.tick;
+        let command = self.command.text();
+        let command_cursor = self.command.cursor();
+        self.tick = self.tick.wrapping_add(1);
+        self.terminal.draw(|frame| {
+            let area = frame.area();
+            let [header, tasks, messages, command_area] = Layout::vertical([
+                Constraint::Length(4),
+                Constraint::Min(6),
+                Constraint::Length(9),
+                Constraint::Length(3),
+            ])
+            .areas(area);
+            render_header(frame, header, snapshot);
+            render_tasks(frame, tasks, snapshot, tick);
+            render_messages(frame, messages, snapshot);
+            render_command(
+                frame,
+                command_area,
+                &command,
+                command_cursor,
+                snapshot.exit_requested,
+            );
+        })?;
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::{UiEvent, format_event};
-
-    #[test]
-    fn terminal_lines_are_derived_only_from_runtime_facts() {
-        assert_eq!(
-            format_event(&UiEvent::TaskProgress {
-                replicate: 2,
-                identity: "simulate/000003/model-000000",
-                iteration: 25,
-                target_iteration: Some(100),
-            }),
-            "[replicate 2] task simulate/000003/model-000000: iteration 25/100 (25.0%)"
-        );
-        assert_eq!(
-            format_event(&UiEvent::TaskCompleted {
-                replicate: 2,
-                identity: "simulate/000003/model-000000",
-                final_iteration: Some(100),
-                output_directory: Path::new("output/task-000003"),
-            }),
-            "[replicate 2] task simulate/000003/model-000000: completed at iteration 100 -> output/task-000003"
-        );
+impl Drop for DashboardTerminal {
+    fn drop(&mut self) {
+        let _ = self.terminal.show_cursor();
+        restore_terminal();
+        let _ = &self.lease;
     }
+}
+
+struct TerminalLease;
+
+impl Drop for TerminalLease {
+    fn drop(&mut self) {
+        TERMINAL_OWNED.store(false, Ordering::Release);
+    }
+}
+
+fn restore_terminal() {
+    let mut stderr = io::stderr();
+    let _ = execute!(stderr, DisableMouseCapture, Show, LeaveAlternateScreen);
+    let _ = stderr.flush();
+    let _ = disable_raw_mode();
+}
+
+fn edit_action(code: KeyCode, modifiers: KeyModifiers) -> Option<EditAction> {
+    match code {
+        KeyCode::Char(character)
+            if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(EditAction::Insert(character))
+        }
+        KeyCode::Backspace => Some(EditAction::Backspace),
+        KeyCode::Delete => Some(EditAction::Delete),
+        KeyCode::Left => Some(EditAction::Left),
+        KeyCode::Right => Some(EditAction::Right),
+        KeyCode::Home => Some(EditAction::Home),
+        KeyCode::End => Some(EditAction::End),
+        KeyCode::Esc => Some(EditAction::Clear),
+        KeyCode::Enter => Some(EditAction::Submit),
+        _ => None,
+    }
+}
+
+fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &DashboardSnapshot) {
+    let counts = counts(snapshot);
+    let elapsed = format_duration(snapshot.started.elapsed());
+    let output = snapshot
+        .output
+        .as_deref()
+        .map_or_else(|| "planning".to_owned(), |path| path.display().to_string());
+    let text = vec![
+        Line::from(vec![
+            Span::styled(
+                snapshot.heading.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(
+                "  running={} pending={} completed={} failed={} cancelled={} skipped={} · elapsed {elapsed}",
+                counts.running,
+                counts.pending,
+                counts.completed,
+                counts.failed,
+                counts.cancelled,
+                counts.skipped,
+            )),
+        ]),
+        Line::from(format!(
+            "replicates={} · tasks={} · output={output}",
+            snapshot.replicate_count,
+            snapshot.tasks.len()
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Study ")),
+        area,
+    );
+}
+
+fn render_tasks(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &DashboardSnapshot,
+    tick: usize,
+) {
+    let header = Row::new(["rep", "phase", "task", "status", "progress", "time"]).style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    let available = usize::from(area.height.saturating_sub(3));
+    let mut rows = snapshot
+        .tasks
+        .iter()
+        .take(available)
+        .map(|task| task_row(task, tick))
+        .collect::<Vec<_>>();
+    if snapshot.tasks.len() > available && available > 0 {
+        rows.truncate(available.saturating_sub(1));
+        rows.push(Row::new([
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(format!(
+                "… {} more tasks",
+                snapshot.tasks.len() - rows.len()
+            )),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+        ]));
+    }
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(4),
+            Constraint::Percentage(14),
+            Constraint::Percentage(28),
+            Constraint::Length(12),
+            Constraint::Percentage(27),
+            Constraint::Length(22),
+        ],
+    )
+    .header(header)
+    .column_spacing(1)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Tasks ({}) ", snapshot.tasks.len())),
+    );
+    frame.render_widget(table, area);
+}
+
+fn task_row(task: &TaskSnapshot, tick: usize) -> Row<'static> {
+    let status_style = match task.status {
+        TaskStatus::Pending | TaskStatus::Skipped => Style::default().fg(Color::DarkGray),
+        TaskStatus::Running => Style::default().fg(Color::Cyan),
+        TaskStatus::Completed => Style::default().fg(Color::Green),
+        TaskStatus::Failed => Style::default().fg(Color::Red),
+        TaskStatus::Cancelled => Style::default().fg(Color::Yellow),
+    };
+    let progress = progress_text(task, tick);
+    let timing = timing_text(task);
+    let task_label = if task.detail.is_empty() {
+        format!("{} · {} · {}", task.label, task.subject, task.identity)
+    } else {
+        format!("{} · {}", task.label, task.detail)
+    };
+    Row::new([
+        Cell::from(task.replicate.to_string()),
+        Cell::from(task.phase.clone()),
+        Cell::from(task_label).style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from(task.status.label()).style(status_style),
+        Cell::from(progress).style(Style::default().fg(Color::Cyan)),
+        Cell::from(timing),
+    ])
+}
+
+fn progress_text(task: &TaskSnapshot, tick: usize) -> String {
+    if task.status == TaskStatus::Pending || task.status == TaskStatus::Skipped {
+        return String::new();
+    }
+    if task.kind != "model" {
+        return if task.status == TaskStatus::Running {
+            format!("{} {}", SPINNER[tick % SPINNER.len()], task.kind)
+        } else {
+            task.kind.clone()
+        };
+    }
+    match task.target {
+        Some(target) => {
+            let ratio = if target == 0 {
+                1.0
+            } else {
+                (task.iteration as f64 / target as f64).clamp(0.0, 1.0)
+            };
+            let filled = (ratio * 16.0).round() as usize;
+            format!(
+                "{}{} {}/{}",
+                "█".repeat(filled),
+                "░".repeat(16 - filled),
+                task.iteration,
+                target
+            )
+        }
+        None => format!(
+            "{} iteration {}",
+            SPINNER[tick % SPINNER.len()],
+            task.iteration
+        ),
+    }
+}
+
+fn timing_text(task: &TaskSnapshot) -> String {
+    let Some(started) = task.started else {
+        return String::new();
+    };
+    let elapsed = task
+        .finished
+        .unwrap_or_else(Instant::now)
+        .duration_since(started);
+    let eta = task.target.and_then(|target| {
+        if task.iteration == 0 || task.iteration >= target {
+            None
+        } else {
+            let remaining = target - task.iteration;
+            elapsed
+                .checked_mul(u32::try_from(remaining).ok()?)?
+                .checked_div(u32::try_from(task.iteration).ok()?)
+        }
+    });
+    match eta {
+        Some(eta) => format!(
+            "elapsed {} ETA {}",
+            format_duration(elapsed),
+            format_duration(eta)
+        ),
+        None => format!("elapsed {}", format_duration(elapsed)),
+    }
+}
+
+fn render_messages(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &DashboardSnapshot) {
+    let visible = usize::from(area.height.saturating_sub(2));
+    let start = snapshot.messages.len().saturating_sub(visible);
+    let text = snapshot.messages[start..]
+        .iter()
+        .map(|message| Line::from(message.clone()))
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(Block::default().borders(Borders::ALL).title(" Messages "))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_command(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    command: &str,
+    cursor: usize,
+    exit_requested: bool,
+) {
+    let title = if exit_requested {
+        " Command · exit requested "
+    } else {
+        " Command · type exit then Enter "
+    };
+    let value = if exit_requested { "" } else { command };
+    frame.render_widget(
+        Paragraph::new(value)
+            .style(Style::default().fg(Color::Yellow))
+            .block(Block::default().borders(Borders::ALL).title(title)),
+        area,
+    );
+    if !exit_requested {
+        let x = area.x.saturating_add(1).saturating_add(
+            u16::try_from(cursor)
+                .unwrap_or(u16::MAX)
+                .min(area.width.saturating_sub(2)),
+        );
+        frame.set_cursor_position(Position::new(x, area.y.saturating_add(1)));
+    }
+}
+
+#[derive(Default)]
+struct Counts {
+    pending: usize,
+    running: usize,
+    completed: usize,
+    failed: usize,
+    cancelled: usize,
+    skipped: usize,
+}
+
+fn counts(snapshot: &DashboardSnapshot) -> Counts {
+    let mut counts = Counts::default();
+    for task in &snapshot.tasks {
+        match task.status {
+            TaskStatus::Pending => counts.pending += 1,
+            TaskStatus::Running => counts.running += 1,
+            TaskStatus::Completed => counts.completed += 1,
+            TaskStatus::Failed => counts.failed += 1,
+            TaskStatus::Cancelled => counts.cancelled += 1,
+            TaskStatus::Skipped => counts.skipped += 1,
+        }
+    }
+    counts
+}
+
+fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3_600,
+        (seconds / 60) % 60,
+        seconds % 60
+    )
 }

@@ -57,20 +57,24 @@ impl ScientificModel for CounterModel {
 struct Project(PathBuf);
 
 impl Project {
-    fn new(study: &str, input: &str) -> Self {
+    fn new(study: &str, parameters: &str) -> Self {
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "scientific-workflow-study-{}-{sequence}",
             std::process::id()
         ));
-        fs::create_dir_all(root.join("config/inputs")).unwrap();
+        fs::create_dir_all(root.join("config")).unwrap();
         fs::write(root.join("study.json"), study).unwrap();
         fs::write(
             root.join("config/state.json"),
             r#"{"fields":[{"name":"count"}]}"#,
         )
         .unwrap();
-        fs::write(root.join("config/inputs/counter.json"), input).unwrap();
+        fs::write(
+            root.join("config/parameters.json"),
+            format!(r#"{{"counter":{parameters}}}"#),
+        )
+        .unwrap();
         Self(root)
     }
 
@@ -94,12 +98,11 @@ const STUDY: &str = r#"
   "phases": {
     "measure": {
       "after": ["simulate"],
-      "tasks": [{"model":"counter","input":"inputs/counter.json"}]
+      "tasks": [{"model":"counter"}]
     },
     "simulate": {
       "tasks": [{
-        "model":"counter",
-        "input":"inputs/counter.json"
+        "model":"counter"
       }],
       "max_concurrency": 2
     }
@@ -161,6 +164,16 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
         assert_eq!(metadata["user_metadata"]["model_constants"]["initial"], 5);
         assert_eq!(metadata["user_metadata"]["workflow"]["model"], "counter");
         assert_eq!(
+            metadata["user_metadata"]["workflow"]["parameter_ordinal"],
+            0
+        );
+        let parameter_source = metadata["user_metadata"]["workflow"]["parameter_source"]
+            .as_str()
+            .unwrap();
+        assert!(parameter_source.ends_with("config/parameters.json"));
+        assert!(metadata["user_metadata"]["workflow"]["input_ordinal"].is_null());
+        assert!(metadata["user_metadata"]["workflow"]["input_source"].is_null());
+        assert_eq!(
             metadata["user_metadata"]["workflow"]["persistence"],
             serde_json::json!({
                 "backend": "local",
@@ -178,7 +191,7 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
 #[test]
 fn crate_level_run_is_the_complete_ordinary_entry_point() {
     let project = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"counter","input":"inputs/counter.json"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"model":"counter"}]}}}"#,
         r#"{"initial":1,"steps":1}"#,
     );
     let study = Study::load(project.path()).unwrap();
@@ -197,9 +210,14 @@ fn crate_level_run_is_the_complete_ordinary_entry_point() {
 #[test]
 fn preflight_rejects_invalid_binding_without_output() {
     let missing = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"absent","input":"inputs/counter.json"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"model":"absent"}]}}}"#,
         r#"{"initial":1,"steps":1}"#,
     );
+    fs::write(
+        missing.path().join("config/parameters.json"),
+        r#"{"absent":{"initial":1,"steps":1}}"#,
+    )
+    .unwrap();
     assert!(matches!(
         Study::load(missing.path()),
         Err(StudyError::UnknownModel { model, .. }) if model == "absent"
@@ -207,7 +225,7 @@ fn preflight_rejects_invalid_binding_without_output() {
     assert!(!missing.path().join("output").exists());
 
     let bad_constants = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"counter","input":"inputs/counter.json"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"model":"counter"}]}}}"#,
         r#"{"initial":"wrong","steps":1}"#,
     );
     assert!(matches!(
@@ -226,7 +244,7 @@ fn generic_program_task_receives_captured_config_and_dependency_outputs() {
     {
       "phases": {
         "simulate": {
-          "tasks": [{"model":"counter","input":"inputs/counter.json"}]
+          "tasks": [{"model":"counter"}]
         },
         "plot": {
           "after": ["simulate"],
@@ -237,8 +255,8 @@ fn generic_program_task_receives_captured_config_and_dependency_outputs() {
     "#;
     let project = Project::new(study_document, r#"{"initial":2,"steps":1}"#);
     fs::write(
-        project.path().join("config/plot.json"),
-        r#"{"title":"captured title","dpi":180}"#,
+        project.path().join("config/parameters.json"),
+        r#"{"counter":{"initial":2,"steps":1},"plot":{"title":"captured title","dpi":180}}"#,
     )
     .unwrap();
     let program = project.path().join("plot.py");
@@ -253,7 +271,7 @@ config = json.loads(Path(os.environ["WORKFLOW_CONFIG_PATH"]).read_text())
 dependencies = json.loads(Path(os.environ["WORKFLOW_DEPENDENCIES_PATH"]).read_text())
 output = Path(os.environ["WORKFLOW_TASK_OUTPUT"])
 result = {
-    "title": config["config"]["plot.json"]["title"],
+    "title": config["config"]["parameters.json"]["plot"]["title"],
     "phase": dependencies[0]["phase"],
     "dependency_kind": dependencies[0]["tasks"][0]["kind"],
     "dependency_exists": Path(dependencies[0]["tasks"][0]["output_directory"]).is_dir(),
@@ -268,8 +286,8 @@ result = {
 
     let study = Study::load(project.path()).unwrap();
     fs::write(
-        project.path().join("config/plot.json"),
-        r#"{"title":"changed after Study load","dpi":72}"#,
+        project.path().join("config/parameters.json"),
+        r#"{"counter":{"initial":2,"steps":1},"plot":{"title":"changed after Study load","dpi":72}}"#,
     )
     .unwrap();
 
@@ -337,8 +355,8 @@ fn nested_python_task_runs_without_a_rust_wrapper_or_executable_script() {
     "#;
     let project = Project::new(study_document, r#"{"initial":0,"steps":0}"#);
     fs::write(
-        project.path().join("config/analysis.json"),
-        r#"{"title":"direct Python task"}"#,
+        project.path().join("config/parameters.json"),
+        r#"{"counter":{"initial":0,"steps":0},"analysis":{"title":"direct Python task"}}"#,
     )
     .unwrap();
     let script = project.path().join("analyze.py");
@@ -351,7 +369,7 @@ from pathlib import Path
 config = json.loads(Path(os.environ["WORKFLOW_CONFIG_PATH"]).read_text())
 output = Path(os.environ["WORKFLOW_TASK_OUTPUT"])
 (output / "analysis.json").write_text(json.dumps({
-    "title": config["config"]["analysis.json"]["title"]
+    "title": config["config"]["parameters.json"]["analysis"]["title"]
 }))
 "#,
     )

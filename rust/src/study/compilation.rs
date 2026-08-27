@@ -23,27 +23,28 @@ pub(crate) fn compile(
         let mut tasks = Vec::with_capacity(phase.tasks().len());
         for resolved in phase.tasks() {
             let (identity_suffix, label, task) = match resolved {
-                ResolvedTask::Model(input) => {
-                    let registration =
-                        catalog
-                            .get(input.model())
-                            .ok_or_else(|| StudyError::UnknownModel {
-                                phase: phase.name().to_owned(),
-                                model: input.model().to_owned(),
-                            })?;
+                ResolvedTask::Model(parameters) => {
+                    let registration = catalog.get(parameters.model()).ok_or_else(|| {
+                        StudyError::UnknownModel {
+                            phase: phase.name().to_owned(),
+                            model: parameters.model().to_owned(),
+                        }
+                    })?;
                     let observation_plan =
-                        registration.preflight(input, &schema).map_err(|source| {
-                            StudyError::model_preflight(
-                                phase.name(),
-                                input.model(),
-                                input.ordinal(),
-                                source,
-                            )
-                        })?;
+                        registration
+                            .preflight(parameters, &schema)
+                            .map_err(|source| {
+                                StudyError::model_preflight(
+                                    phase.name(),
+                                    parameters.model(),
+                                    parameters.ordinal(),
+                                    source,
+                                )
+                            })?;
                     (
-                        format!("{}-{:06}", input.model(), input.ordinal()),
-                        format!("{} #{}", input.model(), input.ordinal()),
-                        registration.make_task(input.clone(), observation_plan),
+                        format!("{}-{:06}", parameters.model(), parameters.ordinal()),
+                        format!("{} #{}", parameters.model(), parameters.ordinal()),
+                        registration.make_task(parameters.clone(), observation_plan),
                     )
                 }
                 ResolvedTask::Program(program) => {

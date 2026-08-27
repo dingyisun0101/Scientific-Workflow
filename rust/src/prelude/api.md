@@ -28,7 +28,7 @@ Re-exporting empty tiers keeps the uniform subsystem rule without inventing
 construction APIs.
 
 The Basic prelude deliberately does not export `Task`, `Study`, model catalogs,
-project parsers, resolved inputs, output allocators, persistence writers/readers,
+project parsers, resolved model parameters, output allocators, persistence writers/readers,
 schedulers, summaries, or runtime adapters. Those
 are not required to complete an ordinary project.
 

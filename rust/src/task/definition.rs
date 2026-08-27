@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::config::advanced::{ResolvedProgramTask, ResolvedTaskInput};
+use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
 use crate::observation::advanced::BoundObservationPlan;
 
 use super::execution::{ProgramDefinition, StatefulDefinition, TaskDefinition, TaskExecutionHost};
@@ -30,13 +30,13 @@ pub(crate) enum TaskKind {
 
 #[derive(Clone)]
 enum TaskDescriptor {
-    Model(ResolvedTaskInput),
+    Model(ResolvedModelParameters),
     Program(ResolvedProgramTask),
 }
 
 impl Task {
     pub(crate) fn for_model<M>(
-        input: ResolvedTaskInput,
+        parameters: ResolvedModelParameters,
         observation_plan: BoundObservationPlan,
     ) -> Self
     where
@@ -44,10 +44,10 @@ impl Task {
     {
         Self {
             definition: Arc::new(StatefulDefinition::<M>::new(
-                input.clone(),
+                parameters.clone(),
                 observation_plan,
             )),
-            descriptor: TaskDescriptor::Model(input),
+            descriptor: TaskDescriptor::Model(parameters),
         }
     }
 
@@ -74,14 +74,14 @@ impl Task {
 
     pub(crate) fn model(&self) -> Option<&str> {
         match &self.descriptor {
-            TaskDescriptor::Model(input) => Some(input.model()),
+            TaskDescriptor::Model(parameters) => Some(parameters.model()),
             TaskDescriptor::Program(_) => None,
         }
     }
 
-    pub(crate) fn input(&self) -> Option<&ResolvedTaskInput> {
+    pub(crate) fn parameters(&self) -> Option<&ResolvedModelParameters> {
         match &self.descriptor {
-            TaskDescriptor::Model(input) => Some(input),
+            TaskDescriptor::Model(parameters) => Some(parameters),
             TaskDescriptor::Program(_) => None,
         }
     }
@@ -95,14 +95,14 @@ impl Task {
 
     pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
         match &self.descriptor {
-            TaskDescriptor::Model(input) => input.timeout(),
+            TaskDescriptor::Model(parameters) => parameters.timeout(),
             TaskDescriptor::Program(program) => program.timeout(),
         }
     }
 
     pub(crate) fn subject(&self) -> &str {
         match &self.descriptor {
-            TaskDescriptor::Model(input) => input.model(),
+            TaskDescriptor::Model(parameters) => parameters.model(),
             TaskDescriptor::Program(program) => program.subject(),
         }
     }

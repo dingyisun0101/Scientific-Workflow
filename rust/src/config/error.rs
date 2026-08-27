@@ -1,4 +1,4 @@
-//! Configuration-owned project loading and input resolution failures.
+//! Configuration-owned project loading and parameter resolution failures.
 
 use std::io;
 use std::path::PathBuf;
@@ -49,8 +49,8 @@ pub enum ConfigError {
         reason: String,
     },
 
-    /// A task input reference escaped the project configuration directory.
-    #[error("task input path `{path}` is outside configuration root `{config_root}`")]
+    /// A discovered document escaped the project configuration directory.
+    #[error("document path `{path}` is outside configuration root `{config_root}`")]
     PathOutsideConfig {
         /// Rejected authored or resolved path.
         path: PathBuf,
@@ -77,19 +77,21 @@ pub enum ConfigError {
         dependency: String,
     },
 
-    /// A task input expansion cannot be represented safely.
-    #[error("task input expansion in `{path}` exceeds supported combination counts")]
+    /// A model-parameter expansion cannot be represented safely.
+    #[error("model parameter expansion in `{path}` exceeds supported combination counts")]
     ExpansionOverflow {
-        /// Input document whose selection product overflowed.
+        /// Parameters document whose selection product overflowed.
         path: PathBuf,
     },
 
-    /// One resolved input could not be decoded as its model's constants type.
-    #[error("failed to decode resolved input {ordinal} for model `{model}` from `{path}`")]
+    /// One resolved parameter combination could not decode as model constants.
+    #[error(
+        "failed to decode resolved parameter combination {ordinal} for model `{model}` from `{path}`"
+    )]
     DecodeModelConstants {
         /// Compiled model key from the study manifest.
         model: String,
-        /// Task input document path.
+        /// Central parameters document path.
         path: PathBuf,
         /// Zero-based deterministic combination ordinal.
         ordinal: u64,

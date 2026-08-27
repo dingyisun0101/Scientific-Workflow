@@ -1,4 +1,4 @@
-//! Complete expanded task inputs and config-owned typed decoding.
+//! Complete expanded model parameters and config-owned typed decoding.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,17 +13,17 @@ use super::program::ResolvedProgramTask;
 /// One centrally resolved generic task declaration.
 #[derive(Clone, Debug)]
 pub(crate) enum ResolvedTask {
-    Model(ResolvedTaskInput),
+    Model(ResolvedModelParameters),
     Program(ResolvedProgramTask),
 }
 
-/// One complete task input after deterministic selection expansion.
+/// One complete model-parameter combination after deterministic expansion.
 #[derive(Clone)]
-pub struct ResolvedTaskInput {
-    inner: Arc<ResolvedTaskInputInner>,
+pub struct ResolvedModelParameters {
+    inner: Arc<ResolvedModelParametersInner>,
 }
 
-impl ResolvedTaskInput {
+impl ResolvedModelParameters {
     pub(crate) fn new(
         model: Box<str>,
         source_path: PathBuf,
@@ -34,7 +34,7 @@ impl ResolvedTaskInput {
         let json = serde_json::to_vec(&value)
             .expect("serializing an already parsed serde_json::Value cannot fail");
         Self {
-            inner: Arc::new(ResolvedTaskInputInner {
+            inner: Arc::new(ResolvedModelParametersInner {
                 model,
                 source_path,
                 ordinal,
@@ -50,7 +50,7 @@ impl ResolvedTaskInput {
         &self.inner.model
     }
 
-    /// Returns the canonical task input document path.
+    /// Returns the canonical project parameters document path.
     pub fn source_path(&self) -> &Path {
         &self.inner.source_path
     }
@@ -65,7 +65,7 @@ impl ResolvedTaskInput {
         self.inner.timeout
     }
 
-    /// Decodes this complete resolved input as one owned typed value.
+    /// Decodes this complete resolved parameter combination as one owned value.
     ///
     /// This is the sole supported constants-supply operation. It never rereads
     /// or reparses the source file and contextualizes type errors with the
@@ -88,10 +88,10 @@ impl ResolvedTaskInput {
     }
 }
 
-impl fmt::Debug for ResolvedTaskInput {
+impl fmt::Debug for ResolvedModelParameters {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ResolvedTaskInput")
+            .debug_struct("ResolvedModelParameters")
             .field("model", &self.model())
             .field("source_path", &self.source_path())
             .field("ordinal", &self.ordinal())
@@ -100,7 +100,7 @@ impl fmt::Debug for ResolvedTaskInput {
     }
 }
 
-struct ResolvedTaskInputInner {
+struct ResolvedModelParametersInner {
     model: Box<str>,
     source_path: PathBuf,
     ordinal: u64,

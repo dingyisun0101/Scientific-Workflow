@@ -1,7 +1,8 @@
 # Task API
 
 The `task` subsystem owns one uniform unit of scientific workload. A task is
-either a registered stateful Rust model combined with one config-owned input,
+either a registered stateful Rust model combined with one config-owned
+parameter combination,
 or a resolved external executable. Python declarations are resolved into the
 same executable boundary. Users never construct Rust `Task` values; they
 implement and register models or declare programs/Python in `study.json`.
@@ -12,7 +13,8 @@ paths, scheduling, durable format, messages, UI, or lifecycle policy.
 
 Stateful execution is fixed:
 
-1. config-owned `ResolvedTaskInput` decodes one complete `M::Constants`;
+1. config-owned `ResolvedModelParameters` decodes one complete `M::Constants`
+   from `parameters.json[model-key]`;
 2. Study calls `M::observation_plan(&constants)` and stores its schema-bound result;
 3. `M::initialize(constants, schema)` creates the canonical model at execution;
 4. task verifies stable state ownership/schema and target iteration;
@@ -92,15 +94,16 @@ impl ScientificModel for PopulationModel { ... }
 ```
 
 The nonempty, whitespace-exact string is the stable semantic key used by
-`study.json`. It is deliberately not inferred from `type_name`, module paths,
-or source order because those are refactor-unstable. The macro preserves the
-impl and submits hidden immutable registration metadata. Duplicate or invalid
-keys fail during Study preflight before output. Linked registration order is
-never used; the internal catalog sorts keys.
+`study.json` and the matching top-level section of `config/parameters.json`.
+It is deliberately not inferred from `type_name`, module paths, or source order
+because those are refactor-unstable. The macro preserves the impl and submits
+only hidden immutable registration metadata. Duplicate or invalid keys fail
+during Study preflight before output. Linked registration order is never used;
+the internal catalog sorts keys.
 
-The attribute performs no runtime work by itself and creates no mutable global
-registry. A model must be linked into the final executable for its registration
-to be discoverable.
+The attribute performs no runtime work, scheduling, persistence, progress, or
+UI rendering and creates no mutable global registry. A model must be linked
+into the final executable for its registration to be discoverable.
 
 ## Advanced API
 
@@ -177,7 +180,8 @@ concrete execution loops are private. Hidden
 crate `__private` re-exports exist solely for macro expansion and are not a
 supported API.
 
-Replacement task implementations must preserve config-owned decode, direct
+Replacement task implementations must preserve model-key parameter selection,
+config-owned decode, direct
 state ownership checks, deterministic observation-plan binding, observation
 ordering, generic model/program dispatch, and runtime-owned
 cancellation/lifecycle. Programs and Python scripts must remain declarative
