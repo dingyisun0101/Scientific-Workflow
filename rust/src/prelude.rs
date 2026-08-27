@@ -2,31 +2,17 @@
 //!
 //! This module owns no behavior. [`basic`] gathers ordinary application APIs;
 //! [`advanced`] is its strict superset for integrations and Workflow internals.
-//! The existing [`study`] scope remains available while that subsystem awaits
-//! its own inference-first refactor.
 
 /// Ordinary application-facing imports.
 pub mod basic {
-    pub use crate::artifact::{
-        ArtifactDescriptor, ArtifactDisposition, ArtifactError, ArtifactLoadError,
-        PersistedArtifact, VerifiedArtifact, load_verified_artifact, persist_artifact,
-    };
+    pub use crate::WorkflowError;
     #[allow(unused_imports)]
     pub use crate::config::basic::*;
-    pub use crate::execution::{
-        ExecutionScope, ExecutionScopeError, ReplicateContext, ReplicateExecutionError,
-        ReplicateExecutor,
-    };
-    pub use crate::rng_record::{
-        DerivedSeed, RNG_RECORDS_METADATA_KEY, ReplicateSeedDeriver, RngRecord, RngRecordError,
-    };
+    pub use crate::model;
+    pub use crate::runtime::basic::*;
     pub use crate::state::basic::*;
-    pub use crate::storage::{
-        CompletedRecording, CompletedStreamSummary, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
-        JsonStringDecoder, JsonVecF64Decoder, RecordingTiming, StateStreamLayout,
-        StateStreamStorage, StorageError, StoredStateSeriesReader, SystemStateWriter,
-        SystemStateWriterBuilder,
-    };
+    #[allow(unused_imports)]
+    pub use crate::study::basic::*;
     pub use crate::task::basic::*;
     pub use crate::writer::basic::*;
 }
@@ -34,22 +20,12 @@ pub mod basic {
 /// Supported imports for advanced users and Workflow integrations.
 pub mod advanced {
     pub use super::basic::*;
-    pub use crate::config::advanced::{
-        ConfigError, FailurePolicy, PhaseSpecification, ProjectDocument, ProjectSpecification,
-        ReplicatePolicy, ReplicateScheduling, ResolvedTaskInput, StateSchemaDocument,
-        StudyManifest,
-    };
+    pub use crate::config::advanced::*;
+    pub use crate::runtime::advanced::*;
     #[doc(hidden)]
     pub use crate::state::advanced::PayloadTuple;
-    pub use crate::state::advanced::{
-        StateFieldSchema, StateMaintenance, StateSchemaAccess, StateSchemaSource,
-    };
-    pub use crate::task::advanced::{TaskDefinition, TaskDescriptor, TaskExecutionHost, TaskKind};
-    pub use crate::writer::advanced::{
-        EncodedObservation, Observation, ObservationSink, SessionOutcome, StreamDescriptor,
-        WriterDescriptor,
-    };
+    pub use crate::state::advanced::*;
+    pub use crate::study::advanced::*;
+    pub use crate::task::advanced::*;
+    pub use crate::writer::advanced::*;
 }
-
-/// Existing orchestration imports pending the task/runtime/ui refactor.
-pub mod study;

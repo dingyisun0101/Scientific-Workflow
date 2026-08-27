@@ -17,6 +17,7 @@ use physics_in_parallel::prelude::advanced::Dense;
 use physics_in_parallel::prelude::basic::Tensor;
 use scientific_workflow::prelude::basic::*;
 use scientific_workflow::state::advanced::{StateMaintenance, StateSchemaAccess};
+use scientific_workflow::storage::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

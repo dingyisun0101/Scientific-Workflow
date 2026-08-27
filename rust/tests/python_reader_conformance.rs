@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::basic::{
-    JsonPayloadDecoderRegistry, StateStreamStorage, StateTime, StoredStateSeriesReader, Stream,
-    SystemStateSchema, SystemStateWriterBuilder, Writer,
+use scientific_workflow::prelude::basic::{StateTime, Stream, SystemStateSchema, Writer};
+use scientific_workflow::storage::{
+    JsonPayloadDecoderRegistry, StateStreamStorage, StoredStateSeriesReader,
+    SystemStateWriterBuilder,
 };
 use serde_json::{Map, Value};
 

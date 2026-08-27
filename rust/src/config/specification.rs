@@ -67,7 +67,7 @@ impl ProjectSpecification {
                             path: input_path.clone(),
                         })?;
                     tasks.push(ResolvedTaskInput::new(
-                        task.definition.clone(),
+                        task.model.clone(),
                         input_path.clone(),
                         ordinal,
                         value,

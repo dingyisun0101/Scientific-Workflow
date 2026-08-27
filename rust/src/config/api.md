@@ -4,7 +4,7 @@ The `config` subsystem is the sole compiler for a Workflow project's
 declarative files. It receives one typed project-root path, reads every
 declaration centrally, performs strict JSON parsing and deterministic task
 input expansion, and publishes one immutable `ProjectSpecification` for
-runtime. Its canonical scopes are `scientific_workflow::config::basic` and
+Study. Its canonical scopes are `scientific_workflow::config::basic` and
 `scientific_workflow::config::advanced`.
 
 The terminology is deliberately precise:
@@ -49,8 +49,8 @@ The basic scope is intentionally empty. Configuration's ordinary user
 interface is the project file grammar, not a Rust loader or query API.
 
 Application code writes the study manifest, state schema, and task input
-documents, then supplies only `project_root: &Path` to the future
-`runtime::basic` entry point. It does not construct a config object, load JSON,
+documents, then supplies only `project_root: &Path` to
+`scientific_workflow::run`. It does not construct a config object, load JSON,
 request individual keys, iterate combinations, resolve paths, or attach
 provenance.
 
@@ -62,7 +62,7 @@ config-owned names.
 ## Advanced API
 
 `config::advanced` re-exports the empty Basic API and publishes the complete
-read-only integration boundary used by runtime, tests, and replacement
+read-only integration boundary used by Study, tests, and replacement
 integrations. No exported type has a public constructor other than
 `ProjectSpecification::load`.
 
@@ -182,36 +182,35 @@ It owns no scheduler or mutable lifecycle state.
 - `failure_policy()` returns the effective sibling-task policy; the default is
   `FailFast`.
 
-Phase inspection performs no effects. Runtime may derive identities, labels,
-output scopes, and scheduler structures from these declarations but cannot
-mutate them.
+Phase inspection performs no effects. Study derives identities, labels, and
+bound tasks; runtime derives output scopes and scheduler structures without
+mutating them.
 
 ### `config::advanced::ResolvedTaskInput`
 
 One immutable, cheap-cloneable concrete task input. It is the only bridge from
-an application-authored task input document to typed model constants or a
-typed one-shot input.
+an application-authored task input document to typed model constants.
 
-- `definition()` returns the nonempty manifest string selecting compiled task
-  behavior. Config treats it as opaque; runtime cross-validates it against
-  compiled `Task` definitions.
+- `model()` returns the nonempty stable manifest key selecting a compiled
+  scientific model. Config treats it as opaque; Study cross-validates it
+  against the immutable compiled model catalog.
 - `source_path()` returns the canonical task input document path.
 - `ordinal()` returns the zero-based combination ordinal within that one task
   declaration's input space.
 - `display_fields()` iterates optional additional scientific state field names
-  in authored order. Config checks only nonblank uniqueness; runtime validates
+  in authored order. Config checks only nonblank uniqueness; Study validates
   them against the state schema before execution.
 - `timeout()` returns the optional task-specific effective timeout.
 - `resolved_json()` returns deterministic compact JSON bytes for provenance.
   It does not expose a mutable or general-purpose JSON dictionary.
 - `decode<T: DeserializeOwned>()` decodes the complete resolved input as one
   owned typed value. It never rereads or reparses the source file. A mismatch
-  returns `ConfigError::DecodeTaskInput` with definition, source path,
+  returns `ConfigError::DecodeModelConstants` with model key, source path,
   combination ordinal, and the underlying Serde error.
 
-`decode` is the sole supported constants-supply operation. Stateful task
-execution requests `M::Constants`; one-shot execution requests its declared
-input type. Users do not call it in normal application code, and no module
+`decode` is the sole supported constants-supply operation. Study preflight and
+stateful execution request `M::Constants`. Users do not call it in normal
+application code, and no module
 decodes individual JSON Pointers. Types that require a closed object grammar
 should use `#[serde(deny_unknown_fields)]`.
 
@@ -244,7 +243,7 @@ The centrally parsed state schema awaiting state-owned semantic validation:
 `json_value()` is a narrow subsystem seam, not a general task-input escape
 hatch. Config owns JSON syntax, duplicate-key rejection, source reading, and
 source preservation. State owns field declarations, normalized names,
-descriptions, ordering, and schema allocation. Runtime composes the two once.
+descriptions, ordering, and schema allocation. Study composes the two once.
 
 ### `config::advanced::ConfigError`
 
@@ -266,8 +265,8 @@ of interest and preserve a fallback arm.
   phase.
 - `ExpansionOverflow { path }`: a selection product or allocation cannot be
   represented safely.
-- `DecodeTaskInput { definition, path, ordinal, source }`: the complete
-  resolved input does not deserialize as the task-requested type.
+- `DecodeModelConstants { model, path, ordinal, source }`: the complete
+  resolved input does not deserialize as the selected model's constants type.
 
 Loading is failure-atomic: no `ProjectSpecification` escapes an error. Typed
 decode does not mutate the resolved input and leaves it reusable after error.
@@ -289,7 +288,7 @@ The manifest root accepts exactly `replicates` and `phases`:
     "simulate": {
       "tasks": [
         {
-          "definition": "model",
+          "model": "model",
           "input": "inputs/run.json",
           "display": {
             "include": ["population"]
@@ -306,7 +305,7 @@ The manifest root accepts exactly `replicates` and `phases`:
       "after": ["simulate"],
       "tasks": [
         {
-          "definition": "analysis",
+          "model": "analysis",
           "input": "inputs/analysis.json"
         }
       ]
@@ -318,7 +317,7 @@ The manifest root accepts exactly `replicates` and `phases`:
 Workflow-owned objects reject unknown fields. `phases` is a nonempty ordered
 object. Each phase contains a nonempty `tasks` array plus optional `after`,
 `max_concurrency`, `start_interval_ms`, `timeout_ms`, and `failure_policy`.
-Each task contains exactly `definition`, `input`, optional `display`, and
+Each task contains exactly `model`, `input`, optional `display`, and
 optional `timeout_ms`. `display` accepts only `include`.
 
 All millisecond values are `u64` and convert to `Duration`. Config does not
@@ -387,6 +386,7 @@ struct Model {
     remaining: u64,
 }
 
+#[scientific_workflow::model("population")]
 impl ScientificModel for Model {
     type Constants = Constants;
 
@@ -414,10 +414,6 @@ impl ScientificModel for Model {
         Ok(())
     }
 }
-
-fn model_task() -> Task {
-    Task::stateful::<Model, _>(|_| Ok(Writer::all_fields()))
-}
 ```
 
 The user writes `config/inputs/run.json`:
@@ -432,7 +428,7 @@ The user writes `config/inputs/run.json`:
 Config produces two resolved task inputs and supplies two separate `Constants`
 values to two executions. The user never calls `combinations()`.
 
-A runtime integration loads the advanced boundary and composes state semantic
+A Study integration loads the advanced boundary and composes state semantic
 validation without another filesystem read:
 
 ```rust,no_run
@@ -452,8 +448,8 @@ fn prepare(project_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     for phase in project.phases() {
         for input in phase.tasks() {
             println!(
-                "definition={} combination={}",
-                input.definition(),
+                "model={} combination={}",
+                input.model(),
                 input.ordinal(),
             );
         }
@@ -464,9 +460,10 @@ fn prepare(project_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Runtime later matches each opaque `definition` to compiled task behavior,
-validates selected display fields against `schema`, and invokes
-`TaskDefinition` with the corresponding `ResolvedTaskInput`.
+Study later matches each opaque `model` key to compiled model behavior,
+validates selected display fields against `schema`, and publishes an internal
+task that runtime invokes through `TaskDefinition` with the corresponding
+`ResolvedTaskInput`.
 
 ## Not API
 

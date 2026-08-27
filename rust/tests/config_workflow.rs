@@ -60,7 +60,7 @@ fn manifest() -> &'static str {
       "phases": {
         "simulate": {
           "tasks": [{
-            "definition": "model",
+            "model": "model",
             "input": "inputs/run.json",
             "display": {"include": ["population", "energy"]},
             "timeout_ms": 250
@@ -71,7 +71,7 @@ fn manifest() -> &'static str {
         "analyze": {
           "after": ["simulate"],
           "tasks": [{
-            "definition": "analysis",
+            "model": "analysis",
             "input": "inputs/analysis.json"
           }],
           "timeout_ms": 500,
@@ -170,7 +170,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
             },
         ]
     );
-    assert_eq!(simulation.tasks()[3].definition(), "model");
+    assert_eq!(simulation.tasks()[3].model(), "model");
     assert_eq!(simulation.tasks()[3].ordinal(), 3);
     assert_eq!(
         simulation.tasks()[3].display_fields().collect::<Vec<_>>(),
@@ -198,7 +198,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
 #[test]
 fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"definition":"model","input":"inputs/run.json"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
         &[("run.json", "{}")],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
@@ -220,7 +220,7 @@ fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() 
 #[test]
 fn correlated_cases_become_complete_typed_constant_values() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"definition":"model","input":"inputs/run.json"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"model":"model","input":"inputs/run.json"}]}}}"#,
         &[(
             "run.json",
             r#"{
@@ -259,7 +259,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let unknown = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"definition":"x","input":"inputs/x.json","mystery":true}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json","mystery":true}]}}}"#,
         &[("x.json", "{}")],
     );
     assert!(matches!(
@@ -268,7 +268,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let duplicate_input = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"definition":"x","input":"inputs/x.json"}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
         &[("x.json", r#"{"value":1,"value":2}"#)],
     );
     assert!(matches!(
@@ -283,7 +283,7 @@ fn task_inputs_cannot_escape_the_config_inputs_directory() {
         let study = serde_json::json!({
             "phases": {
                 "one": {
-                    "tasks": [{"definition": "x", "input": input}]
+                    "tasks": [{"model": "x", "input": input}]
                 }
             }
         });
@@ -298,7 +298,7 @@ fn task_inputs_cannot_escape_the_config_inputs_directory() {
 #[test]
 fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     let missing = TestProject::new(
-        r#"{"phases":{"one":{"after":["absent"],"tasks":[{"definition":"x","input":"inputs/x.json"}]}}}"#,
+        r#"{"phases":{"one":{"after":["absent"],"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
         &[("x.json", "{}")],
     );
     assert!(matches!(
@@ -309,8 +309,8 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     let cycle = TestProject::new(
         r#"{
           "phases": {
-            "one": {"after":["two"],"tasks":[{"definition":"x","input":"inputs/x.json"}]},
-            "two": {"after":["one"],"tasks":[{"definition":"x","input":"inputs/x.json"}]}
+            "one": {"after":["two"],"tasks":[{"model":"x","input":"inputs/x.json"}]},
+            "two": {"after":["one"],"tasks":[{"model":"x","input":"inputs/x.json"}]}
           }
         }"#,
         &[("x.json", "{}")],
@@ -321,7 +321,7 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     ));
 
     let mixed = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"definition":"x","input":"inputs/x.json"}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
         &[(
             "x.json",
             r#"{"choice":{"$sweep":[1,2]},"$cases":[{"value":1},{"value":2}]}"#,
@@ -334,9 +334,9 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
 }
 
 #[test]
-fn typed_decode_errors_retain_definition_source_and_combination() {
+fn typed_decode_errors_retain_model_source_and_combination() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"definition":"model","input":"inputs/x.json"}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"model":"model","input":"inputs/x.json"}]}}}"#,
         &[("x.json", r#"{"steps":"wrong"}"#)],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
@@ -347,11 +347,11 @@ fn typed_decode_errors_retain_definition_source_and_combination() {
     }
     assert!(matches!(
         specification.phases()[0].tasks()[0].decode::<Constants>(),
-        Err(ConfigError::DecodeTaskInput {
-            definition,
+        Err(ConfigError::DecodeModelConstants {
+            model,
             ordinal: 0,
             ..
-        }) if definition == "model"
+        }) if model == "model"
     ));
 }
 

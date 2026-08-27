@@ -29,7 +29,7 @@ fn parallel_dispatch_reenters_one_isolated_worker_per_replicate() {
               },
               "phases": {
                 "test": {
-                  "tasks": [{"definition": "test", "input": "inputs/test.json"}]
+                  "tasks": [{"model": "test", "input": "inputs/test.json"}]
                 }
               }
             }"#,

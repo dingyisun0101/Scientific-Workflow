@@ -2,7 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use scientific_workflow::prelude::basic::*;
+use scientific_workflow::artifact::*;
+use scientific_workflow::execution::ExecutionScope;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 

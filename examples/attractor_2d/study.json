@@ -9,27 +9,13 @@
     "simulate": {
       "tasks": [
         {
-          "definition": "attractor",
+          "model": "attractor",
           "input": "inputs/run.json",
           "display": {"include": ["point", "radius"]}
         }
       ],
       "max_concurrency": 3,
       "start_interval_ms": 3000
-    },
-    "validate": {
-      "after": ["simulate"],
-      "tasks": [
-        {"definition": "validation", "input": "inputs/run.json"}
-      ],
-      "max_concurrency": 3,
-      "start_interval_ms": 3000
-    },
-    "render": {
-      "after": ["validate"],
-      "tasks": [
-        {"definition": "render", "input": "inputs/render.json"}
-      ]
     }
   }
 }

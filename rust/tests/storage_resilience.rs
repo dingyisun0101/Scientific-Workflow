@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use scientific_workflow::prelude::basic::*;
 use scientific_workflow::state::advanced::StateMaintenance;
+use scientific_workflow::storage::*;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

@@ -3,6 +3,7 @@
 use serde::de::DeserializeOwned;
 
 use crate::state::advanced::{SystemState, SystemStateSchema};
+use crate::writer::advanced::Writer;
 
 use super::result::TaskResult;
 
@@ -26,6 +27,17 @@ use super::result::TaskResult;
 pub trait ScientificModel: Send + Sized + 'static {
     /// One complete set of model constants supplied by config.
     type Constants: DeserializeOwned + Send + Sync + 'static;
+
+    /// Defines the scientific observations recorded for this model.
+    ///
+    /// The default records every declared state field at every iteration.
+    /// Implementations may derive stream selection and sampling cadence from
+    /// model constants. This function is called during effect-free study
+    /// preflight and again when execution starts, so it must be deterministic
+    /// and must not perform external side effects.
+    fn writer(_constants: &Self::Constants) -> TaskResult<Writer> {
+        Ok(Writer::all_fields())
+    }
 
     /// Builds a fully initialized model from resolved constants and the
     /// runtime-loaded state schema.

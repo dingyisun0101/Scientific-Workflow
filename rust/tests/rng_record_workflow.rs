@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use scientific_workflow::prelude::basic::*;
+use scientific_workflow::rng_record::*;
+use scientific_workflow::storage::*;
 use serde_json::{Map, Value, json};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

@@ -74,13 +74,11 @@ pub enum ConfigError {
         path: PathBuf,
     },
 
-    /// One resolved input could not be decoded as its task's requested type.
-    #[error(
-        "failed to decode resolved input {ordinal} for definition `{definition}` from `{path}`"
-    )]
-    DecodeTaskInput {
-        /// Compiled definition key from the study manifest.
-        definition: String,
+    /// One resolved input could not be decoded as its model's constants type.
+    #[error("failed to decode resolved input {ordinal} for model `{model}` from `{path}`")]
+    DecodeModelConstants {
+        /// Compiled model key from the study manifest.
+        model: String,
         /// Task input document path.
         path: PathBuf,
         /// Zero-based deterministic combination ordinal.

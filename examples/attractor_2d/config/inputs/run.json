@@ -5,8 +5,6 @@
   "trajectory_sampling_interval": 10,
   "radius_sampling_interval": 5,
   "checkpoint_sampling_interval": 1000,
-  "maximum_chunk_bytes": 8192,
-  "storage_queue_bytes": 65536,
   "mu": {"$sweep": [-0.25, 0.25, 1.0]},
   "angular_frequency": {"$sweep": [0.75, 1.25]}
 }

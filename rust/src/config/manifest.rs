@@ -158,7 +158,7 @@ pub(crate) struct ParsedPhase {
 }
 
 pub(crate) struct ParsedTask {
-    pub(crate) definition: Box<str>,
+    pub(crate) model: Box<str>,
     pub(crate) input: PathBuf,
     pub(crate) display_fields: Arc<[Box<str>]>,
     pub(crate) timeout: Option<Duration>,
@@ -248,12 +248,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         let mut tasks = Vec::with_capacity(raw.tasks.len());
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("/phases/{name}/tasks/{index}");
-            validate_identifier(
-                path,
-                &format!("{pointer}/definition"),
-                &task.definition,
-                "task definition",
-            )?;
+            validate_identifier(path, &format!("{pointer}/model"), &task.model, "model")?;
             let mut display_fields = Vec::with_capacity(task.display.include.len());
             let mut seen_fields = HashSet::with_capacity(task.display.include.len());
             for field in task.display.include {
@@ -273,7 +268,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                 display_fields.push(field.into_boxed_str());
             }
             tasks.push(ParsedTask {
-                definition: task.definition.into_boxed_str(),
+                model: task.model.into_boxed_str(),
                 input: task.input,
                 display_fields: display_fields.into(),
                 timeout: task.timeout_ms.map(Duration::from_millis),
@@ -404,7 +399,7 @@ const fn default_max_concurrency() -> usize {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTask {
-    definition: String,
+    model: String,
     input: PathBuf,
     #[serde(default)]
     display: RawDisplay,

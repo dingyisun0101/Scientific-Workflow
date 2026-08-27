@@ -2,12 +2,11 @@ use std::thread;
 use std::time::Duration;
 
 use scientific_workflow::prelude::basic::*;
+use serde::Deserialize;
 
-use crate::AppResult;
+const POINT_FIELD: &str = "point";
 
-pub(crate) const POINT_FIELD: &str = "point";
-
-pub(crate) const RADIUS_FIELD: &str = "radius";
+const RADIUS_FIELD: &str = "radius";
 
 // REQUIRED EXAMPLE BEHAVIOR: every model step pauses briefly so progress is
 // visible to a human watching the terminal. This is a permanent teaching and
@@ -24,38 +23,71 @@ pub(crate) struct HopfModel {
     mu: f64,
     omega: f64,
     physical_time_increment_per_step: f64,
+    step_count: u64,
 }
 
-impl HopfModel {
-    pub(crate) fn new(
-        schema: &SystemStateSchema,
-        initial_point: [f64; 2],
-        mu: f64,
-        omega: f64,
-        physical_time_increment_per_step: f64,
-    ) -> AppResult<Self> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttractorConstants {
+    initial_point: [f64; 2],
+    physical_time_increment_per_step: f64,
+    step_count: u64,
+    trajectory_sampling_interval: u64,
+    radius_sampling_interval: u64,
+    checkpoint_sampling_interval: u64,
+    mu: f64,
+    angular_frequency: f64,
+}
+
+#[scientific_workflow::model("attractor")]
+impl ScientificModel for HopfModel {
+    type Constants = AttractorConstants;
+
+    fn writer(constants: &Self::Constants) -> TaskResult<Writer> {
+        Ok(Writer::streams([
+            Stream::fields("trajectory", [POINT_FIELD])?
+                .every_iterations(constants.trajectory_sampling_interval)?,
+            Stream::fields("radius", [RADIUS_FIELD])?
+                .every_iterations(constants.radius_sampling_interval)?,
+            Stream::fields("checkpoint", [POINT_FIELD, RADIUS_FIELD])?
+                .every_iterations(constants.checkpoint_sampling_interval)?,
+        ])?
+        .with_iteration_unit("iteration")?
+        .with_physical_time_unit("dimensionless_model_time")?)
+    }
+
+    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
         // Derived values are inserted alongside primary values so every stream
         // can select fields by schema name without knowing this Rust type.
-        let radius = initial_point[0].hypot(initial_point[1]);
+        let radius = constants.initial_point[0].hypot(constants.initial_point[1]);
         let initial_time = StateTime::from_iteration_and_physical_time(0, 0.0)
             .expect("zero is a finite physical-time coordinate");
         let mut state = schema.create_empty_state(initial_time);
 
-        state.insert_payload(POINT_FIELD, initial_point.to_vec())?;
+        state.insert_payload(POINT_FIELD, constants.initial_point.to_vec())?;
         state.insert_payload(RADIUS_FIELD, radius)?;
         Ok(Self {
             state,
-            mu,
-            omega,
-            physical_time_increment_per_step,
+            mu: constants.mu,
+            omega: constants.angular_frequency,
+            physical_time_increment_per_step: constants.physical_time_increment_per_step,
+            step_count: constants.step_count,
         })
     }
 
-    pub(crate) fn state(&self) -> &SystemState {
+    fn state(&self) -> &SystemState {
         &self.state
     }
 
-    pub(crate) fn step(&mut self) -> Result<(), StateError> {
+    fn is_complete(&self) -> bool {
+        self.state.time().iteration() == self.step_count
+    }
+
+    fn target_iteration(&self) -> Option<u64> {
+        Some(self.step_count)
+    }
+
+    fn step(&mut self) -> TaskResult {
         // REQUIRED AND PERMANENT: the example must advance slowly enough for its
         // live progress display to be legible. This pause is part of the example
         // contract, not numerical integration and not study policy.

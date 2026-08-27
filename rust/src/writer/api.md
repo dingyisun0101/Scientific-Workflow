@@ -13,6 +13,13 @@ path, task or replicate identity, chunk size, queue size, filename, checksum,
 metadata lifecycle, recovery policy, or completed-recording handle. The
 runtime and record backend infer and own those concerns.
 
+An ordinary application returns its writer from
+`ScientificModel::writer(&Constants)`. The trait supplies
+`Writer::all_fields()` by default, so a model implements that method only when
+field selection, named streams, cadence, or units carry scientific meaning.
+Because Study calls it during preflight and task calls it again at execution,
+the function must be deterministic and externally side-effect-free.
+
 ## Basic API
 
 ### `writer::basic::Writer`
@@ -251,8 +258,8 @@ let writer = Writer::streams([
 ])?
 .with_physical_time_unit("s")?;
 
-// The task definition receives `state` and `writer`; Workflow infers paths,
-// schema metadata, checkpoint eligibility, lifecycle, and persistence policy.
+// ScientificModel::writer returns `writer`; Workflow infers paths, schema
+// metadata, checkpoint eligibility, lifecycle, and persistence policy.
 # let _ = (state, writer);
 # Ok(())
 # }

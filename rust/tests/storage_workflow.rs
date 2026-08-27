@@ -17,6 +17,7 @@ use physics_in_parallel::prelude::advanced::{AttrsCore, AttrsMeta, Dense, PhysOb
 use physics_in_parallel::prelude::basic::Tensor;
 use physics_in_parallel::prelude::models::PhysObj;
 use scientific_workflow::prelude::basic::*;
+use scientific_workflow::storage::*;
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};

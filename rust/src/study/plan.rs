@@ -1,165 +1,218 @@
-//! Deterministic, read-only study plan export.
+//! Immutable study, phase, and task views.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
-use serde::Serialize;
-use serde_json::Value;
+use crate::config::advanced::{
+    FailurePolicy, ProjectDocument, ProjectSpecification, ReplicatePolicy, ResolvedTaskInput,
+};
+use crate::state::advanced::SystemStateSchema;
+use crate::task::advanced::{ModelCatalog, Task, TaskDefinition};
 
-use super::{Phase, StudyError, TaskMode};
+use super::compilation;
+use super::error::StudyError;
 
-const STUDY_PLAN_FORMAT: &str = "scientific-workflow.study-plan.v2";
-
-/// Complete serializable phase/task graph registered with one study.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct StudyPlan {
-    format: &'static str,
-    phases: Vec<StudyPlanPhase>,
+/// A complete immutable and effect-free execution declaration.
+#[derive(Clone)]
+pub struct Study {
+    inner: Arc<StudyInner>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-struct StudyPlanPhase {
-    id: u64,
-    label: String,
-    registration_order: usize,
-    dependencies: Vec<u64>,
-    max_active_tasks: usize,
-    prepared_task_queue_capacity: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    delay_per_task_ns: Option<u128>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    task_timeout_ns: Option<u128>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deadline_after_ns: Option<u128>,
-    failure_policy: &'static str,
-    requires_confirmation: bool,
-    examines_completion: bool,
-    tasks: Vec<StudyPlanTask>,
-}
+impl Study {
+    /// Loads project declarations and binds all linked `#[model]` registrations.
+    ///
+    /// This performs complete preflight without creating output or initializing
+    /// a scientific model. Config is the only file reader and JSON parser.
+    pub fn load(project_root: &Path) -> Result<Self, StudyError> {
+        let catalog = ModelCatalog::discovered()?;
+        Self::load_with_catalog(project_root, &catalog)
+    }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-struct StudyPlanTask {
-    id: String,
-    category: String,
-    label: String,
-    registration_order: usize,
-    mode: &'static str,
-    status: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    delay_rank: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    release_offset_ns: Option<u128>,
-    metadata: Value,
-}
+    /// Loads a study against an explicit immutable model catalog.
+    ///
+    /// This is the deterministic injection seam for tests and embedded hosts;
+    /// ordinary applications use [`Self::load`].
+    pub fn load_with_catalog(
+        project_root: &Path,
+        catalog: &ModelCatalog,
+    ) -> Result<Self, StudyError> {
+        let project = ProjectSpecification::load(project_root)?;
+        compilation::compile(project, catalog)
+    }
 
-impl StudyPlan {
-    pub(crate) fn from_phases(phases: &[Phase]) -> Self {
+    pub(crate) fn from_parts(
+        project: ProjectSpecification,
+        schema: SystemStateSchema,
+        phases: Box<[StudyPhase]>,
+    ) -> Self {
+        let output_root = project.project_root().join("output");
         Self {
-            format: STUDY_PLAN_FORMAT,
-            phases: phases
-                .iter()
-                .enumerate()
-                .map(|(registration_order, phase)| {
-                    let mut executable_rank = 0_usize;
-                    let tasks = phase
-                        .tasks()
-                        .iter()
-                        .enumerate()
-                        .map(|(task_order, task)| {
-                            let delay_rank = (!task.is_completed()).then(|| {
-                                let rank = executable_rank;
-                                executable_rank += 1;
-                                rank
-                            });
-                            let release_offset_ns = phase.delay_per_task().and_then(|delay| {
-                                delay_rank.map(|rank| delay.as_nanos().saturating_mul(rank as u128))
-                            });
-                            StudyPlanTask {
-                                id: task.id().to_string(),
-                                category: task.category_name().to_owned(),
-                                label: task.label().to_owned(),
-                                registration_order: task_order,
-                                mode: match task.mode() {
-                                    TaskMode::Progress => "progress",
-                                    TaskMode::OneShot => "one-shot",
-                                },
-                                status: if task.is_completed() {
-                                    "completed"
-                                } else {
-                                    "pending"
-                                },
-                                delay_rank,
-                                release_offset_ns,
-                                metadata: Value::Object(
-                                    task.metadata_iter()
-                                        .map(|(key, value)| (key.to_owned(), value.clone()))
-                                        .collect(),
-                                ),
-                            }
-                        })
-                        .collect();
-                    StudyPlanPhase {
-                        id: phase.id().get(),
-                        label: phase.label().to_owned(),
-                        registration_order,
-                        dependencies: phase
-                            .dependencies()
-                            .iter()
-                            .map(|dependency| dependency.get())
-                            .collect(),
-                        max_active_tasks: phase.max_active_tasks(),
-                        prepared_task_queue_capacity: phase.prepared_task_queue_capacity(),
-                        delay_per_task_ns: phase.delay_per_task().map(|value| value.as_nanos()),
-                        task_timeout_ns: phase.task_timeout().map(|value| value.as_nanos()),
-                        deadline_after_ns: phase.deadline_after().map(|value| value.as_nanos()),
-                        failure_policy: phase.failure_policy().as_str(),
-                        requires_confirmation: phase.requires_confirmation(),
-                        examines_completion: phase.examines_completion(),
-                        tasks,
-                    }
-                })
-                .collect(),
-        }
-    }
-
-    /// Serializes the plan as deterministic pretty JSON with a final newline.
-    pub fn to_pretty_json(&self) -> Result<Vec<u8>, StudyError> {
-        let mut bytes = serde_json::to_vec_pretty(self)
-            .map_err(|source| StudyError::SerializeStudyPlan { source })?;
-        bytes.push(b'\n');
-        Ok(bytes)
-    }
-
-    /// Writes the plan without overwriting different existing content.
-    pub fn write_json(&self, path: impl AsRef<Path>) -> Result<(), StudyError> {
-        let path = path.as_ref();
-        let bytes = self.to_pretty_json()?;
-        match OpenOptions::new().write(true).create_new(true).open(path) {
-            Ok(mut file) => file
-                .write_all(&bytes)
-                .and_then(|()| file.sync_all())
-                .map_err(|source| StudyError::WriteStudyPlan {
-                    path: path.to_path_buf(),
-                    source,
-                }),
-            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-                let existing = fs::read(path).map_err(|source| StudyError::WriteStudyPlan {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-                if existing == bytes {
-                    Ok(())
-                } else {
-                    Err(StudyError::StudyPlanConflict {
-                        path: path.to_path_buf(),
-                    })
-                }
-            }
-            Err(source) => Err(StudyError::WriteStudyPlan {
-                path: path.to_path_buf(),
-                source,
+            inner: Arc::new(StudyInner {
+                project,
+                schema,
+                phases,
+                output_root,
             }),
         }
+    }
+
+    /// Returns the canonical project root loaded by config.
+    pub fn project_root(&self) -> &Path {
+        self.inner.project.project_root()
+    }
+
+    /// Returns the inferred output root, `<project-root>/output`.
+    pub fn output_root(&self) -> &Path {
+        &self.inner.output_root
+    }
+
+    /// Returns the semantically validated shared state schema.
+    pub fn state_schema(&self) -> &SystemStateSchema {
+        &self.inner.schema
+    }
+
+    /// Returns immutable phases in manifest declaration order.
+    pub fn phases(&self) -> &[StudyPhase] {
+        &self.inner.phases
+    }
+
+    /// Returns the effective replicate policy parsed from `study.json`.
+    pub fn replicate_policy(&self) -> ReplicatePolicy {
+        self.inner.project.manifest().replicate_policy()
+    }
+
+    /// Returns every exact source document in config's deterministic first-use order.
+    pub fn source_documents(&self) -> &[ProjectDocument] {
+        self.inner.project.documents()
+    }
+}
+
+impl std::fmt::Debug for Study {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Study")
+            .field("project_root", &self.project_root())
+            .field("output_root", &self.output_root())
+            .field("phases", &self.phases().len())
+            .finish_non_exhaustive()
+    }
+}
+
+struct StudyInner {
+    project: ProjectSpecification,
+    schema: SystemStateSchema,
+    phases: Box<[StudyPhase]>,
+    output_root: PathBuf,
+}
+
+/// One immutable execution phase compiled from the study manifest.
+#[derive(Clone, Debug)]
+pub struct StudyPhase {
+    pub(crate) name: Box<str>,
+    pub(crate) dependencies: Box<[Box<str>]>,
+    pub(crate) tasks: Box<[StudyTask]>,
+    pub(crate) max_concurrency: usize,
+    pub(crate) start_interval: Duration,
+    pub(crate) timeout: Option<Duration>,
+    pub(crate) failure_policy: FailurePolicy,
+}
+
+impl StudyPhase {
+    /// Returns the stable phase key from `study.json`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Iterates dependency keys in declaration order.
+    pub fn dependencies(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.dependencies.iter().map(Box::as_ref)
+    }
+
+    /// Returns bound model invocations in deterministic expansion order.
+    pub fn tasks(&self) -> &[StudyTask] {
+        &self.tasks
+    }
+
+    /// Returns the positive effective concurrency bound.
+    pub const fn max_concurrency(&self) -> usize {
+        self.max_concurrency
+    }
+
+    /// Returns the effective interval between task admissions.
+    pub const fn start_interval(&self) -> Duration {
+        self.start_interval
+    }
+
+    /// Returns the optional phase-wide cooperative timeout.
+    pub const fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
+
+    /// Returns the effective sibling failure policy.
+    pub const fn failure_policy(&self) -> FailurePolicy {
+        self.failure_policy
+    }
+}
+
+/// One model bound to one complete config-owned constants input.
+#[derive(Clone)]
+pub struct StudyTask {
+    pub(crate) identity: Box<str>,
+    pub(crate) label: Box<str>,
+    pub(crate) output_ordinal: u64,
+    pub(crate) input: ResolvedTaskInput,
+    pub(crate) definition: Task,
+}
+
+impl StudyTask {
+    /// Returns the inferred stable identity within this study plan.
+    pub fn identity(&self) -> &str {
+        &self.identity
+    }
+
+    /// Returns the inferred human-readable label.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Returns the registered model key selected by the manifest.
+    pub fn model(&self) -> &str {
+        self.input.model()
+    }
+
+    /// Returns the config-owned resolved task input.
+    pub fn input(&self) -> &ResolvedTaskInput {
+        &self.input
+    }
+
+    /// Returns additional state fields selected for display.
+    pub fn display_fields(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.input.display_fields()
+    }
+
+    /// Returns the optional task-specific cooperative timeout.
+    pub fn timeout(&self) -> Option<Duration> {
+        self.input.timeout()
+    }
+
+    pub(crate) fn output_ordinal(&self) -> u64 {
+        self.output_ordinal
+    }
+
+    pub(crate) fn definition(&self) -> &dyn TaskDefinition {
+        &self.definition
+    }
+}
+
+impl std::fmt::Debug for StudyTask {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StudyTask")
+            .field("identity", &self.identity())
+            .field("label", &self.label())
+            .field("model", &self.model())
+            .field("input", &self.input)
+            .finish_non_exhaustive()
     }
 }

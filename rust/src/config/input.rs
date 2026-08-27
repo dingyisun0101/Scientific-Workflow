@@ -17,7 +17,7 @@ pub struct ResolvedTaskInput {
 
 impl ResolvedTaskInput {
     pub(crate) fn new(
-        definition: Box<str>,
+        model: Box<str>,
         source_path: PathBuf,
         ordinal: u64,
         value: Value,
@@ -28,7 +28,7 @@ impl ResolvedTaskInput {
             .expect("serializing an already parsed serde_json::Value cannot fail");
         Self {
             inner: Arc::new(ResolvedTaskInputInner {
-                definition,
+                model,
                 source_path,
                 ordinal,
                 value,
@@ -39,9 +39,9 @@ impl ResolvedTaskInput {
         }
     }
 
-    /// Returns the manifest key selecting compiled task behavior.
-    pub fn definition(&self) -> &str {
-        &self.inner.definition
+    /// Returns the stable manifest key selecting a compiled scientific model.
+    pub fn model(&self) -> &str {
+        &self.inner.model
     }
 
     /// Returns the canonical task input document path.
@@ -68,13 +68,13 @@ impl ResolvedTaskInput {
     ///
     /// This is the sole supported constants-supply operation. It never rereads
     /// or reparses the source file and contextualizes type errors with the
-    /// definition, source path, and combination ordinal.
+    /// model key, source path, and combination ordinal.
     pub fn decode<T>(&self) -> Result<T, ConfigError>
     where
         T: DeserializeOwned,
     {
-        T::deserialize(&self.inner.value).map_err(|source| ConfigError::DecodeTaskInput {
-            definition: self.definition().to_owned(),
+        T::deserialize(&self.inner.value).map_err(|source| ConfigError::DecodeModelConstants {
+            model: self.model().to_owned(),
             path: self.source_path().to_path_buf(),
             ordinal: self.ordinal(),
             source,
@@ -91,7 +91,7 @@ impl fmt::Debug for ResolvedTaskInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResolvedTaskInput")
-            .field("definition", &self.definition())
+            .field("model", &self.model())
             .field("source_path", &self.source_path())
             .field("ordinal", &self.ordinal())
             .field("display_fields", &self.inner.display_fields)
@@ -101,7 +101,7 @@ impl fmt::Debug for ResolvedTaskInput {
 }
 
 struct ResolvedTaskInputInner {
-    definition: Box<str>,
+    model: Box<str>,
     source_path: PathBuf,
     ordinal: u64,
     value: Value,

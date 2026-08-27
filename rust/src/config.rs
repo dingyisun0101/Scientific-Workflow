@@ -2,8 +2,8 @@
 //!
 //! Ordinary applications do not call this subsystem: they write a study
 //! manifest, a state schema, and task input documents. [`advanced`] is the
-//! supported boundary through which runtime loads one project root and obtains
-//! immutable phase specifications and resolved task inputs.
+//! supported boundary through which Study loads one project root and obtains
+//! immutable phase specifications and resolved model inputs.
 
 mod document;
 mod error;

@@ -1,8 +1,5 @@
 //! Supported runtime port and private task execution implementations.
 
-use std::any::type_name;
-
-use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::config::advanced::ResolvedTaskInput;
@@ -11,49 +8,6 @@ use crate::writer::advanced::{Writer, WriterDescriptor};
 
 use super::model::ScientificModel;
 use super::result::TaskResult;
-
-/// The execution shape of a compiled task definition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TaskKind {
-    /// Typed constants initialize a [`ScientificModel`] and its writer.
-    Stateful,
-    /// Typed constants feed one callback without a state or writer.
-    OneShot,
-}
-
-/// Read-only metadata needed to validate and plan a compiled task.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaskDescriptor {
-    kind: TaskKind,
-    constants_type_name: &'static str,
-}
-
-impl TaskDescriptor {
-    pub(crate) fn new<C>(kind: TaskKind) -> Self {
-        Self {
-            kind,
-            constants_type_name: type_name::<C>(),
-        }
-    }
-
-    /// Returns whether this definition is stateful or one-shot.
-    pub const fn kind(&self) -> TaskKind {
-        self.kind
-    }
-
-    /// Returns the diagnostic Rust name of the config-supplied constants type.
-    ///
-    /// This string is intended for errors and inspection. It is not a stable
-    /// task identity and must not be persisted as one.
-    pub const fn constants_type_name(&self) -> &'static str {
-        self.constants_type_name
-    }
-
-    /// Reports whether execution requires the project's state schema.
-    pub const fn requires_state_schema(&self) -> bool {
-        matches!(self.kind, TaskKind::Stateful)
-    }
-}
 
 /// The runtime-owned services a task may use while executing.
 ///
@@ -96,13 +50,10 @@ pub trait TaskExecutionHost {
 
 /// Type-erased execution contract consumed by the Workflow runtime.
 ///
-/// Application code ordinarily constructs [`super::definition::Task`] and
-/// does not implement this trait. Replacement runtimes may execute a task from
-/// a resolved task input through this supported boundary.
+/// Study ordinarily constructs [`super::definition::Task`] from a registered
+/// model. Application code does not implement this trait. Replacement runtimes
+/// may execute a task from a resolved task input through this boundary.
 pub trait TaskDefinition: Send + Sync {
-    /// Returns immutable planning metadata.
-    fn descriptor(&self) -> &TaskDescriptor;
-
     /// Obtains typed constants from `input` and executes through `host`.
     ///
     /// Returning `Ok(())` while `host.cancellation_requested()` is true means
@@ -111,41 +62,32 @@ pub trait TaskDefinition: Send + Sync {
     fn execute(&self, input: &ResolvedTaskInput, host: &mut dyn TaskExecutionHost) -> TaskResult;
 }
 
-pub(crate) struct StatefulDefinition<M, W> {
-    descriptor: TaskDescriptor,
-    writer: W,
+pub(crate) struct StatefulDefinition<M> {
     marker: std::marker::PhantomData<fn() -> M>,
 }
 
-impl<M, W> StatefulDefinition<M, W>
+impl<M> StatefulDefinition<M>
 where
     M: ScientificModel,
 {
-    pub(crate) fn new(writer: W) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            descriptor: TaskDescriptor::new::<M::Constants>(TaskKind::Stateful),
-            writer,
             marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<M, W> TaskDefinition for StatefulDefinition<M, W>
+impl<M> TaskDefinition for StatefulDefinition<M>
 where
     M: ScientificModel,
-    W: Fn(&M::Constants) -> TaskResult<Writer> + Send + Sync + 'static,
 {
-    fn descriptor(&self) -> &TaskDescriptor {
-        &self.descriptor
-    }
-
     fn execute(&self, input: &ResolvedTaskInput, host: &mut dyn TaskExecutionHost) -> TaskResult {
         if host.cancellation_requested() {
             return Ok(());
         }
 
         let constants: M::Constants = input.decode()?;
-        let writer = (self.writer)(&constants)?;
+        let writer = M::writer(&constants)?;
         let schema = host.state_schema()?.clone();
         WriterDescriptor::bind(writer.clone(), &schema)?;
 
@@ -184,39 +126,6 @@ where
         let final_target = validate_target(model.state(), model.target_iteration())?;
         validate_target_progress(target, final_target)?;
         host.observe_model_final(model.state(), final_target)
-    }
-}
-
-pub(crate) struct OneShotDefinition<C, F> {
-    descriptor: TaskDescriptor,
-    run: F,
-    marker: std::marker::PhantomData<fn() -> C>,
-}
-
-impl<C, F> OneShotDefinition<C, F> {
-    pub(crate) fn new(run: F) -> Self {
-        Self {
-            descriptor: TaskDescriptor::new::<C>(TaskKind::OneShot),
-            run,
-            marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<C, F> TaskDefinition for OneShotDefinition<C, F>
-where
-    C: DeserializeOwned + Send + Sync + 'static,
-    F: Fn(C) -> TaskResult + Send + Sync + 'static,
-{
-    fn descriptor(&self) -> &TaskDescriptor {
-        &self.descriptor
-    }
-
-    fn execute(&self, input: &ResolvedTaskInput, host: &mut dyn TaskExecutionHost) -> TaskResult {
-        if host.cancellation_requested() {
-            return Ok(());
-        }
-        (self.run)(input.decode::<C>()?)
     }
 }
 
