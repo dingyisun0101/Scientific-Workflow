@@ -44,8 +44,8 @@ The root object has one required `phases` object and two optional objects:
     "failure_policy": "fail_fast"
   },
   "persistence": {
-    "chunk_target_bytes": 67108864,
-    "queue_capacity_bytes": 67108864
+    "chunk_target_mb": 64,
+    "queue_capacity_mb": 64
   },
   "phases": {
     "simulate": {
@@ -68,9 +68,14 @@ Unknown properties are rejected at every Workflow-owned level.
 - `replicates.scheduling` is `"sequential"` by default or `"parallel"`.
 - replicate and phase `failure_policy` are `"fail_fast"` by default or
   `"finish_all"`.
-- both persistence byte settings default independently to 64 MiB and must be
-  positive integers. There is no backend selector while only the automatic
-  local backend exists.
+- `persistence.chunk_target_mb` defaults to `64`, must be a positive integer,
+  and uses decimal megabytes: one MB is exactly 1,000,000 bytes. Config checks
+  conversion overflow and supplies the resulting byte target internally.
+- `persistence.queue_capacity_mb` follows the same positive-integer decimal-MB
+  rule and defaults to `64`. It bounds queued encoded data for backpressure.
+  There is no backend selector while only the automatic local backend exists.
+- no JSON persistence-size setting accepts bytes. Config converts both MB
+  values once and rejects conversion overflow before Study is published.
 - `phases` must contain at least one phase. Phase keys must be nonempty and
   have no surrounding whitespace.
 - `after` defaults to empty. Dependencies must exist, be unique, differ from

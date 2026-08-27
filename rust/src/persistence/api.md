@@ -22,17 +22,20 @@ symbols. Its user-facing surface is the optional root object in `study.json`:
 
 ```json
 "persistence": {
-  "chunk_target_bytes": 67108864,
-  "queue_capacity_bytes": 67108864
+  "chunk_target_mb": 64,
+  "queue_capacity_mb": 64
 }
 ```
 
-Both fields are optional positive integers and default independently to 64
-MiB. The first is an approximate encoded-byte chunk rollover target; the
-second is the per-stream queued-byte backpressure capacity. The backend and
-all destinations are inferred. Invalid settings fail during Config/Study
-loading before output exists. These settings apply to model-state streams;
-external program workspaces require no separate user setting.
+Both fields are optional positive integers. `chunk_target_mb` defaults to 64
+decimal megabytes, where one MB is exactly 1,000,000 bytes, and is converted
+once into the approximate encoded-byte chunk rollover target during Config
+loading. `queue_capacity_mb` follows the same unit/default and becomes the
+per-stream queued-data backpressure capacity. No JSON persistence-size field
+accepts bytes. Conversion overflow and invalid settings fail during
+Config/Study loading before output exists. The backend and all destinations
+are inferred. These settings apply to model-state streams; external program
+workspaces require no separate user setting.
 
 Program persistence is equally automatic. Each program task gets this private
 durable layout:

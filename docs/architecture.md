@@ -364,6 +364,13 @@ writes and commits immutable JSONL chunks plus one authoritative
 `metadata.json` lifecycle. There is no writer builder, per-stream storage
 override, public flush, resume/continuation path, or completion handle.
 
+Users author every persistence size as a positive integer decimal MB, with one
+MB equal to 1,000,000 bytes. The `study.json` fields are
+`persistence.chunk_target_mb` and `persistence.queue_capacity_mb`; no JSON
+persistence-size field is byte-addressed. Config alone checks and converts
+both values to internal byte counts, and effective provenance records those
+exact byte values.
+
 Advanced users can only open completed recordings with a decoder registry.
 Readers verify metadata, sizes, hashes, framing, ordering, schema, decoding,
 and StateSeries invariants before publishing owned results. A future local or

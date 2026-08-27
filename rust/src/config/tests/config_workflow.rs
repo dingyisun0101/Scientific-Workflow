@@ -64,8 +64,8 @@ fn manifest() -> &'static str {
         "failure_policy": "finish_all"
       },
       "persistence": {
-        "chunk_target_bytes": 8192,
-        "queue_capacity_bytes": 16384
+        "chunk_target_mb": 2,
+        "queue_capacity_mb": 3
       },
       "phases": {
         "simulate": {
@@ -128,8 +128,8 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
     assert_eq!(replicates.scheduling(), ReplicateScheduling::Parallel);
     assert_eq!(replicates.failure_policy(), FailurePolicy::FinishAll);
     let persistence = specification.manifest().persistence();
-    assert_eq!(persistence.chunk_target_bytes().get(), 8192);
-    assert_eq!(persistence.queue_capacity_bytes().get(), 16384);
+    assert_eq!(persistence.chunk_target_bytes().get(), 2_000_000);
+    assert_eq!(persistence.queue_capacity_bytes().get(), 3_000_000);
 
     let simulation = &specification.phases()[0];
     assert_eq!(simulation.name(), "simulate");
@@ -281,12 +281,40 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let invalid_persistence = TestProject::new(
-        r#"{"persistence":{"chunk_target_bytes":0},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        r#"{"persistence":{"chunk_target_mb":0},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(invalid_persistence.path()),
         Err(ConfigError::InvalidDocument { pointer, .. }) if pointer == "/"
+    ));
+
+    let legacy_chunk_bytes = TestProject::new(
+        r#"{"persistence":{"chunk_target_bytes":1048576},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        &[("x", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(legacy_chunk_bytes.path()),
+        Err(ConfigError::InvalidDocument { .. })
+    ));
+
+    let legacy_queue_bytes = TestProject::new(
+        r#"{"persistence":{"queue_capacity_bytes":1048576},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        &[("x", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(legacy_queue_bytes.path()),
+        Err(ConfigError::InvalidDocument { .. })
+    ));
+
+    let overflowing_chunk_mb = TestProject::new(
+        r#"{"persistence":{"chunk_target_mb":18446744073709551615},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        &[("x", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(overflowing_chunk_mb.path()),
+        Err(ConfigError::InvalidDocument { pointer, .. })
+            if pointer == "/persistence/chunk_target_mb"
     ));
 
     let duplicate_parameters = TestProject::new(

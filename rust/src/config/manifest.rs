@@ -190,6 +190,16 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             "replicate count must be positive",
         ));
     }
+    let chunk_target_bytes = megabytes_to_bytes(
+        path,
+        "/persistence/chunk_target_mb",
+        raw.persistence.chunk_target_mb,
+    )?;
+    let queue_capacity_bytes = megabytes_to_bytes(
+        path,
+        "/persistence/queue_capacity_mb",
+        raw.persistence.queue_capacity_mb,
+    )?;
 
     let manifest = StudyManifest {
         replicates: ReplicatePolicy {
@@ -198,8 +208,8 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             failure_policy: raw.replicates.failure_policy.into(),
         },
         persistence: PersistenceSpecification {
-            chunk_target_bytes: raw.persistence.chunk_target_bytes,
-            queue_capacity_bytes: raw.persistence.queue_capacity_bytes,
+            chunk_target_bytes,
+            queue_capacity_bytes,
         },
     };
 
@@ -314,6 +324,24 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
     Ok(ParsedManifest { manifest, phases })
 }
 
+fn megabytes_to_bytes(
+    path: &Path,
+    pointer: &'static str,
+    megabytes: NonZeroU64,
+) -> Result<NonZeroU64, ConfigError> {
+    megabytes
+        .get()
+        .checked_mul(BYTES_PER_MEGABYTE)
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| {
+            ConfigError::invalid(
+                path,
+                pointer,
+                "persistence size is too large to represent as a byte count",
+            )
+        })
+}
+
 fn validate_identifier(
     path: &Path,
     pointer: &str,
@@ -382,22 +410,23 @@ struct RawStudy {
     phases: Map<String, Value>,
 }
 
-const DEFAULT_PERSISTENCE_BYTES: u64 = 64 * 1024 * 1024;
+const BYTES_PER_MEGABYTE: u64 = 1_000_000;
+const DEFAULT_PERSISTENCE_MB: u64 = 64;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawPersistence {
-    chunk_target_bytes: NonZeroU64,
-    queue_capacity_bytes: NonZeroU64,
+    chunk_target_mb: NonZeroU64,
+    queue_capacity_mb: NonZeroU64,
 }
 
 impl Default for RawPersistence {
     fn default() -> Self {
-        let bytes = NonZeroU64::new(DEFAULT_PERSISTENCE_BYTES)
-            .expect("the built-in persistence byte setting is positive");
         Self {
-            chunk_target_bytes: bytes,
-            queue_capacity_bytes: bytes,
+            chunk_target_mb: NonZeroU64::new(DEFAULT_PERSISTENCE_MB)
+                .expect("the built-in persistence megabyte setting is positive"),
+            queue_capacity_mb: NonZeroU64::new(DEFAULT_PERSISTENCE_MB)
+                .expect("the built-in persistence megabyte setting is positive"),
         }
     }
 }

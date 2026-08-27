@@ -24,6 +24,10 @@ attractor_2d/
 `HopfModel` directly owns its canonical `SystemState`. It initializes the
 two-dimensional `point` and derived `radius`, advances both values and physical
 time in `step`, and reports completion through its configured iteration count.
+For presentation only, `artificial_step_delay_ms` sleeps after every successful
+step so the automatic dashboard remains visible long enough to inspect. This
+wall-clock delay is not scientific time and should be set to `0` for an
+unpaced calculation.
 Its custom `ObservationPlan` records:
 
 - the phase-space trajectory every 10 iterations;
@@ -34,7 +38,9 @@ The `attractor` section of `config/parameters.json` sweeps three growth
 parameters and two angular frequencies. Config selects that section from the
 registered model key and expands its Cartesian product into six model tasks;
 Runtime executes up to three concurrently and automatically records every
-observation stream.
+observation stream. The supplied one-millisecond delay and two waves of three
+tasks make a normal run last roughly ten seconds, subject to machine and IO
+overhead.
 
 ## Python plot phase
 
@@ -85,6 +91,6 @@ lifecycle lines. The model and plotter do not construct tasks, phases,
 persistence sessions, progress counters, or message channels.
 
 The omitted replicate, timeout, UI, and persistence settings use Workflow's
-validated defaults. Only the scientifically meaningful observation cadence,
-parameter sweep, plotting choices, and one justified concurrency bound are
-authored.
+validated defaults. The project authors scientifically meaningful observation
+cadence, parameter sweep, plotting choices, one justified concurrency bound,
+and the explicitly non-scientific demonstration delay.

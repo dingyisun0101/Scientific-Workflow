@@ -245,7 +245,10 @@ Recording metadata keeps complete resolved constants under `model_constants`
 and Workflow identity/source facts under a separate `workflow` object. The
 workflow object names the selected model, `parameter_ordinal`, and canonical
 `parameter_source`; the effective backend and byte settings are recorded under
-`workflow.persistence`. These namespaces never overwrite one another even
+`workflow.persistence`. The user-authored `chunk_target_mb` and
+`queue_capacity_mb` have already been converted, so provenance deliberately
+records the exact effective values as `chunk_target_bytes` and
+`queue_capacity_bytes`. These namespaces never overwrite one another even
 when scientific constants use the same field names.
 
 The private output-directory allocator and local persistence adapter are

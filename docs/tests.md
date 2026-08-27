@@ -30,7 +30,8 @@ types are deliberately not public.
   defaults, positive limits, dependencies, generic model/program/Python task grammar,
   executable resolution, nested Python/mamba command lowering and executable
   preflight, deterministic `$sweep`/`$cases` expansion, private
-  typed constants decoding, central arbitrary-parameter capture, and
+  typed constants decoding, decimal-MB persistence-size conversion and
+  overflow/legacy-byte-field rejection, central arbitrary-parameter capture, and
   contextual errors. Even an unreferenced JSON document is strict-parsed.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
   invalid/duplicate registrations, effect-free loading, unknown models, typed
@@ -90,4 +91,5 @@ model tasks produce completed recordings and its dependent Python task writes
 `attractor-sweep.svg` plus `plot-summary.json` beneath the configured
 `output/plots` directory. The Python task uses the public verified reader and
 the `plot` section of central `config/parameters.json`; it has no Rust caller
-wrapper.
+wrapper. A focused model test verifies that the demonstration-only configured
+per-step delay is actually applied.

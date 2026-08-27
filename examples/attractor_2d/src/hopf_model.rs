@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use scientific_workflow::prelude::basic::*;
 use serde::Deserialize;
 
@@ -15,6 +17,7 @@ pub(crate) struct HopfModel {
     mu: f64,
     omega: f64,
     physical_time_increment_per_step: f64,
+    artificial_step_delay: Duration,
     step_count: u64,
 }
 
@@ -23,6 +26,7 @@ pub(crate) struct HopfModel {
 pub(crate) struct AttractorConstants {
     initial_point: [f64; 2],
     physical_time_increment_per_step: f64,
+    artificial_step_delay_ms: u64,
     step_count: u64,
     trajectory_sampling_interval: u64,
     radius_sampling_interval: u64,
@@ -63,6 +67,7 @@ impl ScientificModel for HopfModel {
             mu: constants.mu,
             omega: constants.angular_frequency,
             physical_time_increment_per_step: constants.physical_time_increment_per_step,
+            artificial_step_delay: Duration::from_millis(constants.artificial_step_delay_ms),
             step_count: constants.step_count,
         })
     }
@@ -106,6 +111,43 @@ impl ScientificModel for HopfModel {
         // successfully, so the timestamp always describes the stored state.
         self.state
             .advance_time(Some(self.physical_time_increment_per_step))?;
+
+        // This project-only pacing delay keeps progress visible in the
+        // dashboard. It is not scientific time and Workflow does not infer it.
+        std::thread::sleep(self.artificial_step_delay);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    #[test]
+    fn configured_artificial_delay_paces_each_successful_step() {
+        let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/state.json");
+        let schema = SystemStateSchema::load_json_template(&schema_path).unwrap();
+        let delay = Duration::from_millis(15);
+        let constants = AttractorConstants {
+            initial_point: [0.25, 0.0],
+            physical_time_increment_per_step: 0.01,
+            artificial_step_delay_ms: u64::try_from(delay.as_millis()).unwrap(),
+            step_count: 1,
+            trajectory_sampling_interval: 1,
+            radius_sampling_interval: 1,
+            checkpoint_sampling_interval: 1,
+            mu: 0.25,
+            angular_frequency: 1.0,
+        };
+        let mut model = HopfModel::initialize(constants, &schema).unwrap();
+
+        let started = Instant::now();
+        model.step().unwrap();
+
+        assert!(started.elapsed() >= delay);
+        assert!(model.is_complete());
     }
 }

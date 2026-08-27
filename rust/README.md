@@ -135,15 +135,19 @@ project/
 ```
 
 Persistence is automatic. The omitted root `persistence` object infers the
-local backend with 64 MiB chunk and queue settings. Projects that need explicit
-operational sizing may add:
+local backend with a 64 MB decimal chunk target and queue capacity.
+Projects that need explicit operational sizing may add:
 
 ```json
 "persistence": {
-  "chunk_target_bytes": 67108864,
-  "queue_capacity_bytes": 67108864
+  "chunk_target_mb": 64,
+  "queue_capacity_mb": 64
 }
 ```
+
+All JSON persistence sizes are authored in decimal megabytes; one MB is
+exactly 1,000,000 bytes. Config converts both settings into exact internal byte
+counts.
 
 Users never provide Rust recording paths, construct a backend, submit
 observations, or finalize a recording. External programs may own a

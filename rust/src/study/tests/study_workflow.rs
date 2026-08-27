@@ -92,8 +92,8 @@ impl Drop for Project {
 const STUDY: &str = r#"
 {
   "persistence": {
-    "chunk_target_bytes": 4096,
-    "queue_capacity_bytes": 8192
+    "chunk_target_mb": 1,
+    "queue_capacity_mb": 2
   },
   "phases": {
     "measure": {
@@ -121,8 +121,8 @@ fn study_binds_registered_models_and_infers_plan_facts_without_output() {
     );
     assert_eq!(study.output_root(), study.project_root().join("output"));
     assert!(!study.output_root().exists());
-    assert_eq!(study.persistence_plan().chunk_target().get(), 4096);
-    assert_eq!(study.persistence_plan().queue_capacity().get(), 8192);
+    assert_eq!(study.persistence_plan().chunk_target().get(), 1_000_000);
+    assert_eq!(study.persistence_plan().queue_capacity().get(), 2_000_000);
     assert_eq!(study.phases().len(), 2);
     assert_eq!(study.phases()[0].name(), "measure");
     assert_eq!(
@@ -177,13 +177,13 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
             metadata["user_metadata"]["workflow"]["persistence"],
             serde_json::json!({
                 "backend": "local",
-                "chunk_target_bytes": 4096,
-                "queue_capacity_bytes": 8192
+                "chunk_target_bytes": 1_000_000,
+                "queue_capacity_bytes": 2_000_000
             })
         );
         assert_eq!(
             metadata["streams"][0]["storage"]["layout"]["target_bytes"],
-            4096
+            1_000_000
         );
     }
 }
@@ -195,14 +195,8 @@ fn crate_level_run_is_the_complete_ordinary_entry_point() {
         r#"{"initial":1,"steps":1}"#,
     );
     let study = Study::load(project.path()).unwrap();
-    assert_eq!(
-        study.persistence_plan().chunk_target().get(),
-        64 * 1024 * 1024
-    );
-    assert_eq!(
-        study.persistence_plan().queue_capacity().get(),
-        64 * 1024 * 1024
-    );
+    assert_eq!(study.persistence_plan().chunk_target().get(), 64_000_000);
+    assert_eq!(study.persistence_plan().queue_capacity().get(), 64_000_000);
     scientific_workflow::run(project.path()).unwrap();
     assert!(project.path().join("output").is_dir());
 }
