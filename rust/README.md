@@ -7,15 +7,16 @@ configuration-driven model or program execution, and durable outputs.
 
 ```toml
 [dependencies]
-scientific-workflow = "0.10.0"
+scientific-workflow = "0.10.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Rust 1.97 or newer is required. Executables should commit `Cargo.lock`.
 
-> **Breaking release:** Version 0.10.0 intentionally removes the pre-0.10
-> orchestration, configuration, storage/writer, and study surfaces. Applications
-> using 0.9.x or earlier must adopt registered `ScientificModel`
+> **Breaking 0.10 update:** Version 0.10.1 is the current patch release of the
+> 0.10 API generation that intentionally removed the pre-0.10 orchestration,
+> configuration, storage/writer, and study surfaces. Applications using 0.9.x
+> or earlier must adopt registered `ScientificModel`
 > implementations, the canonical three project JSON files, and the crate-level
 > `run(&Path)` facade. Removed Rust APIs and legacy JSON fields have no
 > compatibility aliases.
@@ -51,6 +52,7 @@ impl ScientificModel for PopulationModel {
     fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial_population)?;
+        state.initialize_payload("cumulative_births", 0_u64)?;
         Ok(Self { state, steps: constants.steps })
     }
 
@@ -59,7 +61,13 @@ impl ScientificModel for PopulationModel {
     fn target_iteration(&self) -> Option<u64> { Some(self.steps) }
 
     fn step(&mut self) -> TaskResult {
-        *self.state.payload_mut::<u64>("population")? += 1;
+        let (population, cumulative_births) = self
+            .state
+            .borrow_payloads_mut::<(u64, u64)>(
+                ("population", "cumulative_births"),
+            )?;
+        *population += 1;
+        *cumulative_births += 1;
         self.state.advance_time(None)?;
         Ok(())
     }
@@ -72,8 +80,11 @@ when selected fields, named streams, cadence, or units carry scientific
 meaning. The observation-plan function may inspect constants but must be
 deterministic and side-effect-free.
 
-The stable attribute key is the only bridge from `study.json` to compiled Rust
-behavior. There is no separate registry list in `main`.
+The model is an ordinary Rust owner: `state()` returns a direct borrow of its
+`SystemState`, and coupled field access uses a typed tuple expansion. The
+attribute does not define the model or generate field access. Its stable key is
+only the automatic bridge from `study.json` to compiled Rust behavior, so there
+is no separate registry list in `main`.
 
 Standalone executable and Python tasks require no Rust trait or wrapper.
 Declare them in `study.json`; they receive the same captured central project
@@ -96,7 +107,12 @@ project/
 `config/state.json`:
 
 ```json
-{"fields":[{"name":"population"}]}
+{
+  "fields": [
+    {"name":"population"},
+    {"name":"cumulative_births"}
+  ]
+}
 ```
 
 `config/parameters.json`:

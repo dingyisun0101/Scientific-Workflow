@@ -23,7 +23,7 @@
 //! use scientific_workflow::prelude::basic::*;
 //!
 //! #[derive(Deserialize)]
-//! struct Constants { steps: u64 }
+//! struct Constants { initial: u64, steps: u64 }
 //!
 //! struct Model { state: SystemState, steps: u64 }
 //!
@@ -32,15 +32,22 @@
 //!     type Constants = Constants;
 //!
 //!     fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
-//!         Ok(Self {
-//!             state: schema.create_empty_state(StateTime::from_iteration(0)),
-//!             steps: constants.steps,
-//!         })
+//!         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+//!         state.initialize_payload("population", constants.initial)?;
+//!         state.initialize_payload("cumulative_births", 0_u64)?;
+//!         Ok(Self { state, steps: constants.steps })
 //!     }
 //!
 //!     fn state(&self) -> &SystemState { &self.state }
 //!     fn is_complete(&self) -> bool { self.state.time().iteration() == self.steps }
 //!     fn step(&mut self) -> TaskResult {
+//!         let (population, cumulative_births) = self
+//!             .state
+//!             .borrow_payloads_mut::<(u64, u64)>(
+//!                 ("population", "cumulative_births"),
+//!             )?;
+//!         *population += 1;
+//!         *cumulative_births += 1;
 //!         self.state.advance_time(None)?;
 //!         Ok(())
 //!     }

@@ -3,9 +3,10 @@
 Scientific Workflow turns registered Rust scientific models, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking release:** Version 0.10.0 intentionally replaces the pre-0.10
-> orchestration, configuration, storage/writer, and study APIs. Projects using
-> 0.9.x or earlier must migrate to the model registration plus
+> **Breaking 0.10 update:** Version 0.10.1 is the current patch release of the
+> 0.10 API generation that intentionally replaced the pre-0.10 orchestration,
+> configuration, storage/writer, and study APIs. Projects using 0.9.x or
+> earlier must migrate to the model registration plus
 > `study.json`/`config/state.json`/`config/parameters.json` workflow described
 > below. Legacy Rust entry points and legacy JSON fields are not accepted as
 > compatibility aliases.
@@ -48,8 +49,11 @@ subsystem's `src/<module>/api.md` for exhaustive contracts.
 
 The [attractor example](examples/attractor_2d) demonstrates the final workflow
 as one realistic project. Its Rust executable is one `run(&Path)` call, its
-model owns state and a custom observation plan, its JSON owns constants sweeps
-and phase organization, and its final phase declares a Python plotter directly.
+model directly owns and exposes a `SystemState`, and its coupled scientific
+fields use typed tuple borrowing rather than generated field-access macros. The
+registration attribute only links that ordinary model implementation to its
+stable JSON key. Its JSON owns constants sweeps and phase organization, and its
+final phase declares a Python plotter directly.
 The plotter reads verified model recordings and the `plot` section of the
 central `parameters.json`, then writes an SVG to its configured `output/plots`.
 Rust persistence, scheduling, Python launching, and the Ratatui dashboard

@@ -24,6 +24,11 @@ attractor_2d/
 `HopfModel` directly owns its canonical `SystemState`. It initializes the
 two-dimensional `point` and derived `radius`, advances both values and physical
 time in `step`, and reports completion through its configured iteration count.
+Its `state()` method exposes a direct immutable borrow to Workflow. Inside the
+model, `step` obtains `point` and `radius` together with the typed tuple call
+`borrow_payloads_mut::<(Vec<f64>, f64)>(("point", "radius"))`; model fields are
+not generated or accessed by a macro. The `#[model("attractor")]` attribute is
+only the automatic registration link to `study.json`.
 For presentation only, `artificial_step_delay_ms` sleeps after every successful
 step so the automatic dashboard remains visible long enough to inspect. This
 wall-clock delay is not scientific time and should be set to `0` for an

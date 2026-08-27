@@ -19,6 +19,14 @@ use super::result::TaskResult;
 /// Returning a temporary, swapping the state owner, or changing schemas is a
 /// contract violation.
 ///
+/// The `#[scientific_workflow::model("key")]` attribute only registers the
+/// implementation under a manifest key. It does not generate, wrap, proxy, or
+/// provide access to model state. The model defines an ordinary `SystemState`
+/// field, initializes its concrete payloads, and returns a direct borrow of
+/// that field from [`Self::state`]. Coupled fields remain ordinary typed tuple
+/// borrows through [`SystemState::borrow_payloads`] and
+/// [`SystemState::borrow_payloads_mut`]; no field-access macro is involved.
+///
 /// A successful [`Self::step`] represents exactly one scientifically
 /// observable transition and must strictly advance the state's iteration.
 /// Workflow observes the initial state, every successful step, and the final

@@ -19,8 +19,9 @@ types are deliberately not public.
   declarations, cadence, units, validation, and the Advanced-as-public-superset
   rule. Schema binding and encoding are private.
 - `rust/tests/task_workflow.rs` exercises the downstream
-  `ScientificModel`/model-attribute surface. Catalogs, type erasure, and host
-  execution stay internal.
+  `ScientificModel`/model-attribute surface, including a model-owned stable
+  state exposed by `state()` and coupled mutation through the public typed
+  tuple-borrow API. Catalogs, type erasure, and host execution stay internal.
 
 ## Internal compiler and execution tests
 

@@ -34,6 +34,13 @@ ownership in a trait, so task enforces observable consequences: stable state
 address, exact schema allocation, strictly advancing successful steps, and
 valid target progression.
 
+“Directly own” means the implementation contains an ordinary `SystemState`
+field and returns `&self.state`; the registration attribute does not create a
+hidden state, proxy, wrapper, or accessor. Model code uses `payload[_mut]` for
+one field and `borrow_payloads[_mut]::<(T1, T2, ...)>(names)` for typed coupled
+access. Those calls are normal generic Rust methods and require no invocation
+of a field-access macro.
+
 Associated type:
 
 - `Constants: DeserializeOwned + Send + Sync + 'static` is one complete typed
@@ -147,6 +154,7 @@ impl ScientificModel for Population {
     fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial)?;
+        state.initialize_payload("cumulative_births", 0_u64)?;
         Ok(Self { state, steps: constants.steps })
     }
 
@@ -155,7 +163,13 @@ impl ScientificModel for Population {
     fn target_iteration(&self) -> Option<u64> { Some(self.steps) }
 
     fn step(&mut self) -> TaskResult {
-        *self.state.payload_mut::<u64>("population")? += 1;
+        let (population, cumulative_births) = self
+            .state
+            .borrow_payloads_mut::<(u64, u64)>(
+                ("population", "cumulative_births"),
+            )?;
+        *population += 1;
+        *cumulative_births += 1;
         self.state.advance_time(None)?;
         Ok(())
     }

@@ -35,6 +35,8 @@ pub(crate) struct AttractorConstants {
     angular_frequency: f64,
 }
 
+// This attribute only links the ordinary Rust implementation to the stable
+// `attractor` manifest key. HopfModel itself owns and exposes all model state.
 #[scientific_workflow::model("attractor")]
 impl ScientificModel for HopfModel {
     type Constants = AttractorConstants;

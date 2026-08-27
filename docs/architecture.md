@@ -31,6 +31,12 @@ impl ScientificModel for PopulationModel {
 }
 ```
 
+The attribute only submits registration metadata. It does not create the
+model, generate state fields, wrap the model's state, or change field access.
+The implementation owns an ordinary `SystemState` field, returns `&self.state`
+from `state()`, and accesses coupled payloads through typed tuple borrowing such
+as `borrow_payloads_mut::<(Position, Velocity)>(("position", "velocity"))`.
+
 The executable needs no registry or orchestration builder:
 
 ```rust,ignore
@@ -316,6 +322,9 @@ iteration-advancing `step`. Task enforces what Rust can observe: state
 address/schema stability, strict iteration progress, and a monotonic optional
 target. The macro submits immutable registration metadata; the private catalog
 rejects bad or duplicate keys and ignores linker order.
+State definition and access remain macro-free: the model owns the concrete
+`SystemState`, exposes it with `state()`, and uses the state's typed single- or
+tuple-payload borrowing methods directly.
 
 ### Config
 
