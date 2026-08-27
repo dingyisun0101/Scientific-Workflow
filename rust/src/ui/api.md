@@ -19,8 +19,10 @@ starts automatically through `scientific_workflow::run(&Path)` or
 When both standard input and standard error are terminals, UI enters a
 Crossterm alternate screen and renders a Ratatui dashboard containing:
 
-- inferred replicate, phase, task, label, kind, and subject rows in declared
-  study order;
+- a task panel containing only the current replicate/phase's tasks in declared
+  order; each `PhaseStarted` event replaces the previous phase's rows;
+- replicate and phase shown once in the task-panel title rather than repeated
+  in every task row;
 - pending, running, completed, failed, cancelled, and skipped counts;
 - model iteration gauges when `ScientificModel::target_iteration` is known;
 - model spinners when the target is unknown;
@@ -30,6 +32,9 @@ Crossterm alternate screen and renders a Ratatui dashboard containing:
 - a bounded 100-line lifecycle/error message panel; and
 - the command editor.
 
+The task table itself contains task label/kind/subject, status, progress, and
+timing columns. Inferred task identities and phase prefixes remain available
+to lifecycle messages and durable summaries but are not repeated in each row.
 Runtime lifecycle lines are appended to the message panel instead of scrolling
 the interactive terminal. Scientific payloads are never rendered. When either
 standard stream is not interactive, the same lifecycle messages use the former
@@ -63,7 +68,9 @@ adds no public symbols. Runtime and Study use crate-visible boundaries:
 These are peer-subsystem contracts, not downstream API. Event strings and
 paths are copied into small UI-owned presentation snapshots as required; UI
 never retains a model, `SystemState`, payload, `Study`, recording writer, or
-runtime summary. Concurrent Runtime workers share one clone-cheap session. A
+runtime summary. The reducer retains all planned-task status internally but
+publishes only the most recently started replicate/phase to the task panel.
+Concurrent Runtime workers share one clone-cheap session. A
 mutex protects only dashboard presentation state, and a single bounded-refresh
 thread owns interactive terminal input and drawing.
 

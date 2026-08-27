@@ -82,8 +82,10 @@ Unknown properties are rejected at every Workflow-owned level.
   the containing phase, and form an acyclic graph.
 - each phase must contain at least one task.
 - `max_concurrency` defaults to `1` and must be positive.
-- `start_interval_ms` defaults to zero. Phase and task `timeout_ms` are
-  optional nonnegative millisecond counts.
+- `start_interval_ms` defaults to zero and is the minimum delay between
+  successive task admissions within that phase; the first eligible task is
+  admitted immediately. Phase and task `timeout_ms` are optional nonnegative
+  millisecond counts.
 - each task is exactly one of:
   - a model task with nonblank `model` and optional `timeout_ms`; or
   - a program task with required `program`, optional `args`, and optional

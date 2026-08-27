@@ -191,7 +191,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
     let text = vec![
         Line::from(vec![
             Span::styled(
-                snapshot.heading.clone(),
+                "Scientific Workflow",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -207,7 +207,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
             )),
         ]),
         Line::from(format!(
-            "replicates={} · tasks={} · output={output}",
+            "replicates={} · phase tasks={} · output={output}",
             snapshot.replicate_count,
             snapshot.tasks.len()
         )),
@@ -224,7 +224,7 @@ fn render_tasks(
     snapshot: &DashboardSnapshot,
     tick: usize,
 ) {
-    let header = Row::new(["rep", "phase", "task", "status", "progress", "time"]).style(
+    let header = Row::new(["task", "status", "progress", "time"]).style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
@@ -239,8 +239,6 @@ fn render_tasks(
     if snapshot.tasks.len() > available && available > 0 {
         rows.truncate(available.saturating_sub(1));
         rows.push(Row::new([
-            Cell::from(""),
-            Cell::from(""),
             Cell::from(format!(
                 "… {} more tasks",
                 snapshot.tasks.len() - rows.len()
@@ -253,11 +251,9 @@ fn render_tasks(
     let table = Table::new(
         rows,
         [
-            Constraint::Length(4),
-            Constraint::Percentage(14),
-            Constraint::Percentage(28),
+            Constraint::Percentage(37),
             Constraint::Length(12),
-            Constraint::Percentage(27),
+            Constraint::Percentage(32),
             Constraint::Length(22),
         ],
     )
@@ -266,9 +262,19 @@ fn render_tasks(
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Tasks ({}) ", snapshot.tasks.len())),
+            .title(task_panel_title(snapshot)),
     );
     frame.render_widget(table, area);
+}
+
+fn task_panel_title(snapshot: &DashboardSnapshot) -> String {
+    match (snapshot.phase_replicate, snapshot.phase_name.as_deref()) {
+        (Some(replicate), Some(phase)) => format!(
+            " Tasks · replicate {replicate} · phase {phase} ({}) ",
+            snapshot.tasks.len()
+        ),
+        _ => " Tasks · waiting for phase ".to_owned(),
+    }
 }
 
 fn task_row(task: &TaskSnapshot, tick: usize) -> Row<'static> {
@@ -282,13 +288,11 @@ fn task_row(task: &TaskSnapshot, tick: usize) -> Row<'static> {
     let progress = progress_text(task, tick);
     let timing = timing_text(task);
     let task_label = if task.detail.is_empty() {
-        format!("{} · {} · {}", task.label, task.subject, task.identity)
+        format!("{} · {} {}", task.label, task.kind, task.subject)
     } else {
         format!("{} · {}", task.label, task.detail)
     };
     Row::new([
-        Cell::from(task.replicate.to_string()),
-        Cell::from(task.phase.clone()),
         Cell::from(task_label).style(Style::default().add_modifier(Modifier::BOLD)),
         Cell::from(task.status.label()).style(status_style),
         Cell::from(progress).style(Style::default().fg(Color::Cyan)),

@@ -400,8 +400,10 @@ iteration values, so neither workload supplies UI code or values.
 
 Interactive stdin and stderr select the Ratatui/Crossterm alternate-screen
 dashboard; noninteractive runs use stable plain lifecycle lines. The dashboard
-owns declaration-ordered persistent task rows, progress gauges/spinners,
+owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
 elapsed/ETA fields, a bounded message panel, and the former command editor.
+Every phase-start event replaces the visible task set. Replicate and phase
+appear once in the panel title; rows contain only task-specific information.
 Exact lowercase `exit` or Ctrl+C requests cooperative Runtime cancellation,
 stops further admission, and waits for active model/program cleanup before
 terminal restoration. One private refresh thread retains presentation facts

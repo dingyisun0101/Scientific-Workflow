@@ -71,10 +71,11 @@ call when multiple independent runs are intended.
 Replicates run sequentially or concurrently according to `ReplicatePolicy`.
 Every replicate gets `replicate-XXXXXX` beneath the unique execution scope.
 Phases run in stable topological order. Within a phase, runtime respects
-`max_concurrency`, `start_interval`, task timeout, phase timeout, and sibling
-failure policy. Fail-fast stops further admission and requests cancellation of
-active siblings; finish-all continues admitting declared siblings and returns
-an error after they finish.
+`max_concurrency`, the minimum `start_interval` between successive admissions,
+task timeout, phase timeout, and sibling failure policy. The first eligible
+task has no artificial pre-admission wait. Fail-fast stops further admission
+and requests cancellation of active siblings; finish-all continues admitting
+declared siblings and returns an error after they finish.
 
 An interactive exit request stops further admission across the execution,
 cancels active model/program workers, waits for their cleanup, restores the

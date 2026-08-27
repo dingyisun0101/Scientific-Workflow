@@ -155,8 +155,9 @@ project-relative domain output such as the Python plotter's `output/plots`.
 
 UI is also automatic. No `ui` object or model display fields are required.
 Interactive stdin and stderr select the Ratatui dashboard with inferred task
-rows, progress, timing, lifecycle messages, and the `exit` command. Redirected
-execution uses stable plain lifecycle lines.
+rows for only the current phase, progress, timing, lifecycle messages, and the
+`exit` command. The task-panel title carries the replicate and phase once.
+Redirected execution uses stable plain lifecycle lines.
 
 Config alone reads `study.json`, `config/state.json`, and the complete arbitrary
 `config/parameters.json` namespace once. `$sweep` creates independent Cartesian

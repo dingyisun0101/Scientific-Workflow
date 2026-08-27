@@ -38,9 +38,11 @@ The `attractor` section of `config/parameters.json` sweeps three growth
 parameters and two angular frequencies. Config selects that section from the
 registered model key and expands its Cartesian product into six model tasks;
 Runtime executes up to three concurrently and automatically records every
-observation stream. The supplied one-millisecond delay and two waves of three
-tasks make a normal run last roughly ten seconds, subject to machine and IO
-overhead.
+observation stream. The phase's `start_interval_ms: 10000` setting waits ten
+seconds between successive task admissions (the first eligible task starts
+immediately). This phase-owned scheduling delay is separate from the model's
+one-millisecond per-step presentation delay. With the supplied workload, a
+normal run takes roughly one minute, subject to machine and IO overhead.
 
 ## Python plot phase
 
@@ -86,11 +88,13 @@ cargo run --manifest-path examples/attractor_2d/Cargo.toml
 Workflow creates a unique Rust execution beneath `examples/attractor_2d/output`.
 Python owns its configured `output/plots` destination directly. When stdin and
 stderr are interactive, the automatic Ratatui dashboard shows task rows,
-progress, timing, messages, and an `exit` command; redirected runs use plain
-lifecycle lines. The model and plotter do not construct tasks, phases,
+progress, timing, messages, and an `exit` command. The task section refreshes
+for each phase and shows that phase only; redirected runs use plain lifecycle
+lines. The model and plotter do not construct tasks, phases,
 persistence sessions, progress counters, or message channels.
 
 The omitted replicate, timeout, UI, and persistence settings use Workflow's
 validated defaults. The project authors scientifically meaningful observation
 cadence, parameter sweep, plotting choices, one justified concurrency bound,
-and the explicitly non-scientific demonstration delay.
+the ten-second inter-task admission delay, and the explicitly non-scientific
+per-step demonstration delay.

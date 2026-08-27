@@ -47,7 +47,8 @@ types are deliberately not public.
   environment without any Rust wrapper and records Python launcher provenance.
 - `rust/src/ui/command.rs` verifies the former editor and exact lowercase
   `exit` contract. `ui/state.rs` verifies declaration-ordered event-reduced
-  rows, progress, bounded message history, and cancelled/skipped outcomes. PTY validation
+  rows, per-phase task-panel replacement, progress, bounded message history,
+  and cancelled/skipped outcomes. PTY validation
   confirms alternate-screen Ratatui rendering, keyboard exit, cooperative
   Runtime cancellation, and terminal restoration. Noninteractive tests receive
   stable plain lifecycle diagnostics rather than terminal control sequences.
@@ -92,4 +93,5 @@ model tasks produce completed recordings and its dependent Python task writes
 `output/plots` directory. The Python task uses the public verified reader and
 the `plot` section of central `config/parameters.json`; it has no Rust caller
 wrapper. A focused model test verifies that the demonstration-only configured
-per-step delay is actually applied.
+per-step delay is actually applied. Config boundary coverage preserves the
+phase-owned ten-second `start_interval_ms` admission delay used by the example.

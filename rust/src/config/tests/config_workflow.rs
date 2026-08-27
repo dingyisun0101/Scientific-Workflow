@@ -74,7 +74,7 @@ fn manifest() -> &'static str {
             "timeout_ms": 250
           }],
           "max_concurrency": 2,
-          "start_interval_ms": 10
+          "start_interval_ms": 10000
         },
         "analyze": {
           "after": ["simulate"],
@@ -135,7 +135,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
     assert_eq!(simulation.name(), "simulate");
     assert_eq!(simulation.tasks().len(), 4);
     assert_eq!(simulation.max_concurrency(), 2);
-    assert_eq!(simulation.start_interval(), Duration::from_millis(10));
+    assert_eq!(simulation.start_interval(), Duration::from_secs(10));
     assert_eq!(simulation.failure_policy(), FailurePolicy::FailFast);
 
     #[derive(Debug, Deserialize, PartialEq)]

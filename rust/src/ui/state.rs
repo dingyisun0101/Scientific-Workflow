@@ -35,7 +35,6 @@ impl TaskStatus {
 pub(super) struct TaskSnapshot {
     pub(super) replicate: u64,
     pub(super) phase: String,
-    pub(super) identity: String,
     pub(super) label: String,
     pub(super) kind: String,
     pub(super) subject: String,
@@ -49,9 +48,10 @@ pub(super) struct TaskSnapshot {
 
 #[derive(Clone)]
 pub(super) struct DashboardSnapshot {
-    pub(super) heading: String,
     pub(super) output: Option<PathBuf>,
     pub(super) replicate_count: u64,
+    pub(super) phase_replicate: Option<u64>,
+    pub(super) phase_name: Option<String>,
     pub(super) tasks: Vec<TaskSnapshot>,
     pub(super) messages: Vec<String>,
     pub(super) exit_requested: bool,
@@ -59,9 +59,9 @@ pub(super) struct DashboardSnapshot {
 }
 
 pub(super) struct DashboardState {
-    heading: String,
     output: Option<PathBuf>,
     replicate_count: u64,
+    active_phase: Option<(u64, Box<str>)>,
     tasks: BTreeMap<(u64, Box<str>), TaskSnapshot>,
     task_order: Vec<(u64, Box<str>)>,
     messages: VecDeque<String>,
@@ -72,9 +72,9 @@ pub(super) struct DashboardState {
 impl DashboardState {
     pub(super) fn new() -> Self {
         Self {
-            heading: "Scientific Workflow".to_owned(),
             output: None,
             replicate_count: 0,
+            active_phase: None,
             tasks: BTreeMap::new(),
             task_order: Vec::new(),
             messages: VecDeque::with_capacity(MESSAGE_HISTORY),
@@ -102,7 +102,6 @@ impl DashboardState {
                     TaskSnapshot {
                         replicate: *replicate,
                         phase: (*phase).to_owned(),
-                        identity: (*identity).to_owned(),
                         label: (*label).to_owned(),
                         kind: (*kind).to_owned(),
                         subject: (*subject).to_owned(),
@@ -123,11 +122,10 @@ impl DashboardState {
             } => {
                 self.output = Some((*output_directory).to_path_buf());
                 self.replicate_count = *replicate_count;
-                self.heading = "Scientific Workflow".to_owned();
             }
             UiEvent::PhaseStarted {
                 replicate, name, ..
-            } => self.heading = format!("Replicate {replicate} · Phase {name}"),
+            } => self.active_phase = Some((*replicate, Box::from(*name))),
             UiEvent::TaskStarted {
                 replicate,
                 identity,
@@ -223,14 +221,24 @@ impl DashboardState {
     }
 
     pub(super) fn snapshot(&self) -> DashboardSnapshot {
+        let phase_replicate = self.active_phase.as_ref().map(|(replicate, _)| *replicate);
+        let phase_name = self.active_phase.as_ref().map(|(_, name)| name.to_string());
         DashboardSnapshot {
-            heading: self.heading.clone(),
             output: self.output.clone(),
             replicate_count: self.replicate_count,
+            phase_replicate,
+            phase_name,
             tasks: self
                 .task_order
                 .iter()
                 .filter_map(|key| self.tasks.get(key).cloned())
+                .filter(|task| {
+                    self.active_phase
+                        .as_ref()
+                        .is_some_and(|(replicate, phase)| {
+                            task.replicate == *replicate && task.phase == phase.as_ref()
+                        })
+                })
                 .collect(),
             messages: self.messages.iter().cloned().collect(),
             exit_requested: self.exit_requested,
@@ -347,6 +355,11 @@ mod tests {
             replicate_count: 1,
             task_count_per_replicate: 1,
         });
+        state.apply(&UiEvent::PhaseStarted {
+            replicate: 0,
+            name: "simulate",
+            task_count: 1,
+        });
         state.apply(&UiEvent::TaskStarted {
             replicate: 0,
             phase: "simulate",
@@ -363,6 +376,8 @@ mod tests {
         });
 
         let snapshot = state.snapshot();
+        assert_eq!(snapshot.phase_replicate, Some(0));
+        assert_eq!(snapshot.phase_name.as_deref(), Some("simulate"));
         assert_eq!(snapshot.tasks.len(), 1);
         assert_eq!(snapshot.tasks[0].status, TaskStatus::Running);
         assert_eq!(snapshot.tasks[0].iteration, 25);
@@ -395,10 +410,50 @@ mod tests {
                 subject: identity,
             });
         }
+        state.apply(&UiEvent::PhaseStarted {
+            replicate: 0,
+            name: "phase",
+            task_count: 2,
+        });
 
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.tasks[0].identity, "z-first");
-        assert_eq!(snapshot.tasks[1].identity, "a-second");
+        assert_eq!(snapshot.tasks[0].label, "z-first");
+        assert_eq!(snapshot.tasks[1].label, "a-second");
+    }
+
+    #[test]
+    fn task_section_switches_to_only_the_newly_started_phase() {
+        let mut state = DashboardState::new();
+        for (phase, identity) in [("simulate", "simulation"), ("plot", "plotter")] {
+            state.apply(&UiEvent::TaskPlanned {
+                replicate: 0,
+                phase,
+                identity,
+                label: identity,
+                kind: "program",
+                subject: identity,
+            });
+        }
+
+        state.apply(&UiEvent::PhaseStarted {
+            replicate: 0,
+            name: "simulate",
+            task_count: 1,
+        });
+        let simulation = state.snapshot();
+        assert_eq!(simulation.phase_name.as_deref(), Some("simulate"));
+        assert_eq!(simulation.tasks.len(), 1);
+        assert_eq!(simulation.tasks[0].label, "simulation");
+
+        state.apply(&UiEvent::PhaseStarted {
+            replicate: 0,
+            name: "plot",
+            task_count: 1,
+        });
+        let plot = state.snapshot();
+        assert_eq!(plot.phase_name.as_deref(), Some("plot"));
+        assert_eq!(plot.tasks.len(), 1);
+        assert_eq!(plot.tasks[0].label, "plotter");
     }
 
     #[test]
@@ -414,6 +469,11 @@ mod tests {
                 subject: "model",
             });
         }
+        state.apply(&UiEvent::PhaseStarted {
+            replicate: 0,
+            name: "simulate",
+            task_count: 2,
+        });
         state.apply(&UiEvent::TaskStarted {
             replicate: 0,
             phase: "simulate",

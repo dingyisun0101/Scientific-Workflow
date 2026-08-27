@@ -6,7 +6,8 @@
           "model": "attractor"
         }
       ],
-      "max_concurrency": 3
+      "max_concurrency": 3,
+      "start_interval_ms": 2000
     },
     "plot": {
       "after": ["simulate"],
