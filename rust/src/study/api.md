@@ -1,127 +1,81 @@
 # Study API
 
-The `study` subsystem compiles parsed project declarations and linked Rust
-models into immutable, completely preflighted scientific intent. It is the
-ultimate coordinator of declared intent, not an active scheduler.
+The `study` subsystem is the ultimate coordinator of declared intent. It asks
+config to load one project root, asks state to validate the centrally parsed
+schema, discovers linked models, binds each expanded constants value to its
+model, binds each observation plan to the schema, and produces one immutable
+execution plan.
 
-Study never opens a project file directly: `config` alone performs file IO and
-JSON parsing. Study never creates output, starts a thread, initializes a model,
-or records a state. It combines supported advanced boundaries from config,
-state, and task.
+Study creates no output, starts no worker, initializes no model, and writes no
+recording. Runtime alone owns active effects.
 
 ## Basic API
 
-`scientific_workflow::study::basic` intentionally exports no symbols.
-
-The ordinary user-facing Study API is the `study.json` grammar documented in
-`config/api.md`. Users call `scientific_workflow::run(project_root: &Path)` and
-do not load, construct, mutate, or execute a Study themselves.
-
-An empty Basic scope is intentional API minimization, not an unfinished
-implementation. Manual phase builders, task builders, selectors, completion
-examiners, metadata maps, identities, and scheduling contexts are not part of
-the supported workflow.
+`scientific_workflow::study::basic` intentionally exports no Rust symbols.
+Ordinary users express Study intent in `study.json` and call
+`scientific_workflow::run(project_root: &Path)`. They do not construct phases,
+tasks, identities, persistence plans, registries, or Study builders.
 
 ## Advanced API
 
-`study::advanced` is a strict superset of the empty Basic scope.
+`study::advanced` is the strict superset of Basic and exposes exactly
+`Study` and `StudyError`.
 
 ### `study::advanced::Study`
 
-`Study` is an immutable, clone-cheap, `Send + Sync` plan. It owns an `Arc` to a
-validated project specification, shared state schema, inferred output root, and
-ordered `StudyPhase` values. Cloning does not duplicate documents, model
-definitions, schemas, or resolved constants.
+`Study` is an immutable, clone-cheap plan backed by `Arc`. It owns the shared
+state schema, internal phases/tasks, resolved constants, schema-bound
+observation plans, inferred output root, replicate policy, and effective
+persistence settings. None of those internal planning types is public.
 
-Construction:
+- `Study::load(project_root: &Path) -> Result<Study, StudyError>` performs the
+  complete effect-free loading and preflight transaction. Config canonicalizes
+  paths and parses JSON. Study validates registration keys and duplicates,
+  resolves every manifest model key, decodes every concrete constants value,
+  calls each model's side-effect-free `observation_plan` exactly once, and
+  binds that plan to the shared schema. It does not call
+  `ScientificModel::initialize`.
+- `project_root() -> &Path` returns config's retained canonical root.
+- `output_root() -> &Path` returns the inferred
+  `<canonical-project-root>/output`. The path need not exist until Runtime
+  starts.
 
-- `Study::load(project_root: &Path) -> Result<Study, StudyError>` asks config to
-  load all declarations, discovers linked `#[model]` registrations, validates
-  the catalog, semantically validates the state schema, binds every task input,
-  and performs full preflight. It canonicalizes only through config. No output
-  is created and no model is initialized.
-- `Study::load_with_catalog(project_root: &Path, catalog: &ModelCatalog)` does
-  the same work with an explicit immutable catalog. It is intended for tests,
-  embedded applications, and replacement discovery adapters. The catalog is
-  borrowed only for the call; the resulting Study owns type-erased task
-  definitions.
+`Clone` increments one reference count; it does not reread files, repeat
+preflight, clone scientific payloads, or duplicate constants documents.
+`Debug` prints bounded root/plan information and never model captures or raw
+constants.
 
-Inspection:
-
-- `project_root() -> &Path` returns config's canonical project root.
-- `output_root() -> &Path` returns the inferred `<project-root>/output`. Loading
-  does not create it.
-- `state_schema() -> &SystemStateSchema` borrows the exact schema allocation
-  against which writers and display fields were preflighted.
-- `phases() -> &[StudyPhase]` returns manifest declaration order. Runtime may
-  derive a stable topological execution order without changing this view.
-- `replicate_policy() -> ReplicatePolicy` returns config's copyable effective
-  replicate policy.
-- `source_documents() -> &[ProjectDocument]` returns exact config-owned source
-  documents in deterministic first-use order for provenance.
-
-`Debug` prints bounded project/output roots and the phase count, never model
-captures or constants. Study performs no blocking beyond config file loading
-and pure preflight work. Any error is failure-atomic with respect to output.
-
-### `study::advanced::StudyPhase`
-
-`StudyPhase` is a cloneable immutable view compiled from one manifest phase.
-It exposes:
-
-- `name() -> &str`: stable manifest phase key;
-- `dependencies()`: exact-size iterator over dependency keys in authored order;
-- `tasks() -> &[StudyTask]`: bound invocations in deterministic input-expansion
-  order;
-- `max_concurrency() -> usize`: positive effective active-task bound;
-- `start_interval() -> Duration`: delay between task admissions;
-- `timeout() -> Option<Duration>`: optional cooperative phase timeout; and
-- `failure_policy() -> FailurePolicy`: fail-fast or finish-all sibling policy.
-
-Phase values own their names/dependency strings and task array. Accessors borrow
-them without allocation or mutation. Config already verified nonempty tasks,
-positive concurrency, dependency existence, uniqueness, and acyclicity.
-
-### `study::advanced::StudyTask`
-
-`StudyTask` is one registered model bound to one `ResolvedTaskInput`. It is
-cloneable because the resolved input and erased definition are shared handles.
-It exposes:
-
-- `identity() -> &str`: inferred stable identity formatted from phase key,
-  global plan ordinal, model key, and input expansion ordinal;
-- `label() -> &str`: inferred human-readable `<model> #<ordinal>` label;
-- `model() -> &str`: exact stable model key;
-- `input() -> &ResolvedTaskInput`: config-owned resolved constants/provenance;
-- `display_fields()`: exact-size iterator over already validated selected state
-  fields; and
-- `timeout() -> Option<Duration>`: optional cooperative invocation timeout.
-
-It exposes no output path, mutable lifecycle, executor, writer session, progress
-counter, or manual completion operation. The internal task definition and
-numeric output ordinal are crate-private runtime inputs.
+There is no public manual-catalog loader, phase accessor, task accessor, state
+schema accessor, replicate-policy accessor, persistence-plan accessor, source
+document view, or mutable Study operation. Advanced consumers that need to run
+a preloaded Study pass it to `runtime::advanced::execute`; successful runtime
+summaries provide output paths and task results.
 
 ### `study::advanced::StudyError`
 
-`StudyError` is non-exhaustive and preserves source chains. Variants are:
+`StudyError` is a non-exhaustive owned error enum:
 
-- `Config`: project loading/grammar/expansion failure;
-- `State`: state-schema semantic failure;
-- `ModelCatalog`: invalid or duplicate compiled registration;
-- `UnknownModel { phase, model }`: manifest key has no linked registration;
-- `ModelPreflight { phase, model, ordinal, source }`: constants decoding,
-  writer declaration, or writer/schema binding failed; and
-- `UnknownDisplayField { phase, model, field }`: display selection is absent
-  from the state schema; and
-- `TaskIdentityOverflow`: the total expanded plan exceeds the stable `u64`
-  identity space.
+- `Config(ConfigError)` preserves project loading, grammar, path, expansion,
+  or constants-decoding failure;
+- `State(StateError)` preserves state-schema semantic failure;
+- `InvalidModelRegistration { reason }` reports an invalid or duplicate
+  linked `#[model]` key without exposing the private catalog type;
+- `UnknownModel { phase, model }` reports a manifest key with no linked
+  registration;
+- `ModelPreflight { phase, model, ordinal, source }` contextualizes constants
+  decoding, observation declaration, or schema binding for one concrete task;
+  and
+- `TaskIdentityOverflow` prevents a plan whose deterministic global task
+  ordinal cannot fit in `u64`.
 
-Every error occurs before output creation and before model initialization.
-Callers may correct code or JSON and retry without cleaning a partial run.
+Every variant occurs before output creation and model initialization. Source
+errors remain available through `std::error::Error::source`. A failed load
+publishes no partial Study, so the user can correct code or JSON and retry
+without cleaning output.
 
 ## Example
 
-Ordinary applications do not mention a Study:
+Ordinary execution does not mention `Study`:
 
 ```rust,no_run
 use std::path::Path;
@@ -131,32 +85,32 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 }
 ```
 
-An advanced host may inspect preflighted intent and then execute it:
+An embedding host may split preflight from execution and inspect only the
+stable roots:
 
 ```rust,no_run
 use std::path::Path;
 use scientific_workflow::runtime::advanced::execute;
 use scientific_workflow::study::advanced::Study;
 
-# fn inspect() -> Result<(), Box<dyn std::error::Error>> {
+# fn host() -> Result<(), Box<dyn std::error::Error>> {
 let study = Study::load(Path::new("."))?;
-for phase in study.phases() {
-    println!("{}: {} tasks", phase.name(), phase.tasks().len());
-}
+println!("planned output root: {}", study.output_root().display());
 let summary = execute(study)?;
-println!("{}", summary.output_directory().display());
+println!("actual execution: {}", summary.output_directory().display());
 # Ok(())
 # }
 ```
 
 ## Not API
 
-`study::compilation`, `StudyInner`, internal task definitions, global output
-ordinals, and structure constructors are private. Identity formatting is a
-Study-owned deterministic mechanism, not permission for applications to parse
-identity strings. Inventory iteration order is explicitly not observable:
-`ModelCatalog` sorts keys before Study uses them.
+`ProjectSpecification`, explicit model catalogs, `StudyInner`,
+`StudyPhase`, `StudyTask`, resolved inputs, type-erased task definitions,
+bound observation plans, replicate/persistence policies, global output
+ordinals, identity/label formats, and topological planning data are private.
+Runtime obtains them through crate-visible `study::advanced` exports.
 
-Replacement Study implementations must remain output-free, must use config's
-typed decode rather than parsing raw JSON, must validate every model reference
-before publication, and must produce immutable runtime input.
+A replacement Study must remain output-free, consume config exactly once,
+perform complete model/constants/observation preflight, infer deterministic
+identities and roots, retain immutable execution intent, and expose no mutable
+lifecycle to applications.

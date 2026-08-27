@@ -514,7 +514,6 @@ impl SystemState {
     ///
     /// The returned object refers directly to the stored concrete payload. No
     /// clone, allocation, encoding, or ownership transfer occurs here.
-    #[allow(dead_code, reason = "reserved for writer observation encoding")]
     pub(crate) fn serializable(
         &self,
         key: &str,
@@ -579,24 +578,6 @@ impl StateMaintenance for SystemState {
 
     fn clear_all_payloads(&mut self) {
         self.slots.iter_mut().for_each(|slot| slot.value = None);
-    }
-}
-
-/// A state-bearing value from which a supported consumer can derive a schema.
-pub trait StateSchemaSource {
-    /// Returns the immutable schema defining the state field layout.
-    fn state_schema(&self) -> &SystemStateSchema;
-}
-
-impl StateSchemaSource for SystemState {
-    fn state_schema(&self) -> &SystemStateSchema {
-        self.schema()
-    }
-}
-
-impl StateSchemaSource for SystemStateSchema {
-    fn state_schema(&self) -> &SystemStateSchema {
-        self
     }
 }
 

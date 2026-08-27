@@ -4,7 +4,7 @@ This example demonstrates the complete low-burden workflow:
 
 ```text
 src/hopf_model.rs
-    registered HopfModel + typed constants + custom Writer
+    registered HopfModel + typed constants + custom ObservationPlan
 study.json
     phase membership, concurrency, replicate policy, and model/input reference
 config/state.json
@@ -17,11 +17,13 @@ src/main.rs
 
 `HopfModel` directly owns its `SystemState`, initializes `point` and `radius`,
 advances both fields and scientific time in `step`, declares completion through
-its configured step count, and returns a custom three-stream writer. Workflow
-creates one internal task for each `mu × angular_frequency` sweep combination.
+its configured step count, and returns a custom three-stream observation plan.
+Workflow creates one internal task for each `mu × angular_frequency` sweep
+combination. The omitted `persistence` object uses inferred local defaults;
+Runtime privately constructs and finalizes each task backend.
 
 The application does not parse JSON, construct tasks/phases, assign IDs or
-paths, manage threads, report progress, or open recording writers. Completed
+paths, manage threads, report progress, or open persistence writers. Completed
 recordings are created beneath this project's inferred `output` directory.
 
 Run it with:
@@ -30,5 +32,5 @@ Run it with:
 cargo run --manifest-path examples/attractor_2d/Cargo.toml
 ```
 
-The short sleep inside each model step is intentional teaching behavior so
-concurrent evolution remains observable during development.
+The model performs no display, progress reporting, or artificial delay;
+Runtime infers execution progress from its normal state boundaries.

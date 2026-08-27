@@ -1,8 +1,8 @@
 //! Validated Workflow-owned study manifest declarations.
 
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -17,7 +17,6 @@ pub struct ReplicatePolicy {
     count: u64,
     scheduling: ReplicateScheduling,
     failure_policy: FailurePolicy,
-    base_seed: Option<u64>,
 }
 
 impl ReplicatePolicy {
@@ -35,11 +34,6 @@ impl ReplicatePolicy {
     pub const fn failure_policy(self) -> FailurePolicy {
         self.failure_policy
     }
-
-    /// Returns the optional study seed; deterministic work need not invent one.
-    pub const fn base_seed(self) -> Option<u64> {
-        self.base_seed
-    }
 }
 
 /// Effective scheduling mode for isolated replicates.
@@ -51,16 +45,6 @@ pub enum ReplicateScheduling {
     Parallel,
 }
 
-impl ReplicateScheduling {
-    /// Returns the exact study-manifest spelling.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Sequential => "sequential",
-            Self::Parallel => "parallel",
-        }
-    }
-}
-
 /// Effective failure propagation policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailurePolicy {
@@ -70,26 +54,41 @@ pub enum FailurePolicy {
     FinishAll,
 }
 
-impl FailurePolicy {
-    /// Returns the exact study-manifest spelling.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::FailFast => "fail_fast",
-            Self::FinishAll => "finish_all",
-        }
-    }
-}
-
 /// The validated Workflow-owned portion of `study.json`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StudyManifest {
     replicates: ReplicatePolicy,
+    persistence: PersistenceSpecification,
 }
 
 impl StudyManifest {
     /// Returns the complete effective replicate policy.
     pub const fn replicate_policy(self) -> ReplicatePolicy {
         self.replicates
+    }
+
+    /// Returns the complete effective local-persistence settings.
+    pub const fn persistence(self) -> PersistenceSpecification {
+        self.persistence
+    }
+}
+
+/// Effective persistence settings parsed from the study manifest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistenceSpecification {
+    chunk_target_bytes: NonZeroU64,
+    queue_capacity_bytes: NonZeroU64,
+}
+
+impl PersistenceSpecification {
+    /// Returns the positive approximate local chunk rollover target.
+    pub const fn chunk_target_bytes(self) -> NonZeroU64 {
+        self.chunk_target_bytes
+    }
+
+    /// Returns the positive per-stream backpressure capacity.
+    pub const fn queue_capacity_bytes(self) -> NonZeroU64 {
+        self.queue_capacity_bytes
     }
 }
 
@@ -160,7 +159,6 @@ pub(crate) struct ParsedPhase {
 pub(crate) struct ParsedTask {
     pub(crate) model: Box<str>,
     pub(crate) input: PathBuf,
-    pub(crate) display_fields: Arc<[Box<str>]>,
     pub(crate) timeout: Option<Duration>,
 }
 
@@ -187,7 +185,10 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             count: raw.replicates.count,
             scheduling: raw.replicates.scheduling.into(),
             failure_policy: raw.replicates.failure_policy.into(),
-            base_seed: raw.replicates.base_seed,
+        },
+        persistence: PersistenceSpecification {
+            chunk_target_bytes: raw.persistence.chunk_target_bytes,
+            queue_capacity_bytes: raw.persistence.queue_capacity_bytes,
         },
     };
 
@@ -249,28 +250,9 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("/phases/{name}/tasks/{index}");
             validate_identifier(path, &format!("{pointer}/model"), &task.model, "model")?;
-            let mut display_fields = Vec::with_capacity(task.display.include.len());
-            let mut seen_fields = HashSet::with_capacity(task.display.include.len());
-            for field in task.display.include {
-                validate_identifier(
-                    path,
-                    &format!("{pointer}/display/include"),
-                    &field,
-                    "display field",
-                )?;
-                if !seen_fields.insert(field.clone()) {
-                    return Err(ConfigError::invalid(
-                        path,
-                        format!("{pointer}/display/include"),
-                        format!("display field `{field}` is repeated"),
-                    ));
-                }
-                display_fields.push(field.into_boxed_str());
-            }
             tasks.push(ParsedTask {
                 model: task.model.into_boxed_str(),
                 input: task.input,
-                display_fields: display_fields.into(),
                 timeout: task.timeout_ms.map(Duration::from_millis),
             });
         }
@@ -353,7 +335,29 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 struct RawStudy {
     #[serde(default)]
     replicates: RawReplicatePolicy,
+    #[serde(default)]
+    persistence: RawPersistence,
     phases: Map<String, Value>,
+}
+
+const DEFAULT_PERSISTENCE_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawPersistence {
+    chunk_target_bytes: NonZeroU64,
+    queue_capacity_bytes: NonZeroU64,
+}
+
+impl Default for RawPersistence {
+    fn default() -> Self {
+        let bytes = NonZeroU64::new(DEFAULT_PERSISTENCE_BYTES)
+            .expect("the built-in persistence byte setting is positive");
+        Self {
+            chunk_target_bytes: bytes,
+            queue_capacity_bytes: bytes,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -362,7 +366,6 @@ struct RawReplicatePolicy {
     count: u64,
     scheduling: RawReplicateScheduling,
     failure_policy: RawFailurePolicy,
-    base_seed: Option<u64>,
 }
 
 impl Default for RawReplicatePolicy {
@@ -371,7 +374,6 @@ impl Default for RawReplicatePolicy {
             count: 1,
             scheduling: RawReplicateScheduling::default(),
             failure_policy: RawFailurePolicy::default(),
-            base_seed: None,
         }
     }
 }
@@ -402,15 +404,7 @@ struct RawTask {
     model: String,
     input: PathBuf,
     #[serde(default)]
-    display: RawDisplay,
-    #[serde(default)]
     timeout_ms: Option<u64>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct RawDisplay {
-    include: Vec<String>,
 }
 
 #[derive(Default, Deserialize)]

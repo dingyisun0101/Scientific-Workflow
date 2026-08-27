@@ -34,5 +34,5 @@ pub mod advanced {
     pub use super::schema::StateSchemaAccess;
     #[doc(hidden)]
     pub use super::state::PayloadTuple;
-    pub use super::state::{StateMaintenance, StateSchemaSource};
+    pub use super::state::StateMaintenance;
 }

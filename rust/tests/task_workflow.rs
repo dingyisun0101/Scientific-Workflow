@@ -1,5 +1,4 @@
 use scientific_workflow::prelude::basic::*;
-use scientific_workflow::task::advanced::{ModelCatalog, ModelRegistration, Task};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -29,23 +28,6 @@ impl ScientificModel for Model {
     fn step(&mut self) -> TaskResult {
         unreachable!("the model starts complete")
     }
-}
-
-#[test]
-fn advanced_task_definition_is_derived_from_the_model() {
-    let task = Task::for_model::<Model>();
-    assert!(format!("{task:?}").starts_with("Task"));
-}
-
-#[test]
-fn model_catalog_sorts_keys_and_rejects_invalid_declarations() {
-    let catalog = ModelCatalog::from_registrations([
-        ModelRegistration::new::<Model>("zeta"),
-        ModelRegistration::new::<Model>("alpha"),
-    ])
-    .unwrap();
-    assert_eq!(catalog.keys().collect::<Vec<_>>(), ["alpha", "zeta"]);
-    assert!(ModelCatalog::from_registrations([ModelRegistration::new::<Model>(" ")]).is_err());
 }
 
 #[test]

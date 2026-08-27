@@ -1,101 +1,53 @@
-//! Immutable centrally parsed project source documents.
+//! Strict central JSON parsing with duplicate-key rejection.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Number, Value};
 
 use super::error::ConfigError;
 
-/// Exact source bytes and canonical path for one validated project document.
-#[derive(Clone)]
-pub struct ProjectDocument {
-    inner: Arc<ProjectDocumentInner>,
-}
-
-impl ProjectDocument {
-    /// Returns the canonical filesystem path from which this document was read.
-    pub fn path(&self) -> &Path {
-        &self.inner.path
-    }
-
-    /// Borrows the exact source bytes read and validated by config.
-    pub fn bytes(&self) -> &[u8] {
-        &self.inner.bytes
-    }
-
-    pub(crate) fn read(path: &Path) -> Result<(Self, Value), ConfigError> {
-        let bytes = std::fs::read(path).map_err(|source| ConfigError::Read {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let strict: StrictValue =
-            serde_json::from_slice(&bytes).map_err(|source| ConfigError::Parse {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        if let Some(key) = strict.duplicate_key() {
-            return Err(ConfigError::DuplicateKey {
-                path: path.to_path_buf(),
-                key: key.to_owned(),
-            });
-        }
-        let document = Self {
-            inner: Arc::new(ProjectDocumentInner {
-                path: path.to_path_buf(),
-                bytes: bytes.into_boxed_slice(),
-            }),
-        };
-        Ok((document, strict.into_json()))
-    }
-}
-
-impl fmt::Debug for ProjectDocument {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ProjectDocument")
-            .field("path", &self.path())
-            .field("bytes", &self.bytes().len())
-            .finish()
-    }
-}
-
-struct ProjectDocumentInner {
-    path: PathBuf,
-    bytes: Box<[u8]>,
-}
-
 /// The centrally parsed `state.json` document awaiting state-semantic validation.
-#[derive(Clone, Debug)]
-pub struct StateSchemaDocument {
-    source: ProjectDocument,
-    value: Arc<Value>,
+#[derive(Debug)]
+pub(crate) struct StateSchemaDocument {
+    path: PathBuf,
+    value: Value,
 }
 
 impl StateSchemaDocument {
-    pub(crate) fn new(source: ProjectDocument, value: Value) -> Self {
-        Self {
-            source,
-            value: Arc::new(value),
-        }
+    pub(crate) fn new(path: PathBuf, value: Value) -> Self {
+        Self { path, value }
     }
 
     /// Returns the canonical `state.json` source path.
-    pub fn path(&self) -> &Path {
-        self.source.path()
-    }
-
-    /// Borrows the exact validated `state.json` source bytes.
-    pub fn bytes(&self) -> &[u8] {
-        self.source.bytes()
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Borrows the centrally parsed JSON value for state-semantic validation.
-    pub fn json_value(&self) -> &Value {
+    pub(crate) fn json_value(&self) -> &Value {
         &self.value
     }
+}
+
+pub(crate) fn read_json(path: &Path) -> Result<Value, ConfigError> {
+    let bytes = std::fs::read(path).map_err(|source| ConfigError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let strict: StrictValue =
+        serde_json::from_slice(&bytes).map_err(|source| ConfigError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if let Some(key) = strict.duplicate_key() {
+        return Err(ConfigError::DuplicateKey {
+            path: path.to_path_buf(),
+            key: key.to_owned(),
+        });
+    }
+    Ok(strict.into_json())
 }
 
 enum StrictValue {

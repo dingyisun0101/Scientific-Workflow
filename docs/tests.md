@@ -1,61 +1,52 @@
 # Test structure
 
-Tests are organized by subsystem responsibility and boundary, not by private
-implementation file.
+Tests follow subsystem responsibility and supported boundaries. Config, Study,
+and persistence write mechanics use internal tests because their planning/write
+types are deliberately not public.
 
-## New model-to-runtime workflow
+## Public integration tests
 
-`rust/tests/study_workflow.rs` verifies:
+- `rust/tests/state_workflow.rs` exercises Path-based schema loading,
+  heterogeneous payload ownership, tuple borrows, time advancement, schema
+  inspection, maintenance, and public Basic/Advanced tier behavior.
+- `rust/tests/analysis_workflow.rs` exercises schema identity and ordered
+  in-memory `StateSeries` analysis.
+- `rust/tests/observation_workflow.rs` exercises public plan/stream
+  declarations, cadence, units, validation, and the Advanced-as-public-superset
+  rule. Schema binding and encoding are private.
+- `rust/tests/task_workflow.rs` exercises the downstream
+  `ScientificModel`/model-attribute surface. Catalogs, type erasure, and host
+  execution stay internal.
 
-- `#[model]` discovery without a second registry list;
-- effect-free `Study::load(&Path)`;
-- explicit deterministic `ModelCatalog` injection and duplicate rejection;
-- manifest model matching;
-- typed constants and writer preflight before output;
-- display-field validation before output;
-- deterministic inferred task identities and labels;
-- immutable phase/dependency composition;
-- topological phase execution;
-- automatic recording for every inferred task; and
-- the crate-level single `run(&Path)` entry point.
+## Internal compiler and execution tests
 
-`rust/tests/task_workflow.rs` verifies the reduced task boundary:
+- `rust/src/config/tests/config_workflow.rs` covers duplicate keys, strict
+  unknown-field rejection, safe Path containment, manifest/persistence
+  defaults, positive limits, dependencies, deterministic `$sweep`/`$cases`
+  expansion, private typed constants decoding, and contextual errors.
+- `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
+  invalid/duplicate registrations, effect-free loading, unknown models, typed
+  constants and one-time observation preflight, deterministic internal
+  identities, phase composition, replicate/persistence policy, runtime
+  scheduling, automatic task recordings, and crate-level `run(&Path)`.
 
-- the Basic surface centers on `ScientificModel` rather than Task construction;
-- advanced type-erased task derivation from a model; and
-- key sorting and registration-key validation.
+## Persistence tests
 
-## Config
+The write path is intentionally tested beneath
+`rust/src/persistence/tests/`:
 
-`config_workflow.rs` verifies strict duplicate-key handling, unknown-field
-rejection, path containment, unique source reads, exact source preservation,
-manifest defaults, dependency validation, `$sweep`/`$cases` expansion,
-`model()` identity, typed constants decoding, and contextual
-`DecodeModelConstants` failures.
+- `persistence_workflow.rs` covers automatic-plan-equivalent local writes,
+  bounded chunking, metadata transitions, terminal state deduplication,
+  clone-free encoding, typed verified readback, and generic payload types.
+- `persistence_resilience.rs` injects configuration, encoding, writer,
+  lifecycle, decoder, malformed-record, missing-file, size, and checksum
+  failures and verifies contextual/no-partial-success behavior.
+- `python_reader_conformance.rs` verifies Rust/Python format-v7 compatibility
+  and exact floating-point/unicode round trips.
 
-## State and writer
-
-`state_workflow.rs` and `analysis_workflow.rs` cover schema loading, exact schema
-identity, typed heterogeneous payload ownership, checked time, tuple borrowing,
-and ordered in-memory series.
-
-`writer_workflow.rs` covers inferred all-field observation, explicit streams,
-cadence/units, schema binding, canonical field order, clone-free borrowed
-observation, owned encoded handoff, and tier-superset behavior.
-
-## Transitional durable record mechanics
-
-`storage_workflow.rs`, `storage_resilience.rs`, and `resume_workflow.rs` retain
-coverage for bounded queues, chunks, metadata atomicity, failure evidence,
-checksums, checkpoint reconstruction, rewind, leases, and completed reads.
-
-`python_reader_conformance.rs` checks Rust/Python format compatibility.
-`artifact_workflow.rs` and `rng_record_workflow.rs` cover immutable artifact and
-RNG provenance behavior pending their migration into `record`.
-
-`replicate_workflow.rs` covers the still-direct legacy subprocess replicate
-adapter. New end-to-end replicate behavior belongs in runtime tests as that
-adapter is retired.
+Recovery/resume, public writer builders, per-stream layout controls, legacy
+execution scopes, artifacts, and RNG-record tests were removed with those
+unsupported APIs.
 
 ## Required validation commands
 
@@ -66,7 +57,8 @@ cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path examples/attractor_2d/Cargo.toml
 RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path rust/Cargo.toml --no-deps
 cargo test --manifest-path rust/Cargo.toml --doc
+python3 -m unittest discover -s python/tests
 ```
 
-Package inspection must also confirm that every `api.md` and the proc-macro
-support required by the published dependency arrangement are present.
+Package inspection must also verify that every first-level module's `api.md`,
+`docs/architecture.md`, and proc-macro support are included where required.

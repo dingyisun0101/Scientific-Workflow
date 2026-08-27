@@ -19,7 +19,7 @@
 //! - public errors for unknown, missing, and mismatched fields.
 //!
 //! Payload persistence is intentionally outside this contract. The JSON
-//! fixture defines only the in-memory field layout; the future storage module
+//! fixture defines only the in-memory field layout; the persistence module
 //! will borrow each tensor's existing Serialize implementation.
 
 use std::error::Error as _;

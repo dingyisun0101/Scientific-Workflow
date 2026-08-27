@@ -1,12 +1,14 @@
 //! Execution of a completely validated immutable study.
 //!
 //! Runtime owns active mechanics only: output scopes, replicate and phase
-//! scheduling, task admission, cooperative cancellation, and recording-host
-//! lifecycle. It never opens project declarations or binds model keys itself.
+//! scheduling, task admission, cooperative cancellation, and automatic
+//! persistence lifecycle. It never opens project declarations or binds model
+//! keys itself.
 
 mod error;
 mod execution;
 mod host;
+mod output;
 mod summary;
 
 /// Ordinary application-facing runtime API.

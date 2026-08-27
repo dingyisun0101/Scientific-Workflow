@@ -117,6 +117,19 @@ impl SystemStateSchema {
         Self::from_template(source, template)
     }
 
+    /// Validates a centrally parsed JSON value without a second file read.
+    pub(crate) fn from_json_template_value(
+        source_path: &Path,
+        document: &serde_json::Value,
+    ) -> Result<Self, StateError> {
+        let template =
+            StateTemplate::deserialize(document).map_err(|source| StateError::TemplateParse {
+                path: source_path.to_path_buf(),
+                source,
+            })?;
+        Self::from_template(source_path.to_path_buf(), template)
+    }
+
     /// Creates an empty SystemState that shares this specification.
     ///
     /// Every declared field exists in the returned state's layout, while every
@@ -177,18 +190,6 @@ impl SystemStateSchema {
 /// Import this trait from [`crate::state::advanced`] when schema metadata is
 /// needed. Ordinary state construction requires only the inherent basic API.
 pub trait StateSchemaAccess {
-    /// Validates a centrally parsed JSON value as a state schema.
-    ///
-    /// `source_path` is retained for provenance and contextual errors. Config
-    /// must already have performed strict JSON parsing and duplicate-key
-    /// rejection; state owns field-layout semantic validation.
-    fn from_json_template_value(
-        source_path: &Path,
-        document: &serde_json::Value,
-    ) -> Result<SystemStateSchema, StateError>
-    where
-        Self: Sized;
-
     /// Reports whether two schema handles share one immutable allocation.
     ///
     /// This is an identity comparison, not structural equality. Independently
@@ -218,18 +219,6 @@ pub trait StateSchemaAccess {
 }
 
 impl StateSchemaAccess for SystemStateSchema {
-    fn from_json_template_value(
-        source_path: &Path,
-        document: &serde_json::Value,
-    ) -> Result<SystemStateSchema, StateError> {
-        let template =
-            StateTemplate::deserialize(document).map_err(|source| StateError::TemplateParse {
-                path: source_path.to_path_buf(),
-                source,
-            })?;
-        Self::from_template(source_path.to_path_buf(), template)
-    }
-
     fn shares_schema_instance(&self, other: &SystemStateSchema) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }

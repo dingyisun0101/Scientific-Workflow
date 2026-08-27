@@ -13,14 +13,13 @@ paths, scheduling, durable format, messages, UI, or lifecycle policy.
 Stateful execution is fixed:
 
 1. config-owned `ResolvedTaskInput` decodes one complete `M::Constants`;
-2. `M::writer(&constants)` returns the deterministic writer definition;
-3. task binds that writer to runtime's prevalidated schema;
-4. `M::initialize(constants, schema)` creates the canonical model;
-5. task verifies stable state ownership/schema and target iteration;
-6. runtime observes the initial state automatically;
-7. task calls `step` until `is_complete` or cooperative cancellation;
-8. each successful step must strictly advance iteration and is observed;
-9. the final state is observed/completed exactly once.
+2. Study calls `M::observation_plan(&constants)` and stores its schema-bound result;
+3. `M::initialize(constants, schema)` creates the canonical model at execution;
+4. task verifies stable state ownership/schema and target iteration;
+5. runtime observes the initial state automatically;
+6. task calls `step` until `is_complete` or cooperative cancellation;
+7. each successful step must strictly advance iteration and is observed;
+8. the final state is observed/completed exactly once.
 
 ## Basic API
 
@@ -42,11 +41,12 @@ Associated type:
 
 Methods:
 
-- `writer(&Constants) -> TaskResult<Writer>` declares scientifically meaningful
-  observation streams. Its default is `Writer::all_fields()`. Study invokes it
-  during effect-free preflight and task invokes it again at execution startup;
-  therefore it must be deterministic, pure with respect to external state, and
-  must not retain the constants borrow.
+- `observation_plan(&Constants) -> TaskResult<ObservationPlan>` declares
+  scientifically meaningful observation streams. Its default is
+  `ObservationPlan::all_fields()`. Study invokes it once during effect-free
+  preflight, binds it to the state schema, and retains that exact result for
+  runtime. It must not perform external side effects or retain the constants
+  borrow.
 - `initialize(Constants, &SystemStateSchema) -> TaskResult<Self>` consumes the
   exact typed constants and borrows the shared validated schema. It must return
   a fully initialized model directly owning a state created from that schema.
@@ -94,9 +94,9 @@ impl ScientificModel for PopulationModel { ... }
 The nonempty, whitespace-exact string is the stable semantic key used by
 `study.json`. It is deliberately not inferred from `type_name`, module paths,
 or source order because those are refactor-unstable. The macro preserves the
-impl and submits an immutable `ModelRegistration`. Duplicate/invalid keys fail
-during Study preflight before output. Linked registration order is never used;
-the catalog sorts keys.
+impl and submits hidden immutable registration metadata. Duplicate or invalid
+keys fail during Study preflight before output. Linked registration order is
+never used; the internal catalog sorts keys.
 
 The attribute performs no runtime work by itself and creates no mutable global
 registry. A model must be linked into the final executable for its registration
@@ -104,87 +104,11 @@ to be discoverable.
 
 ## Advanced API
 
-Advanced re-exports every Basic symbol and adds the supported Study/runtime
-integration boundary.
-
-### `task::advanced::ModelRegistration`
-
-A `Copy` immutable association containing a stable `&'static str` key plus
-model-specific task-construction and pure-preflight function pointers.
-
-- `ModelRegistration::new::<M>(key: &'static str)` constructs a registration
-  without initializing `M`, parsing files, or allocating. Ordinary code uses
-  the attribute; explicit construction is for catalogs in tests/embedders.
-- `key() -> &'static str` returns the authored semantic key.
-
-Private function pointers are intentionally not exposed. Registration does not
-own mutable state and is thread-safe.
-
-### `task::advanced::ModelCatalog`
-
-An immutable, cloneable `BTreeMap`-backed catalog.
-
-- `discovered()` collects linked attribute registrations, validates every key,
-  rejects duplicates, and sorts by key independent of linker order.
-- `from_registrations(iter)` builds the same catalog explicitly. The iterator
-  yields `ModelRegistration` by value; the catalog owns its map afterward.
-- `keys()` returns an exact-size lexical-order iterator of static keys.
-
-The lookup operation used by Study is crate-private so applications cannot
-partially reproduce task binding. Catalog creation has no filesystem,
-initialization, or output effects.
-
-### `task::advanced::ModelCatalogError`
-
-Non-exhaustive validation error:
-
-- `InvalidKey { key }`: empty or surrounding-whitespace key;
-- `DuplicateKey { key }`: more than one compiled model claims the same key.
-
-Failure publishes no partial catalog.
-
-### `task::advanced::Task`
-
-Opaque `Clone + Send + Sync + 'static` type-erased model definition. Cloning
-increments an `Arc`; it does not clone models, states, constants, or writers.
-`Debug` is bounded and does not reveal captures.
-
-- `Task::for_model::<M>()` constructs a definition for an already selected
-  model type. It performs no decode, initialization, or IO. Ordinary users do
-  not call it; registration/Study use it automatically. It exists for
-  replacement Study compilers and focused integrations.
-
-Task exposes no public execution method; execution is available only through
-the `TaskDefinition` trait.
-
-### `task::advanced::TaskDefinition`
-
-A `Send + Sync` type-erased runtime port:
-
-- `execute(&ResolvedTaskInput, &mut dyn TaskExecutionHost) -> TaskResult`
-  obtains typed constants through config and runs the complete model lifecycle.
-
-Replacement runtimes may invoke it. Applications should not implement it.
-Returning `Ok` after host cancellation means cooperative cancellation, not
-successful completion; runtime owns that distinction.
-
-### `task::advanced::TaskExecutionHost`
-
-Runtime-owned service port with call-scoped borrows:
-
-- `state_schema() -> TaskResult<&SystemStateSchema>` returns the exact shared
-  schema;
-- `cancellation_requested() -> bool` is checked before initialization and
-  between steps;
-- `begin_model(Writer, &SystemState, Option<u64>)` accepts the validated writer,
-  initial state, and target hint;
-- `observe_model_step(&SystemState, Option<u64>)` handles each successful
-  transition; and
-- `observe_model_final(&SystemState, Option<u64>)` commits the final boundary.
-
-The host may block for storage backpressure. State borrows last only for each
-call and may not be retained. The task module never exposes concrete host,
-storage, cancellation, or UI implementations.
+`task::advanced` is the strict public superset of Basic and currently adds no
+supported public symbols. Workflow peers use crate-visible catalog,
+type-erased task, and execution-host ports through this scope. The procedural
+macro reaches registration metadata only through the crate's documentation-hidden
+`__private` expansion namespace.
 
 ## Example
 
@@ -236,11 +160,13 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 
 ## Not API
 
-`StatefulDefinition`, registration lookup, function pointers, model contract
-error variants, state-address tracking, target-progress validation, and concrete
-execution loops are private. The hidden crate `__private::inventory` re-export
-exists solely for macro expansion and is not a supported API.
+`ModelRegistration`, `ModelCatalog`, `ModelCatalogError`, `Task`,
+`TaskDefinition`, `TaskExecutionHost`, `StatefulDefinition`, registration
+lookup, function pointers, model-contract errors, state-address tracking,
+target-progress validation, and concrete execution loops are private. Hidden
+crate `__private` re-exports exist solely for macro expansion and are not a
+supported API.
 
 Replacement task implementations must preserve config-owned decode, direct
-state ownership checks, deterministic writer binding, observation ordering,
+state ownership checks, deterministic observation-plan binding, observation ordering,
 and runtime-owned cancellation/lifecycle.

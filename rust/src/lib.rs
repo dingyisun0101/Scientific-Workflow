@@ -56,16 +56,16 @@
 //! - [`runtime`] consumes a completed Study and owns active execution/output.
 //! - [`task`] owns the model contract and automatic observation boundaries.
 //! - [`state`] owns canonical scientific state and schema.
-//! - [`writer`] owns scientific observation meaning, not persistence mechanics.
+//! - [`observation`] owns scientific observation meaning, not persistence mechanics.
+//! - [`persistence`] owns automatic durable output and verified reading.
 //!
 //! `Study` is the ultimate coordinator of declared intent; runtime is the
 //! ultimate coordinator of active execution. Advanced integrations use each
 //! module's `advanced` scope. [`prelude`] only aggregates those module-owned
 //! APIs.
 //!
-//! `storage`, `execution`, `artifact`, and `rng_record` remain direct
-//! transitional record/process APIs. They are intentionally absent from the
-//! ordinary prelude and are not needed by model authors.
+//! Persistence write construction and output allocation are internal and are
+//! not available to model authors.
 //!
 //! This crate is pre-1.0 test software and may make coordinated API changes.
 
@@ -76,17 +76,14 @@ extern crate self as scientific_workflow;
 mod clock;
 mod error;
 
-pub mod artifact;
 pub mod config;
-pub mod execution;
+pub mod observation;
+pub mod persistence;
 pub mod prelude;
-pub mod rng_record;
 pub mod runtime;
 pub mod state;
-pub mod storage;
 pub mod study;
 pub mod task;
-pub mod writer;
 
 pub use error::WorkflowError;
 pub use runtime::basic::run;
@@ -98,5 +95,6 @@ pub use scientific_workflow_macros::model;
 /// the application crate. It is not a supported application API.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::task::advanced::ModelRegistration;
     pub use inventory;
 }

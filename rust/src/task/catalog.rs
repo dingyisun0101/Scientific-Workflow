@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::config::advanced::ResolvedTaskInput;
+use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::SystemStateSchema;
-use crate::writer::advanced::WriterDescriptor;
 
 use super::definition::Task;
 use super::model::ScientificModel;
@@ -17,7 +17,7 @@ use super::result::TaskResult;
 pub struct ModelRegistration {
     key: &'static str,
     make_task: fn() -> Task,
-    preflight: fn(&ResolvedTaskInput, &SystemStateSchema) -> TaskResult,
+    preflight: fn(&ResolvedTaskInput, &SystemStateSchema) -> TaskResult<BoundObservationPlan>,
 }
 
 impl ModelRegistration {
@@ -50,7 +50,7 @@ impl ModelRegistration {
         self,
         input: &ResolvedTaskInput,
         schema: &SystemStateSchema,
-    ) -> TaskResult {
+    ) -> TaskResult<BoundObservationPlan> {
         (self.preflight)(input, schema)
     }
 }
@@ -59,18 +59,18 @@ inventory::collect!(ModelRegistration);
 
 /// An immutable, key-sorted collection of compiled model registrations.
 #[derive(Clone)]
-pub struct ModelCatalog {
+pub(crate) struct ModelCatalog {
     registrations: BTreeMap<&'static str, ModelRegistration>,
 }
 
 impl ModelCatalog {
     /// Discovers every linked `#[model]` declaration, then validates and sorts it.
-    pub fn discovered() -> Result<Self, ModelCatalogError> {
+    pub(crate) fn discovered() -> Result<Self, ModelCatalogError> {
         Self::from_registrations(inventory::iter::<ModelRegistration>.into_iter().copied())
     }
 
     /// Builds an explicit deterministic catalog for embedding and tests.
-    pub fn from_registrations(
+    pub(crate) fn from_registrations(
         registrations: impl IntoIterator<Item = ModelRegistration>,
     ) -> Result<Self, ModelCatalogError> {
         let mut by_key = BTreeMap::new();
@@ -85,11 +85,6 @@ impl ModelCatalog {
         Ok(Self {
             registrations: by_key,
         })
-    }
-
-    /// Iterates stable model keys in lexical order.
-    pub fn keys(&self) -> impl ExactSizeIterator<Item = &'static str> + '_ {
-        self.registrations.keys().copied()
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<ModelRegistration> {
@@ -109,7 +104,7 @@ impl std::fmt::Debug for ModelCatalog {
 /// A failure while validating compiled model declarations.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ModelCatalogError {
+pub(crate) enum ModelCatalogError {
     /// A registration key is empty or contains surrounding whitespace.
     #[error(
         "model registration key `{key}` must be nonempty and contain no surrounding whitespace"
@@ -136,12 +131,14 @@ fn validate_key(key: &str) -> Result<(), ModelCatalogError> {
     }
 }
 
-fn preflight_model<M>(input: &ResolvedTaskInput, schema: &SystemStateSchema) -> TaskResult
+fn preflight_model<M>(
+    input: &ResolvedTaskInput,
+    schema: &SystemStateSchema,
+) -> TaskResult<BoundObservationPlan>
 where
     M: ScientificModel,
 {
     let constants: M::Constants = input.decode()?;
-    let writer = M::writer(&constants)?;
-    WriterDescriptor::bind(writer, schema)?;
-    Ok(())
+    let plan = M::observation_plan(&constants)?;
+    Ok(BoundObservationPlan::bind(plan, schema)?)
 }

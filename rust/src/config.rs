@@ -12,6 +12,10 @@ mod input;
 mod manifest;
 mod specification;
 
+#[cfg(test)]
+#[path = "config/tests/config_workflow.rs"]
+mod config_workflow_tests;
+
 /// Ordinary application-facing configuration API.
 ///
 /// This scope is intentionally empty. Configuration's user interface is the
@@ -22,11 +26,8 @@ pub mod basic {}
 pub mod advanced {
     #[allow(unused_imports)]
     pub use super::basic::*;
-    pub use super::document::{ProjectDocument, StateSchemaDocument};
     pub use super::error::ConfigError;
-    pub use super::input::ResolvedTaskInput;
-    pub use super::manifest::{
-        FailurePolicy, PhaseSpecification, ReplicatePolicy, ReplicateScheduling, StudyManifest,
-    };
-    pub use super::specification::ProjectSpecification;
+    pub(crate) use super::input::ResolvedTaskInput;
+    pub(crate) use super::manifest::{FailurePolicy, ReplicatePolicy, ReplicateScheduling};
+    pub(crate) use super::specification::ProjectSpecification;
 }

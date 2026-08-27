@@ -3,10 +3,10 @@
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
 admission, dependency scheduling, task concurrency, cooperative timeouts and
-cancellation, model invocation, and recording-host lifecycle.
+cancellation, model invocation, and automatic persistence lifecycle.
 
 Runtime does not parse JSON, discover models, decode constants for planning,
-validate display fields, or let application code construct phases/tasks.
+or let application code construct phases/tasks.
 
 ## Basic API
 
@@ -27,8 +27,13 @@ preflight, runtime creates a unique execution directory beneath the inferred
 `<project-root>/output`, creates one isolated directory per replicate, executes
 all phases and tasks, completes their recordings, and returns `()`.
 
-The call blocks until all admitted work has stopped and all successful writers
-have durably completed. Task/phase timeout cancellation is cooperative: task
+For each task, Runtime receives Study's private effective persistence settings,
+derives the destination, constructs the backend, submits initial/step/final
+observations, applies backpressure, commits terminal status, and shuts the
+backend down. Application/model code performs none of these operations.
+
+The call blocks until all admitted work has stopped and all successful
+persistence sessions have durably completed. Task/phase timeout cancellation is cooperative: task
 execution checks between model steps. Blocking application code inside one
 step cannot be safely killed by Rust and may delay return.
 
@@ -111,8 +116,8 @@ This non-exhaustive enum reports failures after a valid Study is available:
 
 - `OutputScope { path, source }`: unique execution or replicate directory could
   not be created;
-- `Task { task, source }`: application/model, state, writer, config decode, or
-  storage operation failed during invocation;
+- `Task { task, source }`: application/model, state, observation, config decode,
+  or persistence operation failed during invocation;
 - `TaskPanicked { task }`: task worker unwound unexpectedly;
 - `TaskTimedOut { task, timeout }`: task stopped after its cooperative deadline;
 - `TaskCancelled { task }`: runtime cancelled an active sibling;
@@ -156,15 +161,18 @@ for replicate in summary.replicates() {
 ## Not API
 
 Scheduler polling, worker thread names, active task handles, atomic cancellation
-flags, metadata-map assembly, task output ordinals, `RuntimeTaskHost`, storage
-writer ownership, and topological-position calculation are private.
+flags, metadata-map assembly, task output ordinals, `RuntimeTaskHost`,
+`PersistenceSession`, backend ownership, and topological-position calculation
+are private.
 
 Recording metadata keeps complete resolved constants under `model_constants`
-and Workflow identity/source facts under a separate `workflow` object. These
-namespaces never overwrite one another even when scientific constants use the
-same field names.
+and Workflow identity/source facts under a separate `workflow` object. The
+effective backend and byte settings are recorded under `workflow.persistence`.
+These namespaces never overwrite one another even when scientific constants
+use the same field names.
 
-The current use of transitional `ExecutionScope` and `SystemStateWriter` is an
-adapter detail. A future `record` replacement may change directories' internal
-construction and wire mechanics while preserving the documented inferred root,
-isolation, summaries, failure atomicity, and observation lifecycle.
+The private output-directory allocator and local persistence adapter are
+implementation details. A future backend may change internal construction
+and wire mechanics while preserving the documented inferred root, isolation,
+summaries, failure atomicity, effective-plan provenance, and observation
+lifecycle.

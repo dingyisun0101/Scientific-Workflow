@@ -11,12 +11,13 @@ use serde_json::{Map, Value};
 
 use crate::WorkflowError;
 use crate::config::advanced::{FailurePolicy, ReplicateScheduling};
-use crate::execution::ExecutionScope;
+use crate::persistence::advanced::PersistencePlan;
 use crate::state::advanced::SystemStateSchema;
 use crate::study::advanced::{Study, StudyPhase, StudyTask};
 
 use super::error::RuntimeError;
 use super::host::RuntimeTaskHost;
+use super::output::{create_execution, create_replicate};
 use super::summary::{PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunSummary};
 
 const SCHEDULER_POLL: Duration = Duration::from_millis(5);
@@ -34,20 +35,11 @@ pub fn run(project_root: &Path) -> Result<(), WorkflowError> {
 
 /// Executes one already validated immutable study and returns its summary.
 pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
-    let output = ExecutionScope::create_generated(study.output_root()).map_err(|source| {
-        RuntimeError::OutputScope {
-            path: study.output_root().to_path_buf(),
-            source,
-        }
-    })?;
+    let output = create_execution(study.output_root())?;
     let count = study.replicate_policy().count();
     let mut scopes = Vec::new();
     for index in 0..count {
-        let name = format!("replicate-{index:06}");
-        let path = output.directory().join(&name);
-        let scope = ExecutionScope::create_named(output.directory(), name)
-            .map_err(|source| RuntimeError::OutputScope { path, source })?;
-        scopes.push((index, scope));
+        scopes.push((index, create_replicate(&output, index)?));
     }
 
     let replicates = match study.replicate_policy().scheduling() {
@@ -55,14 +47,14 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
         ReplicateScheduling::Parallel => run_replicates_parallel(&study, scopes)?,
     };
     Ok(RunSummary {
-        output_directory: output.directory().to_path_buf(),
+        output_directory: output,
         replicates: replicates.into_boxed_slice(),
     })
 }
 
 fn run_replicates_sequential(
     study: &Study,
-    scopes: Vec<(u64, ExecutionScope)>,
+    scopes: Vec<(u64, PathBuf)>,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut summaries = Vec::with_capacity(scopes.len());
     let mut first_error = None;
@@ -88,7 +80,7 @@ fn run_replicates_sequential(
 
 fn run_replicates_parallel(
     study: &Study,
-    scopes: Vec<(u64, ExecutionScope)>,
+    scopes: Vec<(u64, PathBuf)>,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut workers: Vec<(u64, JoinHandle<Result<ReplicateRunSummary, RuntimeError>>)> =
         Vec::with_capacity(scopes.len());
@@ -137,7 +129,7 @@ fn run_replicates_parallel(
 fn run_replicate(
     study: &Study,
     index: u64,
-    scope: ExecutionScope,
+    scope: PathBuf,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     let positions = topological_positions(study.phases());
     let mut phases = Vec::with_capacity(positions.len());
@@ -145,12 +137,13 @@ fn run_replicate(
         phases.push(run_phase(
             &study.phases()[position],
             study.state_schema(),
-            scope.directory(),
+            study.persistence_plan(),
+            &scope,
         )?);
     }
     Ok(ReplicateRunSummary {
         index,
-        output_directory: scope.directory().to_path_buf(),
+        output_directory: scope,
         phases: phases.into_boxed_slice(),
     })
 }
@@ -197,6 +190,7 @@ struct ActiveTask {
 fn run_phase(
     phase: &StudyPhase,
     schema: &SystemStateSchema,
+    persistence_plan: PersistencePlan,
     replicate_directory: &Path,
 ) -> Result<PhaseRunSummary, RuntimeError> {
     let phase_started = Instant::now();
@@ -226,7 +220,7 @@ fn run_phase(
             && Instant::now() >= next_admission
         {
             let task = pending.pop_front().expect("checked nonempty task queue");
-            match spawn_task(task, schema.clone(), replicate_directory) {
+            match spawn_task(task, schema.clone(), persistence_plan, replicate_directory) {
                 Ok(task) => active.push(task),
                 Err(error) => {
                     first_error = Some(error);
@@ -317,6 +311,7 @@ fn run_phase(
 fn spawn_task(
     task: StudyTask,
     schema: SystemStateSchema,
+    persistence_plan: PersistencePlan,
     replicate_directory: &Path,
 ) -> Result<ActiveTask, RuntimeError> {
     let cancellation = Arc::new(AtomicBool::new(false));
@@ -331,6 +326,7 @@ fn spawn_task(
             run_task(
                 worker_task,
                 schema,
+                persistence_plan,
                 worker_cancellation,
                 recording_directory,
             )
@@ -351,12 +347,22 @@ fn spawn_task(
 fn run_task(
     task: StudyTask,
     schema: SystemStateSchema,
+    persistence_plan: PersistencePlan,
     cancellation: Arc<AtomicBool>,
     recording_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
-    let metadata = task_metadata(&task);
-    let mut host = RuntimeTaskHost::new(schema, cancellation, recording_directory, metadata);
-    if let Err(source) = task.definition().execute(task.input(), &mut host) {
+    let metadata = task_metadata(&task, persistence_plan);
+    let mut host = RuntimeTaskHost::new(
+        schema,
+        persistence_plan,
+        cancellation,
+        recording_directory,
+        metadata,
+    );
+    if let Err(source) = task
+        .definition()
+        .execute(task.input(), task.observation_plan(), &mut host)
+    {
         host.fail(&source.to_string());
         return Err(RuntimeError::Task {
             task: task.identity().to_owned(),
@@ -378,7 +384,7 @@ fn run_task(
     })
 }
 
-fn task_metadata(task: &StudyTask) -> Map<String, Value> {
+fn task_metadata(task: &StudyTask, persistence_plan: PersistencePlan) -> Map<String, Value> {
     let constants = serde_json::from_slice(task.input().resolved_json())
         .expect("config retains valid resolved JSON");
     let workflow = Value::Object(Map::from_iter([
@@ -392,6 +398,20 @@ fn task_metadata(task: &StudyTask) -> Map<String, Value> {
                 .to_string_lossy()
                 .into_owned()
                 .into(),
+        ),
+        (
+            "persistence".to_owned(),
+            Value::Object(Map::from_iter([
+                ("backend".to_owned(), "local".into()),
+                (
+                    "chunk_target_bytes".to_owned(),
+                    persistence_plan.chunk_target().get().into(),
+                ),
+                (
+                    "queue_capacity_bytes".to_owned(),
+                    persistence_plan.queue_capacity().get().into(),
+                ),
+            ])),
         ),
     ]));
     Map::from_iter([

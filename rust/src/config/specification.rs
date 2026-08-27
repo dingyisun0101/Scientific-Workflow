@@ -2,9 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 
-use super::document::{ProjectDocument, StateSchemaDocument};
+use super::document::{StateSchemaDocument, read_json};
 use super::error::ConfigError;
 use super::expansion;
 use super::input::ResolvedTaskInput;
@@ -16,9 +15,12 @@ const STATE_SCHEMA: &str = "state.json";
 const INPUT_DIRECTORY: &str = "inputs";
 
 /// A complete immutable project declaration compiled from one project root.
-#[derive(Clone, Debug)]
-pub struct ProjectSpecification {
-    inner: Arc<ProjectSpecificationInner>,
+#[derive(Debug)]
+pub(crate) struct ProjectSpecification {
+    project_root: PathBuf,
+    manifest: StudyManifest,
+    state_schema: StateSchemaDocument,
+    phases: Box<[PhaseSpecification]>,
 }
 
 impl ProjectSpecification {
@@ -27,20 +29,19 @@ impl ProjectSpecification {
     /// The root is canonicalized once. `study.json` is read from the root;
     /// `state.json` and every task input are read beneath its `config`
     /// directory. Loading creates no output and executes no task.
-    pub fn load(project_root: &Path) -> Result<Self, ConfigError> {
+    pub(crate) fn load(project_root: &Path) -> Result<Self, ConfigError> {
         let project_root = canonicalize(project_root)?;
         let config_root = canonicalize(&project_root.join(CONFIG_DIRECTORY))?;
 
         let manifest_path = project_root.join(STUDY_MANIFEST);
-        let (manifest_document, manifest_value) = ProjectDocument::read(&manifest_path)?;
+        let manifest_value = read_json(&manifest_path)?;
         let parsed = manifest::parse(&manifest_path, manifest_value)?;
 
         let state_path = canonicalize(&config_root.join(STATE_SCHEMA))?;
         ensure_contained(&config_root, &state_path)?;
-        let (state_document, state_value) = ProjectDocument::read(&state_path)?;
-        let state_schema = StateSchemaDocument::new(state_document.clone(), state_value);
+        let state_value = read_json(&state_path)?;
+        let state_schema = StateSchemaDocument::new(state_path, state_value);
 
-        let mut documents = vec![manifest_document, state_document];
         let mut input_documents: HashMap<PathBuf, serde_json::Value> = HashMap::new();
         let mut phases = Vec::with_capacity(parsed.phases.len());
         for phase in parsed.phases {
@@ -50,8 +51,7 @@ impl ProjectSpecification {
                 let value = if let Some(value) = input_documents.get(&input_path) {
                     value.clone()
                 } else {
-                    let (document, value) = ProjectDocument::read(&input_path)?;
-                    documents.push(document);
+                    let value = read_json(&input_path)?;
                     input_documents.insert(input_path.clone(), value.clone());
                     value
                 };
@@ -71,7 +71,6 @@ impl ProjectSpecification {
                         input_path.clone(),
                         ordinal,
                         value,
-                        Arc::clone(&task.display_fields),
                         task.timeout,
                     ));
                 }
@@ -88,56 +87,32 @@ impl ProjectSpecification {
         }
 
         Ok(Self {
-            inner: Arc::new(ProjectSpecificationInner {
-                project_root,
-                config_root,
-                manifest: parsed.manifest,
-                state_schema,
-                phases: phases.into_boxed_slice(),
-                documents: documents.into_boxed_slice(),
-            }),
+            project_root,
+            manifest: parsed.manifest,
+            state_schema,
+            phases: phases.into_boxed_slice(),
         })
     }
 
     /// Returns the canonical project root supplied to [`Self::load`].
-    pub fn project_root(&self) -> &Path {
-        &self.inner.project_root
-    }
-
-    /// Returns the canonical configuration directory beneath the project root.
-    pub fn config_root(&self) -> &Path {
-        &self.inner.config_root
+    pub(crate) fn project_root(&self) -> &Path {
+        &self.project_root
     }
 
     /// Returns the validated Workflow-owned study manifest.
-    pub fn manifest(&self) -> &StudyManifest {
-        &self.inner.manifest
+    pub(crate) fn manifest(&self) -> &StudyManifest {
+        &self.manifest
     }
 
     /// Returns the centrally parsed state-schema document.
-    pub fn state_schema(&self) -> &StateSchemaDocument {
-        &self.inner.state_schema
+    pub(crate) fn state_schema(&self) -> &StateSchemaDocument {
+        &self.state_schema
     }
 
     /// Returns validated phases and resolved task inputs in declaration order.
-    pub fn phases(&self) -> &[PhaseSpecification] {
-        &self.inner.phases
+    pub(crate) fn phases(&self) -> &[PhaseSpecification] {
+        &self.phases
     }
-
-    /// Returns every unique source document in first-use order.
-    pub fn documents(&self) -> &[ProjectDocument] {
-        &self.inner.documents
-    }
-}
-
-#[derive(Debug)]
-struct ProjectSpecificationInner {
-    project_root: PathBuf,
-    config_root: PathBuf,
-    manifest: StudyManifest,
-    state_schema: StateSchemaDocument,
-    phases: Box<[PhaseSpecification]>,
-    documents: Box<[ProjectDocument]>,
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, ConfigError> {

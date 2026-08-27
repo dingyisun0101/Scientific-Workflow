@@ -13,19 +13,21 @@ It re-exports:
 - every `state::basic` symbol: `StateError`, `StateSeriesError`,
   `PayloadInsertError`, `StateTime`, `SystemStateSchema`, `SystemState`, and
   `StateSeries`;
-- every `writer::basic` symbol: `Writer`, `Stream`, and `WriterError`;
+- every `observation::basic` symbol: `ObservationPlan`, `ObservationStream`,
+  and `ObservationError`;
 - every `task::basic` symbol: `ScientificModel` and `TaskResult`;
 - every `runtime::basic` symbol: only `run`;
 - the crate-level `model` attribute; and
 - crate-level `WorkflowError`.
 
-`config::basic` and `study::basic` are also aggregated but intentionally empty:
-their user-facing declarations are JSON files. Re-exporting empty tiers keeps
+`config::basic`, `study::basic`, and `persistence::basic` are also aggregated
+but intentionally empty: their user-facing declarations are JSON files.
+Re-exporting empty tiers keeps
 the uniform subsystem rule without inventing construction APIs.
 
 The Basic prelude deliberately does not export `Task`, `Study`, model catalogs,
-project parsers, resolved inputs, execution scopes, storage writers/readers,
-artifact APIs, RNG records, schedulers, summaries, or runtime adapters. Those
+project parsers, resolved inputs, output allocators, persistence writers/readers,
+schedulers, summaries, or runtime adapters. Those
 are not required to complete an ordinary project.
 
 Importing the prelude has no side effects. It does not trigger registration
@@ -38,18 +40,20 @@ occurs only when Study loads.
 `scientific_workflow::prelude::advanced::*` is a strict superset of Basic. It
 re-exports the complete supported advanced tiers from:
 
-- `config::advanced`: `ProjectSpecification`, documents, manifest/phase and
-  replicate/failure policies, `ResolvedTaskInput`, and `ConfigError`;
+- `config::advanced`: only `ConfigError`; the compiled declaration graph is
+  crate-private;
 - `state::advanced`: all Basic state types plus `StateFieldSchema`,
-  `StateSchemaAccess`, `StateSchemaSource`, and `StateMaintenance`; the hidden
+  `StateSchemaAccess`, and `StateMaintenance`; the hidden
   generated `PayloadTuple` implementation detail is re-exported only for trait
   resolution and must not be named;
-- `writer::advanced`: Basic writer definitions plus `WriterDescriptor`,
-  `StreamDescriptor`, `Observation`, `EncodedObservation`, `ObservationSink`,
-  and `SessionOutcome`;
-- `task::advanced`: Basic model APIs plus `ModelRegistration`, `ModelCatalog`,
-  `ModelCatalogError`, `Task`, `TaskDefinition`, and `TaskExecutionHost`;
-- `study::advanced`: `Study`, `StudyPhase`, `StudyTask`, and `StudyError`; and
+- `observation::advanced`: the Basic observation declarations; binding and
+  encoding machinery is crate-private;
+- `persistence::advanced`: `PersistenceError`, verified reader/timing types,
+  and JSON payload decoder contracts;
+- `task::advanced`: the Basic model APIs; registration, catalog, task, and host
+  machinery is crate-private;
+- `study::advanced`: only `Study` and `StudyError`; its phase/task graph is
+  crate-private; and
 - `runtime::advanced`: `run`, `execute`, `RuntimeError`, `RunSummary`,
   `ReplicateRunSummary`, `PhaseRunSummary`, and `TaskRunSummary`.
 
@@ -57,10 +61,8 @@ Each symbol retains its owning module's semantics and canonical documentation.
 The prelude does not resolve name collisions with downstream imports and does
 not promise an independently versioned flat API.
 
-Transitional direct modules (`storage`, `execution`, `artifact`, and
-`rng_record`) are intentionally absent from both central preludes. Existing
-specialized users may import them by their owning direct path until the record
-subsystem migration, but ordinary model code must not depend on them.
+Persistence is aggregated through its formal tiers, but its Basic tier is
+empty and its Advanced tier exposes no plan, writer, or lifecycle constructor.
 
 ## Example
 

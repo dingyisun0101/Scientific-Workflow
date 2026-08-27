@@ -15,7 +15,7 @@ pub fn model(attribute: TokenStream, item: TokenStream) -> TokenStream {
         #implementation
 
         ::scientific_workflow::__private::inventory::submit! {
-            ::scientific_workflow::task::advanced::ModelRegistration::new::<#model_type>(#key)
+            ::scientific_workflow::__private::ModelRegistration::new::<#model_type>(#key)
         }
     }
     .into()

@@ -1,4 +1,4 @@
-//! Runtime adapter from task observation boundaries to durable storage.
+//! Runtime adapter from task observation boundaries to automatic persistence.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -6,33 +6,36 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Map, Value};
 
+use crate::observation::advanced::BoundObservationPlan;
+use crate::persistence::advanced::{PersistencePlan, PersistenceSession};
 use crate::state::advanced::{SystemState, SystemStateSchema};
-use crate::storage::SystemStateWriter;
 use crate::task::advanced::{TaskExecutionHost, TaskResult};
-use crate::writer::advanced::Writer;
 
 pub(crate) struct RuntimeTaskHost {
     schema: SystemStateSchema,
+    persistence_plan: PersistencePlan,
     cancellation: Arc<AtomicBool>,
     recording_directory: PathBuf,
     metadata: Map<String, Value>,
-    writer: Option<SystemStateWriter>,
+    persistence: Option<PersistenceSession>,
     final_iteration: Option<u64>,
 }
 
 impl RuntimeTaskHost {
     pub(crate) fn new(
         schema: SystemStateSchema,
+        persistence_plan: PersistencePlan,
         cancellation: Arc<AtomicBool>,
         recording_directory: PathBuf,
         metadata: Map<String, Value>,
     ) -> Self {
         Self {
             schema,
+            persistence_plan,
             cancellation,
             recording_directory,
             metadata,
-            writer: None,
+            persistence: None,
             final_iteration: None,
         }
     }
@@ -50,8 +53,8 @@ impl RuntimeTaskHost {
     }
 
     pub(crate) fn fail(&mut self, reason: &str) {
-        if let Some(writer) = self.writer.take() {
-            let _ = writer.mark_recording_failed(reason.to_owned());
+        if let Some(mut persistence) = self.persistence.take() {
+            persistence.fail(reason);
         }
     }
 }
@@ -67,18 +70,19 @@ impl TaskExecutionHost for RuntimeTaskHost {
 
     fn begin_model(
         &mut self,
-        writer: Writer,
+        plan: BoundObservationPlan,
         state: &SystemState,
         _target_iteration: Option<u64>,
     ) -> TaskResult {
-        let mut storage =
-            SystemStateWriter::builder(self.recording_directory.clone(), &self.schema)
-                .with_writer(writer)
-                .with_user_metadata(self.metadata.clone())
-                .create_new_recording()?;
-        storage.observe_state(state)?;
+        let persistence = PersistenceSession::start(
+            self.recording_directory.clone(),
+            plan,
+            self.persistence_plan,
+            self.metadata.clone(),
+            state,
+        )?;
         self.final_iteration = Some(state.time().iteration());
-        self.writer = Some(storage);
+        self.persistence = Some(persistence);
         Ok(())
     }
 
@@ -87,10 +91,10 @@ impl TaskExecutionHost for RuntimeTaskHost {
         state: &SystemState,
         _target_iteration: Option<u64>,
     ) -> TaskResult {
-        self.writer
+        self.persistence
             .as_mut()
             .expect("begin_model precedes step observation")
-            .observe_state(state)?;
+            .observe(state)?;
         self.final_iteration = Some(state.time().iteration());
         Ok(())
     }
@@ -100,11 +104,11 @@ impl TaskExecutionHost for RuntimeTaskHost {
         state: &SystemState,
         _target_iteration: Option<u64>,
     ) -> TaskResult {
-        let writer = self
-            .writer
-            .take()
-            .expect("begin_model precedes final observation");
-        writer.complete_recording_with_final_state(state)?;
+        self.persistence
+            .as_mut()
+            .expect("begin_model precedes final observation")
+            .complete(state)?;
+        self.persistence = None;
         self.final_iteration = Some(state.time().iteration());
         Ok(())
     }

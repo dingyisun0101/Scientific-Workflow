@@ -1,412 +1,359 @@
 # Workflow architecture
 
-This document explains the complete Rust architecture from the perspective of
-someone opening the repository for the first time. It describes the current
-implementation, its supported API tiers, and the direction of the remaining
-record/UI migration.
+This is the first-time map of the Workflow repository: what users author, how
+one run moves through the system, where each responsibility lives, and what
+every source file does.
 
 ## User workflow
 
-An ordinary project has only two authored surfaces: Rust scientific models and
-JSON declarations.
+An application author supplies only scientific Rust models and project JSON:
 
 ```text
 <project-root>/
 ├── src/
 │   ├── main.rs                 calls scientific_workflow::run(&Path)
 │   └── <models>.rs             registered ScientificModel implementations
-├── study.json                  phase/model organization and runtime policy
+├── study.json                  phases, tasks, replicates, operational policy
 └── config/
     ├── state.json              canonical state schema
     └── inputs/
         └── <model>.json        constants, sweeps, or correlated cases
 ```
 
-A model is connected to the manifest by one stable declaration:
+Each model directly owns its canonical `SystemState` and is linked by a stable
+semantic key:
 
-```rust
+```rust,ignore
 #[scientific_workflow::model("population")]
 impl ScientificModel for PopulationModel {
-    // constants, initialization, state, completion, and stepping
+    // Constants, initialization, canonical state, completion, and one step.
 }
 ```
 
-The executable contains no registry list or orchestration builders:
+The executable needs no registry or orchestration builder:
 
-```rust
+```rust,ignore
 fn main() -> Result<(), scientific_workflow::WorkflowError> {
     scientific_workflow::run(std::path::Path::new("."))
 }
 ```
 
-The internal flow is:
+The application never constructs tasks, phases, a Study, Runtime, output
+paths, persistence, progress counters, messages, or worker threads.
 
-```text
-project root
-    │
-    ▼
-config: strict parse, path validation, defaults, input expansion
-    │ ProjectSpecification + ResolvedTaskInput values
-    ▼
-study: state semantics + model discovery + binding + complete preflight
-    │ immutable Study containing phases and internal tasks
-    ▼
-runtime: output scopes + replicates + scheduling + cancellation + invocation
-    │ automatic observation boundaries
-    ▼
-writer → storage (future record subsystem) and future UI events
-```
+## First-level modules
 
-The decisive ownership distinction is:
+The current first-level library modules are:
 
-```text
-Study   = ultimate coordinator of declared intent
-Runtime = ultimate coordinator of active execution
-```
-
-Config does not discover Rust types. Study does not parse JSON or create
-output. Runtime does not reinterpret declarations or ask application code to
-construct tasks.
-
-## First-level subsystem map
-
-The target first-level subsystems are:
-
-- `state`: canonical scientific state, schema, coordinates, and in-memory
+- `state`: canonical scientific state, schema, time, payloads, and in-memory
   series;
-- `writer`: application-owned observation meaning and schema-bound encoding;
-- `task`: registered scientific behavior behind an internal uniform execution
-  contract;
-- `config`: sole project-document parser and typed constants supplier;
-- `study`: effect-free composition, model binding, identity inference, phase
-  organization, and preflight;
-- `runtime`: active execution, scheduling, cancellation, and output-scope
-  inference;
-- `record`: durable observations, provenance, recovery, artifacts, RNG records,
-  and verified reads; and
-- `ui`: bounded runtime events, snapshots, rendering, and commands.
+- `observation`: application-authored scientific selection, cadence, units,
+  and private encoding;
+- `task`: the `ScientificModel` contract, linked registration, and uniform
+  private execution;
+- `config`: sole project-JSON reader/parser and sole typed constants supplier;
+- `study`: effect-free coordinator of all declared intent and preflight;
+- `runtime`: sole coordinator of active execution and output creation;
+- `persistence`: automatic durable recordings and verified reconstruction;
+- `prelude`: central aggregation of module-owned API tiers; and
+- `error`: the complete-workflow error boundary.
 
-`record` and `ui` are still migration targets. Their existing mechanics remain
-in `storage`, `artifact`, `rng_record`, and parts of the removed legacy study
-implementation. New user-facing design must not add APIs to those transitional
-surfaces.
+There is currently no first-level UI module. Progress can later be inferred
+from runtime-owned task/state boundaries without changing model contracts.
+Legacy `writer`, `storage`, `execution`, `artifact`, and `rng_record`
+modules have been removed; their surviving responsibilities are owned by
+`observation`, `persistence`, or `runtime`.
 
-`prelude` aggregates APIs but owns no behavior. `error` composes subsystem
-errors at the one-call workflow boundary.
-
-## Public API tiers
-
-Every target subsystem root defines two inline scope-management modules:
-
-- `module::basic`: ordinary application-facing declarations;
-- `module::advanced`: a strict superset used by advanced consumers and peer
-  subsystems.
-
-There are no `mod.rs`, `basic.rs`, or `advanced.rs` files. Implementation files
-remain private, and peer modules import only another owner's `advanced` tier.
-The central `prelude::basic` and `prelude::advanced` scopes re-export these
-module-owned symbols; the prelude never wraps or reimplements them.
-
-Current ordinary API intent is deliberately small:
+## End-to-end flow
 
 ```text
-prelude::basic
-├── model attribute
-├── ScientificModel + TaskResult
-├── SystemState declarations and operations
-├── Writer + Stream declarations
+project root: &Path
+        │
+        ▼
+config
+  strict JSON + duplicate keys + paths + defaults + expansion
+        │ private ProjectSpecification / ResolvedTaskInput
+        ▼
+study
+  state semantics + model discovery + constants decode
+  + one-time observation-plan binding + identities + phases
+        │ immutable Study
+        ▼
+runtime
+  execution directory + replicates + scheduling + cancellation
+  + model initialization and stepping
+        │ automatic observation boundaries
+        ▼
+persistence
+  private bounded writer + atomic metadata/chunks + verified reads
+```
+
+Study is the ultimate coordinator of declared intent. Runtime is the ultimate
+coordinator of active execution. Config never discovers Rust model types.
+Study never creates output or initializes a model. Runtime never reparses or
+rebinds declarations. Persistence never decides scientific observation
+meaning.
+
+## API tiers and dependency direction
+
+Each first-level subsystem root defines inline `basic` and `advanced`
+scope-management modules. There are no `mod.rs`, `basic.rs`, or
+`advanced.rs` files.
+
+- `module::basic` is the ordinary application surface.
+- `module::advanced` publicly re-exports Basic and adds only deliberate
+  advanced-user contracts.
+- The same Advanced scope may carry `pub(crate)` exports for peer modules;
+  crate-visible internals do not become public.
+- `prelude::basic` and `prelude::advanced` aggregate these canonical module
+  exports but own no behavior.
+
+Current public surface:
+
+```text
+basic
+├── state construction and manipulation
+├── ObservationPlan / ObservationStream
+├── ScientificModel / TaskResult / #[model]
 ├── run(&Path)
 └── WorkflowError
+
+advanced additions
+├── state schema inspection and deliberate maintenance
+├── ConfigError
+├── Study / StudyError
+├── execute(Study), RuntimeError, and successful summaries
+└── completed-recording readers, decoders, timing, and PersistenceError
 ```
 
-`config::basic` and `study::basic` are empty because their ordinary interfaces
-are JSON documents. `runtime::basic` exports only `run`.
-
-## Dependency direction
+Dependency direction is one-way:
 
 ```text
-writer  ──► state
-task    ──► config + state + writer
-study   ──► config + state + task
-runtime ──► study + task + state + writer + transitional storage/execution
+observation ──► state
+persistence ─► observation + state
+task        ──► config + observation + state
+study       ──► config + observation + persistence + state + task
+runtime     ──► config + persistence + state + study + task
 
-prelude aggregates tiers
+prelude aggregates supported tiers
 error   composes StudyError + RuntimeError
 ```
 
-Config deliberately does not depend on task. It treats the manifest model key
-as opaque text. Study owns the cross-domain match. This prevents the parser
-from becoming a model registry and permits config to be replaced independently.
-
-Task depends on config only through `ResolvedTaskInput::decode<T>()`, preserving
-config as the sole supplier of typed constants. Runtime invokes only tasks that
-Study already bound and validated.
+Peers import another subsystem through its `advanced` boundary. Config does
+not depend on task: it treats model keys as opaque. Study owns the cross-domain
+match. Task asks a config-owned resolved input for one complete typed constants
+value. Runtime receives only a fully preflighted Study.
 
 ## Source tree and file responsibilities
 
 ```text
 workflow/
-├── AGENTS.md                         local/private repository rules
+├── AGENTS.md                         local/private working rules (gitignored)
+├── README.md                         repository entry and user outcome
 ├── docs/
-│   ├── architecture.md               this ownership and layout guide
-│   └── tests.md                      responsibility-oriented validation map
+│   ├── architecture.md               this complete ownership/tree guide
+│   └── tests.md                      validation responsibilities and commands
 ├── macros/
-│   ├── Cargo.toml                    proc-macro support crate
-│   └── src/lib.rs                    #[model] registration expansion
+│   ├── Cargo.toml                    proc-macro package declaration
+│   └── src/lib.rs                    #[model] validation and registration expansion
 ├── rust/
-│   ├── Cargo.toml                    primary library package
-│   ├── README.md                     first-time user guide
+│   ├── Cargo.toml                    primary library package/dependencies
+│   ├── README.md                     complete Rust user procedure
 │   ├── src/
-│   │   ├── lib.rs                    crate modules, macro/run/error exports
-│   │   ├── error.rs                  WorkflowError composition
-│   │   ├── prelude.rs                central basic/advanced aggregation
-│   │   ├── prelude/api.md            exhaustive prelude contract
-│   │   ├── state.rs                  state tiers
-│   │   ├── state/api.md              exhaustive state API
-│   │   ├── state/error.rs            state and series errors
-│   │   ├── state/field.rs            immutable field declarations
-│   │   ├── state/schema.rs           schema loading/semantic validation
-│   │   ├── state/series.rs           ordered in-memory state collection
-│   │   ├── state/state.rs            typed heterogeneous payload owner
+│   │   ├── lib.rs                    module declarations; run/macro/error exports
+│   │   ├── clock.rs                  private UTC formatting and duration conversion
+│   │   ├── error.rs                  crate-level WorkflowError composition
+│   │   ├── prelude.rs                inline Basic/Advanced central aggregation
+│   │   ├── prelude/api.md            exhaustive prelude export contract
+│   │   │
+│   │   ├── state.rs                  state module root and inline API tiers
+│   │   ├── state/api.md              exhaustive state API and examples
+│   │   ├── state/error.rs            schema/state/time/series error enums
+│   │   ├── state/field.rs            immutable field metadata
+│   │   ├── state/schema.rs           Path loader and schema semantic authority
+│   │   ├── state/state.rs            heterogeneous payload owner and tuple borrows
 │   │   ├── state/time.rs             StateTime and checked advancement
-│   │   ├── state/value.rs            erased payload implementation
-│   │   ├── writer.rs                 writer tiers
-│   │   ├── writer/api.md             exhaustive writer API
-│   │   ├── writer/definition.rs      Writer and bound WriterDescriptor
-│   │   ├── writer/stream.rs          Stream and StreamDescriptor
-│   │   ├── writer/sampling.rs        private cadence mechanics
-│   │   ├── writer/observation.rs     checked borrowed state observation
-│   │   ├── writer/encoding.rs        owned canonical encoded handoff
-│   │   ├── writer/session.rs         private cadence/dedup session
-│   │   ├── writer/error.rs           writer validation/encoding errors
-│   │   ├── task.rs                   task tiers
-│   │   ├── task/api.md               exhaustive task/model API
-│   │   ├── task/model.rs             ScientificModel contract
-│   │   ├── task/catalog.rs           registration and deterministic catalog
-│   │   ├── task/definition.rs        opaque advanced Task definition
-│   │   ├── task/execution.rs         host port and model contract checks
-│   │   ├── task/result.rs            application error boundary
-│   │   ├── config.rs                 config tiers
-│   │   ├── config/api.md             grammar and exhaustive config API
-│   │   ├── config/document.rs        strict JSON and exact source bytes
-│   │   ├── config/manifest.rs        study-manifest grammar/defaults
-│   │   ├── config/expansion.rs       $sweep/$cases expansion
-│   │   ├── config/input.rs           resolved input and typed decode
+│   │   ├── state/series.rs           ordered in-memory SystemState collection
+│   │   └── state/value.rs            private erased payload/type/Serde adapter
+│   │   │
+│   │   ├── observation.rs            observation root and inline API tiers
+│   │   ├── observation/api.md        exhaustive declaration API and example
+│   │   ├── observation/error.rs      declaration/binding/encoding errors
+│   │   ├── observation/plan.rs       public plan + private schema-bound plan
+│   │   ├── observation/stream.rs     public stream + private bound stream
+│   │   ├── observation/sampling.rs   private cadence decision
+│   │   ├── observation/state_observation.rs checked borrowed state view
+│   │   ├── observation/encoding.rs   canonical owned encoded records
+│   │   └── observation/session.rs    cadence state and final-state deduplication
+│   │   │
+│   │   ├── task.rs                   task root and inline API tiers
+│   │   ├── task/api.md               exhaustive model contract and example
+│   │   ├── task/model.rs             ScientificModel and direct-state requirements
+│   │   ├── task/result.rs            boxed application error alias
+│   │   ├── task/catalog.rs           linked registrations and sorted validation
+│   │   ├── task/definition.rs        type-erased constants/preflight/execution bridge
+│   │   └── task/execution.rs         host port and model invariant enforcement
+│   │   │
+│   │   ├── config.rs                 config root; empty Basic, error-only Advanced
+│   │   ├── config/api.md             complete project grammar/error contract
+│   │   ├── config/error.rs           owned contextual ConfigError
+│   │   ├── config/document.rs        strict JSON and duplicate-key parser
+│   │   ├── config/manifest.rs        study grammar, defaults, dependency checks
+│   │   ├── config/expansion.rs       deterministic $sweep/$cases compiler
+│   │   ├── config/input.rs           private resolved input and typed decode
 │   │   ├── config/specification.rs   one-root loading transaction
-│   │   ├── config/error.rs           contextual config failures
-│   │   ├── study.rs                  study tiers
-│   │   ├── study/api.md              exhaustive study API
-│   │   ├── study/compilation.rs      private binding/preflight compiler
-│   │   ├── study/plan.rs             immutable Study/Phase/Task views
-│   │   ├── study/error.rs            composition/preflight failures
-│   │   ├── runtime.rs                runtime tiers
-│   │   ├── runtime/api.md            exhaustive runtime API
-│   │   ├── runtime/execution.rs      run entry and active schedulers
-│   │   ├── runtime/host.rs           task-to-storage execution adapter
-│   │   ├── runtime/summary.rs        successful read-only run summaries
-│   │   ├── runtime/error.rs          active execution failures
-│   │   ├── storage.rs                transitional durable record owner
-│   │   ├── storage/error.rs          storage failures
-│   │   ├── storage/json_payload_decoder.rs
-│   │   ├── storage/json_payload_decoder/string.rs
-│   │   ├── storage/json_payload_decoder/vec_f64.rs
-│   │   ├── storage/jsonl_format.rs   durable metadata/chunk wire format
-│   │   ├── storage/queued_state_writer.rs
-│   │   ├── storage/resume.rs         checkpoint reconstruction/rewind
-│   │   ├── storage/stored_state_series_reader.rs
-│   │   ├── execution.rs              transitional output/process scopes
-│   │   ├── execution/error.rs        scope errors
-│   │   ├── execution/replicate.rs    legacy subprocess replicate adapter
-│   │   ├── execution/scope.rs        safe execution directory creation
-│   │   ├── artifact.rs               transitional immutable artifacts
-│   │   ├── rng_record.rs             transitional RNG provenance
-│   │   └── clock.rs                  private UTC/duration utilities
-│   └── tests/*.rs                    subsystem and boundary tests
+│   │   └── config/tests/config_workflow.rs internal compiler/grammar tests
+│   │   │
+│   │   ├── study.rs                  study root; empty Basic, Study/Error Advanced
+│   │   ├── study/api.md              exhaustive Study API and example
+│   │   ├── study/error.rs            binding/preflight StudyError
+│   │   ├── study/compilation.rs      project-to-Study composition
+│   │   ├── study/plan.rs             public Study + private phases/tasks/policies
+│   │   └── study/tests/study_workflow.rs internal binding/runtime tests
+│   │   │
+│   │   ├── runtime.rs                runtime root and inline API tiers
+│   │   ├── runtime/api.md            run/execute/summary/error contract
+│   │   ├── runtime/error.rs          active execution RuntimeError
+│   │   ├── runtime/output.rs         private unique execution/replicate directories
+│   │   ├── runtime/host.rs           task-host to persistence-session adapter
+│   │   ├── runtime/execution.rs      replicate/phase/task schedulers and run entry
+│   │   └── runtime/summary.rs        successful immutable RunSummary tree
+│   │   │
+│   │   ├── persistence.rs            persistence root; empty Basic, read Advanced
+│   │   ├── persistence/api.md        complete settings/read/error contract
+│   │   ├── persistence/plan.rs       private effective operational settings
+│   │   ├── persistence/session.rs    private automatic Runtime lifecycle port
+│   │   ├── persistence/local.rs      private local recording coordinator/lease
+│   │   ├── persistence/local/error.rs exact read/write persistence failures
+│   │   ├── persistence/local/jsonl_format.rs metadata/chunk wire structures
+│   │   ├── persistence/local/queued_state_writer.rs bounded async chunk writer
+│   │   ├── persistence/local/stored_state_series_reader.rs verified reconstruction
+│   │   ├── persistence/local/json_payload_decoder.rs decoder registry/contracts
+│   │   ├── persistence/local/json_payload_decoder/string.rs String decoder
+│   │   ├── persistence/local/json_payload_decoder/vec_f64.rs Vec<f64> decoder
+│   │   └── persistence/tests/
+│   │       ├── persistence_workflow.rs end-to-end local write/read contract
+│   │       ├── persistence_resilience.rs fault/integrity tests
+│   │       └── python_reader_conformance.rs Rust/Python format compatibility
+│   └── tests/
+│       ├── state_workflow.rs          downstream state API/ownership tests
+│       ├── analysis_workflow.rs       in-memory series analysis tests
+│       ├── observation_workflow.rs    public observation declaration tests
+│       ├── task_workflow.rs           downstream ScientificModel API tests
+│       └── fixtures/*.json            canonical state-schema fixtures
 └── examples/attractor_2d/
-    ├── src/main.rs                   one run(&Path) call
-    ├── src/hopf_model.rs             registered model and custom writer
-    ├── study.json                    phase/model declaration
-    └── config/                       state schema and model constants
+    ├── Cargo.toml / Cargo.lock         standalone example package
+    ├── src/main.rs                     one run(&Path) call
+    ├── src/hopf_model.rs               registered state-owning model
+    ├── study.json                      phases/tasks/replicates
+    └── config/                         schema and model constants
 ```
 
-### `lib.rs` and `error.rs`
+## Subsystem details
 
-`lib.rs` declares crate modules, re-exports the `model` attribute, the sole
-ordinary `run` function, and `WorkflowError`. Its hidden `__private` namespace
-exists only so procedural macro expansion can reach `inventory`; applications
-must not use it.
+### State
 
-`error.rs` owns `WorkflowError`. Study failures occur before output creation.
-Runtime failures occur only after a valid immutable Study exists. Preserving
-that distinction lets callers decide whether cleanup or retry is meaningful.
+`SystemStateSchema::load_json_template(&Path)` is the public construction
+boundary. Config uses a crate-private in-memory equivalent so Study does not
+reread `state.json`. `SystemState` owns fixed heterogeneous slots and
+`StateTime`; application models mutate payloads and advance time. Advanced
+inspection exposes field metadata and schema identity. The old generic
+schema-source adapter was removed with the persistence builder that needed it.
 
-### State subsystem
+### Observation
 
-`state.rs` exports ordinary state construction/manipulation through `basic` and
-schema inspection/maintenance through `advanced`. `schema.rs` is the semantic
-authority for `config/state.json`; config passes its already parsed value via
-`StateSchemaAccess`, so Study performs no second read or generic parse.
+A model's `observation_plan(&Constants)` defaults to all fields. Study calls
+it once during preflight and stores the exact schema-bound plan. Runtime does
+not call it again. Private sessions select due streams, borrow/encode selected
+payloads, and deduplicate the final iteration. Observation owns no paths,
+buffers, files, or lifecycle.
 
-`state.rs` owns the canonical `SystemState`. A `ScientificModel` must directly
-own the exact state returned by `state()` for its entire execution. The task
-adapter verifies stable address, schema allocation identity, and strictly
-advancing iteration after successful steps.
+### Task
 
-### Writer subsystem
+`ScientificModel` is the irreducible user contract. The model consumes typed
+constants, initializes from the shared schema, directly owns the stable state
+returned by `state()`, reports completion, and performs one iteration-advancing
+`step`. Task enforces what Rust can observe: state address/schema stability,
+strict iteration progress, and monotonic optional target. The macro submits
+immutable registration metadata; the private catalog rejects bad/duplicate
+keys and ignores linker order.
 
-`Writer` describes scientific observation meaning only: selected fields,
-stream names, cadence, and units. `ScientificModel::writer` returns this
-definition and defaults to `Writer::all_fields()`. The function may inspect
-constants but must be deterministic and effect-free because Study invokes it
-during preflight and Task invokes it again at execution startup.
+### Config
 
-Writer does not own paths, buffering, persistence, task identity, or lifecycle.
-The private session applies sampling and final-state deduplication. The runtime
-host currently adapts encoded observations to `storage`; this moves behind the
-future `record` boundary without changing model code.
+Config canonicalizes the project and `config` roots, parses each required JSON
+file with duplicate-key rejection, validates the exact study grammar and safe
+input containment, caches parsed input values, and expands selections
+deterministically. It retains only values needed by Study; exact source bytes,
+duplicate public graph views, and a cloneable top-level `Arc` were removed.
+The public Advanced API is only `ConfigError`.
 
-### Task subsystem
+### Study
 
-Task's Basic API contains only `ScientificModel` and `TaskResult`. There is no
-ordinary `Task` constructor. A model declares:
+`Study::load(&Path)` performs all cross-domain checks before output: state
+semantics, linked registration validation, model-key resolution, constants
+decoding, and observation/schema binding. It infers stable identities, labels,
+the output root, and private operational policy. Public inspection is limited
+to project/output roots; phases, tasks, schema, resolved inputs, and policies
+exist only for Runtime.
 
-- an owned Serde-decodable `Constants` type;
-- an optional deterministic writer definition;
-- initialization from constants and the shared schema;
-- canonical state borrowing;
-- a completion predicate;
-- one-step evolution; and
-- an optional monotonic target iteration.
+### Runtime
 
-The `#[model("key")]` attribute submits one immutable `ModelRegistration`.
-`ModelCatalog::discovered` collects linked registrations, validates keys,
-rejects duplicates, and sorts by key rather than linker order. Advanced
-`ModelCatalog::from_registrations` avoids hidden global discovery in tests and
-embedders.
+`run(&Path)` loads then executes; `execute(Study)` is the advanced split
+boundary. Runtime alone creates `output/execution-<pid>-<sequence>`, isolated
+`replicate-NNNNNN` directories, and deterministic task recording paths. It
+topologically schedules phases, applies concurrency/start intervals and
+fail-fast/finish-all policy, checks cooperative cancellation between model
+steps, and returns deterministic successful summaries. A blocking user
+`step` cannot be forcibly killed safely.
 
-`Task` is an advanced opaque type created internally from a model. It erases
-the Rust model type without erasing constants validation. `TaskDefinition` is
-runtime's invocation port; `TaskExecutionHost` supplies schema, cancellation,
-and automatic observation boundaries. There is no task context, progress
-counter, message callback, one-shot variant, identity setter, or path setter.
+### Persistence
 
-### Config subsystem
+Persistence is constructed and run only by Runtime. One internal constructor
+accepts an inferred destination, the already-bound observation plan, provenance,
+and one effective shared chunk/queue policy. A bounded worker owns all stream
+writes and commits immutable JSONL chunks plus one authoritative
+`metadata.json` lifecycle. There is no writer builder, per-stream storage
+override, public flush, resume/continuation path, or completion handle.
 
-Config alone opens and parses:
+Advanced users can only open completed recordings with a decoder registry.
+Readers verify metadata, sizes, hashes, framing, ordering, schema, decoding,
+and StateSeries invariants before publishing owned results. A future local or
+remote adapter belongs behind the private `PersistenceSession`, not in model
+or task APIs.
 
-- `<root>/study.json`;
-- `<root>/config/state.json`; and
-- manifest-referenced `.json` files below `<root>/config/inputs/`.
+## Core invariants
 
-One manifest task has `model`, `input`, optional `display`, and optional
-`timeout_ms`. The old ambiguous `definition` field is rejected. `$sweep`
-creates independent Cartesian choices; `$cases` creates correlated choices;
-ordinary arrays remain literal. Config caches each unique input source,
-preserves exact bytes, expands deterministically, and constructs
-`ResolvedTaskInput` values. Its generic `decode<T>()` is the sole typed
-constants-supply operation.
-
-Config validates JSON grammar, duplicate keys, path containment, positive
-limits, dependency existence, and dependency acyclicity. It deliberately does
-not know whether a compiled model key exists, whether constants match a Rust
-type, or whether writer/display fields exist. Those are cross-domain Study
-checks.
-
-### Study subsystem
-
-`Study::load(&Path)` asks config for a `ProjectSpecification`, asks state to
-validate the parsed schema, discovers the immutable model catalog, and binds
-every resolved input to its selected model. It validates constants decoding,
-writer/schema compatibility, display fields, and model-key coverage before
-returning.
-
-Study infers immutable task identities and labels. Identity uses manifest phase
-key, global plan ordinal, model key, and input expansion ordinal. Output paths
-are not embedded in tasks; Study infers only the project output root
-`<project-root>/output`. It preserves phase policy, replicate policy, and exact
-source documents for runtime and provenance.
-
-Loading is effect-free with respect to output and models: it creates no output,
-starts no threads, and does not call `ScientificModel::initialize`. A writer
-declaration is evaluated during preflight under its documented pure-function
-contract.
-
-### Runtime subsystem
-
-`runtime::basic::run(&Path)` is re-exported at crate root. It loads Study and
-executes it, returning `()` on success. `runtime::advanced::execute(Study)`
-accepts an already compiled Study and returns a `RunSummary`.
-
-Only runtime creates output. Each invocation creates a unique generated
-directory below `<project-root>/output`, then an isolated
-`replicate-XXXXXX` directory and deterministic `task-XXXXXX` recording paths.
-It executes phases in stable topological order, admits tasks according to phase
-concurrency/start intervals, and honors fail-fast versus finish-all admission.
-Task and phase timeouts are cooperative: runtime raises cancellation, and the
-task adapter checks between scientific steps. A model that blocks inside one
-step cannot be forcibly unwound safely.
-
-The runtime host creates the storage writer at `begin_model`, records the
-initial state and each successful step, commits the final state exactly once,
-and marks an opened recording failed when model execution errors or is
-cancelled. Resolved constants and Workflow-owned identity/provenance are
-retained under separate recording-metadata namespaces so inferred fields can
-never overwrite scientific constants with the same key.
-
-### Transitional record-related modules
-
-`storage` is the currently used durable backend. It owns exclusive recording
-directories, bounded asynchronous queues, chunk framing, checksums, atomic
-metadata transitions, final-state checkpoints, resume, and verified reading.
-It is intentionally absent from `prelude::basic`; ordinary model authors never
-construct it.
-
-`execution::ExecutionScope` currently supplies safe unique/named directory
-creation. Runtime uses that narrow behavior. The older subprocess
-`ReplicateExecutor` remains directly available only for compatibility tests and
-will be absorbed or removed when record/runtime process isolation is finalized.
-
-`artifact` and `rng_record` retain existing direct APIs until the `record`
-subsystem consolidates durable provenance. They are not part of the ordinary
-prelude and must not leak into model or Study contracts.
-
-## Inference and validation invariants
-
-1. Every filesystem API uses `&Path` for a borrowed path and `PathBuf` for an
-   owned path.
-2. Config is the only project JSON reader/parser and constants supplier.
-3. Model registration keys are stable authored semantics, never Rust type names.
-4. Registration discovery is order-independent; catalogs are key-sorted and
-   duplicate-checked.
-5. Every manifest model reference resolves before output creation.
-6. All constants decode and writer/display schema checks complete during Study
-   preflight.
-7. Models are not initialized during preflight.
-8. Study is immutable and clone-cheap; runtime cannot mutate declared intent.
-9. Task identities and paths are deterministic within an effective plan.
-10. Runtime alone creates output and owns active lifecycle.
-11. A canonical model directly owns one stable `SystemState` allocation.
-12. Each successful `step` advances iteration strictly.
-13. Writer selection is deterministic for a constants value.
-14. Application code never reports routine progress or manually completes a
-    recording.
+1. Filesystem APIs borrow `&Path` and retain `PathBuf`; raw strings are not
+   path parameters.
+2. Config is the sole project JSON reader/parser and typed constants supplier.
+3. Study completes all model/constants/observation binding before output.
+4. Model registration keys are authored stable semantics, never Rust type names.
+5. Models are initialized only during active Runtime execution.
+6. A model directly owns one stable canonical `SystemState`.
+7. Every successful `step` strictly advances scientific iteration.
+8. Observation plans are deterministic, side-effect-free, evaluated once, and
+   stored schema-bound.
+9. Runtime alone creates output and owns scheduling/cancellation.
+10. Persistence writing is private, automatic, bounded, and finalized by
+    Runtime; application code cannot flush, resume, or complete it.
+11. Effective paths, identities, labels, and operational defaults are inferred
+    whenever one safe deterministic answer exists.
+12. Public APIs contain irreducible user intent or a deliberate read/embedding
+    contract, not internal flexibility for hypothetical use.
 
 ## Replacement boundaries
 
-A subsystem may be replaced if its advanced contract and invariants remain
-intact:
-
-- a config replacement must preserve strict parsing, deterministic expansion,
-  source bytes, containment, and typed decode;
-- a study replacement must remain effect-free, consume only supported peer
-  APIs, perform complete binding preflight, and publish immutable intent;
-- a runtime replacement must accept an immutable Study, preserve phase/task
-  policy and cancellation semantics, and own all output creation;
-- a record replacement must implement observation persistence without moving
-  file mechanics into Writer or model code; and
-- a UI replacement must consume bounded runtime-owned snapshots rather than
-  shared mutable model contexts.
-
-Every source change requires review of the owning `api.md`; layout, ownership,
-tiering, dependency, inference, lifecycle, and persistence changes also require
-this document to change in the same patch.
+- A state replacement preserves typed ownership, schema identity, time
+  ordering, and serialization borrows.
+- An observation replacement preserves declaration meaning, one-time binding,
+  cadence, clone-free borrowing, and deterministic encoded order.
+- A task replacement preserves config-owned constants decode, direct state
+  ownership checks, and automatic observation boundaries.
+- A config replacement preserves the grammar, typed-path containment,
+  duplicate-key rejection, deterministic expansion, and centralized parsing.
+- A Study replacement remains effect-free and performs complete binding before
+  publishing immutable intent.
+- A Runtime replacement consumes only Study, preserves policy and summary
+  order, and owns all output/effects.
+- A persistence replacement remains behind the private session and preserves
+  bounded submission, terminal evidence/provenance, and verified reads.

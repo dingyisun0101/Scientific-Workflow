@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::config::advanced::ResolvedTaskInput;
+use crate::observation::advanced::BoundObservationPlan;
 
 use super::execution::{StatefulDefinition, TaskDefinition, TaskExecutionHost};
 use super::model::ScientificModel;
@@ -17,7 +18,7 @@ use super::result::TaskResult;
 /// and its runtime scope. Cloning a task clones only a shared definition
 /// handle.
 #[derive(Clone)]
-pub struct Task {
+pub(crate) struct Task {
     definition: Arc<dyn TaskDefinition>,
 }
 
@@ -27,7 +28,7 @@ impl Task {
     /// Ordinary applications do not call this constructor: model registration
     /// and study composition invoke it automatically. It remains public through
     /// `task::advanced` for replacement study compilers and focused tests.
-    pub fn for_model<M>() -> Self
+    pub(crate) fn for_model<M>() -> Self
     where
         M: ScientificModel,
     {
@@ -38,8 +39,13 @@ impl Task {
 }
 
 impl TaskDefinition for Task {
-    fn execute(&self, input: &ResolvedTaskInput, host: &mut dyn TaskExecutionHost) -> TaskResult {
-        self.definition.execute(input, host)
+    fn execute(
+        &self,
+        input: &ResolvedTaskInput,
+        observation_plan: &BoundObservationPlan,
+        host: &mut dyn TaskExecutionHost,
+    ) -> TaskResult {
+        self.definition.execute(input, observation_plan, host)
     }
 }
 

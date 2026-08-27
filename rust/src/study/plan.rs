@@ -5,8 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::advanced::{
-    FailurePolicy, ProjectDocument, ProjectSpecification, ReplicatePolicy, ResolvedTaskInput,
+    FailurePolicy, ProjectSpecification, ReplicatePolicy, ResolvedTaskInput,
 };
+use crate::observation::advanced::BoundObservationPlan;
+use crate::persistence::advanced::PersistencePlan;
 use crate::state::advanced::SystemStateSchema;
 use crate::task::advanced::{ModelCatalog, Task, TaskDefinition};
 
@@ -33,7 +35,7 @@ impl Study {
     ///
     /// This is the deterministic injection seam for tests and embedded hosts;
     /// ordinary applications use [`Self::load`].
-    pub fn load_with_catalog(
+    pub(crate) fn load_with_catalog(
         project_root: &Path,
         catalog: &ModelCatalog,
     ) -> Result<Self, StudyError> {
@@ -46,20 +48,29 @@ impl Study {
         schema: SystemStateSchema,
         phases: Box<[StudyPhase]>,
     ) -> Self {
-        let output_root = project.project_root().join("output");
+        let project_root = project.project_root().to_path_buf();
+        let output_root = project_root.join("output");
+        let replicate_policy = project.manifest().replicate_policy();
+        let persistence = project.manifest().persistence();
+        let persistence_plan = PersistencePlan::local(
+            persistence.chunk_target_bytes(),
+            persistence.queue_capacity_bytes(),
+        );
         Self {
             inner: Arc::new(StudyInner {
-                project,
+                project_root,
                 schema,
                 phases,
                 output_root,
+                replicate_policy,
+                persistence_plan,
             }),
         }
     }
 
     /// Returns the canonical project root loaded by config.
     pub fn project_root(&self) -> &Path {
-        self.inner.project.project_root()
+        &self.inner.project_root
     }
 
     /// Returns the inferred output root, `<project-root>/output`.
@@ -68,23 +79,23 @@ impl Study {
     }
 
     /// Returns the semantically validated shared state schema.
-    pub fn state_schema(&self) -> &SystemStateSchema {
+    pub(crate) fn state_schema(&self) -> &SystemStateSchema {
         &self.inner.schema
     }
 
     /// Returns immutable phases in manifest declaration order.
-    pub fn phases(&self) -> &[StudyPhase] {
+    pub(crate) fn phases(&self) -> &[StudyPhase] {
         &self.inner.phases
     }
 
     /// Returns the effective replicate policy parsed from `study.json`.
-    pub fn replicate_policy(&self) -> ReplicatePolicy {
-        self.inner.project.manifest().replicate_policy()
+    pub(crate) fn replicate_policy(&self) -> ReplicatePolicy {
+        self.inner.replicate_policy
     }
 
-    /// Returns every exact source document in config's deterministic first-use order.
-    pub fn source_documents(&self) -> &[ProjectDocument] {
-        self.inner.project.documents()
+    /// Returns the immutable effective persistence plan compiled from `study.json`.
+    pub(crate) fn persistence_plan(&self) -> PersistencePlan {
+        self.inner.persistence_plan
     }
 }
 
@@ -94,21 +105,24 @@ impl std::fmt::Debug for Study {
             .debug_struct("Study")
             .field("project_root", &self.project_root())
             .field("output_root", &self.output_root())
+            .field("persistence", &self.persistence_plan())
             .field("phases", &self.phases().len())
             .finish_non_exhaustive()
     }
 }
 
 struct StudyInner {
-    project: ProjectSpecification,
+    project_root: PathBuf,
     schema: SystemStateSchema,
     phases: Box<[StudyPhase]>,
     output_root: PathBuf,
+    replicate_policy: ReplicatePolicy,
+    persistence_plan: PersistencePlan,
 }
 
 /// One immutable execution phase compiled from the study manifest.
 #[derive(Clone, Debug)]
-pub struct StudyPhase {
+pub(crate) struct StudyPhase {
     pub(crate) name: Box<str>,
     pub(crate) dependencies: Box<[Box<str>]>,
     pub(crate) tasks: Box<[StudyTask]>,
@@ -120,79 +134,75 @@ pub struct StudyPhase {
 
 impl StudyPhase {
     /// Returns the stable phase key from `study.json`.
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Iterates dependency keys in declaration order.
-    pub fn dependencies(&self) -> impl ExactSizeIterator<Item = &str> {
+    pub(crate) fn dependencies(&self) -> impl ExactSizeIterator<Item = &str> {
         self.dependencies.iter().map(Box::as_ref)
     }
 
     /// Returns bound model invocations in deterministic expansion order.
-    pub fn tasks(&self) -> &[StudyTask] {
+    pub(crate) fn tasks(&self) -> &[StudyTask] {
         &self.tasks
     }
 
     /// Returns the positive effective concurrency bound.
-    pub const fn max_concurrency(&self) -> usize {
+    pub(crate) const fn max_concurrency(&self) -> usize {
         self.max_concurrency
     }
 
     /// Returns the effective interval between task admissions.
-    pub const fn start_interval(&self) -> Duration {
+    pub(crate) const fn start_interval(&self) -> Duration {
         self.start_interval
     }
 
     /// Returns the optional phase-wide cooperative timeout.
-    pub const fn timeout(&self) -> Option<Duration> {
+    pub(crate) const fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
 
     /// Returns the effective sibling failure policy.
-    pub const fn failure_policy(&self) -> FailurePolicy {
+    pub(crate) const fn failure_policy(&self) -> FailurePolicy {
         self.failure_policy
     }
 }
 
 /// One model bound to one complete config-owned constants input.
 #[derive(Clone)]
-pub struct StudyTask {
+pub(crate) struct StudyTask {
     pub(crate) identity: Box<str>,
     pub(crate) label: Box<str>,
     pub(crate) output_ordinal: u64,
     pub(crate) input: ResolvedTaskInput,
     pub(crate) definition: Task,
+    pub(crate) observation_plan: BoundObservationPlan,
 }
 
 impl StudyTask {
     /// Returns the inferred stable identity within this study plan.
-    pub fn identity(&self) -> &str {
+    pub(crate) fn identity(&self) -> &str {
         &self.identity
     }
 
     /// Returns the inferred human-readable label.
-    pub fn label(&self) -> &str {
+    pub(crate) fn label(&self) -> &str {
         &self.label
     }
 
     /// Returns the registered model key selected by the manifest.
-    pub fn model(&self) -> &str {
+    pub(crate) fn model(&self) -> &str {
         self.input.model()
     }
 
     /// Returns the config-owned resolved task input.
-    pub fn input(&self) -> &ResolvedTaskInput {
+    pub(crate) fn input(&self) -> &ResolvedTaskInput {
         &self.input
     }
 
-    /// Returns additional state fields selected for display.
-    pub fn display_fields(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.input.display_fields()
-    }
-
     /// Returns the optional task-specific cooperative timeout.
-    pub fn timeout(&self) -> Option<Duration> {
+    pub(crate) fn timeout(&self) -> Option<Duration> {
         self.input.timeout()
     }
 
@@ -202,6 +212,10 @@ impl StudyTask {
 
     pub(crate) fn definition(&self) -> &dyn TaskDefinition {
         &self.definition
+    }
+
+    pub(crate) fn observation_plan(&self) -> &BoundObservationPlan {
+        &self.observation_plan
     }
 }
 

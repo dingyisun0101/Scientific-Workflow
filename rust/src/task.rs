@@ -3,8 +3,8 @@
 //! Application authors import [`basic`], implement [`basic::ScientificModel`],
 //! and register the implementation with `#[scientific_workflow::model("key")]`.
 //! Study combines each registered model with config-supplied constants and
-//! creates the internal task automatically. [`advanced`] supplies discovery,
-//! explicit catalog, and execution ports used by Study and runtime. Scheduling,
+//! creates the internal task automatically. [`advanced`] retains that same
+//! supported public surface; discovery, catalogs, and execution ports remain crate-private. Scheduling,
 //! identity, paths, lifecycle persistence, and display remain outside this module.
 
 mod catalog;
@@ -21,8 +21,11 @@ pub mod basic {
 
 /// Supported task API for advanced users and Workflow peer subsystems.
 pub mod advanced {
+    #[allow(unused_imports)]
     pub use super::basic::*;
-    pub use super::catalog::{ModelCatalog, ModelCatalogError, ModelRegistration};
-    pub use super::definition::Task;
-    pub use super::execution::{TaskDefinition, TaskExecutionHost};
+    #[doc(hidden)]
+    pub use super::catalog::ModelRegistration;
+    pub(crate) use super::catalog::{ModelCatalog, ModelCatalogError};
+    pub(crate) use super::definition::Task;
+    pub(crate) use super::execution::{TaskDefinition, TaskExecutionHost};
 }

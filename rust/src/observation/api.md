@@ -1,0 +1,193 @@
+# Observation API
+
+The `observation` subsystem owns application-defined scientific observation: which
+state fields belong to which logical stream, how often iteration-based streams
+are sampled, the optional units attached to inferred time axes, and canonical
+encoding of a borrowed observation. Its canonical scopes are
+`scientific_workflow::observation::basic` and
+`scientific_workflow::observation::advanced`. The central preludes re-export these
+same symbols without wrapping them.
+
+Observation is intentionally independent of persistence. It contains no output
+path, task or replicate identity, chunk size, queue size, filename, checksum,
+metadata lifecycle, recovery policy, or completed-recording handle. The
+runtime and persistence backend infer and own those concerns.
+
+An ordinary application returns its observation plan from
+`ScientificModel::observation_plan(&Constants)`. The trait supplies
+`ObservationPlan::all_fields()` by default, so a model implements that method only when
+field selection, named streams, cadence, or units carry scientific meaning.
+Study calls it once during preflight, binds the returned plan to the validated
+state schema, and stores that exact bound plan in the compiled task. Runtime
+never calls the model method again.
+
+## Basic API
+
+### `observation::basic::ObservationPlan`
+
+`ObservationPlan` is an immutable, owned definition of the scientific observation requested
+by an application. It is `Clone + Debug + Eq`; cloning copies only small
+definition metadata and never touches a state or payload. It is safe to move or
+share according to its ordinary auto traits and performs no I/O, allocation of
+scientific data, blocking, background work, persistence, or cancellation.
+
+The constructors are:
+
+- `ObservationPlan::all_fields()` creates the minimum-burden definition: one stream
+  named `state`, every schema field in schema order, and sampling every
+  iteration. This constructor cannot fail because all remaining facts are
+  inferred when the definition binds to a schema.
+- `ObservationPlan::fields(fields)` creates the same inferred `state` stream with an
+  explicit nonempty field selection. It returns `ObservationError` for blank or
+  duplicate field names. Field existence and canonical ordering are checked
+  later, when a schema is available.
+- `ObservationPlan::streams(streams)` accepts one or more already validated `ObservationStream`
+  definitions. ObservationStream names must be unique after whitespace trimming. Input
+  order is retained as deterministic stream order and later determines the
+  backend's inferred stream-directory ordinals.
+- `with_iteration_unit(unit)` attaches a nonempty unit to the axis whose name
+  is always inferred as `iteration`.
+- `with_physical_time_unit(unit)` attaches a nonempty unit to the axis whose
+  name is always inferred as `physical_time`.
+
+The two unit methods consume and return `ObservationPlan`, allowing fluent composition.
+They trim surrounding whitespace and return `EmptyAxisUnit` without producing
+a partially changed definition. Axis names are not parameters because they
+already follow from `StateTime`.
+
+`ObservationPlan` does not bind itself to a state schema and deliberately
+exposes no getters. Application code declares intent; Study owns schema binding
+and retains the private bound representation.
+
+### `observation::basic::ObservationStream`
+
+`ObservationStream` is one owned scientific stream definition. A stream name is retained
+because it distinguishes scientifically meaningful outputs; a filesystem
+directory is not retained because it can be derived. `ObservationStream` is
+`Clone + Debug + Eq` and owns only normalized names, field selections, and a
+positive cadence.
+
+- `ObservationStream::all_fields(name)` selects all fields of the future bound schema.
+  It returns `EmptyStreamName` when trimming leaves no name.
+- `ObservationStream::fields(name, fields)` selects a nonempty set of named fields. It
+  trims all names and rejects an empty stream name, an empty field name, an
+  empty selection, or a duplicate field. Selection order is not persisted:
+  binding reorders fields into canonical schema order.
+- `every_iterations(iterations)` changes the default cadence of one to the
+  supplied positive value. Iteration zero is selected, followed by each
+  iteration divisible by the value. Zero returns
+  `InvalidSamplingInterval` and leaves the consumed original unavailable in
+  the ordinary Rust builder style.
+
+There is intentionally no public `Sampling`, field-selection, axis, or
+checkpoint type. A full-state stream is inferred as checkpoint-capable after
+schema binding. The final state is a session concern and is offered once even
+when its iteration does not align with a stream cadence.
+
+### `observation::basic::ObservationError`
+
+`ObservationError` is the non-exhaustive error for definition, binding,
+observation, and encoding. Basic users usually propagate it; advanced users
+may inspect contextual variants. Every owned stream/field name remains valid
+after temporary inputs and observations are dropped. Errors contain no
+scientific payload.
+
+Definition and binding variants are:
+
+- `EmptyPlan`: `ObservationPlan::streams` received no streams.
+- `EmptyStreamName`: a stream name was blank after trimming.
+- `DuplicateStreamName { stream }`: two normalized logical names collide.
+- `EmptyFieldName { stream }`: one selected field was blank.
+- `EmptyFieldSelection { stream }`: a selected-field stream has no fields, or
+  schema binding produced no selected fields.
+- `DuplicateField { stream, field }`: a stream selected one field twice.
+- `UnknownField { stream, field }`: schema binding found no declaration for a
+  selected name.
+- `InvalidSamplingInterval { stream }`: a cadence was zero.
+- `EmptyAxisUnit { axis }`: an optional unit was blank.
+
+Observation and encoding variants are:
+
+- `SchemaMismatch { iteration }`: the observed state does not share the exact
+  immutable schema allocation used by the bound observation plan.
+- `StateAccess { stream, iteration, field, source }`: a due selected field is
+  absent or otherwise cannot be borrowed. The originating `StateError` is
+  preserved as the error source.
+- `EncodeField { stream, iteration, field, source }`: a payload's Serde
+  implementation rejected canonical JSON encoding. The `serde_json::Error`
+  source is preserved.
+- `NonIncreasingObservation { stream, previous, next }`: an observation moved
+  backward relative to the last accepted iteration for a stream. Repeating an
+  equal iteration is idempotently skipped by the private session, so this
+  variant currently reports a decreasing coordinate.
+
+Construction, binding, and encoding failures are atomic. A failed definition
+is not produced; a failed bind yields no descriptor; a failed session
+observation advances no stream's accepted-iteration marker and submits no
+encoded observation.
+
+## Advanced API
+
+`observation::advanced` is the strict public superset of Basic and currently
+adds no public symbols. Workflow peers use crate-visible exports in this same
+scope for schema-bound plans, checked state observations, canonical encoding,
+and sampling sessions. Those mechanisms are intentionally unavailable to
+external integrations because persistence supplies no replaceable backend
+injection seam.
+
+## Example
+
+The ordinary flow loads state, initializes it, and declares only irreducible
+scientific observation intent:
+
+```rust,no_run
+use std::path::Path;
+
+use scientific_workflow::state::basic::{StateTime, SystemStateSchema};
+use scientific_workflow::observation::basic::{
+    ObservationError, ObservationPlan, ObservationStream,
+};
+
+# fn example() -> Result<(), Box<dyn std::error::Error>> {
+let schema = SystemStateSchema::load_json_template(Path::new("config/state.json"))?;
+let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+state.initialize_payload("position", vec![0.0_f64, 1.0])?;
+state.initialize_payload("energy", 0.5_f64)?;
+
+let plan = ObservationPlan::streams([
+    ObservationStream::fields("trajectory", ["position"])?.every_iterations(10)?,
+    ObservationStream::all_fields("checkpoint")?.every_iterations(100)?,
+])?
+.with_physical_time_unit("s")?;
+
+// ScientificModel::observation_plan returns `plan`; Workflow infers paths, schema
+// metadata, checkpoint eligibility, lifecycle, and persistence policy.
+# let _ = (state, plan);
+# Ok(())
+# }
+```
+
+## Not API
+
+The following remain private and may change during an observation replacement:
+
+- `ObservationSession`, its accepted-iteration vector, due-stream selection, and
+  final-observation deduplication;
+- `BoundObservationPlan`, `BoundObservationStream`, `StateObservation`, and
+  `EncodedObservation`, including schema binding and the owned backend handoff;
+- `IterationSampling`, its `NonZeroU64` representation, and divisibility
+  implementation;
+- the internal field-selection enum and descriptor constructors;
+- erased-Serde reference adapters, active-field tracking, and JSON serializer
+  structs;
+- allocation choices such as `Box<str>`, boxed slices, and temporary vectors;
+  and
+- the adapter from `EncodedObservation` to the private persistence JSONL
+  format.
+
+There is no public session constructor, sampling type, time-axis metadata
+type, encoder implementation, directory field, persistence configuration, queue,
+chunk, checkpoint flag, path, metadata map, lifecycle guard, or backend worker
+in this subsystem. Replacement implementations may change internal sampling
+and encoding machinery while preserving the documented declaration and error
+contracts. Persistence owns backend construction and lifecycle.

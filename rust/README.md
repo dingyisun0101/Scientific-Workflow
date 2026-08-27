@@ -58,10 +58,11 @@ impl ScientificModel for PopulationModel {
 }
 ```
 
-`ScientificModel::writer` defaults to `Writer::all_fields()`. Override it only
+`ScientificModel::observation_plan` defaults to
+`ObservationPlan::all_fields()`. Override it only
 when selected fields, named streams, cadence, or units carry scientific
-meaning. The writer function may inspect constants but must be deterministic
-and side-effect-free.
+meaning. The observation-plan function may inspect constants but must be
+deterministic and side-effect-free.
 
 The stable attribute key is the only bridge from `study.json` to compiled Rust
 behavior. There is no separate registry list in `main`.
@@ -107,6 +108,20 @@ project/
 }
 ```
 
+Persistence is automatic. The omitted root `persistence` object infers the
+local backend with 64 MiB chunk and queue settings. Projects that need explicit
+operational sizing may add:
+
+```json
+"persistence": {
+  "chunk_target_bytes": 67108864,
+  "queue_capacity_bytes": 67108864
+}
+```
+
+Users never provide output paths, construct a backend, submit observations, or
+finalize a recording.
+
 Config alone reads these files. `$sweep` creates independent Cartesian choices;
 `$cases` creates correlated alternatives; ordinary arrays remain literal.
 
@@ -119,9 +134,10 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 ```
 
 That call loads all declarations, discovers models, validates typed constants,
-binds writers and display fields to the state schema, creates immutable tasks
-and phases, infers identities/output paths, schedules work, and records every
-model automatically.
+binds observation plans to the state schema, creates
+immutable tasks and phases, compiles the effective persistence plan, infers
+identities/output paths, schedules work, and persists every model
+automatically.
 
 Output is created beneath `<project-root>/output` only after Study preflight
 succeeds.
@@ -129,11 +145,12 @@ succeeds.
 ## Architecture at a glance
 
 - `state`: canonical typed scientific state and schema;
-- `writer`: observation meaning and borrowed encoding;
+- `observation`: observation meaning and borrowed encoding;
 - `task`: `ScientificModel`, registration, and uniform invocation;
 - `config`: sole JSON parser and typed constants supplier;
 - `study`: effect-free binding and immutable declared intent;
-- `runtime`: active execution and output creation.
+- `runtime`: active execution and output creation;
+- `persistence`: automatic durable lifecycle and verified reading.
 
 Study coordinates declared intent; runtime coordinates active execution.
 Advanced consumers may use `Study::load` and `runtime::advanced::execute`, but
@@ -141,12 +158,13 @@ ordinary projects should not.
 
 Each target subsystem publishes `module::basic` and `module::advanced`, with
 the latter a strict superset. `prelude::basic` contains the small model-author
-surface. Transitional storage/execution/artifact/RNG APIs remain directly
-importable but are intentionally absent from that prelude.
+surface. Persistence writing is automatic and private; only verified reading
+appears in the Advanced tier.
 
 See [`src/task/api.md`](src/task/api.md),
 [`src/config/api.md`](src/config/api.md),
 [`src/study/api.md`](src/study/api.md),
+[`src/persistence/api.md`](src/persistence/api.md),
 [`src/runtime/api.md`](src/runtime/api.md), and the repository
 [`architecture.md`](../docs/architecture.md).
 

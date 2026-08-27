@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::execution::ExecutionScopeError;
-
 /// A failure after an immutable study passed preflight.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -16,12 +14,12 @@ pub enum RuntimeError {
     OutputScope {
         /// Intended output location.
         path: PathBuf,
-        /// Filesystem-scope failure.
+        /// Underlying filesystem failure.
         #[source]
-        source: ExecutionScopeError,
+        source: std::io::Error,
     },
 
-    /// A model invocation returned an application, state, writer, or record error.
+    /// A model invocation returned an application, state, observation, or persistence error.
     #[error("task `{task}` failed: {source}")]
     Task {
         /// Inferred task identity.

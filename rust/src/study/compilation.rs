@@ -1,7 +1,7 @@
 //! Private effect-free project-to-study composition.
 
 use crate::config::advanced::ProjectSpecification;
-use crate::state::advanced::{StateSchemaAccess, SystemStateSchema};
+use crate::state::advanced::SystemStateSchema;
 use crate::task::advanced::ModelCatalog;
 
 use super::error::StudyError;
@@ -12,7 +12,7 @@ pub(crate) fn compile(
     catalog: &ModelCatalog,
 ) -> Result<Study, StudyError> {
     let state_document = project.state_schema();
-    let schema = <SystemStateSchema as StateSchemaAccess>::from_json_template_value(
+    let schema = SystemStateSchema::from_json_template_value(
         state_document.path(),
         state_document.json_value(),
     )?;
@@ -29,24 +29,9 @@ pub(crate) fn compile(
                         phase: phase.name().to_owned(),
                         model: input.model().to_owned(),
                     })?;
-            if let Err(source) = registration.preflight(input, &schema) {
-                return Err(StudyError::model_preflight(
-                    phase.name(),
-                    input.model(),
-                    input.ordinal(),
-                    source,
-                ));
-            }
-            for field in input.display_fields() {
-                if !schema.contains_field(field) {
-                    return Err(StudyError::UnknownDisplayField {
-                        phase: phase.name().to_owned(),
-                        model: input.model().to_owned(),
-                        field: field.to_owned(),
-                    });
-                }
-            }
-
+            let observation_plan = registration.preflight(input, &schema).map_err(|source| {
+                StudyError::model_preflight(phase.name(), input.model(), input.ordinal(), source)
+            })?;
             let identity = format!(
                 "{}/{:06}/{}-{:06}",
                 phase.name(),
@@ -61,6 +46,7 @@ pub(crate) fn compile(
                 output_ordinal,
                 input: input.clone(),
                 definition: registration.make_task(),
+                observation_plan,
             });
             output_ordinal = output_ordinal
                 .checked_add(1)

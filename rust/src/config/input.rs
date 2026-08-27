@@ -21,7 +21,6 @@ impl ResolvedTaskInput {
         source_path: PathBuf,
         ordinal: u64,
         value: Value,
-        display_fields: Arc<[Box<str>]>,
         timeout: Option<std::time::Duration>,
     ) -> Self {
         let json = serde_json::to_vec(&value)
@@ -33,7 +32,6 @@ impl ResolvedTaskInput {
                 ordinal,
                 value,
                 json: json.into_boxed_slice(),
-                display_fields,
                 timeout,
             }),
         }
@@ -52,11 +50,6 @@ impl ResolvedTaskInput {
     /// Returns the zero-based deterministic combination ordinal.
     pub fn ordinal(&self) -> u64 {
         self.inner.ordinal
-    }
-
-    /// Iterates additional scientific state fields selected for display.
-    pub fn display_fields(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.inner.display_fields.iter().map(Box::as_ref)
     }
 
     /// Returns the optional effective timeout for this task invocation.
@@ -94,7 +87,6 @@ impl fmt::Debug for ResolvedTaskInput {
             .field("model", &self.model())
             .field("source_path", &self.source_path())
             .field("ordinal", &self.ordinal())
-            .field("display_fields", &self.inner.display_fields)
             .field("timeout", &self.timeout())
             .finish_non_exhaustive()
     }
@@ -106,6 +98,5 @@ struct ResolvedTaskInputInner {
     ordinal: u64,
     value: Value,
     json: Box<[u8]>,
-    display_fields: Arc<[Box<str>]>,
     timeout: Option<std::time::Duration>,
 }

@@ -19,8 +19,11 @@ pub enum StudyError {
     State(#[from] StateError),
 
     /// Compiled model registrations are invalid or ambiguous.
-    #[error("failed to validate compiled model registrations")]
-    ModelCatalog(#[from] ModelCatalogError),
+    #[error("invalid compiled model registration: {reason}")]
+    InvalidModelRegistration {
+        /// Stable explanation of the invalid or duplicate registration.
+        reason: String,
+    },
 
     /// A manifest task references no compiled model.
     #[error("phase `{phase}` references unregistered model `{model}`")]
@@ -31,7 +34,7 @@ pub enum StudyError {
         model: String,
     },
 
-    /// Typed constants or writer binding failed during model preflight.
+    /// Typed constants or observation-plan binding failed during model preflight.
     #[error("model `{model}` failed preflight for resolved input {ordinal} in phase `{phase}`")]
     ModelPreflight {
         /// Phase containing the rejected invocation.
@@ -40,25 +43,22 @@ pub enum StudyError {
         model: String,
         /// Deterministic input expansion ordinal.
         ordinal: u64,
-        /// Original config, writer, or model-declaration error.
+        /// Original config, observation, or model-declaration error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    /// Display configuration selected a field absent from the state schema.
-    #[error("model `{model}` in phase `{phase}` selects unknown display field `{field}`")]
-    UnknownDisplayField {
-        /// Phase containing the rejected invocation.
-        phase: String,
-        /// Stable compiled model key.
-        model: String,
-        /// Undeclared scientific state field.
-        field: String,
     },
 
     /// The total expanded task count cannot be represented by stable ordinals.
     #[error("the study contains more expanded task invocations than can be identified")]
     TaskIdentityOverflow,
+}
+
+impl From<ModelCatalogError> for StudyError {
+    fn from(source: ModelCatalogError) -> Self {
+        Self::InvalidModelRegistration {
+            reason: source.to_string(),
+        }
+    }
 }
 
 impl StudyError {

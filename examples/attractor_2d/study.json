@@ -2,16 +2,14 @@
   "replicates": {
     "count": 1,
     "scheduling": "sequential",
-    "failure_policy": "fail_fast",
-    "base_seed": 1101
+    "failure_policy": "fail_fast"
   },
   "phases": {
     "simulate": {
       "tasks": [
         {
           "model": "attractor",
-          "input": "inputs/run.json",
-          "display": {"include": ["point", "radius"]}
+          "input": "inputs/run.json"
         }
       ],
       "max_concurrency": 3,

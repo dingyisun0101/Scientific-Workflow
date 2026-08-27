@@ -2,8 +2,8 @@
 
 use serde::de::DeserializeOwned;
 
+use crate::observation::advanced::ObservationPlan;
 use crate::state::advanced::{SystemState, SystemStateSchema};
-use crate::writer::advanced::Writer;
 
 use super::result::TaskResult;
 
@@ -23,7 +23,7 @@ use super::result::TaskResult;
 /// observable transition and must strictly advance the state's iteration.
 /// Workflow observes the initial state, every successful step, and the final
 /// state automatically. Implementations do not report progress or invoke the
-/// writer themselves.
+/// observation plan themselves.
 pub trait ScientificModel: Send + Sized + 'static {
     /// One complete set of model constants supplied by config.
     type Constants: DeserializeOwned + Send + Sync + 'static;
@@ -32,11 +32,11 @@ pub trait ScientificModel: Send + Sized + 'static {
     ///
     /// The default records every declared state field at every iteration.
     /// Implementations may derive stream selection and sampling cadence from
-    /// model constants. This function is called during effect-free study
-    /// preflight and again when execution starts, so it must be deterministic
-    /// and must not perform external side effects.
-    fn writer(_constants: &Self::Constants) -> TaskResult<Writer> {
-        Ok(Writer::all_fields())
+    /// model constants. This function is called once during effect-free Study
+    /// preflight; Study binds and retains that exact plan for execution. It
+    /// must not perform external side effects.
+    fn observation_plan(_constants: &Self::Constants) -> TaskResult<ObservationPlan> {
+        Ok(ObservationPlan::all_fields())
     }
 
     /// Builds a fully initialized model from resolved constants and the
@@ -65,7 +65,7 @@ pub trait ScientificModel: Send + Sized + 'static {
     /// Success must strictly increase [`SystemState::time`]'s iteration while
     /// preserving the state owner and schema. Failure must not claim a
     /// completed transition: Workflow emits neither a successful-step snapshot
-    /// nor a successful-step writer observation for an error result.
+    /// nor a successful-step observation for an error result.
     fn step(&mut self) -> TaskResult;
 
     /// Optionally reports the expected final iteration for inferred progress.

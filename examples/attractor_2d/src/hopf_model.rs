@@ -1,17 +1,9 @@
-use std::thread;
-use std::time::Duration;
-
 use scientific_workflow::prelude::basic::*;
 use serde::Deserialize;
 
 const POINT_FIELD: &str = "point";
 
 const RADIUS_FIELD: &str = "radius";
-
-// REQUIRED EXAMPLE BEHAVIOR: every model step pauses briefly so progress is
-// visible to a human watching the terminal. This is a permanent teaching and
-// display requirement for this example; do not remove it or optimize it away.
-const REQUIRED_STEP_DISPLAY_PAUSE: Duration = Duration::from_millis(1);
 
 /// Minimal scientific owner for one generated task.
 ///
@@ -43,13 +35,13 @@ pub(crate) struct AttractorConstants {
 impl ScientificModel for HopfModel {
     type Constants = AttractorConstants;
 
-    fn writer(constants: &Self::Constants) -> TaskResult<Writer> {
-        Ok(Writer::streams([
-            Stream::fields("trajectory", [POINT_FIELD])?
+    fn observation_plan(constants: &Self::Constants) -> TaskResult<ObservationPlan> {
+        Ok(ObservationPlan::streams([
+            ObservationStream::fields("trajectory", [POINT_FIELD])?
                 .every_iterations(constants.trajectory_sampling_interval)?,
-            Stream::fields("radius", [RADIUS_FIELD])?
+            ObservationStream::fields("radius", [RADIUS_FIELD])?
                 .every_iterations(constants.radius_sampling_interval)?,
-            Stream::fields("checkpoint", [POINT_FIELD, RADIUS_FIELD])?
+            ObservationStream::fields("checkpoint", [POINT_FIELD, RADIUS_FIELD])?
                 .every_iterations(constants.checkpoint_sampling_interval)?,
         ])?
         .with_iteration_unit("iteration")?
@@ -88,11 +80,6 @@ impl ScientificModel for HopfModel {
     }
 
     fn step(&mut self) -> TaskResult {
-        // REQUIRED AND PERMANENT: the example must advance slowly enough for its
-        // live progress display to be legible. This pause is part of the example
-        // contract, not numerical integration and not study policy.
-        thread::sleep(REQUIRED_STEP_DISPLAY_PAUSE);
-
         {
             // A tuple borrow gives simultaneous mutable access to two
             // distinct slots while preserving SystemState's aliasing rules.

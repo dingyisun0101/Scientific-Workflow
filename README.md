@@ -23,7 +23,8 @@ one resolved model-input combination becomes one internal task.
 registered models + project JSON
     → config parsing and deterministic expansion
     → immutable Study binding and preflight
-    → runtime scheduling and automatic recording
+    → Study-owned effective persistence plan
+    → runtime scheduling and automatic persistence
 ```
 
 The Rust crate lives in [`rust/`](rust/). Start with its
@@ -33,7 +34,9 @@ subsystem's `src/<module>/api.md` for exhaustive contracts.
 
 The [attractor example](examples/attractor_2d) demonstrates the final workflow:
 its Rust executable is one `run(&Path)` call, while its model owns state and a
-custom writer and its JSON owns study organization and constants sweeps.
+custom observation plan and its JSON owns study organization and constants sweeps.
+Persistence construction, submission, finalization, and shutdown are entirely
+internal.
 
 > This crate is pre-1.0 test software. Public API behavior may change through
 > coordinated refactor releases.

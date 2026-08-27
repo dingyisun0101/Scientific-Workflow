@@ -3,35 +3,35 @@
 use thiserror::Error;
 
 use crate::config::advanced::ResolvedTaskInput;
+use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::{StateSchemaAccess, SystemState, SystemStateSchema};
-use crate::writer::advanced::{Writer, WriterDescriptor};
 
 use super::model::ScientificModel;
 use super::result::TaskResult;
 
 /// The runtime-owned services a task may use while executing.
 ///
-/// Implementations perform automatic writer observation and automatic
+/// Implementations perform automatic state observation and automatic
 /// lifecycle/progress snapshot publication at each method boundary. The task
 /// module deliberately exposes no user callback for formatting messages,
 /// choosing channels, managing storage, or mutating lifecycle state.
-pub trait TaskExecutionHost {
+pub(crate) trait TaskExecutionHost {
     /// Borrows the state schema loaded from the project's `config/state.json`.
     fn state_schema(&self) -> TaskResult<&SystemStateSchema>;
 
     /// Reports whether cooperative cancellation has been requested.
     fn cancellation_requested(&self) -> bool;
 
-    /// Accepts the validated writer and emits the initial observation and
+    /// Accepts the validated observation plan and emits the initial observation and
     /// automatic initialized snapshot for `state`.
     fn begin_model(
         &mut self,
-        writer: Writer,
+        plan: BoundObservationPlan,
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult;
 
-    /// Emits the automatic writer observation and progress snapshot after one
+    /// Emits the automatic observation and progress snapshot after one
     /// successful model step.
     fn observe_model_step(
         &mut self,
@@ -39,7 +39,7 @@ pub trait TaskExecutionHost {
         target_iteration: Option<u64>,
     ) -> TaskResult;
 
-    /// Emits the final writer observation and completion snapshot exactly once
+    /// Emits the final observation and completion snapshot exactly once
     /// after the model reports completion.
     fn observe_model_final(
         &mut self,
@@ -53,13 +53,18 @@ pub trait TaskExecutionHost {
 /// Study ordinarily constructs [`super::definition::Task`] from a registered
 /// model. Application code does not implement this trait. Replacement runtimes
 /// may execute a task from a resolved task input through this boundary.
-pub trait TaskDefinition: Send + Sync {
+pub(crate) trait TaskDefinition: Send + Sync {
     /// Obtains typed constants from `input` and executes through `host`.
     ///
     /// Returning `Ok(())` while `host.cancellation_requested()` is true means
     /// cooperative cancellation, not successful completion; lifecycle status
     /// remains the runtime's responsibility.
-    fn execute(&self, input: &ResolvedTaskInput, host: &mut dyn TaskExecutionHost) -> TaskResult;
+    fn execute(
+        &self,
+        input: &ResolvedTaskInput,
+        observation_plan: &BoundObservationPlan,
+        host: &mut dyn TaskExecutionHost,
+    ) -> TaskResult;
 }
 
 pub(crate) struct StatefulDefinition<M> {
@@ -81,22 +86,25 @@ impl<M> TaskDefinition for StatefulDefinition<M>
 where
     M: ScientificModel,
 {
-    fn execute(&self, input: &ResolvedTaskInput, host: &mut dyn TaskExecutionHost) -> TaskResult {
+    fn execute(
+        &self,
+        input: &ResolvedTaskInput,
+        observation_plan: &BoundObservationPlan,
+        host: &mut dyn TaskExecutionHost,
+    ) -> TaskResult {
         if host.cancellation_requested() {
             return Ok(());
         }
 
         let constants: M::Constants = input.decode()?;
-        let writer = M::writer(&constants)?;
         let schema = host.state_schema()?.clone();
-        WriterDescriptor::bind(writer.clone(), &schema)?;
 
         let mut model = M::initialize(constants, &schema)?;
         let state_address = model.state() as *const SystemState;
         validate_state(model.state(), &schema, state_address)?;
         let mut target = validate_target(model.state(), model.target_iteration())?;
 
-        host.begin_model(writer, model.state(), target)?;
+        host.begin_model(observation_plan.clone(), model.state(), target)?;
 
         while !model.is_complete() {
             if host.cancellation_requested() {
