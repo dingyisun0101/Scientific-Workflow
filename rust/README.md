@@ -13,6 +13,13 @@ serde = { version = "1", features = ["derive"] }
 
 Rust 1.97 or newer is required. Executables should commit `Cargo.lock`.
 
+> **Breaking release:** Version 0.10.0 intentionally removes the pre-0.10
+> orchestration, configuration, storage/writer, and study surfaces. Applications
+> using 0.9.x or earlier must adopt registered `ScientificModel`
+> implementations, the canonical three project JSON files, and the crate-level
+> `run(&Path)` facade. Removed Rust APIs and legacy JSON fields have no
+> compatibility aliases.
+
 ## Complete user procedure
 
 ### 1. Define a model
@@ -180,8 +187,8 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 That call loads all declarations, discovers models, validates typed constants,
 binds observation plans to the state schema, resolves program paths and Python
 environments, creates immutable generic tasks and phases, compiles the
-effective persistence plan,
-infers identities/output paths, schedules work, and persists every task
+effective persistence plan, infers identities/output paths, schedules work,
+and persists every task
 automatically while publishing inferred terminal progress.
 
 Each program or Python script receives absolute `WORKFLOW_CONFIG_PATH` and

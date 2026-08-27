@@ -27,12 +27,12 @@ types are deliberately not public.
 - `rust/src/config/tests/config_workflow.rs` covers duplicate keys, strict
   unknown-field rejection, canonical `parameters.json`, automatic model-key
   section selection, rejection of legacy task input paths, manifest/persistence
-  defaults, positive limits, dependencies, generic model/program/Python task grammar,
-  executable resolution, nested Python/mamba command lowering and executable
-  preflight, deterministic `$sweep`/`$cases` expansion, private
-  typed constants decoding, decimal-MB persistence-size conversion and
-  overflow/legacy-byte-field rejection, central arbitrary-parameter capture, and
-  contextual errors. Even an unreferenced JSON document is strict-parsed.
+  defaults, positive limits, dependencies, generic model/program/Python task
+  grammar, executable resolution, nested Python/mamba command lowering and
+  executable preflight, deterministic `$sweep`/`$cases` expansion, private
+  typed constants decoding, decimal-MB persistence-size conversion,
+  overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
+  and contextual errors. Even an unreferenced JSON document is strict-parsed.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
   invalid/duplicate registrations, effect-free loading, unknown models, typed
   constants and one-time observation preflight, deterministic internal
@@ -93,5 +93,6 @@ model tasks produce completed recordings and its dependent Python task writes
 `output/plots` directory. The Python task uses the public verified reader and
 the `plot` section of central `config/parameters.json`; it has no Rust caller
 wrapper. A focused model test verifies that the demonstration-only configured
-per-step delay is actually applied. Config boundary coverage preserves the
-phase-owned ten-second `start_interval_ms` admission delay used by the example.
+per-step delay is actually applied. A manifest regression test and Config
+boundary coverage preserve the phase-owned two-second `start_interval_ms`
+admission delay used by the example.

@@ -23,6 +23,7 @@ version = "0.1.0"
 dependencies = [
  "scientific-workflow",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

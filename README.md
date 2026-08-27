@@ -3,6 +3,13 @@
 Scientific Workflow turns registered Rust scientific models, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
+> **Breaking release:** Version 0.10.0 intentionally replaces the pre-0.10
+> orchestration, configuration, storage/writer, and study APIs. Projects using
+> 0.9.x or earlier must migrate to the model registration plus
+> `study.json`/`config/state.json`/`config/parameters.json` workflow described
+> below. Legacy Rust entry points and legacy JSON fields are not accepted as
+> compatibility aliases.
+
 The user workflow is intentionally limited to:
 
 1. implement/register each stateful Rust model and provide any standalone task
@@ -27,7 +34,7 @@ wrapper.
 ```text
 registered models and/or programs + project JSON
     → crate-level run(&Path) facade
-    → one central immutable parse of all JSON requested by Study
+    → one central immutable parse of all project JSON
     → immutable Study binding and preflight
     → Study-owned effective persistence plan
     → runtime::execute(Study)

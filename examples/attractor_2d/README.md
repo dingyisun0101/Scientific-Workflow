@@ -28,6 +28,7 @@ For presentation only, `artificial_step_delay_ms` sleeps after every successful
 step so the automatic dashboard remains visible long enough to inspect. This
 wall-clock delay is not scientific time and should be set to `0` for an
 unpaced calculation.
+
 Its custom `ObservationPlan` records:
 
 - the phase-space trajectory every 10 iterations;
@@ -38,11 +39,11 @@ The `attractor` section of `config/parameters.json` sweeps three growth
 parameters and two angular frequencies. Config selects that section from the
 registered model key and expands its Cartesian product into six model tasks;
 Runtime executes up to three concurrently and automatically records every
-observation stream. The phase's `start_interval_ms: 10000` setting waits ten
+observation stream. The phase's `start_interval_ms: 2000` setting waits two
 seconds between successive task admissions (the first eligible task starts
 immediately). This phase-owned scheduling delay is separate from the model's
 one-millisecond per-step presentation delay. With the supplied workload, a
-normal run takes roughly one minute, subject to machine and IO overhead.
+normal run takes roughly 16 seconds, subject to machine and IO overhead.
 
 ## Python plot phase
 
@@ -63,9 +64,8 @@ completed simulation outputs, and isolated artifact directory through the
 standard `WORKFLOW_*` contract.
 
 The plotter retrieves its visual settings from the `plot` section of
-`config/parameters.json`, opens every
-dependency recording with the official verified
-`scientific_workflow_reader`, and produces:
+`config/parameters.json`, opens every dependency recording with the official
+verified `scientific_workflow_reader`, and produces:
 
 ```text
 output/plots/
@@ -96,5 +96,5 @@ persistence sessions, progress counters, or message channels.
 The omitted replicate, timeout, UI, and persistence settings use Workflow's
 validated defaults. The project authors scientifically meaningful observation
 cadence, parameter sweep, plotting choices, one justified concurrency bound,
-the ten-second inter-task admission delay, and the explicitly non-scientific
+the two-second inter-task admission delay, and the explicitly non-scientific
 per-step demonstration delay.

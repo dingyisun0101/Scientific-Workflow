@@ -54,8 +54,8 @@ The current first-level library modules are:
 - `observation`: application-authored scientific selection, cadence, units,
   and private encoding;
 - `task`: generic model/program workload abstraction (including Python
-  lowering), `ScientificModel`
-  contract, linked model registration, and uniform private execution;
+  lowering), `ScientificModel` contract, linked model registration, and
+  uniform private execution;
 - `config`: sole reader/parser of all project JSON, immutable central snapshot,
   executable/Python-environment resolution, and sole typed model-constants
   supplier;
@@ -160,8 +160,8 @@ prelude aggregates supported tiers
 Peers import another subsystem through its `advanced` boundary. Config does
 not depend on task: it treats model keys as opaque. Study owns the cross-domain
 match. Task asks config-owned resolved model parameters for one complete typed
-constants value or delegates one resolved program. Runtime receives only a fully
-preflighted Study and its retained Config.
+constants value or delegates one resolved program. Runtime receives only a
+fully preflighted Study and its retained Config.
 
 ## Source tree and file responsibilities
 
@@ -312,10 +312,10 @@ direct arguments and no public Rust adapter. Config lowers a nested Python
 script/environment declaration to that same executable boundary. A model
 consumes typed constants, initializes from the shared schema, and directly owns
 the stable state returned by `state()`. It reports completion and performs one
-iteration-advancing `step`. Task enforces what Rust can observe: state address/schema stability,
-strict iteration progress, and monotonic optional target. The macro submits
-immutable registration metadata; the private catalog rejects bad/duplicate
-keys and ignores linker order.
+iteration-advancing `step`. Task enforces what Rust can observe: state
+address/schema stability, strict iteration progress, and a monotonic optional
+target. The macro submits immutable registration metadata; the private catalog
+rejects bad or duplicate keys and ignores linker order.
 
 ### Config
 
@@ -324,11 +324,11 @@ Config canonicalizes the project and `config` roots and parses `study.json`,
 namespace with duplicate-key rejection. One clone-cheap immutable Config
 retains the entire value graph. A model key automatically selects its same-name
 parameter section; no manifest input path exists. Config expands selections
-deterministically, resolves program paths and Python
-scripts/environment managers once, and creates a
-deterministic language-neutral snapshot for external tasks. Reserved Workflow
-documents and arbitrary application documents use the same lookup graph. The
-public Advanced API is only `ConfigError`.
+deterministically, resolves program paths and Python scripts/environment
+managers once, and creates a deterministic language-neutral snapshot for
+external tasks. Reserved Workflow documents and arbitrary application
+documents use the same lookup graph. The public Advanced API is only
+`ConfigError`.
 
 ### Study
 
@@ -336,10 +336,10 @@ public Advanced API is only `ConfigError`.
 semantics, linked registration validation, model-key resolution, generic
 program and Python-environment resolution, constants decoding, and
 observation/schema binding. It retains
-the central Config, infers stable identities, labels, the output root, and
-private operational policy. Public inspection is limited
-to project/output roots; phases, tasks, schema, resolved parameters, and policies
-exist only for Runtime.
+the central Config and infers stable identities, labels, the output root, and
+private operational policy. Public inspection is limited to project/output
+roots; phases, tasks, schema, resolved parameters, and policies exist only for
+Runtime.
 
 ### Runtime
 
