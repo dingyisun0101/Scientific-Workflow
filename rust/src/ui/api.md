@@ -49,7 +49,7 @@ stops admission, asks active models to stop between steps, terminates active
 external programs, waits for cleanup, publishes cancellation, and then UI
 restores the terminal.
 
-There is no `ui` object in `study.json`: no refresh rate, theme, field list,
+There is no `ui` object in `wf_configs/study.json`: no refresh rate, theme, field list,
 message callback, progress counter, renderer, or cancellation handle is
 user-defined. Terminal setup/drawing failure is best-effort and cannot turn
 valid scientific work into failure.

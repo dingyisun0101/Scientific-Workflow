@@ -1,8 +1,9 @@
 //! Configuration-driven scientific workflow execution.
 //!
 //! An ordinary application defines registered [`task::basic::ScientificModel`]
-//! implementations, writes `study.json`, `config/state.json`, and the central
-//! `config/parameters.json`, then calls [`run`] with the project root. Workflow infers task
+//! implementations, writes `wf_configs/study.json`, its declared named
+//! state-schema documents, and the central `wf_configs/parameters.json`, then
+//! calls [`run`] with the project root. Workflow infers task
 //! instances, phase membership, identities, output paths, progress boundaries,
 //! recording lifecycle, and execution mechanics.
 //!

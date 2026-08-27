@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use super::document::child_pointer;
 use super::error::ConfigError;
 
 pub(crate) fn expand(path: &Path, value: &Value) -> Result<Vec<Value>, ConfigError> {
@@ -234,15 +235,6 @@ fn flattened_paths(object: &Map<String, Value>) -> Vec<String> {
     }
     paths.sort_unstable();
     paths
-}
-
-fn child_pointer(parent: &str, key: &str) -> String {
-    let key = key.replace('~', "~0").replace('/', "~1");
-    if parent == "/" {
-        format!("/{key}")
-    } else {
-        format!("{parent}/{key}")
-    }
 }
 
 fn normalized_pointer(pointer: &str) -> &str {

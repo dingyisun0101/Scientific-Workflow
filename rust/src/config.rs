@@ -1,10 +1,11 @@
 //! Central parsing and resolution of declarative Workflow project parameters.
 //!
 //! Ordinary applications do not call this subsystem: they write a study
-//! manifest, one state schema, and one arbitrary `parameters.json`. Config
-//! parses them once into one immutable namespaced graph. Study retains that graph, uses
-//! typed reserved views for workflow procedure, and binds model, generic
-//! program, or environment-managed Python tasks from it.
+//! manifest, named state-schema documents, and one arbitrary `parameters.json`
+//! beneath the required `wf_configs` project directory. Config parses them once
+//! into one immutable namespaced graph. Study retains that graph, uses typed
+//! reserved views for workflow procedure, and binds model, generic program, or
+//! environment-managed Python tasks from it.
 
 mod document;
 mod error;

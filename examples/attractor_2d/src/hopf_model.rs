@@ -130,7 +130,8 @@ mod tests {
 
     #[test]
     fn configured_artificial_delay_paces_each_successful_step() {
-        let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/state.json");
+        let schema_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("wf_configs/states/attractor.json");
         let schema = SystemStateSchema::load_json_template(&schema_path).unwrap();
         let delay = Duration::from_millis(15);
         let constants = AttractorConstants {

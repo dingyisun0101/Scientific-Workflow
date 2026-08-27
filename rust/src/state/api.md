@@ -65,8 +65,10 @@ type for that state lineage.
 
 Payloads accepted by `initialize_payload` and `insert_payload` implement
 `Serialize + Clone + Send + 'static`. `Send` permits an owned state to move
-between threads. `Sync` is not required, so shared cross-thread references are
-available only when the concrete payload composition permits them. Explicit
+between threads. The private erased payload boundary deliberately does not
+require `Sync`, so `SystemState` and `StateSeries` are not `Sync` even when a
+particular set of concrete payloads would be. Cross-thread shared ownership
+therefore requires synchronization such as `Arc<Mutex<SystemState>>`. Explicit
 state cloning invokes every populated payload's `Clone`; ordinary insertion,
 borrowing, mutation, extraction, and series movement do not clone payloads.
 
@@ -160,8 +162,9 @@ Callers should match variants of interest and retain a fallback arm.
   an established physical coordinate.
 - `InvalidPhysicalAdvance { current, delta }`: the delta or sum is non-finite.
 
-`state::basic::PayloadInsertError<T>` owns a rejected incoming payload and its
-`StateError`. `error()` and `payload()` borrow the two components;
+`state::basic::PayloadInsertError<T>` owns a payload rejected by
+`initialize_payload` or `insert_payload` and its `StateError`. `error()` and
+`payload()` borrow the two components;
 `into_parts()` returns `(StateError, T)` without cloning. `Display` delegates to
 the state error, while `Debug` intentionally omits payload contents.
 
@@ -262,7 +265,7 @@ implementation.
 
 ## Example
 
-Given `config/state.json`:
+Given `wf_configs/states/state.json`:
 
 ```json
 {
@@ -283,7 +286,7 @@ use scientific_workflow::state::basic::{StateSeries, StateTime, SystemStateSchem
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let schema =
-        SystemStateSchema::load_json_template(Path::new("config/state.json"))?;
+        SystemStateSchema::load_json_template(Path::new("wf_configs/states/state.json"))?;
     let time = StateTime::from_iteration_and_physical_time(0, 0.0)
         .expect("the physical coordinate is finite");
     let mut state = schema.create_empty_state(time);

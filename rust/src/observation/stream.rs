@@ -24,6 +24,14 @@ enum FieldSelection {
 
 impl ObservationStream {
     /// Defines a named stream containing every field in its bound state schema.
+    ///
+    /// The name is trimmed and remains a scientific identifier rather than a
+    /// filesystem path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObservationError::EmptyStreamName`] when the normalized name
+    /// is empty.
     pub fn all_fields(name: impl Into<String>) -> Result<Self, ObservationError> {
         Ok(Self {
             name: normalize_stream_name(name)?,
@@ -33,6 +41,17 @@ impl ObservationStream {
     }
 
     /// Defines a named stream containing the selected state fields.
+    ///
+    /// Stream and field names are trimmed. Selection order is accepted as
+    /// application input but schema binding later restores canonical schema
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObservationError::EmptyStreamName`],
+    /// [`ObservationError::EmptyFieldName`],
+    /// [`ObservationError::EmptyFieldSelection`], or
+    /// [`ObservationError::DuplicateField`] for an invalid declaration.
     pub fn fields<I, S>(name: impl Into<String>, fields: I) -> Result<Self, ObservationError>
     where
         I: IntoIterator<Item = S>,
@@ -70,6 +89,15 @@ impl ObservationStream {
     }
 
     /// Changes this stream's cadence from every iteration to every `iterations`.
+    ///
+    /// Iteration zero and every iteration divisible by this positive interval
+    /// are selected. The terminal state is handled independently by the
+    /// private observation session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObservationError::InvalidSamplingInterval`] when `iterations`
+    /// is zero.
     pub fn every_iterations(mut self, iterations: u64) -> Result<Self, ObservationError> {
         let Some(iterations) = NonZeroU64::new(iterations) else {
             return Err(ObservationError::InvalidSamplingInterval {

@@ -1,6 +1,6 @@
 //! Validated Workflow-owned study manifest declarations.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use super::document::child_pointer;
 use super::error::ConfigError;
 use super::parameters::ResolvedTask;
 use super::python::PythonTaskDeclaration;
@@ -55,7 +56,7 @@ pub enum FailurePolicy {
     FinishAll,
 }
 
-/// The validated Workflow-owned portion of `study.json`.
+/// The validated Workflow-owned portion of `wf_configs/study.json`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StudyManifest {
     replicates: ReplicatePolicy,
@@ -144,6 +145,7 @@ impl PhaseSpecification {
 
 pub(crate) struct ParsedManifest {
     pub(crate) manifest: StudyManifest,
+    pub(crate) state_paths: BTreeMap<Box<str>, PathBuf>,
     pub(crate) phases: Vec<ParsedPhase>,
 }
 
@@ -160,6 +162,7 @@ pub(crate) struct ParsedPhase {
 pub(crate) enum ParsedTask {
     Model {
         model: Box<str>,
+        state: Box<str>,
         timeout: Option<Duration>,
     },
     Program {
@@ -213,24 +216,52 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         },
     };
 
+    let mut state_paths = BTreeMap::new();
+    for (name, state_path) in raw.paths.states {
+        let pointer = child_pointer("/paths/states", &name);
+        validate_identifier(path, &pointer, &name, "state")?;
+        if state_path.as_os_str().is_empty() {
+            return Err(ConfigError::invalid(
+                path,
+                &pointer,
+                "state schema path must be nonempty",
+            ));
+        }
+        if state_path.is_absolute() {
+            return Err(ConfigError::invalid(
+                path,
+                &pointer,
+                "state schema path must be relative to the project root",
+            ));
+        }
+        if state_path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+            return Err(ConfigError::invalid(
+                path,
+                pointer,
+                "state schema path must use the `.json` extension",
+            ));
+        }
+        state_paths.insert(name.into_boxed_str(), state_path);
+    }
+
     let declared_names = raw.phases.keys().cloned().collect::<HashSet<_>>();
     let mut phases = Vec::with_capacity(raw.phases.len());
     for (name, value) in raw.phases {
-        validate_identifier(path, &format!("/phases/{name}"), &name, "phase")?;
-        let raw: RawPhase = serde_json::from_value(value).map_err(|error| {
-            ConfigError::invalid(path, format!("/phases/{name}"), error.to_string())
-        })?;
+        let phase_pointer = child_pointer("/phases", &name);
+        validate_identifier(path, &phase_pointer, &name, "phase")?;
+        let raw: RawPhase = serde_json::from_value(value)
+            .map_err(|error| ConfigError::invalid(path, &phase_pointer, error.to_string()))?;
         if raw.tasks.is_empty() {
             return Err(ConfigError::invalid(
                 path,
-                format!("/phases/{name}/tasks"),
+                format!("{phase_pointer}/tasks"),
                 "a phase must declare at least one task",
             ));
         }
         if raw.max_concurrency == 0 {
             return Err(ConfigError::invalid(
                 path,
-                format!("/phases/{name}/max_concurrency"),
+                format!("{phase_pointer}/max_concurrency"),
                 "maximum concurrency must be positive",
             ));
         }
@@ -240,14 +271,14 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         for dependency in raw.after {
             validate_identifier(
                 path,
-                &format!("/phases/{name}/after"),
+                &format!("{phase_pointer}/after"),
                 &dependency,
                 "phase dependency",
             )?;
             if dependency == name {
                 return Err(ConfigError::invalid(
                     path,
-                    format!("/phases/{name}/after"),
+                    format!("{phase_pointer}/after"),
                     "a phase cannot depend on itself",
                 ));
             }
@@ -260,7 +291,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             if !seen_dependencies.insert(dependency.clone()) {
                 return Err(ConfigError::invalid(
                     path,
-                    format!("/phases/{name}/after"),
+                    format!("{phase_pointer}/after"),
                     format!("dependency `{dependency}` is repeated"),
                 ));
             }
@@ -269,17 +300,19 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
 
         let mut tasks = Vec::with_capacity(raw.tasks.len());
         for (index, task) in raw.tasks.into_iter().enumerate() {
-            let pointer = format!("/phases/{name}/tasks/{index}");
+            let pointer = format!("{phase_pointer}/tasks/{index}");
             let timeout = task.timeout_ms.map(Duration::from_millis);
-            match (task.model, task.program, task.python) {
-                (Some(model), None, None) if task.args.is_empty() => {
+            match (task.model, task.state, task.program, task.python) {
+                (Some(model), Some(state), None, None) if task.args.is_empty() => {
                     validate_identifier(path, &format!("{pointer}/model"), &model, "model")?;
+                    validate_identifier(path, &format!("{pointer}/state"), &state, "state")?;
                     tasks.push(ParsedTask::Model {
                         model: model.into_boxed_str(),
+                        state: state.into_boxed_str(),
                         timeout,
                     });
                 }
-                (None, Some(program), None) => {
+                (None, None, Some(program), None) => {
                     if program.as_os_str().is_empty() {
                         return Err(ConfigError::invalid(
                             path,
@@ -293,7 +326,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                         timeout,
                     });
                 }
-                (None, None, Some(declaration)) if task.args.is_empty() => {
+                (None, None, None, Some(declaration)) if task.args.is_empty() => {
                     tasks.push(ParsedTask::Python {
                         declaration,
                         timeout,
@@ -303,7 +336,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `model`, `program`, or `python`; top-level `args` are valid only for a program",
+                        "a task must declare exactly `model` with `state`, `program`, or `python`; top-level `args` are valid only for a program",
                     ));
                 }
             }
@@ -321,7 +354,11 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
     }
 
     validate_acyclic(path, &phases)?;
-    Ok(ParsedManifest { manifest, phases })
+    Ok(ParsedManifest {
+        manifest,
+        state_paths,
+        phases,
+    })
 }
 
 fn megabytes_to_bytes(
@@ -403,11 +440,18 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawStudy {
+    paths: RawPaths,
     #[serde(default)]
     replicates: RawReplicatePolicy,
     #[serde(default)]
     persistence: RawPersistence,
     phases: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPaths {
+    states: BTreeMap<String, PathBuf>,
 }
 
 const BYTES_PER_MEGABYTE: u64 = 1_000_000;
@@ -474,6 +518,8 @@ const fn default_max_concurrency() -> usize {
 struct RawTask {
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
     #[serde(default)]
     program: Option<PathBuf>,
     #[serde(default)]

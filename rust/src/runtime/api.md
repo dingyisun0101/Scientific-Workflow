@@ -150,7 +150,7 @@ paths through:
 Programs may read any central configuration keys they understand. The supplied
 workspace is their default location for temporary or task-scoped artifacts,
 but an external program owns its domain-specific IO and may resolve a
-project-relative destination from `parameters.json`. For example, the bundled
+project-relative destination from `wf_configs/parameters.json`. For example, the bundled
 Python plotter writes directly to the configured `output/plots`. Rust
 Persistence does not relocate or publish those Python-owned files. A Study uses
 its captured snapshot: editing JSON after `Study::load` cannot alter these
@@ -245,7 +245,8 @@ topological-position calculation are private.
 Recording metadata keeps complete resolved constants under `model_constants`
 and Workflow identity/source facts under a separate `workflow` object. The
 workflow object names the selected model, `parameter_ordinal`, and canonical
-`parameter_source`; the effective backend and byte settings are recorded under
+`parameter_source`, plus the explicitly selected `state` key; the effective
+backend and byte settings are recorded under
 `workflow.persistence`. The user-authored `chunk_target_mb` and
 `queue_capacity_mb` have already been converted, so provenance deliberately
 records the exact effective values as `chunk_target_bytes` and

@@ -77,6 +77,17 @@ pub enum ConfigError {
         dependency: String,
     },
 
+    /// A model task selects no state schema declared by the study.
+    #[error("model `{model}` in phase `{phase}` selects unknown state `{state}`")]
+    UnknownState {
+        /// Containing phase key.
+        phase: String,
+        /// Compiled model key.
+        model: String,
+        /// Missing state-schema key.
+        state: String,
+    },
+
     /// A model-parameter expansion cannot be represented safely.
     #[error("model parameter expansion in `{path}` exceeds supported combination counts")]
     ExpansionOverflow {

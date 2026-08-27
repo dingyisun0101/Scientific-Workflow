@@ -1,6 +1,7 @@
 //! Automatic durable model recordings and program workspaces.
 //!
-//! Ordinary applications configure persistence only through `study.json`.
+//! Ordinary applications configure persistence only through
+//! `wf_configs/study.json`.
 //! Study owns an immutable effective plan, while Runtime privately constructs
 //! and drives persistence. Model tasks receive structured state recordings;
 //! generic program and Python tasks receive config/dependency snapshots,
@@ -23,7 +24,7 @@ mod python_reader_conformance_tests;
 /// Ordinary application-facing persistence API.
 ///
 /// This scope is intentionally empty. Applications author the optional
-/// `persistence` object in `study.json` and call `run(&Path)`.
+/// `persistence` object in `wf_configs/study.json` and call `run(&Path)`.
 pub mod basic {}
 
 /// Supported persistence API for inspection, verified reading, and Workflow peers.

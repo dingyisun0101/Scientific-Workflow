@@ -13,7 +13,10 @@ use super::program::ResolvedProgramTask;
 /// One centrally resolved generic task declaration.
 #[derive(Clone, Debug)]
 pub(crate) enum ResolvedTask {
-    Model(ResolvedModelParameters),
+    Model {
+        parameters: ResolvedModelParameters,
+        state: Box<str>,
+    },
     Program(ResolvedProgramTask),
 }
 
@@ -31,15 +34,12 @@ impl ResolvedModelParameters {
         value: Value,
         timeout: Option<std::time::Duration>,
     ) -> Self {
-        let json = serde_json::to_vec(&value)
-            .expect("serializing an already parsed serde_json::Value cannot fail");
         Self {
             inner: Arc::new(ResolvedModelParametersInner {
                 model,
                 source_path,
                 ordinal,
                 value,
-                json: json.into_boxed_slice(),
                 timeout,
             }),
         }
@@ -82,9 +82,9 @@ impl ResolvedModelParameters {
         })
     }
 
-    /// Borrows deterministic compact JSON for provenance persistence.
-    pub fn resolved_json(&self) -> &[u8] {
-        &self.inner.json
+    /// Borrows the complete resolved value for internal provenance assembly.
+    pub(crate) fn resolved_value(&self) -> &Value {
+        &self.inner.value
     }
 }
 
@@ -105,6 +105,5 @@ struct ResolvedModelParametersInner {
     source_path: PathBuf,
     ordinal: u64,
     value: Value,
-    json: Box<[u8]>,
     timeout: Option<std::time::Duration>,
 }

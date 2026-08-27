@@ -1,8 +1,9 @@
 //! Loading one project root into an immutable resolved specification.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::document::StateSchemaDocument;
+use super::document::{StateSchemaDocument, child_pointer};
 use super::error::ConfigError;
 use super::expansion;
 use super::manifest::{self, ParsedTask, PhaseSpecification, StudyManifest};
@@ -11,7 +12,6 @@ use super::program::{ResolvedProgramTask, resolve_executable};
 use super::python;
 use super::store::Config;
 
-const STATE_SCHEMA: &str = "state.json";
 const PARAMETERS: &str = "parameters.json";
 
 /// A complete immutable project declaration compiled from one project root.
@@ -19,33 +19,31 @@ const PARAMETERS: &str = "parameters.json";
 pub(crate) struct ProjectSpecification {
     config: Config,
     manifest: StudyManifest,
-    state_schema: StateSchemaDocument,
+    state_schemas: BTreeMap<Box<str>, StateSchemaDocument>,
     phases: Box<[PhaseSpecification]>,
 }
 
 impl ProjectSpecification {
     /// Loads and validates all declarations and parameters beneath `project_root`.
     ///
-    /// The root is canonicalized once. `study.json` is read from the root and
-    /// every JSON document beneath `config` is captured centrally. Reserved
-    /// views, model parameter sections, and executable paths are resolved from that
+    /// The root is canonicalized once. `wf_configs/study.json` and every other
+    /// JSON document beneath `wf_configs` are captured centrally. Reserved views,
+    /// model parameter sections, and executable paths are resolved from that
     /// snapshot. Loading creates no output and executes no task.
     pub(crate) fn load(project_root: &Path) -> Result<Self, ConfigError> {
         let config = Config::load(project_root)?;
         let parsed = manifest::parse(config.study_path(), config.study_value().clone())?;
 
-        let state_relative = Path::new(STATE_SCHEMA);
-        let (state_path, state_value) =
-            config
-                .document(state_relative)
-                .ok_or_else(|| ConfigError::Read {
-                    path: config.config_root().join(state_relative),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "required state schema document was not loaded",
-                    ),
-                })?;
-        let state_schema = StateSchemaDocument::new(state_path.to_path_buf(), state_value.clone());
+        let mut state_schemas = BTreeMap::new();
+        for (name, authored_path) in &parsed.state_paths {
+            let (state_path, state_value) = config
+                .project_document(authored_path)?
+                .ok_or_else(|| missing_document(config.project_root(), authored_path))?;
+            state_schemas.insert(
+                name.clone(),
+                StateSchemaDocument::new(state_path.to_path_buf(), state_value.clone()),
+            );
+        }
 
         let parameters_relative = Path::new(PARAMETERS);
         let (parameters_path, parameters_value) =
@@ -71,11 +69,22 @@ impl ProjectSpecification {
             let mut tasks = Vec::new();
             for task in phase.tasks {
                 match task {
-                    ParsedTask::Model { model, timeout } => {
+                    ParsedTask::Model {
+                        model,
+                        state,
+                        timeout,
+                    } => {
+                        if !state_schemas.contains_key(state.as_ref()) {
+                            return Err(ConfigError::UnknownState {
+                                phase: phase.name.to_string(),
+                                model: model.to_string(),
+                                state: state.to_string(),
+                            });
+                        }
                         let value = parameter_sections.get(model.as_ref()).ok_or_else(|| {
                             ConfigError::invalid(
                                 parameters_path,
-                                format!("/{}", model),
+                                child_pointer("/", &model),
                                 format!("registered model `{model}` has no parameter section"),
                             )
                         })?;
@@ -91,13 +100,16 @@ impl ProjectSpecification {
                                     path: parameters_path.to_path_buf(),
                                 }
                             })?;
-                            tasks.push(ResolvedTask::Model(ResolvedModelParameters::new(
-                                model.clone(),
-                                parameters_path.to_path_buf(),
-                                ordinal,
-                                value,
-                                timeout,
-                            )));
+                            tasks.push(ResolvedTask::Model {
+                                parameters: ResolvedModelParameters::new(
+                                    model.clone(),
+                                    parameters_path.to_path_buf(),
+                                    ordinal,
+                                    value,
+                                    timeout,
+                                ),
+                                state: state.clone(),
+                            });
                         }
                     }
                     ParsedTask::Program {
@@ -134,7 +146,7 @@ impl ProjectSpecification {
         Ok(Self {
             config,
             manifest: parsed.manifest,
-            state_schema,
+            state_schemas,
             phases: phases.into_boxed_slice(),
         })
     }
@@ -154,13 +166,28 @@ impl ProjectSpecification {
         &self.manifest
     }
 
-    /// Returns the centrally parsed state-schema document.
-    pub(crate) fn state_schema(&self) -> &StateSchemaDocument {
-        &self.state_schema
+    /// Returns centrally parsed state-schema documents by manifest key.
+    pub(crate) fn state_schemas(&self) -> &BTreeMap<Box<str>, StateSchemaDocument> {
+        &self.state_schemas
     }
 
     /// Returns validated phases and resolved generic tasks in declaration order.
     pub(crate) fn phases(&self) -> &[PhaseSpecification] {
         &self.phases
+    }
+}
+
+fn missing_document(project_root: &Path, authored_path: &Path) -> ConfigError {
+    let path = if authored_path.is_absolute() {
+        authored_path.to_path_buf()
+    } else {
+        project_root.join(authored_path)
+    };
+    ConfigError::Read {
+        path,
+        source: std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "declared state schema was not captured as a JSON config document",
+        ),
     }
 }

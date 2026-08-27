@@ -8,7 +8,7 @@ use serde_json::{Number, Value};
 
 use super::error::ConfigError;
 
-/// The centrally parsed `state.json` document awaiting state-semantic validation.
+/// One centrally parsed named state-schema document awaiting semantic validation.
 #[derive(Debug)]
 pub(crate) struct StateSchemaDocument {
     path: PathBuf,
@@ -20,7 +20,7 @@ impl StateSchemaDocument {
         Self { path, value }
     }
 
-    /// Returns the canonical `state.json` source path.
+    /// Returns the canonical state-schema source path.
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
@@ -28,6 +28,16 @@ impl StateSchemaDocument {
     /// Borrows the centrally parsed JSON value for state-semantic validation.
     pub(crate) fn json_value(&self) -> &Value {
         &self.value
+    }
+}
+
+/// Appends one RFC 6901-escaped object key to a JSON Pointer.
+pub(crate) fn child_pointer(parent: &str, key: &str) -> String {
+    let escaped = key.replace('~', "~0").replace('/', "~1");
+    if parent == "/" {
+        format!("/{escaped}")
+    } else {
+        format!("{parent}/{escaped}")
     }
 }
 

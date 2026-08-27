@@ -5,7 +5,8 @@ either a registered stateful Rust model combined with one config-owned
 parameter combination,
 or a resolved external executable. Python declarations are resolved into the
 same executable boundary. Users never construct Rust `Task` values; they
-implement and register models or declare programs/Python in `study.json`.
+implement and register models or declare programs/Python in
+`wf_configs/study.json`.
 
 Task owns model-contract enforcement and observation boundaries. It does not
 own manifest parsing, model-key matching, phase membership, identities, labels,
@@ -14,9 +15,11 @@ paths, scheduling, durable format, messages, UI, or lifecycle policy.
 Stateful execution is fixed:
 
 1. config-owned `ResolvedModelParameters` decodes one complete `M::Constants`
-   from `parameters.json[model-key]`;
-2. Study calls `M::observation_plan(&constants)` and stores its schema-bound result;
-3. `M::initialize(constants, schema)` creates the canonical model at execution;
+   from `wf_configs/parameters.json[model-key]`;
+2. Study resolves the model task's explicit `state` key, calls
+   `M::observation_plan(&constants)`, and stores its result bound to that named schema;
+3. `M::initialize(constants, schema)` creates the canonical model at execution
+   from the same task-bound schema;
 4. task verifies stable state ownership/schema and target iteration;
 5. runtime observes the initial state automatically;
 6. task calls `step` until `is_complete` or cooperative cancellation;
@@ -53,7 +56,8 @@ Methods:
 - `observation_plan(&Constants) -> TaskResult<ObservationPlan>` declares
   scientifically meaningful observation streams. Its default is
   `ObservationPlan::all_fields()`. Study invokes it once during effect-free
-  preflight, binds it to the state schema, and retains that exact result for
+  preflight, binds it to the model task's selected named state schema, and
+  retains that exact result for
   runtime. It must not perform external side effects or retain the constants
   borrow.
 - `initialize(Constants, &SystemStateSchema) -> TaskResult<Self>` consumes the
@@ -101,7 +105,10 @@ impl ScientificModel for PopulationModel { ... }
 ```
 
 The nonempty, whitespace-exact string is the stable semantic key used by
-`study.json` and the matching top-level section of `config/parameters.json`.
+`wf_configs/study.json` and the matching top-level section of
+`wf_configs/parameters.json`.
+It is independent of the task's required `state` key, so models may share a
+schema and model/state names need not match.
 It is deliberately not inferred from `type_name`, module paths, or source order
 because those are refactor-unstable. The macro preserves the impl and submits
 only hidden immutable registration metadata. Duplicate or invalid keys fail
@@ -121,7 +128,7 @@ macro reaches registration metadata only through the crate's documentation-hidde
 `__private` expansion namespace.
 
 Program and Python tasks add no Rust export to either tier. A user declares an
-executable or nested Python environment in `study.json`; Config resolves it,
+executable or nested Python environment in `wf_configs/study.json`; Config resolves it,
 Study places it in the same phase graph as model tasks, and Runtime invokes it
 through task's private execution-host port.
 Its arguments are passed directly without a shell. The program receives the
@@ -183,7 +190,8 @@ impl ScientificModel for Population {
 }
 ```
 
-With `study.json` referring to model `population`, `main` is:
+With `wf_configs/study.json` referring to model `population` and explicitly selecting its
+named state schema, `main` is:
 
 ```rust,no_run
 fn main() -> Result<(), scientific_workflow::WorkflowError> {
@@ -203,7 +211,8 @@ supported API.
 
 Replacement task implementations must preserve model-key parameter selection,
 config-owned decode, direct
-state ownership checks, deterministic observation-plan binding, observation
+state ownership checks, explicit named-schema selection, deterministic
+observation-plan binding, observation
 ordering, generic model/program dispatch, and runtime-owned
 cancellation/lifecycle. Programs and Python scripts must remain declarative
 tasks rather than requiring a Rust wrapper or public registration API.

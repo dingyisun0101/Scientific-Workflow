@@ -15,15 +15,50 @@ struct TestProject(PathBuf);
 
 impl TestProject {
     fn new(study: &str, parameter_sections: &[(&str, &str)]) -> Self {
+        let mut study: serde_json::Value = serde_json::from_str(study).unwrap();
+        let root = study.as_object_mut().unwrap();
+        root.entry("paths").or_insert_with(
+            || serde_json::json!({"states":{"default":"wf_configs/states/default.json"}}),
+        );
+        if let Some(phases) = root
+            .get_mut("phases")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for phase in phases.values_mut() {
+                if let Some(tasks) = phase
+                    .get_mut("tasks")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for task in tasks {
+                        if task.get("model").is_some() && task.get("state").is_none() {
+                            task.as_object_mut()
+                                .unwrap()
+                                .insert("state".to_owned(), "default".into());
+                        }
+                    }
+                }
+            }
+        }
+        Self::write(
+            &serde_json::to_string_pretty(&study).unwrap(),
+            parameter_sections,
+        )
+    }
+
+    fn new_raw(study: &str, parameter_sections: &[(&str, &str)]) -> Self {
+        Self::write(study, parameter_sections)
+    }
+
+    fn write(study: &str, parameter_sections: &[(&str, &str)]) -> Self {
         let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "scientific-workflow-config-{sequence}-{}",
             std::process::id()
         ));
-        fs::create_dir_all(root.join("config")).unwrap();
-        fs::write(root.join("study.json"), study).unwrap();
+        fs::create_dir_all(root.join("wf_configs/states")).unwrap();
+        fs::write(root.join("wf_configs/study.json"), study).unwrap();
         fs::write(
-            root.join("config/state.json"),
+            root.join("wf_configs/states/default.json"),
             r#"{
               "fields": [
                 {"name": "population"},
@@ -38,7 +73,7 @@ impl TestProject {
             .collect::<Vec<_>>()
             .join(",");
         fs::write(
-            root.join("config/parameters.json"),
+            root.join("wf_configs/parameters.json"),
             format!("{{{parameters}}}"),
         )
         .unwrap();
@@ -90,14 +125,21 @@ fn manifest() -> &'static str {
 
 fn model_task(task: &ResolvedTask) -> &ResolvedModelParameters {
     match task {
-        ResolvedTask::Model(parameters) => parameters,
+        ResolvedTask::Model { parameters, .. } => parameters,
+        ResolvedTask::Program(_) => panic!("expected a model task"),
+    }
+}
+
+fn model_state(task: &ResolvedTask) -> &str {
+    match task {
+        ResolvedTask::Model { state, .. } => state,
         ResolvedTask::Program(_) => panic!("expected a model task"),
     }
 }
 
 fn program_task(task: &ResolvedTask) -> &ResolvedProgramTask {
     match task {
-        ResolvedTask::Model(_) => panic!("expected a program task"),
+        ResolvedTask::Model { .. } => panic!("expected a program task"),
         ResolvedTask::Program(program) => program,
     }
 }
@@ -196,11 +238,8 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
         Some(Duration::from_millis(250))
     );
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(
-            model_task(&simulation.tasks()[3]).resolved_json()
-        )
-        .unwrap(),
-        serde_json::json!({
+        model_task(&simulation.tasks()[3]).resolved_value(),
+        &serde_json::json!({
             "shape": [64, 64],
             "temperature": 300.0,
             "solver": {"method": "euler"}
@@ -220,13 +259,89 @@ fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() 
         &[("model", "{}")],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
-    let document = specification.state_schema();
+    let document = &specification.state_schemas()["default"];
     let schema =
         SystemStateSchema::from_json_template_value(document.path(), document.json_value())
             .unwrap();
 
     assert_eq!(schema.field_schemas().len(), 2);
     assert_eq!(schema.template_path(), document.path());
+}
+
+#[test]
+fn named_state_paths_are_resolved_once_and_selected_explicitly_by_model_tasks() {
+    let project = TestProject::new(
+        r#"{
+          "paths": {
+            "states": {
+              "population": "wf_configs/population.json",
+              "energy": "wf_configs/states/energy.json"
+            }
+          },
+          "phases": {
+            "only": {
+              "tasks": [
+                {"model":"model", "state":"population"},
+                {"model":"analysis", "state":"energy"}
+              ]
+            }
+          }
+        }"#,
+        &[("model", "{}"), ("analysis", "{}")],
+    );
+    fs::write(
+        project.path().join("wf_configs/population.json"),
+        r#"{"fields":[{"name":"population"}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        project.path().join("wf_configs/states/energy.json"),
+        r#"{"fields":[{"name":"energy"}]}"#,
+    )
+    .unwrap();
+
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    assert_eq!(specification.state_schemas().len(), 2);
+    assert!(
+        specification.state_schemas()["population"]
+            .path()
+            .ends_with("wf_configs/population.json")
+    );
+    assert!(
+        specification.state_schemas()["energy"]
+            .path()
+            .ends_with("wf_configs/states/energy.json")
+    );
+    assert_eq!(
+        model_state(&specification.phases()[0].tasks()[0]),
+        "population"
+    );
+    assert_eq!(model_state(&specification.phases()[0].tasks()[1]), "energy");
+
+    let unknown = TestProject::new(
+        r#"{
+          "paths":{"states":{"known":"wf_configs/states/default.json"}},
+          "phases":{"only":{"tasks":[{"model":"model","state":"missing"}]}}
+        }"#,
+        &[("model", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(unknown.path()),
+        Err(ConfigError::UnknownState { phase, model, state })
+            if phase == "only" && model == "model" && state == "missing"
+    ));
+
+    let missing_selector = TestProject::new_raw(
+        r#"{
+          "paths":{"states":{"known":"wf_configs/states/default.json"}},
+          "phases":{"only":{"tasks":[{"model":"model"}]}}
+        }"#,
+        &[("model", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(missing_selector.path()),
+        Err(ConfigError::InvalidDocument { reason, .. }) if reason.contains("with `state`")
+    ));
 }
 
 #[test]
@@ -265,7 +380,19 @@ fn correlated_cases_become_complete_typed_constant_values() {
 
 #[test]
 fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields() {
-    let duplicate = TestProject::new(r#"{"phases":{"one":{"tasks":[],"tasks":[]}}}"#, &[]);
+    let missing_paths = TestProject::new_raw(
+        r#"{"phases":{"one":{"tasks":[{"program":"anything"}]}}}"#,
+        &[],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(missing_paths.path()),
+        Err(ConfigError::InvalidDocument { reason, .. }) if reason.contains("missing field `paths`")
+    ));
+
+    let duplicate = TestProject::new_raw(
+        r#"{"paths":{"states":{}},"phases":{"one":{"tasks":[],"tasks":[]}}}"#,
+        &[],
+    );
     assert!(matches!(
         ProjectSpecification::load(duplicate.path()),
         Err(ConfigError::DuplicateKey { key, .. }) if key == "tasks"
@@ -324,6 +451,88 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     assert!(matches!(
         ProjectSpecification::load(duplicate_parameters.path()),
         Err(ConfigError::DuplicateKey { key, .. }) if key == "value"
+    ));
+}
+
+#[test]
+fn workflow_project_root_requires_reserved_wf_configs_documents() {
+    let legacy_layout = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        &[("model", "{}")],
+    );
+    fs::rename(
+        legacy_layout.path().join("wf_configs"),
+        legacy_layout.path().join("config"),
+    )
+    .unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(legacy_layout.path()),
+        Err(ConfigError::Read { path, .. }) if path.ends_with("wf_configs")
+    ));
+
+    let missing_study = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        &[("model", "{}")],
+    );
+    fs::rename(
+        missing_study.path().join("wf_configs/study.json"),
+        missing_study.path().join("study.json"),
+    )
+    .unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(missing_study.path()),
+        Err(ConfigError::Read { path, .. }) if path.ends_with("wf_configs/study.json")
+    ));
+
+    let missing_parameters = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        &[("model", "{}")],
+    );
+    fs::remove_file(missing_parameters.path().join("wf_configs/parameters.json")).unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(missing_parameters.path()),
+        Err(ConfigError::Read { path, .. }) if path.ends_with("wf_configs/parameters.json")
+    ));
+}
+
+#[test]
+fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
+    let project = TestProject::new_raw(
+        r#"{
+          "paths":{"states":{"outside":"state.json"}},
+          "phases":{"only":{"tasks":[{"model":"model","state":"outside"}]}}
+        }"#,
+        &[("model", "{}")],
+    );
+    fs::write(
+        project.path().join("state.json"),
+        r#"{"fields":[{"name":"population"}]}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(project.path()),
+        Err(ConfigError::PathOutsideConfig { path, config_root })
+            if path.ends_with("state.json") && config_root.ends_with("wf_configs")
+    ));
+
+    let absolute = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        &[("model", "{}")],
+    );
+    let manifest_path = absolute.path().join("wf_configs/study.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["paths"]["states"]["default"] = absolute
+        .path()
+        .join("wf_configs/states/default.json")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(absolute.path()),
+        Err(ConfigError::InvalidDocument { pointer, reason, .. })
+            if pointer == "/paths/states/default" && reason.contains("project root")
     ));
 }
 
@@ -430,7 +639,7 @@ fn central_config_captures_all_project_parameters_in_one_namespace() {
         "model"
     );
     assert_eq!(
-        snapshot["config"]["state.json"]["fields"][0]["name"],
+        snapshot["config"]["states/default.json"]["fields"][0]["name"],
         "population"
     );
     assert_eq!(
@@ -446,13 +655,114 @@ fn invalid_unreferenced_json_is_rejected_because_config_manages_all_documents() 
         &[("model", "{}")],
     );
     fs::write(
-        project.path().join("config/unreferenced.json"),
+        project.path().join("wf_configs/unreferenced.json"),
         r#"{"duplicate":1,"duplicate":2}"#,
     )
     .unwrap();
     assert!(matches!(
         ProjectSpecification::load(project.path()),
         Err(ConfigError::DuplicateKey { key, .. }) if key == "duplicate"
+    ));
+}
+
+#[test]
+fn diagnostics_escape_authored_json_pointer_keys() {
+    let phase = TestProject::new(r#"{"phases":{"bad/name~":{"tasks":[]}}}"#, &[]);
+    assert!(matches!(
+        ProjectSpecification::load(phase.path()),
+        Err(ConfigError::InvalidDocument { pointer, .. })
+            if pointer == "/phases/bad~1name~0/tasks"
+    ));
+
+    let parameters = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"model":"a/b~c"}]}}}"#,
+        &[("different", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(parameters.path()),
+        Err(ConfigError::InvalidDocument { pointer, .. }) if pointer == "/a~1b~0c"
+    ));
+}
+
+#[test]
+fn empty_and_overlapping_expansion_markers_are_rejected() {
+    for source in [
+        r#"{"choice":{"$sweep":[]}}"#,
+        r#"{"$cases":[]}"#,
+        r#"{"$cases":[{"x":1},{"y":2}]}"#,
+        r#"{"$unknown":[1,2]}"#,
+    ] {
+        let project = TestProject::new(
+            r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+            &[("model", source)],
+        );
+        assert!(matches!(
+            ProjectSpecification::load(project.path()),
+            Err(ConfigError::InvalidDocument { .. })
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn json_file_symlinks_preserve_authored_keys_and_enforce_containment() {
+    use std::os::unix::fs::symlink;
+
+    let contained = TestProject::new(
+        r#"{
+          "paths":{"states":{"alias":"wf_configs/alias.json"}},
+          "phases":{"only":{"tasks":[{"model":"model","state":"alias"}]}}
+        }"#,
+        &[("model", "{}")],
+    );
+    symlink(
+        "states/default.json",
+        contained.path().join("wf_configs/alias.json"),
+    )
+    .unwrap();
+    let specification = ProjectSpecification::load(contained.path()).unwrap();
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(specification.config().snapshot_json()).unwrap();
+    assert_eq!(
+        snapshot["config"]["alias.json"],
+        snapshot["config"]["states/default.json"]
+    );
+    assert!(
+        specification.state_schemas()["alias"]
+            .path()
+            .ends_with("wf_configs/states/default.json")
+    );
+
+    let escaping = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
+        &[],
+    );
+    fs::write(escaping.path().join("outside.json"), "{}").unwrap();
+    symlink(
+        "../outside.json",
+        escaping.path().join("wf_configs/escape.json"),
+    )
+    .unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(escaping.path()),
+        Err(ConfigError::PathOutsideConfig { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_config_document_paths_are_rejected_without_lossy_snapshot_keys() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let project = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
+        &[],
+    );
+    let name = std::ffi::OsString::from_vec(b"invalid-\xff.json".to_vec());
+    fs::write(project.path().join("wf_configs").join(name), "{}").unwrap();
+    assert!(matches!(
+        ProjectSpecification::load(project.path()),
+        Err(ConfigError::InvalidDocument { reason, .. }) if reason.contains("valid UTF-8")
     ));
 }
 
@@ -535,4 +845,56 @@ fn nested_python_task_resolves_its_mamba_environment_during_loading() {
             "--publication"
         ]
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn every_supported_explicit_python_environment_is_lowered_during_loading() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let project = TestProject::new(
+        r#"{
+          "phases":{"analyze":{"tasks":[
+            {"python":{"script":"scripts/analyze.py","environment":{"manager":"venv","path":"env"}}},
+            {"python":{"script":"scripts/analyze.py","environment":{"manager":"conda","name":"DSES","executable":"tools/conda"}}},
+            {"python":{"script":"scripts/analyze.py","environment":{"manager":"uv","project":"uv-project","executable":"tools/uv"}}},
+            {"python":{"script":"scripts/analyze.py","environment":{"manager":"poetry","project":"poetry-project","executable":"tools/poetry"}}}
+          ]}}
+        }"#,
+        &[],
+    );
+    for directory in [
+        "scripts",
+        "env/bin",
+        "tools",
+        "uv-project",
+        "poetry-project",
+    ] {
+        fs::create_dir_all(project.path().join(directory)).unwrap();
+    }
+    fs::write(project.path().join("scripts/analyze.py"), "print('ok')\n").unwrap();
+    for executable in ["env/bin/python", "tools/conda", "tools/uv", "tools/poetry"] {
+        let path = project.path().join(executable);
+        fs::write(&path, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    let programs = specification.phases()[0]
+        .tasks()
+        .iter()
+        .map(program_task)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        programs
+            .iter()
+            .map(|program| program.python_environment_manager().unwrap())
+            .collect::<Vec<_>>(),
+        ["venv", "conda", "uv", "poetry"]
+    );
+    assert_eq!(programs[1].args()[0..4], ["run", "-n", "DSES", "python"]);
+    assert_eq!(programs[2].args()[0], "run");
+    assert_eq!(programs[2].args()[1], "--project");
+    assert_eq!(programs[3].args()[0], "--directory");
+    assert_eq!(programs[3].args()[2], "run");
 }

@@ -1,8 +1,9 @@
 # Test structure
 
-Tests follow subsystem responsibility and supported boundaries. Config, Study,
-and persistence write mechanics use internal tests because their planning/write
-types are deliberately not public.
+Tests follow subsystem responsibility and supported boundaries. Observation
+binding/session behavior, Config and Study compilation, and persistence write
+mechanics use internal tests because their working types are deliberately not
+public.
 
 ## Public integration tests
 
@@ -25,19 +26,30 @@ types are deliberately not public.
 
 ## Internal compiler and execution tests
 
-- `rust/src/config/tests/config_workflow.rs` covers duplicate keys, strict
-  unknown-field rejection, canonical `parameters.json`, automatic model-key
-  section selection, rejection of legacy task input paths, manifest/persistence
+- `rust/src/observation/tests/observation_workflow.rs` covers normalized
+  declarations, schema-order binding, canonical encoding, schema identity,
+  cadence, terminal deduplication, decreasing iterations, and failure-atomic
+  session markers. The public declaration boundary remains covered separately
+  by `rust/tests/observation_workflow.rs`.
+- `rust/src/config/tests/config_workflow.rs` covers the required `wf_configs/`
+  root and reserved files, optional `states/` grouping, rejection of schemas
+  outside that root, duplicate keys, strict unknown-field rejection, canonical
+  `wf_configs/parameters.json`, automatic model-key section selection, named
+  state-path maps and explicit per-model selectors, unknown/missing state
+  selectors, rejection of legacy task input paths, manifest/persistence
   defaults, positive limits, dependencies, generic model/program/Python task
-  grammar, executable resolution, nested Python/mamba command lowering and
-  executable preflight, deterministic `$sweep`/`$cases` expansion, private
-  typed constants decoding, decimal-MB persistence-size conversion,
+  grammar, executable resolution, all supported Python environment lowering
+  and executable preflight, contained/escaping JSON symlinks, authored
+  snapshot keys, non-UTF-8 path rejection, RFC 6901 diagnostic pointers,
+  deterministic `$sweep`/`$cases` expansion and malformed-marker rejection,
+  private typed constants decoding, decimal-MB persistence-size conversion,
   overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
   and contextual errors. Even an unreferenced JSON document is strict-parsed.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
   invalid/duplicate registrations, effect-free loading, unknown models, typed
   constants and one-time observation preflight, deterministic internal
-  identities, phase composition, replicate/persistence policy, runtime
+  identities, per-model binding of multiple named state schemas, phase
+  composition, replicate/persistence policy, runtime
   scheduling, automatic task recordings, and crate-level `run(&Path)`. Its
   recording checks require canonical `parameter_ordinal`/`parameter_source`
   provenance and reject legacy input-path fields. Its
@@ -92,7 +104,7 @@ compile fixture. A manual or release validation run should confirm that its six
 model tasks produce completed recordings and its dependent Python task writes
 `attractor-sweep.svg` plus `plot-summary.json` beneath the configured
 `output/plots` directory. The Python task uses the public verified reader and
-the `plot` section of central `config/parameters.json`; it has no Rust caller
+the `plot` section of central `wf_configs/parameters.json`; it has no Rust caller
 wrapper. A focused model test verifies that the demonstration-only configured
 per-step delay is actually applied. A manifest regression test and Config
 boundary coverage preserve the phase-owned two-second `start_interval_ms`

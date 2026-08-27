@@ -1,9 +1,15 @@
 {
+  "paths": {
+    "states": {
+      "attractor": "wf_configs/states/attractor.json"
+    }
+  },
   "phases": {
     "simulate": {
       "tasks": [
         {
-          "model": "attractor"
+          "model": "attractor",
+          "state": "attractor"
         }
       ],
       "max_concurrency": 3,

@@ -195,6 +195,20 @@ fn ordered_analysis_preserves_ownership_and_invariants() {
     let (_, recovered_duplicate) = ordering_rejection.into_parts();
     assert_eq!(recovered_duplicate.time().iteration(), 4);
 
+    let earlier = sample_state(&spec, 3, vec![29], &clones);
+    let decreasing_rejection = series
+        .push_state(earlier)
+        .expect_err("a decreasing iteration must fail");
+    assert!(matches!(
+        decreasing_rejection.error(),
+        StateSeriesError::NonIncreasingIteration {
+            previous: 4,
+            next: 3
+        }
+    ));
+    let (_, recovered_earlier) = decreasing_rejection.into_parts();
+    assert_eq!(recovered_earlier.time().iteration(), 3);
+
     let popped = series.pop_state().expect("last state must move out");
     assert_eq!(popped.time().iteration(), 4);
     assert_eq!(series.len(), 1);

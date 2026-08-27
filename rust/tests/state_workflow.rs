@@ -24,7 +24,7 @@
 
 use std::error::Error as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -61,6 +61,17 @@ const COUPLED_TEMPLATE: &str = concat!(
     "/tests/fixtures/coupled_state.json"
 );
 
+fn temporary_test_directory(label: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after the Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "scientific-workflow-state-{label}-{}-{nonce}",
+        std::process::id()
+    ))
+}
+
 #[test]
 fn state_and_prelude_advanced_scopes_are_strict_basic_supersets() {
     let module_basic = scientific_workflow::state::basic::StateTime::from_iteration(1);
@@ -80,6 +91,67 @@ fn state_and_prelude_advanced_scopes_are_strict_basic_supersets() {
 
     let schema = SystemStateSchema::load_json_template(Path::new(STATE_TEMPLATE)).unwrap();
     assert_eq!(inspect_with_advanced_trait(&schema), 3);
+}
+
+#[test]
+fn schema_validation_is_strict_and_normalizes_metadata() {
+    let directory = temporary_test_directory("schema-validation");
+    fs::create_dir_all(&directory).expect("temporary schema directory must be created");
+
+    let empty_name = directory.join("empty-name.json");
+    fs::write(&empty_name, br#"{"fields":[{"name":"   "}]}"#).unwrap();
+    assert!(matches!(
+        SystemStateSchema::load_json_template(&empty_name),
+        Err(StateError::EmptyFieldName { index: 0 })
+    ));
+
+    let unknown_property = directory.join("unknown-property.json");
+    fs::write(
+        &unknown_property,
+        br#"{"fields":[{"name":"population","unit":"people"}]}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        SystemStateSchema::load_json_template(&unknown_property),
+        Err(StateError::TemplateParse { .. })
+    ));
+
+    let normalized = directory.join("normalized.json");
+    fs::write(
+        &normalized,
+        br#"{"fields":[{"name":" population ","description":"   "},{"name":" activity ","description":" enabled "}]}"#,
+    )
+    .unwrap();
+    let schema = SystemStateSchema::load_json_template(&normalized).unwrap();
+    assert_eq!(schema.field_schemas()[0].name(), "population");
+    assert_eq!(schema.field_schemas()[0].description(), None);
+    assert_eq!(schema.field_schemas()[1].name(), "activity");
+    assert_eq!(schema.field_schemas()[1].description(), Some("enabled"));
+
+    fs::remove_dir_all(directory).expect("temporary schema directory must be removed");
+}
+
+#[test]
+fn failed_initialization_preserves_the_incoming_payload() {
+    let schema = SystemStateSchema::load_json_template(Path::new(STATE_TEMPLATE)).unwrap();
+    let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+    state
+        .initialize_payload("population", vec![1_u64, 2, 3])
+        .unwrap();
+
+    let incoming = vec![5_u64, 8, 13];
+    let incoming_pointer = incoming.as_ptr();
+    let rejection = state
+        .initialize_payload("population", incoming)
+        .expect_err("a second initialization must return its incoming owner");
+    assert!(matches!(
+        rejection.error(),
+        StateError::PayloadAlreadyInitialized { field } if field == "population"
+    ));
+    assert_eq!(rejection.payload().as_ptr(), incoming_pointer);
+    let (_, recovered) = rejection.into_parts();
+    assert_eq!(recovered.as_ptr(), incoming_pointer);
+    assert_eq!(recovered, vec![5, 8, 13]);
 }
 
 #[test]
@@ -141,14 +213,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // Reload the generated JSON from a distinct path to verify the complete
     // filesystem round trip and deterministic field reconstruction.
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock must be after the Unix epoch")
-        .as_nanos();
-    let round_trip_directory = std::env::temp_dir().join(format!(
-        "scientific-workflow-public-system-state-{}-{nonce}",
-        std::process::id()
-    ));
+    let round_trip_directory = temporary_test_directory("round-trip");
     let round_trip_path = round_trip_directory.join("state.json");
 
     fs::create_dir_all(&round_trip_directory)
@@ -633,6 +698,13 @@ fn generated_tuple_arities_two_through_eight_are_available() {
     }
 
     let _ = state.borrow_payloads::<(u64, u64)>(("a", "b")).unwrap();
+    let repeated = state
+        .borrow_payloads::<(u64, u64)>(("a", "a"))
+        .expect_err("immutable tuple borrowing must reject a repeated field");
+    assert!(matches!(
+        repeated,
+        StateError::RepeatedPayloadBorrow { field } if field == "a"
+    ));
     let _ = state
         .borrow_payloads::<(u64, u64, u64)>(("a", "b", "c"))
         .unwrap();

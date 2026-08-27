@@ -17,6 +17,9 @@ pub struct ObservationPlan {
 
 impl ObservationPlan {
     /// Defines one inferred stream named `state` containing every state field.
+    ///
+    /// This declaration is infallible. Binding later rejects an empty state
+    /// schema because every observation stream must contain at least one field.
     pub fn all_fields() -> Self {
         Self {
             streams: vec![
@@ -29,6 +32,15 @@ impl ObservationPlan {
     }
 
     /// Defines one inferred stream named `state` containing selected fields.
+    ///
+    /// Field names are trimmed and must be nonempty and unique. Their existence
+    /// is checked later against the model's state schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObservationError::EmptyFieldName`],
+    /// [`ObservationError::EmptyFieldSelection`], or
+    /// [`ObservationError::DuplicateField`] for an invalid declaration.
     pub fn fields<I, S>(fields: I) -> Result<Self, ObservationError>
     where
         I: IntoIterator<Item = S>,
@@ -38,6 +50,15 @@ impl ObservationPlan {
     }
 
     /// Defines several explicitly named scientific streams.
+    ///
+    /// Definition order is retained. Stream constructors already normalize
+    /// names; this operation rejects an empty plan and repeated normalized
+    /// names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObservationError::EmptyPlan`] or
+    /// [`ObservationError::DuplicateStreamName`].
     pub fn streams<I>(streams: I) -> Result<Self, ObservationError>
     where
         I: IntoIterator<Item = ObservationStream>,
@@ -62,6 +83,13 @@ impl ObservationPlan {
     }
 
     /// Attaches an optional scientific unit to the inferred `iteration` axis.
+    ///
+    /// Surrounding whitespace is removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObservationError::EmptyAxisUnit`] when the normalized unit is
+    /// empty.
     pub fn with_iteration_unit(
         mut self,
         unit: impl Into<String>,
@@ -71,6 +99,13 @@ impl ObservationPlan {
     }
 
     /// Attaches an optional scientific unit to the inferred `physical_time` axis.
+    ///
+    /// Surrounding whitespace is removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObservationError::EmptyAxisUnit`] when the normalized unit is
+    /// empty.
     pub fn with_physical_time_unit(
         mut self,
         unit: impl Into<String>,

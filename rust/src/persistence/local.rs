@@ -304,9 +304,9 @@ impl SystemStateWriter {
             .as_ref()
             .expect("an active recording owns its writer worker");
         for observation in observations {
-            let stream = observation.stream().to_owned();
-            let record = EncodedStateRecord::new(observation.time(), observation.into_bytes());
-            writer.submit_record(&stream, record)?;
+            let (stream, time, bytes) = observation.into_parts();
+            let record = EncodedStateRecord::new(time, bytes);
+            writer.submit_record(stream, record)?;
         }
         Ok(())
     }
@@ -371,9 +371,9 @@ impl SystemStateWriter {
             .as_ref()
             .expect("an active recording owns its writer worker");
         for observation in observations {
-            let stream = observation.stream().to_owned();
-            let record = EncodedStateRecord::new(observation.time(), observation.into_bytes());
-            writer.submit_record(&stream, record)?;
+            let (stream, time, bytes) = observation.into_parts();
+            let record = EncodedStateRecord::new(time, bytes);
+            writer.submit_record(stream, record)?;
         }
         Ok(())
     }

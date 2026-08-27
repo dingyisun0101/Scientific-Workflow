@@ -22,6 +22,40 @@ struct CounterModel {
     steps: u64,
 }
 
+#[derive(Deserialize)]
+struct EnergyConstants {
+    initial: f64,
+}
+
+struct EnergyModel {
+    state: SystemState,
+}
+
+#[scientific_workflow::model("energy")]
+impl ScientificModel for EnergyModel {
+    type Constants = EnergyConstants;
+
+    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+        let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+        state.initialize_payload("energy", constants.initial)?;
+        Ok(Self { state })
+    }
+
+    fn state(&self) -> &SystemState {
+        &self.state
+    }
+
+    fn is_complete(&self) -> bool {
+        self.state.time().iteration() == 1
+    }
+
+    fn step(&mut self) -> TaskResult {
+        *self.state.payload_mut::<f64>("energy")? *= 0.5;
+        self.state.advance_time(None)?;
+        Ok(())
+    }
+}
+
 #[scientific_workflow::model("counter")]
 impl ScientificModel for CounterModel {
     type Constants = CounterConstants;
@@ -58,20 +92,48 @@ struct Project(PathBuf);
 
 impl Project {
     fn new(study: &str, parameters: &str) -> Self {
+        let mut study: serde_json::Value = serde_json::from_str(study).unwrap();
+        let root = study.as_object_mut().unwrap();
+        root.entry("paths").or_insert_with(
+            || serde_json::json!({"states":{"default":"wf_configs/states/default.json"}}),
+        );
+        if let Some(phases) = root
+            .get_mut("phases")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for phase in phases.values_mut() {
+                if let Some(tasks) = phase
+                    .get_mut("tasks")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for task in tasks {
+                        if task.get("model").is_some() && task.get("state").is_none() {
+                            task.as_object_mut()
+                                .unwrap()
+                                .insert("state".to_owned(), "default".into());
+                        }
+                    }
+                }
+            }
+        }
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "scientific-workflow-study-{}-{sequence}",
             std::process::id()
         ));
-        fs::create_dir_all(root.join("config")).unwrap();
-        fs::write(root.join("study.json"), study).unwrap();
+        fs::create_dir_all(root.join("wf_configs/states")).unwrap();
         fs::write(
-            root.join("config/state.json"),
+            root.join("wf_configs/study.json"),
+            serde_json::to_vec_pretty(&study).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("wf_configs/states/default.json"),
             r#"{"fields":[{"name":"count"}]}"#,
         )
         .unwrap();
         fs::write(
-            root.join("config/parameters.json"),
+            root.join("wf_configs/parameters.json"),
             format!(r#"{{"counter":{parameters}}}"#),
         )
         .unwrap();
@@ -163,6 +225,7 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
             serde_json::from_slice(&fs::read(metadata_path).unwrap()).unwrap();
         assert_eq!(metadata["user_metadata"]["model_constants"]["initial"], 5);
         assert_eq!(metadata["user_metadata"]["workflow"]["model"], "counter");
+        assert_eq!(metadata["user_metadata"]["workflow"]["state"], "default");
         assert_eq!(
             metadata["user_metadata"]["workflow"]["parameter_ordinal"],
             0
@@ -170,7 +233,7 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
         let parameter_source = metadata["user_metadata"]["workflow"]["parameter_source"]
             .as_str()
             .unwrap();
-        assert!(parameter_source.ends_with("config/parameters.json"));
+        assert!(parameter_source.ends_with("wf_configs/parameters.json"));
         assert!(metadata["user_metadata"]["workflow"]["input_ordinal"].is_null());
         assert!(metadata["user_metadata"]["workflow"]["input_source"].is_null());
         assert_eq!(
@@ -186,6 +249,44 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
             1_000_000
         );
     }
+}
+
+#[test]
+fn one_study_binds_each_model_task_to_its_selected_named_state() {
+    let project = Project::new(
+        r#"{
+          "paths":{"states":{
+            "counter-state":"wf_configs/states/default.json",
+            "energy-state":"wf_configs/states/energy.json"
+          }},
+          "phases":{"simulate":{"tasks":[
+            {"model":"counter","state":"counter-state"},
+            {"model":"energy","state":"energy-state"}
+          ]}}
+        }"#,
+        r#"{"initial":2,"steps":1}"#,
+    );
+    fs::write(
+        project.path().join("wf_configs/states/energy.json"),
+        r#"{"fields":[{"name":"energy"}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        project.path().join("wf_configs/parameters.json"),
+        r#"{
+          "counter":{"initial":2,"steps":1},
+          "energy":{"initial":8.0}
+        }"#,
+    )
+    .unwrap();
+
+    let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+    let tasks = summary.replicates()[0].phases()[0].tasks();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0].model(), Some("counter"));
+    assert_eq!(tasks[0].final_iteration(), Some(1));
+    assert_eq!(tasks[1].model(), Some("energy"));
+    assert_eq!(tasks[1].final_iteration(), Some(1));
 }
 
 #[test]
@@ -208,7 +309,7 @@ fn preflight_rejects_invalid_binding_without_output() {
         r#"{"initial":1,"steps":1}"#,
     );
     fs::write(
-        missing.path().join("config/parameters.json"),
+        missing.path().join("wf_configs/parameters.json"),
         r#"{"absent":{"initial":1,"steps":1}}"#,
     )
     .unwrap();
@@ -249,7 +350,7 @@ fn generic_program_task_receives_captured_config_and_dependency_outputs() {
     "#;
     let project = Project::new(study_document, r#"{"initial":2,"steps":1}"#);
     fs::write(
-        project.path().join("config/parameters.json"),
+        project.path().join("wf_configs/parameters.json"),
         r#"{"counter":{"initial":2,"steps":1},"plot":{"title":"captured title","dpi":180}}"#,
     )
     .unwrap();
@@ -280,7 +381,7 @@ result = {
 
     let study = Study::load(project.path()).unwrap();
     fs::write(
-        project.path().join("config/parameters.json"),
+        project.path().join("wf_configs/parameters.json"),
         r#"{"counter":{"initial":2,"steps":1},"plot":{"title":"changed after Study load","dpi":72}}"#,
     )
     .unwrap();
@@ -349,7 +450,7 @@ fn nested_python_task_runs_without_a_rust_wrapper_or_executable_script() {
     "#;
     let project = Project::new(study_document, r#"{"initial":0,"steps":0}"#);
     fs::write(
-        project.path().join("config/parameters.json"),
+        project.path().join("wf_configs/parameters.json"),
         r#"{"counter":{"initial":0,"steps":0},"analysis":{"title":"direct Python task"}}"#,
     )
     .unwrap();

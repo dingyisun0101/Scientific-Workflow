@@ -16,7 +16,8 @@ use super::result::TaskResult;
 #[derive(Clone, Copy)]
 pub struct ModelRegistration {
     key: &'static str,
-    make_task: fn(ResolvedModelParameters, BoundObservationPlan) -> Task,
+    make_task:
+        fn(ResolvedModelParameters, Box<str>, SystemStateSchema, BoundObservationPlan) -> Task,
     preflight: fn(&ResolvedModelParameters, &SystemStateSchema) -> TaskResult<BoundObservationPlan>,
 }
 
@@ -37,7 +38,7 @@ impl ModelRegistration {
         }
     }
 
-    /// Returns the stable key used in `study.json`.
+    /// Returns the stable key used in `wf_configs/study.json`.
     pub const fn key(self) -> &'static str {
         self.key
     }
@@ -45,9 +46,11 @@ impl ModelRegistration {
     pub(crate) fn make_task(
         self,
         parameters: ResolvedModelParameters,
+        state: Box<str>,
+        schema: SystemStateSchema,
         observation_plan: BoundObservationPlan,
     ) -> Task {
-        (self.make_task)(parameters, observation_plan)
+        (self.make_task)(parameters, state, schema, observation_plan)
     }
 
     pub(crate) fn preflight(

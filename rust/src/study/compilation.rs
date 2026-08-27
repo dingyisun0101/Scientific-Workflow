@@ -1,5 +1,7 @@
 //! Private effect-free project-to-study composition.
 
+use std::collections::BTreeMap;
+
 use crate::config::advanced::{ProjectSpecification, ResolvedTask};
 use crate::state::advanced::SystemStateSchema;
 use crate::task::advanced::{ModelCatalog, Task};
@@ -11,11 +13,13 @@ pub(crate) fn compile(
     project: ProjectSpecification,
     catalog: &ModelCatalog,
 ) -> Result<Study, StudyError> {
-    let state_document = project.state_schema();
-    let schema = SystemStateSchema::from_json_template_value(
-        state_document.path(),
-        state_document.json_value(),
-    )?;
+    let mut schemas = BTreeMap::new();
+    for (name, document) in project.state_schemas() {
+        schemas.insert(
+            name.as_ref(),
+            SystemStateSchema::from_json_template_value(document.path(), document.json_value())?,
+        );
+    }
 
     let mut output_ordinal = 0_u64;
     let mut phases = Vec::with_capacity(project.phases().len());
@@ -23,7 +27,10 @@ pub(crate) fn compile(
         let mut tasks = Vec::with_capacity(phase.tasks().len());
         for resolved in phase.tasks() {
             let (identity_suffix, label, task) = match resolved {
-                ResolvedTask::Model(parameters) => {
+                ResolvedTask::Model { parameters, state } => {
+                    let schema = schemas
+                        .get(state.as_ref())
+                        .expect("config validated every model state reference");
                     let registration = catalog.get(parameters.model()).ok_or_else(|| {
                         StudyError::UnknownModel {
                             phase: phase.name().to_owned(),
@@ -32,7 +39,7 @@ pub(crate) fn compile(
                     })?;
                     let observation_plan =
                         registration
-                            .preflight(parameters, &schema)
+                            .preflight(parameters, schema)
                             .map_err(|source| {
                                 StudyError::model_preflight(
                                     phase.name(),
@@ -44,7 +51,12 @@ pub(crate) fn compile(
                     (
                         format!("{}-{:06}", parameters.model(), parameters.ordinal()),
                         format!("{} #{}", parameters.model(), parameters.ordinal()),
-                        registration.make_task(parameters.clone(), observation_plan),
+                        registration.make_task(
+                            parameters.clone(),
+                            state.clone(),
+                            schema.clone(),
+                            observation_plan,
+                        ),
                     )
                 }
                 ResolvedTask::Program(program) => {
@@ -78,9 +90,5 @@ pub(crate) fn compile(
             failure_policy: phase.failure_policy(),
         });
     }
-    Ok(Study::from_parts(
-        project,
-        schema,
-        phases.into_boxed_slice(),
-    ))
+    Ok(Study::from_parts(project, phases.into_boxed_slice()))
 }

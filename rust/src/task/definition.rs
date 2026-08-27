@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
 use crate::observation::advanced::BoundObservationPlan;
+use crate::state::advanced::SystemStateSchema;
 
 use super::execution::{ProgramDefinition, StatefulDefinition, TaskDefinition, TaskExecutionHost};
 use super::model::ScientificModel;
@@ -30,13 +31,18 @@ pub(crate) enum TaskKind {
 
 #[derive(Clone)]
 enum TaskDescriptor {
-    Model(ResolvedModelParameters),
+    Model {
+        parameters: ResolvedModelParameters,
+        state: Box<str>,
+    },
     Program(ResolvedProgramTask),
 }
 
 impl Task {
     pub(crate) fn for_model<M>(
         parameters: ResolvedModelParameters,
+        state: Box<str>,
+        schema: SystemStateSchema,
         observation_plan: BoundObservationPlan,
     ) -> Self
     where
@@ -45,9 +51,10 @@ impl Task {
         Self {
             definition: Arc::new(StatefulDefinition::<M>::new(
                 parameters.clone(),
+                schema,
                 observation_plan,
             )),
-            descriptor: TaskDescriptor::Model(parameters),
+            descriptor: TaskDescriptor::Model { parameters, state },
         }
     }
 
@@ -60,50 +67,57 @@ impl Task {
 
     pub(crate) fn kind(&self) -> TaskKind {
         match self.descriptor {
-            TaskDescriptor::Model(_) => TaskKind::Model,
+            TaskDescriptor::Model { .. } => TaskKind::Model,
             TaskDescriptor::Program(_) => TaskKind::Program,
         }
     }
 
     pub(crate) fn kind_name(&self) -> &'static str {
         match &self.descriptor {
-            TaskDescriptor::Model(_) => "model",
+            TaskDescriptor::Model { .. } => "model",
             TaskDescriptor::Program(program) => program.kind_name(),
         }
     }
 
     pub(crate) fn model(&self) -> Option<&str> {
         match &self.descriptor {
-            TaskDescriptor::Model(parameters) => Some(parameters.model()),
+            TaskDescriptor::Model { parameters, .. } => Some(parameters.model()),
             TaskDescriptor::Program(_) => None,
         }
     }
 
     pub(crate) fn parameters(&self) -> Option<&ResolvedModelParameters> {
         match &self.descriptor {
-            TaskDescriptor::Model(parameters) => Some(parameters),
+            TaskDescriptor::Model { parameters, .. } => Some(parameters),
             TaskDescriptor::Program(_) => None,
         }
     }
 
     pub(crate) fn program(&self) -> Option<&ResolvedProgramTask> {
         match &self.descriptor {
-            TaskDescriptor::Model(_) => None,
+            TaskDescriptor::Model { .. } => None,
             TaskDescriptor::Program(program) => Some(program),
         }
     }
 
     pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
         match &self.descriptor {
-            TaskDescriptor::Model(parameters) => parameters.timeout(),
+            TaskDescriptor::Model { parameters, .. } => parameters.timeout(),
             TaskDescriptor::Program(program) => program.timeout(),
         }
     }
 
     pub(crate) fn subject(&self) -> &str {
         match &self.descriptor {
-            TaskDescriptor::Model(parameters) => parameters.model(),
+            TaskDescriptor::Model { parameters, .. } => parameters.model(),
             TaskDescriptor::Program(program) => program.subject(),
+        }
+    }
+
+    pub(crate) fn state(&self) -> Option<&str> {
+        match &self.descriptor {
+            TaskDescriptor::Model { state, .. } => Some(state),
+            TaskDescriptor::Program(_) => None,
         }
     }
 }

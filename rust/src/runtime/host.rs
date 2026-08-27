@@ -15,12 +15,11 @@ use crate::observation::advanced::BoundObservationPlan;
 use crate::persistence::advanced::{
     PersistencePlan, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
 };
-use crate::state::advanced::{SystemState, SystemStateSchema};
+use crate::state::advanced::SystemState;
 use crate::task::advanced::{TaskExecutionHost, TaskResult};
 use crate::ui::advanced::TaskUi;
 
 pub(crate) struct RuntimeTaskHost {
-    schema: SystemStateSchema,
     persistence_plan: PersistencePlan,
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
@@ -56,7 +55,6 @@ impl RuntimeTaskEnvironment {
 
 impl RuntimeTaskHost {
     pub(crate) fn new(
-        schema: SystemStateSchema,
         persistence_plan: PersistencePlan,
         cancellation: Arc<AtomicBool>,
         output_directory: PathBuf,
@@ -65,7 +63,6 @@ impl RuntimeTaskHost {
         environment: RuntimeTaskEnvironment,
     ) -> Self {
         Self {
-            schema,
             persistence_plan,
             cancellation,
             output_directory,
@@ -97,10 +94,6 @@ impl RuntimeTaskHost {
 }
 
 impl TaskExecutionHost for RuntimeTaskHost {
-    fn state_schema(&self) -> TaskResult<&SystemStateSchema> {
-        Ok(&self.schema)
-    }
-
     fn cancellation_requested(&self) -> bool {
         self.cancellation_requested()
     }

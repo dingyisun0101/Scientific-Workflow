@@ -2,10 +2,11 @@
 
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
 config to capture one project root, retains that central immutable Config,
-asks state to validate the centrally parsed schema, discovers linked models,
-selects `parameters.json[model-key]`, binds each expanded constants value to
+asks State to validate the centrally parsed named schemas, discovers linked models,
+selects `wf_configs/parameters.json[model-key]`, binds each expanded constants value to
 its model, resolves external programs
-and Python environments, binds observation plans to the schema, and produces
+and Python environments, selects each model task's named schema, binds its
+observation plan to that schema, and produces
 one immutable execution plan of generic tasks.
 
 Study creates no output, starts no worker, initializes no model, and writes no
@@ -14,7 +15,7 @@ recording. Runtime alone owns active effects.
 ## Basic API
 
 `scientific_workflow::study::basic` intentionally exports no Rust symbols.
-Ordinary users express Study intent in `study.json` and call
+Ordinary users express Study intent in `wf_configs/study.json` and call
 `scientific_workflow::run(project_root: &Path)`. They do not construct phases,
 tasks, identities, persistence plans, registries, or Study builders.
 
@@ -26,7 +27,7 @@ tasks, identities, persistence plans, registries, or Study builders.
 ### `study::advanced::Study`
 
 `Study` is an immutable, clone-cheap plan backed by `Arc`. It owns the shared
-central Config, state schema, internal phases/tasks, resolved constants,
+central Config, task-bound state schemas, internal phases/tasks, resolved constants,
 resolved executable/script/environment paths, schema-bound observation plans,
 inferred output root, replicate policy, and effective persistence/UI settings. None of those
 internal planning types is public.
@@ -36,8 +37,9 @@ internal planning types is public.
   paths and parses JSON. Study validates registration keys and duplicates,
   resolves every manifest model key, program path, Python script, interpreter,
   and environment manager, decodes every concrete constants value,
-  calls each model's side-effect-free `observation_plan` exactly once, and
-  binds that plan to the shared schema. It does not call
+  validates every named state document, calls each model's side-effect-free
+  `observation_plan` exactly once, and binds that plan to the schema explicitly
+  selected by that model task. It does not call
   `ScientificModel::initialize`.
 - `project_root() -> &Path` returns config's retained canonical root.
 - `output_root() -> &Path` returns the inferred
@@ -50,7 +52,7 @@ preflight, clone scientific payloads, or duplicate constants documents.
 constants.
 
 There is no public manual-catalog loader, phase accessor, task accessor, state
-schema accessor, replicate-policy accessor, persistence-plan accessor, source
+schema map/accessor, replicate-policy accessor, persistence-plan accessor, source
 document view, UI-plan accessor, or mutable Study operation. Advanced consumers that need to run
 a preloaded Study pass it to `runtime::advanced::execute`; successful runtime
 summaries provide output paths and task results.
@@ -61,7 +63,8 @@ summaries provide output paths and task results.
 
 - `Config(ConfigError)` preserves project loading, grammar, path, expansion,
   or constants-decoding failure;
-- `State(StateError)` preserves state-schema semantic failure;
+- `State(StateError)` preserves semantic failure from any declared named state
+  schema;
 - `InvalidModelRegistration { reason }` reports an invalid or duplicate
   linked `#[model]` key without exposing the private catalog type;
 - `UnknownModel { phase, model }` reports a manifest key with no linked
@@ -114,7 +117,8 @@ println!("actual execution: {}", summary.output_directory().display());
 `StudyPhase`, `StudyTask`, central `Config`, resolved model parameters/programs and
 Python launchers,
 type-erased task definitions,
-bound observation plans, replicate/persistence policies, UI plan, global
+named and task-bound state schemas, bound observation plans,
+replicate/persistence policies, UI plan, global
 output ordinals, identity/label formats, and topological planning data are private.
 Runtime obtains them through crate-visible `study::advanced` exports.
 

@@ -100,27 +100,28 @@ impl StateWriterWorker {
         Self::spawn(configs, manifest)
     }
 
-    /// Admits one complete record to the recording-wide FIFO queue.
+    /// Admits one complete record and its owned stream name to the
+    /// recording-wide FIFO queue.
     pub(crate) fn submit_record(
         &self,
-        stream: &str,
+        stream: String,
         record: EncodedStateRecord,
     ) -> Result<(), PersistenceError> {
         let record_bytes =
             u64::try_from(record.len()).map_err(|_| PersistenceError::ByteCountOverflow {
-                stream: stream.to_owned(),
+                stream: stream.clone(),
             })?;
         let mut state = lock_state(&self.shared);
         let queue_bytes = state
             .streams
-            .get(stream)
+            .get(stream.as_str())
             .ok_or_else(|| PersistenceError::UnknownStateStream {
-                stream: stream.to_owned(),
+                stream: stream.clone(),
             })?
             .queue_bytes;
         if record_bytes > queue_bytes {
             return Err(PersistenceError::RecordTooLarge {
-                stream: stream.to_owned(),
+                stream,
                 bytes: record_bytes,
                 limit: queue_bytes,
             });
@@ -131,13 +132,13 @@ impl StateWriterWorker {
             ensure_accepting(&state)?;
             let stream_state = state
                 .streams
-                .get(stream)
+                .get(stream.as_str())
                 .expect("validated stream remains registered");
             if let Some(previous) = stream_state.last_accepted_iteration
                 && iteration <= previous
             {
                 return Err(PersistenceError::OutOfOrderIteration {
-                    stream: stream.to_owned(),
+                    stream,
                     iteration,
                     previous,
                 });
@@ -151,12 +152,12 @@ impl StateWriterWorker {
                 state.outstanding_records += 1;
                 let stream_state = state
                     .streams
-                    .get_mut(stream)
+                    .get_mut(stream.as_str())
                     .expect("validated stream remains registered");
                 stream_state.outstanding_bytes += record_bytes;
                 stream_state.last_accepted_iteration = Some(iteration);
                 state.queue.push_back(Work::Record {
-                    stream: stream.to_owned(),
+                    stream,
                     record,
                     bytes: record_bytes,
                 });

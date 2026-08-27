@@ -1,8 +1,9 @@
 # Config API
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
-captures `study.json`, the canonical `config/state.json`, and the canonical
-`config/parameters.json` in a central immutable `Config`. The parameters
+captures `wf_configs/study.json`, every named state schema declared by
+`study.json.paths.states`, and the canonical `wf_configs/parameters.json` in a
+central immutable `Config`. The parameters
 document is the one arbitrary nested namespace for every user-project setting:
 model constants and sweeps, plotting settings, validation tolerances, and
 external-program options. Config also resolves environment-managed Python
@@ -20,24 +21,40 @@ Its ordinary user-facing API is this project layout:
 
 ```text
 <project-root>/
-├── study.json
-└── config/
-    ├── state.json
-    └── parameters.json
+└── wf_configs/
+    ├── study.json
+    ├── parameters.json
+    └── states/
+        ├── population.json
+        └── environment.json
 ```
 
 The user passes only `project_root: &Path` to `scientific_workflow::run`.
-Config derives every other Workflow path. Model tasks do not name parameter
-files: their stable model key selects the same-named top-level section in
-`parameters.json`. Missing canonical documents and missing model sections fail
-loading before output exists.
+The required `wf_configs/` directory identifies that path as a Workflow project
+root; `wf_configs/study.json` and `wf_configs/parameters.json` are both required
+for a valid project. Config derives both reserved document paths. Model tasks do
+not name parameter files: their stable model key selects the same-named
+top-level section in `parameters.json`. Each model task explicitly selects a
+named state schema. Missing declared documents, state keys, and model sections
+fail loading before output exists.
 
-### `study.json`
+`wf_configs/states/` is recommended for readable organization, but it is not a
+required directory. State-schema documents may be placed anywhere beneath
+`wf_configs/`; each one must be registered with its project-root-relative path
+in `study.json.paths.states`. A state path outside `wf_configs/` is rejected.
 
-The root object has one required `phases` object and two optional objects:
+### `wf_configs/study.json`
+
+The root object has required `paths` and `phases` objects and two optional
+objects:
 
 ```json
 {
+  "paths": {
+    "states": {
+      "population": "wf_configs/states/population.json"
+    }
+  },
   "replicates": {
     "count": 1,
     "scheduling": "sequential",
@@ -51,7 +68,7 @@ The root object has one required `phases` object and two optional objects:
     "simulate": {
       "after": [],
       "tasks": [
-        {"model": "population"}
+        {"model": "population", "state": "population"}
       ],
       "max_concurrency": 1,
       "start_interval_ms": 0,
@@ -64,6 +81,11 @@ The root object has one required `phases` object and two optional objects:
 
 Unknown properties are rejected at every Workflow-owned level.
 
+- `paths.states` maps nonblank, whitespace-exact semantic state names to JSON
+  paths. Paths must be project-root-relative, resolve once during Config
+  loading, and identify captured `.json` documents beneath the canonical
+  `wf_configs/` root. Multiple models may share one state key, while one project
+  may declare any number of schemas.
 - `replicates.count` defaults to `1` and must be positive.
 - `replicates.scheduling` is `"sequential"` by default or `"parallel"`.
 - replicate and phase `failure_policy` are `"fail_fast"` by default or
@@ -87,7 +109,8 @@ Unknown properties are rejected at every Workflow-owned level.
   admitted immediately. Phase and task `timeout_ms` are optional nonnegative
   millisecond counts.
 - each task is exactly one of:
-  - a model task with nonblank `model` and optional `timeout_ms`; or
+  - a model task with nonblank `model`, required nonblank `state`, and optional
+    `timeout_ms`; or
   - a program task with required `program`, optional `args`, and optional
     `timeout_ms`, for example
     `{"program":"bin/analyze","args":["--publication"]}`; or
@@ -101,6 +124,10 @@ Unknown properties are rejected at every Workflow-owned level.
   Resolution occurs during loading, so Runtime never searches again.
 - Model keys remain opaque until Study matches them to linked `#[model]`
   registrations.
+- Model `state` keys are resolved during effect-free assembly. The selected
+  parsed document is validated by State, bound to that exact model task, and
+  recorded in task provenance. There is no implicit model-name fallback or
+  single global schema.
 
 ### Python tasks
 
@@ -151,14 +178,19 @@ with `-`. Virtual-environment and project paths must resolve to directories.
 Every manager/interpreter is resolved to an executable regular file during
 `Study::load`; Runtime performs no environment discovery.
 
-### `config/state.json`
+### State-schema documents
 
-Config parses this document once and rejects duplicate JSON keys. State owns
-its semantic grammar; the current shape is an ordered `fields` array whose
-entries contain `name` and optional `description`. Study passes the already
-parsed value to state validation without rereading the file.
+Every path in `study.json.paths.states` names a JSON document captured beneath
+`wf_configs/`. The recommended `wf_configs/states/` directory is optional; for
+example, both `wf_configs/states/population.json` and
+`wf_configs/population.json` are valid when their exact project-root-relative
+paths are declared. Config parses each document once and rejects duplicate JSON
+keys. State owns its semantic grammar; the current shape is an ordered `fields`
+array whose entries contain `name` and optional `description`. Study passes each
+already parsed value to State validation without rereading the file, then binds
+model tasks by their explicit `state` key.
 
-### `config/parameters.json`
+### `wf_configs/parameters.json`
 
 This required root object contains every custom-project parameter, grouped by
 the stable key of its consumer:
@@ -176,17 +208,19 @@ the stable key of its consumer:
 }
 ```
 
-For `{"model":"population"}`, Config selects only the `population` section,
-expands it, and decodes each result as one complete
-`ScientificModel::Constants`. Other sections remain arbitrary and are
-available to external programs through the frozen central snapshot. Config
-owns two expansion markers inside a selected model section:
+For `{"model":"population","state":"population"}`, Config selects only the
+`population` section, expands it, and decodes each result as one complete
+`ScientificModel::Constants`. Other sections remain arbitrary and are available
+to external programs through the frozen central snapshot. Config owns two
+expansion markers inside a selected model section:
 
 - `{"$sweep": [a, b, ...]}` selects independent alternatives at that object
   position. Multiple sweeps form a deterministic Cartesian product.
 - a root or nested object may contain `"$cases": [{...}, {...}]` alongside
   fixed fields. Cases are correlated alternatives and must share the same
-  flattened field set without overlapping fixed values.
+  flattened field set without overlapping fixed values. Fixed siblings and
+  case values cannot contain further selection markers: a `$cases` object is
+  the terminal correlated choice at that subtree.
 
 Choices and cases must be nonempty. A `$sweep` object has no siblings.
 Reserved markers cannot occur inside a choice/case, and unknown `$...` keys
@@ -197,31 +231,42 @@ one complete owned constants value during Study preflight.
 
 ### Central configuration snapshot
 
-The state schema and the entire arbitrary parameters namespace use the same
+State schemas and the entire arbitrary parameters namespace use the same
 strict parser, duplicate-key rules, immutable snapshot, and lookup graph.
-Additional JSON found beneath `config/` is still captured and validated for
-forward compatibility, but the supported ordinary layout puts every custom
-project parameter in `parameters.json` rather than fragmenting it across files.
+Additional JSON found beneath `wf_configs/` (other than the separately
+captured reserved `study.json`) is still captured and validated for forward
+compatibility, but the supported ordinary layout puts every custom project
+parameter in `parameters.json` rather than fragmenting it across files.
 
 Generic program and Python tasks receive a deterministic language-neutral
 snapshot:
 
 ```json
 {
-  "study": {"phases": {}},
+  "study": {
+    "paths": {"states": {"population": "wf_configs/states/population.json"}},
+    "phases": {"simulate": {"tasks": [{"model":"population","state":"population"}]}}
+  },
   "config": {
     "parameters.json": {
       "population": {"growth": 0.1},
       "plot": {"dpi": 300}
     },
-    "state.json": {"fields": []}
+    "states/population.json": {"fields": [{"name":"population"}]}
   }
 }
 ```
 
-The top-level `study` value is the captured root manifest. `config` maps exact
-forward-slash-normalized paths relative to `config/` to their values, sorted
-lexicographically. Programs retrieve the keys they understand from this one
+The top-level `study` value is the captured reserved manifest. The logical
+`config` object maps exact forward-slash-normalized paths relative to
+`wf_configs/` to their values, excluding `study.json` and sorting keys
+lexicographically. The logical key remains `config` so external tasks consume a
+stable configuration namespace rather than a source-directory name. Relative
+document names must be valid UTF-8; Config rejects them instead of collapsing
+distinct names through lossy conversion. JSON file symlinks retain their
+authored relative snapshot key, but their canonical target must remain beneath
+`wf_configs/`. Directory symlinks are not traversed.
+Programs retrieve the keys they understand from this one
 snapshot. Config does not require a schema for arbitrary documents.
 
 All documents undergo duplicate-key detection when `Study::load` captures the
@@ -251,6 +296,8 @@ crate-private because applications cannot use them without duplicating Study.
 - `InvalidProgram { path, reason }` reports an unsafe, missing, non-executable
   program/manager or invalid Python script/environment declaration;
 - `UnknownDependency { phase, dependency }` reports a missing phase edge;
+- `UnknownState { phase, model, state }` reports a model task whose selector
+  does not name a declared state schema;
 - `ExpansionOverflow { path }` prevents unrepresentable or unallocatable
   combination products; and
 - `DecodeModelConstants { model, path, ordinal, source }` contextualizes a
@@ -273,15 +320,17 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 }
 ```
 
-Config reads `study.json` and every JSON document beneath `config/` as part of
-that call. Any config failure returns before Runtime creates output. A phase
-may then declare a model task followed by a direct Python task:
+Config reads `wf_configs/study.json` and every other JSON document beneath
+`wf_configs/` as part of that call. Any config failure returns before Runtime
+creates output. A phase may then declare a model task followed by a direct
+Python task:
 
 ```json
 {
+  "paths": {"states": {"population":"wf_configs/states/population.json"}},
   "phases": {
     "simulate": {
-      "tasks": [{"model":"population"}]
+      "tasks": [{"model":"population","state":"population"}]
     },
     "plot": {
       "after": ["simulate"],
@@ -306,8 +355,10 @@ canonicalization, and `$sweep`/`$cases` expansion are private compilation
 machinery. Peer subsystems reach the required crate-visible types through
 `config::advanced`; downstream applications cannot construct or inspect them.
 
-A replacement config implementation must preserve the canonical files,
-model-key parameter selection, typed `Path` containment, duplicate-key
+A replacement config implementation must preserve the required `wf_configs`
+project boundary, canonical manifest and parameters files, named state-path
+resolution, explicit per-model state
+selection, model-key parameter selection, typed `Path` containment, duplicate-key
 rejection, deterministic expansion,
 centralized one-pass parsing, immutable complete-project snapshots, complete
 constants decoding, direct executable and Python-environment resolution,

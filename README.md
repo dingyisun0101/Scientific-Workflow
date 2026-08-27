@@ -6,58 +6,61 @@ executable programs, and declarative JSON into validated, recorded studies.
 > **Breaking 0.10 update:** Version 0.10.2 is the current patch release of the
 > 0.10 API generation that intentionally replaced the pre-0.10 orchestration,
 > configuration, storage/writer, and study APIs. Projects using 0.9.x or
-> earlier must migrate to the model registration plus
-> `study.json`/`config/state.json`/`config/parameters.json` workflow described
-> below. Legacy Rust entry points and legacy JSON fields are not accepted as
-> compatibility aliases.
+> earlier must migrate to the model registration plus `wf_configs/study.json`
+> named-state map and `wf_configs/parameters.json` workflow. A root-level
+> `study.json` and the former `config/` directory are not compatibility aliases.
+> Legacy Rust entry points and legacy JSON fields are likewise not accepted.
 
-The user workflow is intentionally limited to:
+## Start here
 
-1. implement/register each stateful Rust model and provide any standalone task
-   programs or Python scripts;
-2. write `study.json`, `config/state.json`, and the single project-wide
-   `config/parameters.json`; and
-3. call `scientific_workflow::run(project_root)`.
+- To use the library, follow the complete [Rust crate guide](rust/README.md).
+  It contains installation, architecture and ownership diagrams, the full
+  project procedure, model examples, JSON grammar, execution, and validation.
+- To see a complete working project, open the
+  [two-dimensional attractor example](examples/attractor_2d/README.md), its
+  [study manifest](examples/attractor_2d/wf_configs/study.json), and its
+  [registered model](examples/attractor_2d/src/hopf_model.rs).
+- To understand subsystem boundaries and dependency direction, read the
+  [architecture guide](docs/architecture.md).
+- To find the tests for a behavior or run the required checks, use the
+  [test map](docs/tests.md).
+- Before contributing changes, read the repository [agent and edit
+  instructions](AGENTS.md).
 
-```rust
-fn main() -> Result<(), scientific_workflow::WorkflowError> {
-    scientific_workflow::run(std::path::Path::new("."))
-}
-```
-
-Users do not construct tasks, phases, studies, runtimes, output paths,
-recording sessions, progress counters, or messages. A task is either one
-registered model plus one resolved model-parameter combination, one executable
-declared directly in `study.json`, or one `.py` script with its environment
-declared inside the task's `python` object. Neither program form needs a Rust
-wrapper.
+## Repository map
 
 ```text
-registered models and/or programs + project JSON
-    → crate-level run(&Path) facade
-    → one central immutable parse of all project JSON
-    → immutable Study binding and preflight
-    → Study-owned effective persistence plan
-    → runtime::execute(Study)
-    → automatic scheduling, persistence, and terminal UI
+workflow/
++-- rust/                   Rust crate, crate guide, sources, and Rust tests
++-- python/                 verified recording reader and Python tests
++-- examples/attractor_2d/ complete Rust-model + Python-analysis project
++-- docs/                   architecture and test responsibility maps
++-- AGENTS.md               repository editing and documentation rules
+`-- README.md               repository navigation
 ```
 
-The Rust crate lives in [`rust/`](rust/). Start with its
-[user guide](rust/README.md), then use the complete
-[architecture](docs/architecture.md), [test map](docs/tests.md), and each
-subsystem's `src/<module>/api.md` for exhaustive contracts.
+## Subsystem contracts
 
-The [attractor example](examples/attractor_2d) demonstrates the final workflow
-as one realistic project. Its Rust executable is one `run(&Path)` call, its
-model directly owns and exposes a `SystemState`, and its coupled scientific
-fields use typed tuple borrowing rather than generated field-access macros. The
-registration attribute only links that ordinary model implementation to its
-stable JSON key. Its JSON owns constants sweeps and phase organization, and its
-final phase declares a Python plotter directly.
-The plotter reads verified model recordings and the `plot` section of the
-central `parameters.json`, then writes an SVG to its configured `output/plots`.
-Rust persistence, scheduling, Python launching, and the Ratatui dashboard
-remain automatic.
+Each first-level Rust subsystem has an exhaustive API and replacement contract:
+
+- [State](rust/src/state/api.md): schemas, typed payload ownership, time, and
+  in-memory series.
+- [Observation](rust/src/observation/api.md): stream declarations, binding,
+  cadence, and encoding boundaries.
+- [Task](rust/src/task/api.md): `ScientificModel`, registration, model
+  contracts, and generic program tasks.
+- [Config](rust/src/config/api.md): project JSON, named state paths, parameter
+  expansion, and program/Python resolution.
+- [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable
+  execution intent.
+- [Persistence](rust/src/persistence/api.md): automatic recordings, lifecycle,
+  format, and verified reconstruction.
+- [Runtime](rust/src/runtime/api.md): execution, scheduling, cancellation,
+  program environments, and summaries.
+- [UI](rust/src/ui/api.md): automatic terminal presentation and exit handling.
+- [Error](rust/src/error/api.md): complete-workflow error composition.
+- [Prelude](rust/src/prelude/api.md): canonical Basic and Advanced API
+  aggregation.
 
 > This crate is pre-1.0 test software. Public API behavior may change through
 > coordinated refactor releases.

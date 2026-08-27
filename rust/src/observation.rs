@@ -13,6 +13,10 @@ mod session;
 mod state_observation;
 mod stream;
 
+#[cfg(test)]
+#[path = "observation/tests/observation_workflow.rs"]
+mod observation_workflow_tests;
+
 /// Ordinary application-facing observation definitions.
 pub mod basic {
     pub use super::error::ObservationError;

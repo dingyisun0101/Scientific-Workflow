@@ -16,7 +16,8 @@ mod study_workflow_tests;
 
 /// Ordinary application-facing study API.
 ///
-/// This scope is intentionally empty: ordinary applications write `study.json`
+/// This scope is intentionally empty: ordinary applications write
+/// `wf_configs/study.json`
 /// and call the crate-level `run(&Path)` entry point.
 pub mod basic {}
 

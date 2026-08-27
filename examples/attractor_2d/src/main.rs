@@ -13,7 +13,8 @@ mod tests {
 
     #[test]
     fn simulation_tasks_retain_the_two_second_admission_interval() {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("study.json");
+        let manifest =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("wf_configs/study.json");
         let study: serde_json::Value =
             serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
 

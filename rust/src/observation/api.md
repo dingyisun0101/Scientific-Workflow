@@ -80,9 +80,10 @@ positive cadence.
   the ordinary Rust builder style.
 
 There is intentionally no public `Sampling`, field-selection, axis, or
-checkpoint type. A full-state stream is inferred as checkpoint-capable after
-schema binding. The final state is a session concern and is offered once even
-when its iteration does not align with a stream cadence.
+checkpoint type. Selecting all fields makes complete state reconstruction
+possible, but Observation does not classify or label a stream as a checkpoint.
+The final state is a session concern and is offered once even when its
+iteration does not align with a stream cadence.
 
 ### `observation::basic::ObservationError`
 
@@ -149,7 +150,7 @@ use scientific_workflow::observation::basic::{
 };
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
-let schema = SystemStateSchema::load_json_template(Path::new("config/state.json"))?;
+let schema = SystemStateSchema::load_json_template(Path::new("wf_configs/states/state.json"))?;
 let mut state = schema.create_empty_state(StateTime::from_iteration(0));
 state.initialize_payload("position", vec![0.0_f64, 1.0])?;
 state.initialize_payload("energy", 0.5_f64)?;
@@ -160,8 +161,9 @@ let plan = ObservationPlan::streams([
 ])?
 .with_physical_time_unit("s")?;
 
-// ScientificModel::observation_plan returns `plan`; Workflow infers paths, schema
-// metadata, checkpoint eligibility, lifecycle, and persistence policy.
+// ScientificModel::observation_plan returns `plan`; Workflow infers paths,
+// schema metadata, lifecycle, and persistence policy. The all-fields stream
+// retains every field needed for complete state reconstruction.
 # let _ = (state, plan);
 # Ok(())
 # }

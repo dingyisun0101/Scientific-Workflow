@@ -14,25 +14,15 @@ use super::stream::BoundObservationStream;
 
 /// An owned encoded scientific observation ready for a persistence backend.
 pub(crate) struct EncodedObservation {
-    stream: Box<str>,
+    stream: String,
     time: StateTime,
     bytes: Vec<u8>,
 }
 
 impl EncodedObservation {
-    /// Returns the logical scientific stream name.
-    pub(crate) fn stream(&self) -> &str {
-        &self.stream
-    }
-
-    /// Returns the encoded state's scientific coordinate.
-    pub(crate) fn time(&self) -> StateTime {
-        self.time
-    }
-
-    /// Consumes the observation and returns its encoded allocation.
-    pub(crate) fn into_bytes(self) -> Vec<u8> {
-        self.bytes
+    /// Consumes the observation into its queue-ready owned components.
+    pub(crate) fn into_parts(self) -> (String, StateTime, Vec<u8>) {
+        (self.stream, self.time, self.bytes)
     }
 }
 
@@ -91,7 +81,7 @@ pub(super) fn encode(
         }
     })?;
     Ok(EncodedObservation {
-        stream: stream.name().into(),
+        stream: stream.name().to_owned(),
         time,
         bytes,
     })

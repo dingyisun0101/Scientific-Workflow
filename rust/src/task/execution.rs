@@ -16,9 +16,6 @@ use super::result::TaskResult;
 /// module deliberately exposes no user callback for formatting messages,
 /// choosing channels, managing storage, or mutating lifecycle state.
 pub(crate) trait TaskExecutionHost {
-    /// Borrows the state schema loaded from the project's `config/state.json`.
-    fn state_schema(&self) -> TaskResult<&SystemStateSchema>;
-
     /// Reports whether cooperative cancellation has been requested.
     fn cancellation_requested(&self) -> bool;
 
@@ -68,6 +65,7 @@ pub(crate) trait TaskDefinition: Send + Sync {
 
 pub(crate) struct StatefulDefinition<M> {
     parameters: ResolvedModelParameters,
+    schema: SystemStateSchema,
     observation_plan: BoundObservationPlan,
     marker: std::marker::PhantomData<fn() -> M>,
 }
@@ -78,10 +76,12 @@ where
 {
     pub(crate) fn new(
         parameters: ResolvedModelParameters,
+        schema: SystemStateSchema,
         observation_plan: BoundObservationPlan,
     ) -> Self {
         Self {
             parameters,
+            schema,
             observation_plan,
             marker: std::marker::PhantomData,
         }
@@ -98,7 +98,7 @@ where
         }
 
         let constants: M::Constants = self.parameters.decode()?;
-        let schema = host.state_schema()?.clone();
+        let schema = self.schema.clone();
 
         let mut model = M::initialize(constants, &schema)?;
         let state_address = model.state() as *const SystemState;

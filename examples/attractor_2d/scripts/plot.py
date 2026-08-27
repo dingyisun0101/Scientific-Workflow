@@ -51,9 +51,9 @@ def _settings() -> dict[str, Any]:
     config = _object(snapshot, "configuration snapshot").get("config")
     documents = _object(config, "configuration snapshot.config")
     parameters = _object(
-        documents.get("parameters.json"), "config/parameters.json"
+        documents.get("parameters.json"), "wf_configs/parameters.json"
     )
-    return _object(parameters.get("plot"), "config/parameters.json.plot")
+    return _object(parameters.get("plot"), "wf_configs/parameters.json.plot")
 
 
 def _output_directory(settings: dict[str, Any]) -> Path:

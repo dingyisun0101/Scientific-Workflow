@@ -11,10 +11,11 @@ attractor_2d/
 ├── src/
 │   ├── main.rs                 one scientific_workflow::run(&Path) call
 │   └── hopf_model.rs           registered state-owning scientific model
-├── study.json                  simulate phase followed by plot phase
-├── config/
-│   ├── state.json              canonical scientific state schema
-│   └── parameters.json         every model and plotting parameter
+├── wf_configs/                 required Workflow configuration root
+│   ├── study.json              simulate phase followed by plot phase
+│   ├── parameters.json         every model and plotting parameter
+│   └── states/                 recommended schema grouping
+│       └── attractor.json      canonical scientific state schema
 └── scripts/
     └── plot.py                 directly declared Python task
 ```
@@ -28,7 +29,7 @@ Its `state()` method exposes a direct immutable borrow to Workflow. Inside the
 model, `step` obtains `point` and `radius` together with the typed tuple call
 `borrow_payloads_mut::<(Vec<f64>, f64)>(("point", "radius"))`; model fields are
 not generated or accessed by a macro. The `#[model("attractor")]` attribute is
-only the automatic registration link to `study.json`.
+only the automatic registration link to `wf_configs/study.json`.
 For presentation only, `artificial_step_delay_ms` sleeps after every successful
 step so the automatic dashboard remains visible long enough to inspect. This
 wall-clock delay is not scientific time and should be set to `0` for an
@@ -40,7 +41,7 @@ Its custom `ObservationPlan` records:
 - radius every 5 iterations; and
 - a combined checkpoint every 1,000 iterations.
 
-The `attractor` section of `config/parameters.json` sweeps three growth
+The `attractor` section of `wf_configs/parameters.json` sweeps three growth
 parameters and two angular frequencies. Config selects that section from the
 registered model key and expands its Cartesian product into six model tasks;
 Runtime executes up to three concurrently and automatically records every
@@ -69,7 +70,7 @@ completed simulation outputs, and isolated artifact directory through the
 standard `WORKFLOW_*` contract.
 
 The plotter retrieves its visual settings from the `plot` section of
-`config/parameters.json`, opens every dependency recording with the official
+`wf_configs/parameters.json`, opens every dependency recording with the official
 verified `scientific_workflow_reader`, and produces:
 
 ```text

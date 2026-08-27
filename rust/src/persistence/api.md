@@ -18,7 +18,8 @@ execution.
 ## Basic API
 
 `scientific_workflow::persistence::basic` intentionally exports no Rust
-symbols. Its user-facing surface is the optional root object in `study.json`:
+symbols. Its user-facing surface is the optional root object in
+`wf_configs/study.json`:
 
 ```json
 "persistence": {
@@ -58,7 +59,7 @@ Python it additionally records the canonical `python_script` and declared
 Runtime passes the other paths to the child. `artifacts/` is the default
 working directory and remains available for temporary or task-scoped results.
 An external program may instead read a project-relative destination from the
-frozen `parameters.json` snapshot and write there directly. The bundled Python
+frozen `wf_configs/parameters.json` snapshot and write there directly. The bundled Python
 plotter uses `output/plots`. Such files are program-owned: Persistence does not
 move, publish, validate, or reconstruct them.
 

@@ -16,12 +16,13 @@
 //!
 //! # Ownership and cloning
 //!
-//! `set` consumes a payload without cloning it. Initial insertion returns
-//! `None`, replacement returns ownership of the previous same-typed payload,
-//! and rejection returns ownership of the unchanged incoming payload through
-//! [`PayloadInsertError`]. `take` moves a stored payload back to the caller. These
-//! operations preserve the backing allocations of ordinary scientific owners
-//! such as `Vec<T>` and tensor containers.
+//! `initialize_payload` and `insert_payload` consume payloads without cloning
+//! them. Initial insertion returns `None`, replacement returns ownership of the
+//! previous same-typed payload, and rejection returns ownership of the
+//! unchanged incoming payload through [`PayloadInsertError`]. `take_payload`
+//! moves a stored payload back to the caller. These operations preserve the
+//! backing allocations of ordinary scientific owners such as `Vec<T>` and
+//! tensor containers.
 //!
 //! Explicitly cloning a `SystemState` is different: it shares the immutable
 //! specification but deep-clones every populated payload. Persistence should
@@ -67,7 +68,8 @@ use super::value::StateValue;
 /// Fields are declared by a JSON-derived [`SystemStateSchema`]. Values are addressed
 /// by those field names but stored in compact optional slots. The type-erased
 /// representation remains private; callers always insert, borrow, mutate, and
-/// extract concrete Rust types.
+/// extract concrete Rust types. An owned state is `Send` but not `Sync`; shared
+/// cross-thread ownership requires an external synchronization boundary.
 pub struct SystemState {
     spec: SystemStateSchema,
     time: StateTime,
@@ -360,10 +362,11 @@ impl SystemState {
     ///
     /// # Errors
     ///
-    /// Validation proceeds from left to right and completes before references
-    /// are returned. The method reports an unknown field, repeated field,
-    /// retained type mismatch, or missing payload through [`StateError`]. An
-    /// error leaves every slot unchanged.
+    /// Validation first resolves field names and rejects repeated fields, then
+    /// checks retained types and payload presence in tuple order. Every check
+    /// completes before references are returned. The method reports an unknown
+    /// field, repeated field, retained type mismatch, or missing payload through
+    /// [`StateError`]. An error leaves every slot unchanged.
     pub fn borrow_payloads<'state, Q>(
         &'state self,
         keys: Q::Keys<'_>,

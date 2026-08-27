@@ -7,9 +7,9 @@
 //! # Scope
 //!
 //! This module performs no sampling, serialization, decoding, filesystem IO,
-//! chunking, or queue management. A simulation sends borrowed partial states
-//! to the future storage layer; a `StateSeries` is instead built when an
-//! application or reader wants an owned collection for analysis.
+//! chunking, or queue management. Runtime sends borrowed observations to
+//! persistence; a `StateSeries` is instead built when an application or reader
+//! wants an owned collection for analysis.
 //!
 //! # Ownership and cloning
 //!
@@ -49,7 +49,9 @@ use super::state::SystemState;
 /// `spec` remains present even when the collection is empty, so later appends
 /// can be checked with constant-time layout identity. Each stored state carries
 /// its own cheap handle to the same immutable layout allocation and therefore
-/// remains independently valid after removal from the series.
+/// remains independently valid after removal from the series. Like its owned
+/// states, a series is `Send` but not `Sync`; shared cross-thread ownership
+/// requires external synchronization.
 pub struct StateSeries {
     spec: SystemStateSchema,
     states: Vec<SystemState>,

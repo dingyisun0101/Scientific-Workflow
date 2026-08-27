@@ -93,8 +93,8 @@ impl SystemStateSchema {
 
     /// Parses and validates a specification from an in-memory JSON document.
     ///
-    /// This is the internal reconstruction boundary for a future persistence
-    /// reader. `source` identifies the containing metadata file for provenance
+    /// This is the internal reconstruction boundary used by persistence
+    /// readers. `source` identifies the containing metadata file for provenance
     /// and errors; it need not be a standalone state-template path. Parsing
     /// uses the same strict Serde representation and semantic validation as
     /// [`SystemStateSchema::load_json_template`].

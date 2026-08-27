@@ -48,7 +48,7 @@ pub trait ScientificModel: Send + Sized + 'static {
     }
 
     /// Builds a fully initialized model from resolved constants and the
-    /// runtime-loaded state schema.
+    /// selected, centrally loaded state schema.
     ///
     /// The returned model must already contain a usable, fully populated state
     /// created from this exact `schema` allocation. No state observation occurs

@@ -25,13 +25,15 @@
 //!
 //! Type erasure and boxing are implementation details. This module is
 //! crate-private so end users interact only with typed methods on
-//! `SystemState`, such as `set`, `get`, `get_mut`, and `take`.
+//! `SystemState`, such as `initialize_payload`, `insert_payload`, `payload`,
+//! `payload_mut`, and `take_payload`.
 //!
 //! # Threading
 //!
 //! Stored values must implement [`Send`] so an owned `SystemState` can transfer
 //! between threads when an application requires it. [`Sync`] is intentionally
-//! not required: an owning simulation mutates payloads exclusively, while the
+//! not required, which makes `SystemState` and `StateSeries` `Send` but not
+//! `Sync`. An owning simulation mutates payloads exclusively, while the
 //! persistence hot path borrows them synchronously only for encoding. Encoded
 //! bytes—not `StateValue` objects—enter the background writer queue.
 //!
@@ -71,13 +73,8 @@ trait ErasedValue: Any + Send {
 
     /// Borrows the concrete payload through erased Serde serialization.
     ///
-    /// This explicit concrete-to-trait-object coercion avoids depending on
-    /// trait-object upcasting and therefore remains compatible with the
-    /// crate's Rust 1.85 minimum version.
-    #[allow(
-        dead_code,
-        reason = "called through the crate-private storage boundary before storage is exported"
-    )]
+    /// This explicit concrete-to-trait-object coercion keeps the erased
+    /// serialization boundary independent of trait-object upcasting.
     fn as_serialize(&self) -> &dyn erased_serde::Serialize;
 }
 
@@ -198,10 +195,6 @@ impl StateValue {
     /// This operation does not clone, move, encode, or allocate. The returned
     /// trait object remains tied to this wrapper's borrow; a storage encoder
     /// supplies the actual serializer and framing.
-    #[allow(
-        dead_code,
-        reason = "called through the crate-private storage boundary before storage is exported"
-    )]
     pub(crate) fn serializable(&self) -> &dyn erased_serde::Serialize {
         self.inner.as_serialize()
     }

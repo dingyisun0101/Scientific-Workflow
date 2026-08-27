@@ -11,7 +11,6 @@ use serde_json::{Map, Value};
 
 use crate::config::advanced::{Config, FailurePolicy, ReplicateScheduling};
 use crate::persistence::advanced::PersistencePlan;
-use crate::state::advanced::SystemStateSchema;
 use crate::study::advanced::{Study, StudyPhase, StudyTask};
 use crate::task::advanced::TaskKind;
 use crate::ui::advanced::{UiEvent, UiSession};
@@ -267,7 +266,6 @@ struct PhaseRuntime<'a> {
 }
 
 struct TaskRuntime {
-    schema: SystemStateSchema,
     persistence_plan: PersistencePlan,
     config: Config,
     project_root: PathBuf,
@@ -473,7 +471,6 @@ fn spawn_task(
         .replicate_directory
         .join(format!("task-{:06}", worker_task.output_ordinal()));
     let runtime = TaskRuntime {
-        schema: context.study.state_schema().clone(),
         persistence_plan: context.study.persistence_plan(),
         config: context.study.config().clone(),
         project_root: context.study.project_root().to_path_buf(),
@@ -533,7 +530,6 @@ fn run_task(
         runtime.dependencies_json,
     );
     let mut host = RuntimeTaskHost::new(
-        runtime.schema,
         runtime.persistence_plan,
         cancellation,
         output_directory,
@@ -604,12 +600,18 @@ fn task_metadata(task: &StudyTask, persistence_plan: PersistencePlan) -> Map<Str
     ]));
     match task.task().parameters() {
         Some(parameters) => {
-            let constants = serde_json::from_slice(parameters.resolved_json())
-                .expect("config retains valid resolved JSON");
+            let constants = parameters.resolved_value().clone();
             let workflow = Value::Object(Map::from_iter([
                 ("task_identity".to_owned(), task.identity().into()),
                 ("kind".to_owned(), "model".into()),
                 ("model".to_owned(), parameters.model().into()),
+                (
+                    "state".to_owned(),
+                    task.task()
+                        .state()
+                        .expect("model tasks retain their selected state")
+                        .into(),
+                ),
                 ("parameter_ordinal".to_owned(), parameters.ordinal().into()),
                 (
                     "parameter_source".to_owned(),

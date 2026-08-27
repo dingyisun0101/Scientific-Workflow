@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use crate::config::advanced::{Config, FailurePolicy, ProjectSpecification, ReplicatePolicy};
 use crate::persistence::advanced::PersistencePlan;
-use crate::state::advanced::SystemStateSchema;
 use crate::task::advanced::{ModelCatalog, Task, TaskDefinition, TaskKind};
 use crate::ui::advanced::UiPlan;
 
@@ -41,11 +40,7 @@ impl Study {
         compilation::compile(project, catalog)
     }
 
-    pub(crate) fn from_parts(
-        project: ProjectSpecification,
-        schema: SystemStateSchema,
-        phases: Box<[StudyPhase]>,
-    ) -> Self {
+    pub(crate) fn from_parts(project: ProjectSpecification, phases: Box<[StudyPhase]>) -> Self {
         let project_root = project.project_root().to_path_buf();
         let config = project.config().clone();
         let output_root = project_root.join("output");
@@ -60,7 +55,6 @@ impl Study {
             inner: Arc::new(StudyInner {
                 project_root,
                 config,
-                schema,
                 phases,
                 output_root,
                 replicate_policy,
@@ -80,11 +74,6 @@ impl Study {
         &self.inner.output_root
     }
 
-    /// Returns the semantically validated shared state schema.
-    pub(crate) fn state_schema(&self) -> &SystemStateSchema {
-        &self.inner.schema
-    }
-
     /// Returns the immutable central configuration captured at Study load.
     pub(crate) fn config(&self) -> &Config {
         &self.inner.config
@@ -95,12 +84,13 @@ impl Study {
         &self.inner.phases
     }
 
-    /// Returns the effective replicate policy parsed from `study.json`.
+    /// Returns the effective replicate policy parsed from `wf_configs/study.json`.
     pub(crate) fn replicate_policy(&self) -> ReplicatePolicy {
         self.inner.replicate_policy
     }
 
-    /// Returns the immutable effective persistence plan compiled from `study.json`.
+    /// Returns the immutable effective persistence plan compiled from
+    /// `wf_configs/study.json`.
     pub(crate) fn persistence_plan(&self) -> PersistencePlan {
         self.inner.persistence_plan
     }
@@ -128,7 +118,6 @@ impl std::fmt::Debug for Study {
 struct StudyInner {
     project_root: PathBuf,
     config: Config,
-    schema: SystemStateSchema,
     phases: Box<[StudyPhase]>,
     output_root: PathBuf,
     replicate_policy: ReplicatePolicy,
@@ -149,7 +138,7 @@ pub(crate) struct StudyPhase {
 }
 
 impl StudyPhase {
-    /// Returns the stable phase key from `study.json`.
+    /// Returns the stable phase key from `wf_configs/study.json`.
     pub(crate) fn name(&self) -> &str {
         &self.name
     }

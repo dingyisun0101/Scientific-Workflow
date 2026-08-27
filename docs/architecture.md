@@ -15,11 +15,20 @@ programs plus project JSON:
 │   ├── main.rs                 calls scientific_workflow::run(&Path)
 │   └── <models>.rs             registered ScientificModel implementations
 ├── scripts/                     optional executable and `.py` task programs
-├── study.json                  phases, tasks, replicates, operational policy
-└── config/
-    ├── state.json              canonical state schema
-    └── parameters.json         every custom-project parameter namespace
+└── wf_configs/                 required Workflow configuration root
+    ├── study.json              phases, tasks, replicates, operational policy
+    ├── parameters.json         every custom-project parameter namespace
+    └── states/                 recommended, optional schema grouping
+        ├── population.json
+        └── environment.json
 ```
+
+The presence of `wf_configs/` identifies the root passed to `run`; a valid
+project requires `wf_configs/study.json` and `wf_configs/parameters.json`.
+The `states/` subdirectory is organizational convention, not grammar. A state
+schema may use any path beneath `wf_configs/`, but its project-root-relative
+path must be registered explicitly in `study.json.paths.states`. State paths
+outside the canonical `wf_configs/` boundary are rejected.
 
 Each model directly owns its canonical `SystemState` and is linked by a stable
 semantic key:
@@ -92,7 +101,7 @@ config
         │ private Config / ProjectSpecification / ResolvedTask
         ▼
 study
-  retained Config + state semantics + model discovery + constants decode
+  retained Config + named state semantics + model discovery + constants decode
   + generic program/Python tasks + one-time observation-plan binding
   + identities + phases
         │ immutable Study returned to the crate facade
@@ -113,8 +122,19 @@ runtime::execute
 The crate facade owns only the transition from project root to Study to
 Runtime. Study is the ultimate coordinator of declared intent. Runtime is the
 ultimate coordinator of active execution. Config never discovers Rust model
-types. Study never creates output or initializes a model. Study and Runtime
-never reparse the captured documents. Persistence never decides scientific
+types or performs execution.
+
+During `Study::load`, Config is the sole subsystem that discovers, reads, and
+parses authored project JSON. State's standalone public `&Path` loader remains
+a deliberate independent-use exception; composed Workflow passes State
+already parsed values. Persistence alone owns the Workflow recording format,
+its writes, and verified reconstruction. Runtime may create high-level
+execution/replicate directories and launch external programs; external
+programs own their declared domain artifacts, and UI owns terminal output.
+Other subsystems consume typed or validated in-memory values instead of
+reopening configuration or interpreting persistence files.
+Study never creates output or initializes a model. Study and Runtime never
+reparse the captured documents. Persistence never decides scientific
 observation meaning.
 
 ## API tiers and dependency direction
@@ -211,7 +231,8 @@ workflow/
 │   │   ├── observation/sampling.rs   private cadence decision
 │   │   ├── observation/state_observation.rs checked borrowed state view
 │   │   ├── observation/encoding.rs   canonical owned encoded records
-│   │   └── observation/session.rs    cadence state and final-state deduplication
+│   │   ├── observation/session.rs    cadence state and final-state deduplication
+│   │   └── observation/tests/observation_workflow.rs internal binding/session tests
 │   │   │
 │   │   ├── task.rs                   task root and inline API tiers
 │   │   ├── task/api.md               exhaustive model contract and example
@@ -285,9 +306,10 @@ workflow/
     ├── Cargo.toml / Cargo.lock         standalone example package
     ├── src/main.rs                     one run(&Path) call
     ├── src/hopf_model.rs               registered state-owning model
-    ├── study.json                      swept simulation then Python plot phase
-    ├── config/state.json               canonical model state schema
-    ├── config/parameters.json          model sweeps + plotter settings
+    ├── wf_configs/
+    │   ├── study.json                  swept simulation then Python plot phase
+    │   ├── parameters.json             model sweeps + plotter settings
+    │   └── states/attractor.json       named `attractor` state schema
     └── scripts/plot.py                 direct verified-recording SVG task
 ```
 
@@ -297,7 +319,7 @@ workflow/
 
 `SystemStateSchema::load_json_template(&Path)` is the public construction
 boundary. Config uses a crate-private in-memory equivalent so Study does not
-reread `state.json`. `SystemState` owns fixed heterogeneous slots and
+reread named state documents. `SystemState` owns fixed heterogeneous slots and
 `StateTime`; application models mutate payloads and advance time. Advanced
 inspection exposes field metadata and schema identity. The old generic
 schema-source adapter was removed with the persistence builder that needed it.
@@ -316,7 +338,7 @@ buffers, files, or lifecycle.
 Task itself is generic: Study may instead bind a resolved executable with
 direct arguments and no public Rust adapter. Config lowers a nested Python
 script/environment declaration to that same executable boundary. A model
-consumes typed constants, initializes from the shared schema, and directly owns
+consumes typed constants, initializes from its task-bound selected schema, and directly owns
 the stable state returned by `state()`. It reports completion and performs one
 iteration-advancing `step`. Task enforces what Rust can observe: state
 address/schema stability, strict iteration progress, and a monotonic optional
@@ -328,12 +350,15 @@ tuple-payload borrowing methods directly.
 
 ### Config
 
-Config canonicalizes the project and `config` roots and parses `study.json`,
-`config/state.json`, and the complete arbitrary `config/parameters.json`
-namespace with duplicate-key rejection. One clone-cheap immutable Config
-retains the entire value graph. A model key automatically selects its same-name
-parameter section; no manifest input path exists. Config expands selections
-deterministically, resolves program paths and Python scripts/environment
+Config canonicalizes the project and required `wf_configs` roots and parses
+`wf_configs/study.json`, every other JSON document beneath `wf_configs/`
+(including all named state schemas), and the complete arbitrary
+`wf_configs/parameters.json` namespace with duplicate-key rejection. One
+clone-cheap immutable Config retains the entire value graph.
+`wf_configs/study.json.paths.states` maps semantic state keys to configuration documents; every
+model task explicitly selects one key. A model key automatically selects its
+same-name parameter section; no per-task parameter path exists. Config expands
+selections deterministically, resolves program paths and Python scripts/environment
 managers once, and creates a deterministic language-neutral snapshot for
 external tasks. Reserved Workflow documents and arbitrary application
 documents use the same lookup graph. The public Advanced API is only
@@ -341,10 +366,11 @@ documents use the same lookup graph. The public Advanced API is only
 
 ### Study
 
-`Study::load(&Path)` performs all cross-domain checks before output: state
-semantics, linked registration validation, model-key resolution, generic
+`Study::load(&Path)` performs all cross-domain checks before output: every
+named state's semantics, every model task's state lookup, linked registration
+validation, model-key resolution, generic
 program and Python-environment resolution, constants decoding, and
-observation/schema binding. It retains
+observation/task-schema binding. It retains
 the central Config and infers stable identities, labels, the output root, and
 private operational policy. Public inspection is limited to project/output
 roots; phases, tasks, schema, resolved parameters, and policies exist only for
@@ -374,7 +400,7 @@ writes and commits immutable JSONL chunks plus one authoritative
 override, public flush, resume/continuation path, or completion handle.
 
 Users author every persistence size as a positive integer decimal MB, with one
-MB equal to 1,000,000 bytes. The `study.json` fields are
+MB equal to 1,000,000 bytes. The `wf_configs/study.json` fields are
 `persistence.chunk_target_mb` and `persistence.queue_capacity_mb`; no JSON
 persistence-size field is byte-addressed. Config alone checks and converts
 both values to internal byte counts, and effective provenance records those
@@ -390,17 +416,17 @@ records generic-program or Python launcher provenance, and atomically publishes
 running/complete/failed metadata. The workspace remains the external task's
 default working area, but Python or another external program owns its
 domain-specific IO and may write to a safe project-relative destination from
-`parameters.json`; the attractor plotter uses `output/plots`.
+`wf_configs/parameters.json`; the attractor plotter uses `output/plots`.
 
 Model recording provenance calls the selected combination
-`parameter_ordinal` and its canonical `parameters.json` document
-`parameter_source`; the removed per-task input-file vocabulary is not retained
-on disk.
+`parameter_ordinal` and its canonical `wf_configs/parameters.json` document
+`parameter_source`; `state` records the named schema selector bound during
+assembly. The removed per-task input-file vocabulary is not retained on disk.
 
 ### UI
 
 Study owns a private zero-configuration `UiPlan`; its current effective policy
-is inferred rather than authored in `study.json`. Runtime constructs one
+is inferred rather than authored in `wf_configs/study.json`. Runtime constructs one
 clone-cheap `UiSession` after creating the execution output and publishes
 borrowed execution, replicate, phase, task, iteration, outcome, and path facts.
 Model progress comes from the same host boundaries already used for automatic
@@ -444,7 +470,7 @@ owns behavior or creates an alternative canonical implementation path.
 6. A model directly owns one stable canonical `SystemState`.
 7. Every successful `step` strictly advances scientific iteration.
 8. Observation plans are deterministic, side-effect-free, evaluated once, and
-   stored schema-bound.
+   stored bound to each model task's explicitly selected named schema.
 9. The crate facade alone turns a project root into a Study and then invokes
    Runtime; Runtime accepts only a completed Study.
 10. Runtime alone creates output and owns scheduling/cancellation and external
@@ -463,6 +489,10 @@ owns behavior or creates an alternative canonical implementation path.
 16. A Python environment is declared inside its task's `python` object and is
     completely resolved during Study loading; there is no global environment
     registry or runtime environment discovery.
+17. Config is the only composed-Workflow reader/parser of authored project
+    JSON; Runtime never reparses derived config values.
+18. Persistence is the only owner of Workflow recording IO and format
+    interpretation; Runtime owns only scope orchestration around that boundary.
 
 ## Replacement boundaries
 
@@ -474,7 +504,8 @@ owns behavior or creates an alternative canonical implementation path.
   ownership checks, automatic observation boundaries, and generic program
   delegation without public adapters.
 - A config replacement preserves the grammar, typed-path containment,
-  duplicate-key rejection, deterministic expansion, all-document immutable
+  named-state lookup, explicit task selection, duplicate-key rejection,
+  deterministic expansion, all-document immutable
   snapshots, direct-program and nested Python-environment resolution, and
   centralized parsing.
 - A Study replacement remains effect-free and performs complete binding before

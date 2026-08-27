@@ -20,13 +20,14 @@
 //! names are retained to make an error independent of the state or template
 //! that produced it; successful state access does not allocate error context.
 //!
-//! # Ownership-preserving insertion failures
+//! # Ownership-preserving payload-write failures
 //!
 //! [`PayloadInsertError`] is generic because it returns ownership of a payload that
-//! [`SystemState::insert_payload`](super::state::SystemState::insert_payload) could not accept. Its
-//! diagnostics deliberately omit the payload value, so scientific data does
-//! not need to implement [`Debug`](std::fmt::Debug) and is never traversed or
-//! copied merely to format an error.
+//! [`SystemState::initialize_payload`](super::state::SystemState::initialize_payload) or
+//! [`SystemState::insert_payload`](super::state::SystemState::insert_payload) could not accept.
+//! Its diagnostics deliberately omit the payload value, so scientific data
+//! does not need to implement [`Debug`](std::fmt::Debug) and is never traversed
+//! or copied merely to format an error.
 
 use std::error::Error;
 use std::fmt;
@@ -210,17 +211,18 @@ pub enum StateSeriesError {
     },
 }
 
-/// A failed [`SystemState::insert_payload`](super::state::SystemState::insert_payload) operation that
-/// retains ownership of the unchanged incoming payload.
+/// A failed payload initialization or insertion that retains ownership of the
+/// unchanged incoming payload.
 ///
-/// A set operation can fail before moving `payload` into a state because the
-/// requested field is undeclared or because its assembly-retained type contract
-/// names a different concrete Rust type. The latter remains true even when the
+/// [`SystemState::initialize_payload`](super::state::SystemState::initialize_payload)
+/// rejects undeclared or already initialized fields.
+/// [`SystemState::insert_payload`](super::state::SystemState::insert_payload)
+/// rejects undeclared fields and retained type mismatches, including when a
 /// field is temporarily empty after `take` or `clear`. Returning only
-/// [`StateError`] in those cases would drop the caller's payload while unwinding
-/// the failed call. `PayloadInsertError` instead keeps the rejection reason and original
-/// `T` together, following the ownership-preserving pattern of channel send
-/// errors.
+/// [`StateError`] in those cases would drop the caller's payload while
+/// unwinding the failed call. `PayloadInsertError` instead keeps the rejection
+/// reason and original `T` together, following the ownership-preserving pattern
+/// of channel send errors.
 ///
 /// The payload remains private so diagnostics cannot accidentally expose or
 /// traverse large scientific data. Borrow it through [`PayloadInsertError::payload`] or
@@ -240,11 +242,13 @@ pub struct PayloadInsertError<T> {
 }
 
 impl<T> PayloadInsertError<T> {
-    /// Creates an ownership-preserving set rejection.
+    /// Creates an ownership-preserving payload-write rejection.
     ///
     /// This constructor is crate-private because only SystemState validation
     /// may determine that a payload was rejected. Public callers receive a
-    /// `PayloadInsertError<T>` from [`SystemState::insert_payload`](super::state::SystemState::insert_payload)
+    /// `PayloadInsertError<T>` from
+    /// [`SystemState::initialize_payload`](super::state::SystemState::initialize_payload)
+    /// or [`SystemState::insert_payload`](super::state::SystemState::insert_payload)
     /// and recover its contents through the accessors below.
     pub(crate) const fn new(error: StateError, payload: T) -> Self {
         Self { error, payload }
@@ -261,9 +265,9 @@ impl<T> PayloadInsertError<T> {
 
     /// Returns the unchanged rejected payload by shared reference.
     ///
-    /// The returned reference points to the same concrete `T` moved into
-    /// [`SystemState::insert_payload`](super::state::SystemState::insert_payload). No payload clone,
-    /// serialization, downcast, or backing-buffer copy occurs.
+    /// The returned reference points to the same concrete `T` passed to the
+    /// rejected initialization or insertion. No payload clone, serialization,
+    /// downcast, or backing-buffer copy occurs.
     pub const fn payload(&self) -> &T {
         &self.payload
     }
