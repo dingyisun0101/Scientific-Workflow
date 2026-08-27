@@ -3,7 +3,7 @@
 Scientific Workflow turns registered Rust scientific models, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking 0.10 update:** Version 0.10.1 is the current patch release of the
+> **Breaking 0.10 update:** Version 0.10.2 is the current patch release of the
 > 0.10 API generation that intentionally replaced the pre-0.10 orchestration,
 > configuration, storage/writer, and study APIs. Projects using 0.9.x or
 > earlier must migrate to the model registration plus

@@ -7,13 +7,13 @@ configuration-driven model or program execution, and durable outputs.
 
 ```toml
 [dependencies]
-scientific-workflow = "0.10.1"
+scientific-workflow = "0.10.2"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Rust 1.97 or newer is required. Executables should commit `Cargo.lock`.
 
-> **Breaking 0.10 update:** Version 0.10.1 is the current patch release of the
+> **Breaking 0.10 update:** Version 0.10.2 is the current patch release of the
 > 0.10 API generation that intentionally removed the pre-0.10 orchestration,
 > configuration, storage/writer, and study surfaces. Applications using 0.9.x
 > or earlier must adopt registered `ScientificModel`
