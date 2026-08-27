@@ -25,7 +25,7 @@
 //! #[derive(Deserialize)]
 //! struct Constants { initial: u64, steps: u64 }
 //!
-//! struct Model { state: SystemState, steps: u64 }
+//! struct Model { state: SystemState, target_iteration: u64 }
 //!
 //! #[scientific_workflow::model("example")]
 //! impl ScientificModel for Model {
@@ -35,11 +35,17 @@
 //!         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
 //!         state.initialize_payload("population", constants.initial)?;
 //!         state.initialize_payload("cumulative_births", 0_u64)?;
-//!         Ok(Self { state, steps: constants.steps })
+//!         Ok(Self {
+//!             state,
+//!             target_iteration: constants.steps,
+//!         })
 //!     }
 //!
 //!     fn state(&self) -> &SystemState { &self.state }
-//!     fn is_complete(&self) -> bool { self.state.time().iteration() == self.steps }
+//!     fn is_complete(&self) -> bool {
+//!         self.state.time().iteration() >= self.target_iteration
+//!     }
+//!     fn target_iteration(&self) -> Option<u64> { Some(self.target_iteration) }
 //!     fn step(&mut self) -> TaskResult {
 //!         let (population, cumulative_births) = self
 //!             .state

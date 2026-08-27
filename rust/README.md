@@ -28,6 +28,9 @@ Rust 1.97 or newer is required. Executables should commit `Cargo.lock`.
 The model directly owns its canonical `SystemState`. Its associated constants
 type is the complete typed form of one expanded section selected from
 `config/parameters.json` by the model's registration key.
+In the fixed-duration example below, `StateTime::iteration()` is the current
+completed iteration, while `target_iteration` retains the configured stopping
+target; it is not a second progress counter.
 
 ```rust,no_run
 use serde::Deserialize;
@@ -42,7 +45,7 @@ struct Constants {
 
 struct PopulationModel {
     state: SystemState,
-    steps: u64,
+    target_iteration: u64,
 }
 
 #[scientific_workflow::model("population")]
@@ -53,12 +56,17 @@ impl ScientificModel for PopulationModel {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial_population)?;
         state.initialize_payload("cumulative_births", 0_u64)?;
-        Ok(Self { state, steps: constants.steps })
+        Ok(Self {
+            state,
+            target_iteration: constants.steps,
+        })
     }
 
     fn state(&self) -> &SystemState { &self.state }
-    fn is_complete(&self) -> bool { self.state.time().iteration() == self.steps }
-    fn target_iteration(&self) -> Option<u64> { Some(self.steps) }
+    fn is_complete(&self) -> bool {
+        self.state.time().iteration() >= self.target_iteration
+    }
+    fn target_iteration(&self) -> Option<u64> { Some(self.target_iteration) }
 
     fn step(&mut self) -> TaskResult {
         let (population, cumulative_births) = self

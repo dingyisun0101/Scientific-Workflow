@@ -132,7 +132,9 @@ no filesystem or process operation.
 ## Example
 
 This example shows the complete ordinary model surface. After it, the user
-writes JSON and calls `run`; no Task value is constructed.
+writes JSON and calls `run`; no Task value is constructed. The state's time
+stores current progress. The separate `target_iteration` field stores the
+configured stopping condition and is not another mutable iteration counter.
 
 ```rust,no_run
 use serde::Deserialize;
@@ -144,7 +146,7 @@ struct Constants { initial: u64, steps: u64 }
 
 struct Population {
     state: SystemState,
-    steps: u64,
+    target_iteration: u64,
 }
 
 #[scientific_workflow::model("population")]
@@ -155,12 +157,17 @@ impl ScientificModel for Population {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial)?;
         state.initialize_payload("cumulative_births", 0_u64)?;
-        Ok(Self { state, steps: constants.steps })
+        Ok(Self {
+            state,
+            target_iteration: constants.steps,
+        })
     }
 
     fn state(&self) -> &SystemState { &self.state }
-    fn is_complete(&self) -> bool { self.state.time().iteration() == self.steps }
-    fn target_iteration(&self) -> Option<u64> { Some(self.steps) }
+    fn is_complete(&self) -> bool {
+        self.state.time().iteration() >= self.target_iteration
+    }
+    fn target_iteration(&self) -> Option<u64> { Some(self.target_iteration) }
 
     fn step(&mut self) -> TaskResult {
         let (population, cumulative_births) = self
