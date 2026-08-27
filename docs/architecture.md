@@ -368,9 +368,9 @@ documents use the same lookup graph. The public Advanced API is only
 
 `Study::load(&Path)` performs all cross-domain checks before output: every
 named state's semantics, every model task's state lookup, linked registration
-validation, model-key resolution, generic
-program and Python-environment resolution, constants decoding, and
-observation/task-schema binding. It retains
+validation, model-key resolution, constants decoding, and
+observation/task-schema binding over Config's already-resolved generic program
+and Python tasks. It retains
 the central Config and infers stable identities, labels, the output root, and
 private operational policy. Public inspection is limited to project/output
 roots; phases, tasks, schema, resolved parameters, and policies exist only for

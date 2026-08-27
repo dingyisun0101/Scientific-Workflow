@@ -47,7 +47,8 @@ public.
   and contextual errors. Even an unreferenced JSON document is strict-parsed.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
   invalid/duplicate registrations, effect-free loading, unknown models, typed
-  constants and one-time observation preflight, deterministic internal
+  constants and one-time observation preflight, contextual named-schema
+  validation errors, Study/error `Send + Sync`, deterministic internal
   identities, per-model binding of multiple named state schemas, phase
   composition, replicate/persistence policy, runtime
   scheduling, automatic task recordings, and crate-level `run(&Path)`. Its

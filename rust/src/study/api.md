@@ -1,13 +1,14 @@
 # Study API
 
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
-config to capture one project root, retains that central immutable Config,
-asks State to validate the centrally parsed named schemas, discovers linked models,
-selects `wf_configs/parameters.json[model-key]`, binds each expanded constants value to
-its model, resolves external programs
-and Python environments, selects each model task's named schema, binds its
-observation plan to that schema, and produces
-one immutable execution plan of generic tasks.
+Config to capture one project root and fully resolve its declarations, retains
+that central immutable Config, asks State to validate the centrally parsed
+named schemas, discovers linked models, binds each Config-expanded constants
+value to its registered model and selected schema, binds its observation plan
+to that schema, and produces one immutable execution plan of generic tasks.
+Executable paths, Python environments, parameter selection, and expansion are
+Config responsibilities completed before Study performs this cross-domain
+binding.
 
 Study creates no output, starts no worker, initializes no model, and writes no
 recording. Runtime alone owns active effects.
@@ -30,17 +31,20 @@ tasks, identities, persistence plans, registries, or Study builders.
 central Config, task-bound state schemas, internal phases/tasks, resolved constants,
 resolved executable/script/environment paths, schema-bound observation plans,
 inferred output root, replicate policy, and effective persistence/UI settings. None of those
-internal planning types is public.
+internal planning types is public. `Study` is `Send + Sync`; clones may be
+moved or shared across host threads without mutable planning state.
 
 - `Study::load(project_root: &Path) -> Result<Study, StudyError>` performs the
-  complete effect-free loading and preflight transaction. Config canonicalizes
-  paths and parses JSON. Study validates registration keys and duplicates,
-  resolves every manifest model key, program path, Python script, interpreter,
-  and environment manager, decodes every concrete constants value,
-  validates every named state document, calls each model's side-effect-free
-  `observation_plan` exactly once, and binds that plan to the schema explicitly
-  selected by that model task. It does not call
-  `ScientificModel::initialize`.
+  complete effect-free loading and preflight transaction. Config first
+  canonicalizes paths, parses JSON, expands model parameters, and resolves
+  programs, Python scripts, interpreters, and environment managers. Study then
+  validates registration keys and duplicates, resolves every model key,
+  validates every named state document, decodes every concrete constants value,
+  calls each model's side-effect-free `observation_plan` exactly once, and binds
+  that plan to the schema explicitly selected by that model task. It does not
+  call `ScientificModel::initialize`. Loading is synchronous and may block on
+  ordinary configuration reads and executable metadata/resolution, but starts
+  no worker thread and creates no output.
 - `project_root() -> &Path` returns config's retained canonical root.
 - `output_root() -> &Path` returns the inferred
   `<canonical-project-root>/output`. The path need not exist until Runtime
@@ -63,8 +67,9 @@ summaries provide output paths and task results.
 
 - `Config(ConfigError)` preserves project loading, grammar, path, expansion,
   or constants-decoding failure;
-- `State(StateError)` preserves semantic failure from any declared named state
-  schema;
+- `State { state, path, source }` identifies the semantic manifest key and
+  canonical source path of a rejected named schema while preserving its
+  original `StateError`;
 - `InvalidModelRegistration { reason }` reports an invalid or duplicate
   linked `#[model]` key without exposing the private catalog type;
 - `UnknownModel { phase, model }` reports a manifest key with no linked
@@ -80,7 +85,8 @@ invalid program or Python declaration is reported through the wrapped
 `ConfigError`.
 Source errors remain available through `std::error::Error::source`. A failed load
 publishes no partial Study, so the user can correct code or JSON and retry
-without cleaning output.
+without cleaning output. `StudyError` is `Send + Sync` and retains no borrow of
+the failed loading transaction.
 
 ## Example
 
@@ -122,8 +128,9 @@ replicate/persistence policies, UI plan, global
 output ordinals, identity/label formats, and topological planning data are private.
 Runtime obtains them through crate-visible `study::advanced` exports.
 
-A replacement Study must remain output-free, consume and retain config exactly
-once, perform complete model/constants/observation and program/Python preflight, infer
-deterministic identities and roots, retain immutable execution intent, and
-expose no mutable lifecycle to applications. Runtime must be able to execute
-the retained snapshot after project JSON changes without rereading it.
+A replacement Study must remain output-free, consume and retain Config exactly
+once, perform complete state/model/constants/observation binding over Config's
+already-resolved program/Python tasks, infer deterministic identities and
+roots, retain immutable execution intent, and expose no mutable lifecycle to
+applications. Runtime must be able to execute the retained snapshot after
+project JSON changes without rereading it.

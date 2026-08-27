@@ -15,10 +15,10 @@ pub(crate) fn compile(
 ) -> Result<Study, StudyError> {
     let mut schemas = BTreeMap::new();
     for (name, document) in project.state_schemas() {
-        schemas.insert(
-            name.as_ref(),
-            SystemStateSchema::from_json_template_value(document.path(), document.json_value())?,
-        );
+        let schema =
+            SystemStateSchema::from_json_template_value(document.path(), document.json_value())
+                .map_err(|source| StudyError::state_schema(name, document.path(), source))?;
+        schemas.insert(name.as_ref(), schema);
     }
 
     let mut output_ordinal = 0_u64;

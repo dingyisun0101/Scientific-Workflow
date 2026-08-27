@@ -1,5 +1,7 @@
 //! Study composition and preflight failures.
 
+use std::path::{Path, PathBuf};
+
 use thiserror::Error;
 
 use crate::config::advanced::ConfigError;
@@ -14,9 +16,17 @@ pub enum StudyError {
     #[error("failed to load project declarations")]
     Config(#[from] ConfigError),
 
-    /// State rejected the centrally parsed state-schema document.
-    #[error("failed to validate the project state schema")]
-    State(#[from] StateError),
+    /// State rejected one centrally parsed named state-schema document.
+    #[error("failed to validate state schema `{state}` from `{path}`")]
+    State {
+        /// Semantic state key declared by the study manifest.
+        state: String,
+        /// Canonical source document path retained by Config.
+        path: PathBuf,
+        /// Original State semantic-validation failure.
+        #[source]
+        source: StateError,
+    },
 
     /// Compiled model registrations are invalid or ambiguous.
     #[error("invalid compiled model registration: {reason}")]
@@ -64,6 +74,14 @@ impl From<ModelCatalogError> for StudyError {
 }
 
 impl StudyError {
+    pub(crate) fn state_schema(state: &str, path: &Path, source: StateError) -> Self {
+        Self::State {
+            state: state.to_owned(),
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+
     pub(crate) fn model_preflight(
         phase: &str,
         model: &str,

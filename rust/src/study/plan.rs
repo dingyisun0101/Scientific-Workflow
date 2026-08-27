@@ -24,20 +24,9 @@ impl Study {
     /// This performs complete preflight without creating output or initializing
     /// a scientific model. Config is the only file reader and JSON parser.
     pub fn load(project_root: &Path) -> Result<Self, StudyError> {
-        let catalog = ModelCatalog::discovered()?;
-        Self::load_with_catalog(project_root, &catalog)
-    }
-
-    /// Loads a study against an explicit immutable model catalog.
-    ///
-    /// This is the deterministic injection seam for tests and embedded hosts;
-    /// ordinary applications use [`Self::load`].
-    pub(crate) fn load_with_catalog(
-        project_root: &Path,
-        catalog: &ModelCatalog,
-    ) -> Result<Self, StudyError> {
         let project = ProjectSpecification::load(project_root)?;
-        compilation::compile(project, catalog)
+        let catalog = ModelCatalog::discovered()?;
+        compilation::compile(project, &catalog)
     }
 
     pub(crate) fn from_parts(project: ProjectSpecification, phases: Box<[StudyPhase]>) -> Self {

@@ -364,7 +364,7 @@ Import the extension traits from `state::advanced` or `prelude::advanced`:
 | `Study::load(project_root)` | `project_root: &Path` | Performs complete effect-free Config loading, state validation, model discovery, parameter decode, program/Python resolution, and observation preflight. |
 | `study.project_root()` | `&self` | Borrows Config's canonical project root. |
 | `study.output_root()` | `&self` | Borrows the inferred `<project-root>/output` path; it need not exist yet. |
-| `StudyError` | Non-exhaustive enum | Reports `Config`, `State`, `InvalidModelRegistration`, `UnknownModel`, `ModelPreflight`, or `TaskIdentityOverflow`. Every variant occurs before Runtime creates output. |
+| `StudyError` | Non-exhaustive enum | Reports `Config`, contextual `State { state, path, source }`, `InvalidModelRegistration`, `UnknownModel`, `ModelPreflight`, or `TaskIdentityOverflow`. Every variant occurs before Runtime creates output. |
 
 `Study` is immutable and clone-cheap through shared ownership. Its phase graph,
 tasks, selected schemas, resolved constants, and policies are intentionally not

@@ -173,6 +173,14 @@ const STUDY: &str = r#"
 "#;
 
 #[test]
+fn study_and_its_error_are_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_send_sync::<Study>();
+    assert_send_sync::<StudyError>();
+}
+
+#[test]
 fn study_binds_registered_models_and_infers_plan_facts_without_output() {
     let project = Project::new(STUDY, r#"{"initial":5,"steps":2}"#);
     let study = Study::load(project.path()).unwrap();
@@ -328,6 +336,27 @@ fn preflight_rejects_invalid_binding_without_output() {
         Err(StudyError::ModelPreflight { model, .. }) if model == "counter"
     ));
     assert!(!bad_constants.path().join("output").exists());
+
+    let bad_state = Project::new(
+        r#"{
+          "paths":{"states":{"broken":"wf_configs/states/broken.json"}},
+          "phases":{"only":{"tasks":[{"model":"counter","state":"broken"}]}}
+        }"#,
+        r#"{"initial":1,"steps":1}"#,
+    );
+    fs::write(
+        bad_state.path().join("wf_configs/states/broken.json"),
+        r#"{"fields":[{"name":"count"},{"name":"count"}]}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        Study::load(bad_state.path()),
+        Err(StudyError::State { state, path, source: StateError::DuplicateField { field } })
+            if state == "broken"
+                && path.ends_with("wf_configs/states/broken.json")
+                && field == "count"
+    ));
+    assert!(!bad_state.path().join("output").exists());
 }
 
 #[cfg(unix)]

@@ -2,9 +2,10 @@
 //!
 //! Config remains the sole parser. Study composes its immutable output with
 //! the retained central Config snapshot, compiled model registrations,
-//! validated program/Python tasks, state semantics, deterministic identities,
-//! phase organization, inferred operational plans, and complete preflight. Runtime
-//! consumes a finished [`advanced::Study`] and never reinterprets project JSON.
+//! already-resolved program/Python tasks, state semantics, deterministic
+//! identities, phase organization, inferred operational plans, and complete
+//! preflight. Runtime consumes a finished [`advanced::Study`] and never
+//! reinterprets project JSON.
 
 mod compilation;
 mod error;
