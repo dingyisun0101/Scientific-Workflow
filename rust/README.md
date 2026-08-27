@@ -16,6 +16,28 @@ the application that understands them.
 > change between releases until a stable 1.0 line is announced. Treat every
 > version update as a coordinated migration.
 
+## Current refactor boundary
+
+The target application workflow has only four authored inputs:
+
+1. a scientific state and its schema;
+2. a writer describing scientifically meaningful observations;
+3. typed task definitions; and
+4. `study.json`, `config/state.json`, and referenced task input documents below
+   `config/inputs/`.
+
+The new `state`, `writer`, `task`, and `config` module boundaries implement
+that model now. The current `study`, `configuration`, `execution`, and
+`storage` APIs remain temporarily available while `runtime` and `record` are
+migrated. They are compatibility surfaces, not the recommended architecture
+for new integrations.
+
+The vocabulary used by the new boundary is precise: `study.json` is the
+**study manifest**, `config/state.json` is the **state schema document**, an
+application JSON file below `config/inputs/` is a **task input document**, one
+expanded concrete value is a **resolved task input**, and its typed Rust value
+is one set of **model constants**.
+
 ## Installation
 
 Scientific Workflow 0.10 requires Rust 1.97 or newer. Use the registry release
@@ -92,42 +114,35 @@ different versions of the same path or provenance rules. The resulting program
 may still produce numbers, but it becomes difficult to explain exactly which
 inputs produced them or which layer owns a failure.
 
-Scientific Workflow separates those responsibilities. A typical program has
+Scientific Workflow separates those responsibilities. A target program has
 the following flow:
 
 ```text
-study.json ──► StudySettings ──► ReplicateExecutor
-                                      │
-                                      ▼
-                         output/replicate_<index>
-                                      │
-parameters.json               paths.json
-      │                           │
-      ▼                           ▼
-StudyConfiguration            ProjectPaths
-      │                           │
-      ▼                           │
-WorkloadConfiguration               │
-      │                           │
-      └──── application maps combinations ────────────┐
-                                                       ▼
-                                              Study → Phase → Task
-                                                       │
-                          application-owned workload ──┤
-                                                       ▼
-       artifacts + RNG records + typed SystemState + ExecutionScope
-                                                       │
-                                                       ▼
-                         bounded Storage → completed recording/checkpoint
-                                                       │
-                                                       ▼
-                                   reader or in-memory StateSeries analysis
+project root: &Path
+        │
+        ├── study.json                 study manifest
+        └── config/
+            ├── state.json             state schema document
+            └── inputs/*.json          task input documents
+        │
+        ▼
+ProjectSpecification                  strict central parsing and expansion
+        │
+        ├── resolved task input ──► typed model constants
+        └── effective phase and replicate policy
+        │
+        ▼
+runtime plan ──► Task ──► ScientificModel + Writer
+        │
+        ▼
+recording + source/input provenance ──► verified readback or StateSeries
 ```
 
-Every arrow is explicit. Configuration does not silently execute work. A task
-does not silently choose a filesystem location. Storage does not decide model
-semantics. The application connects the pieces and therefore remains the owner
-of scientific meaning.
+Config loads and validates declarations but does not execute work or create
+output. Task owns typed scientific behavior but not paths or lifecycle. The
+future runtime composes these boundaries and infers identities, scheduling,
+progress, messages, and recording administration. The application remains the
+owner of scientific meaning without manually wiring those mechanics.
 
 ## Design philosophy
 
@@ -203,15 +218,53 @@ scientific workloads.
 
 ### Cooperative orchestration
 
-Rust workloads cannot be forcibly stopped safely. Cancellation, task timeouts,
-and phase deadlines are cooperative: the scheduler requests cancellation and
-the workload observes it through `TaskContext`. This makes the control contract
-honest and avoids pretending that arbitrary scientific code can be terminated
-without cleanup.
+Rust workloads cannot be forcibly stopped safely. In the transitional study
+API, the scheduler requests cancellation and the legacy workload observes it
+through `study::TaskContext`. In the new task boundary, runtime exposes the
+same cooperative state through `TaskExecutionHost` and checks it between model
+steps. Neither contract pretends that arbitrary Rust code can be interrupted
+mid-call without cleanup.
 
 ## Public modules
 
-### `configuration`: strict experiment inputs
+### `config`: central project declarations and constants supply
+
+The target `config` subsystem is the only Workflow code that opens or parses
+project declaration JSON. Ordinary users call no config Rust API; they author
+the file grammar. Runtime will accept only a borrowed `project_root: &Path`
+and load this conventional layout:
+
+```text
+<project-root>/
+├── study.json
+└── config/
+    ├── state.json
+    └── inputs/
+        └── run.json
+```
+
+`study.json` declares replicate policy, phases, task definition keys, input
+references, and optional execution/display policy. Task input documents hold
+application-owned values. Exact `{"$sweep":[...]}` markers create independent
+Cartesian choices; `$cases` creates correlated alternatives; ordinary arrays
+remain literal. Config expands these internally and runtime creates one task
+invocation per resulting constants value. Users never call `combinations()`
+or decode individual JSON keys.
+
+The ordinary `config::basic` scope is intentionally empty. The read-only
+`config::advanced` integration scope exposes `ProjectSpecification` and its
+effective manifest, phases, source documents, state schema document, and
+`ResolvedTaskInput` values. Task consumes `ResolvedTaskInput` directly and
+asks config to decode the complete declared constants type. See
+`src/config/api.md` for the exhaustive manifest grammar, selection grammar,
+defaults, path containment, errors, examples, and replacement contract.
+
+### `configuration`: transitional experiment inputs
+
+This older module serves the unmigrated study/execution/example stack. It is
+not an alias for `config`, and its manual workload selection,
+`combinations()`, JSON Pointer decoding, and named-path APIs are intentionally
+absent from the target boundary.
 
 The `configuration` module validates three independent input concerns: the
 study manifest, study-wide scientific parameters, and named paths:
@@ -466,14 +519,75 @@ entries, preserves declaration order and original bytes, and resolves relative
 values lexically against the study root. It does not canonicalize targets,
 expand shell syntax, or require paths to exist.
 
-Configuration validates process-level replicate policy but does not execute
+The transitional configuration module validates process-level replicate policy but does not execute
 it. It does not register tasks, create output, choose phase concurrency, or
 validate domain-specific physics. Applications explicitly pass settings to the
 execution API and map selected parameter combinations into workloads.
 
-### `study`: orchestration and lifecycle
+### `task`: typed scientific work with inferred mechanics
 
-The `study` module is the control plane. Its vocabulary is deliberately small:
+The new `task` boundary exposes only `Task`, `ScientificModel`, and
+`TaskResult` to ordinary application code. A canonical `ScientificModel`
+directly owns its `SystemState`, initializes it from one typed constants value,
+performs one observable transition in `step`, and optionally reports a target
+iteration. A stateful task binds that model to a writer factory:
+
+```rust,no_run
+use scientific_workflow::prelude::basic::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Constants {
+    initial: u64,
+    steps: u64,
+}
+
+struct Model {
+    state: SystemState,
+    remaining: u64,
+    target: u64,
+}
+
+impl ScientificModel for Model {
+    type Constants = Constants;
+
+    fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+        let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+        state.initialize_payload("population", constants.initial)?;
+        Ok(Self { state, remaining: constants.steps, target: constants.steps })
+    }
+
+    fn state(&self) -> &SystemState { &self.state }
+    fn is_complete(&self) -> bool { self.remaining == 0 }
+
+    fn step(&mut self) -> TaskResult {
+        *self.state.payload_mut::<u64>("population")? += 1;
+        self.state.advance_time(None)?;
+        self.remaining -= 1;
+        Ok(())
+    }
+
+    fn target_iteration(&self) -> Option<u64> { Some(self.target) }
+}
+
+let task = Task::stateful::<Model, _>(|_| Ok(Writer::all_fields()));
+# let _ = task;
+```
+
+Config supplies typed constants from the resolved task input. Runtime loads
+the centrally parsed `config/state.json` into state, validates the writer
+before model initialization, observes the initial state and every
+successful step, and publishes routine lifecycle/progress messages. Task code
+receives no generic context, paths, identity, progress counter, message
+callback, record session, or completion control. `Task::one_shot` covers typed
+work that genuinely needs neither state nor a writer. See `src/task/api.md` for
+the complete ownership and advanced-host contracts.
+
+### `study`: transitional orchestration and lifecycle
+
+The current `study` module remains the transitional control plane while the
+future runtime is migrated onto the new `task` boundary. Its legacy vocabulary
+is deliberately small:
 
 ```text
 Study
@@ -499,9 +613,10 @@ output fails before execution begins. Workflow never infers how individual
 tasks inside an incomplete phase should validate, reuse, clean up, or resume.
 Those decisions remain entirely with the phase's application workloads.
 
-A `Task` owns identity, category, label, mode, immutable metadata, and exactly
-one application workload. Progress and one-shot tasks share the same type.
-`Task::completed` represents work that the application has independently
+A `study::Task` owns identity, category, label, mode, immutable metadata, and
+exactly one application workload. It is distinct from the new `task::Task`.
+Progress and one-shot tasks share the same legacy type. `Task::completed`
+represents work that the application has independently
 verified as already satisfied.
 
 `Task::one_shot_for_configuration` and
@@ -557,7 +672,8 @@ assert!(summary.is_success());
 # }
 ```
 
-The only communication channel supplied to a workload is `TaskContext`. It
+The only communication channel supplied to this legacy workload is
+`study::TaskContext`. It
 reports progress and human-readable detail, exposes identity and metadata, and
 observes cooperative cancellation. It does not provide hidden filesystem,
 network, subprocess, state, or artifact capabilities.
@@ -734,12 +850,15 @@ provided provenance record.
 
 The prelude uses tiered scope management:
 
-- `prelude::basic` re-exports ordinary configuration, state, storage,
-  execution, artifact, and RNG primitives used by scientific code.
+- `prelude::basic` re-exports the complete ordinary state, writer, and task
+  tiers. It also temporarily contains legacy configuration, storage,
+  execution, artifact, and RNG primitives. The target `config::basic` tier is
+  aggregated but intentionally contributes no names.
 - `prelude::advanced` is a strict superset that adds supported state
-  integration and inspection traits.
-- `prelude::study` re-exports orchestration types used at the application
-  boundary.
+  inspection, writer-backend, task-runtime, and read-only config integration
+  contracts.
+- `prelude::study` temporarily re-exports legacy orchestration types during
+  runtime migration; it is not a third long-term tier.
 
 Prelude modules are aliases for canonical public types. They do not compile a
 second implementation, wrap behavior, or introduce another ownership layer.
@@ -760,10 +879,10 @@ forcing a large state recording into a small orchestration record.
 
 ## What Scientific Workflow intentionally does not do
 
-The crate does not provide a universal model trait, solver registry, distributed
-queue, cloud service, database, dataframe abstraction, plotting API, or domain
-ontology. It does not decide whether a simulation is correct. It provides
-auditable infrastructure around scientific work while keeping scientific
+The crate provides the narrow `ScientificModel` execution contract, but no
+universal solver abstraction, distributed queue, cloud service, database,
+dataframe abstraction, plotting API, or domain ontology. It does not decide
+whether a simulation is correct. It provides auditable infrastructure around scientific
 authority in the code that owns the model.
 
 That restraint is part of the design: a small set of well-owned tools is easier

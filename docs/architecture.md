@@ -3,14 +3,16 @@
 ## Status and purpose
 
 This document describes the target architecture for the current Scientific
-Workflow refactor. `state` and `writer` now implement their target boundaries;
-current orchestration and storage modules coexist with the remaining target
-modules until their behavior has been migrated and verified.
+Workflow refactor. `state`, `writer`, `task`, and `config` now implement their
+target boundaries. Current orchestration, legacy configuration, and storage
+modules coexist with the remaining target modules until their behavior has
+been migrated and verified.
 
 The architecture has one overriding usability goal:
 
 > An application author defines scientific state and how it is written,
-> defines task behavior, and writes `study.json` plus task configuration JSON.
+> defines task behavior, and writes a study manifest, state schema, and task
+> input documents.
 > Workflow infers and owns the remaining orchestration.
 
 In particular, application code should not construct replicate executors,
@@ -39,21 +41,22 @@ A Workflow application has four authored inputs:
 2. A writer definition describing which scientific observations are retained.
 3. One or more task definitions containing the actual scientific or analysis
    work.
-4. `study.json` and files beneath `config/`, containing execution policy and
-   typed task inputs.
+4. A study manifest, state schema, and task input documents beneath the project
+   root, containing execution policy and application-owned inputs.
 
 The executable calls the single Workflow entry point. Workflow then:
 
-1. discovers the study root;
+1. accepts one typed project-root path;
 2. strictly validates all JSON before creating output;
 3. matches manifest task declarations to compiled task definitions;
-4. expands parameter combinations deterministically;
+4. expands task-input combinations deterministically;
 5. derives replicate, phase, task, and recording identities;
 6. dispatches isolated replicates when required;
 7. schedules the selected tasks;
 8. creates and manages writers and recording sessions;
 9. infers progress from observed state where possible;
-10. records configuration, paths, seeds, artifacts, timing, and lifecycle
+10. records source documents, resolved task inputs, paths, seeds, artifacts,
+    timing, and lifecycle
     provenance automatically; and
 11. finalizes or marks output failed according to the task result.
 
@@ -84,13 +87,13 @@ The crate aggregates the module tiers centrally:
   because each module advanced scope includes its basic scope, the central
   advanced prelude is a strict superset of `prelude::basic`.
 
-Direct imports such as `state::basic::State` and
+Direct imports such as `state::basic::SystemState` and
 `record::advanced::RecordingDescriptor` remain valid and are preferred when a
 consumer wants a narrow dependency. The preludes are conveniences, not
 alternative implementations.
 
 The ordinary definition surface still centers on concepts equivalent to
-`State`, `Writer`, `Task`, `TaskContext`, `run`, and `WorkflowError`. A
+`SystemState`, `Writer`, `Task`, `ScientificModel`, `run`, and `WorkflowError`. A
 high-level completed-recording handle belongs in the basic record API. More
 specialized integration seams belong in advanced APIs, not in an undifferentiated
 crate-root export list.
@@ -160,27 +163,22 @@ pub mod advanced {
 }
 ```
 
-The intended dependency direction is:
+The intended supported dependency direction is:
 
 ```text
-state
-  ▲
-  ├──────── writer
-  │            ▲
-  ├────────────┼──────── task
-  │            │
-  └────────────┼──────── record
-               │
-config         │        ui
-   ▲           │         ▲
-   └────────── runtime ───┘
+writer  ──► state
+task    ──► state + writer + config
+record  ──► state + writer
+runtime ──► config + task + state + writer + record + ui
 
 prelude aggregates published tiers but owns no behavior
 ```
 
 `runtime` is the composition root and may depend on every subsystem's advanced
 boundary. `config` remains independent of compiled task implementations: the
-runtime performs registry-to-manifest cross-validation. `record` implements
+runtime performs registry-to-manifest cross-validation. `task` imports only
+config's advanced `ResolvedTaskInput`, making config the sole typed constants
+supplier without making config depend on compiled task behavior. `record` implements
 writer/task ports instead of causing writer or task to depend on record
 internals. `ui` owns the event and snapshot contracts populated by runtime, so
 the renderer does not import scheduler internals.
@@ -248,19 +246,21 @@ Filesystem paths are never accepted as raw `&str` or `String`, and owned paths
 decoded from JSON use `PathBuf`. This makes path semantics visible in type
 signatures and prevents ordinary text from acquiring accidental path meaning.
 
-The exact Rust trait signatures will be fixed during implementation, but they
-must preserve these rules:
+The implemented task boundary and the remaining runtime composition preserve
+these rules:
 
-- task configuration is decoded once into the task's declared input type;
+- each resolved task input is decoded once by config into the task's declared
+  input type;
 - task identity is derived, never manually supplied in Rust;
 - a stateful task binds its state and writer definitions without rebuilding
   storage infrastructure;
 - a one-shot task can run without inventing an empty state or writer;
-- the runtime owns writer creation, completion, and failure cleanup;
-- progress is inferred from state observations or task structure whenever
-  possible; and
-- `TaskContext` contains no scheduler, renderer, filesystem-layout, or storage
-  administration API.
+- task invokes the application writer factory once, while runtime owns writer
+  session creation, completion, and failure cleanup;
+- progress and routine messages are inferred from state observations and
+  runtime lifecycle whenever possible; and
+- task/model code receives no scheduler, renderer, filesystem-layout, progress
+  counter, message channel, or storage-administration context.
 
 ## Target source tree
 
@@ -295,24 +295,17 @@ src/
 ├── task/
 │   ├── api.md
 │   ├── definition.rs
-│   ├── context.rs
-│   ├── registry.rs
-│   ├── identity.rs
-│   ├── progress.rs
-│   ├── completion.rs
-│   └── error.rs
+│   ├── model.rs
+│   ├── execution.rs
+│   └── result.rs
 ├── config.rs
 ├── config/
 │   ├── api.md
-│   ├── discovery.rs
-│   ├── source.rs
-│   ├── strict_json.rs
-│   ├── study.rs
-│   ├── task.rs
+│   ├── document.rs
+│   ├── manifest.rs
 │   ├── expansion.rs
-│   ├── resolved.rs
-│   ├── defaults.rs
-│   ├── validation.rs
+│   ├── input.rs
+│   ├── specification.rs
 │   └── error.rs
 ├── runtime.rs
 ├── runtime/
@@ -432,8 +425,8 @@ additional integration responsibilities accepted by advanced consumers.
 
 The `state` module owns scientific state structure, values, scientific time,
 and ordered in-memory series. Its standalone schema loader reads one JSON
-template through a typed `&Path`; it knows nothing about task scheduling, study
-configuration, recording layout, or terminal display.
+template through a typed `&Path`; it knows nothing about task scheduling, the
+study manifest, recording layout, or terminal display.
 
 State remains application-owned. Workflow may validate, borrow, encode, and
 reconstruct it, but does not attach model semantics to fields.
@@ -490,8 +483,8 @@ indices.
 ### `state/schema.rs`
 
 Loads and validates the complete schema from a strict JSON template. It
-establishes stable field order, supports private allocation-identity checks,
-and produces the schema description persisted with recordings. The public
+establishes stable field order, publishes allocation-identity inspection
+through its advanced tier, and produces the schema description persisted with recordings. The public
 loader accepts `&Path`, while internal reconstruction parses embedded bytes
 without publishing a second construction API.
 
@@ -605,8 +598,8 @@ validates it once before work begins and canonicalizes every field selection
 into schema order.
 
 The definition contains no recording directory and no replicate or task ID.
-Those are injected internally after configuration expansion has produced a
-stable runtime identity.
+Those are injected internally after task-input expansion has produced a stable
+runtime identity.
 
 ### `writer/stream.rs`
 
@@ -668,10 +661,18 @@ chains state or Serde sources without exposing record internals.
 
 ## `task`: application-owned work
 
-The `task` module owns the contract between application work and Workflow. A
-task definition says what code to run and which typed inputs it consumes.
-Workflow derives its runtime identity, configuration combination, phase,
-output scope, progress representation, and provenance.
+The `task` module owns one irreducible boundary: it turns heterogeneous typed
+application behavior into a uniform definition that runtime can invoke. A
+stateful task binds resolved typed constants, an application-owned
+`ScientificModel`, and a `Writer`; a one-shot task binds typed constants and
+one callback. Workflow derives identity, display label, resolved-input
+combination, phase, output scope, lifecycle, progress representation,
+messaging, and provenance outside this module.
+
+Task wraps the complete scientific workload from calculation through the
+automatic observation boundary. It does not perform durable recording itself.
+The runtime manages tasks as members of phases, while task remains independent
+of phase and scheduling types.
 
 ### `src/task.rs`
 
@@ -680,252 +681,210 @@ task registry or global state merely by being imported.
 
 ### `task::basic` export scope
 
-Exports `Task`, `TaskContext`, the ordinary task result, and the minimal
-message/cancellation concepts application work may need. It does not expose
-manual identity construction, registry mutation, scheduler controls, metadata
-maps, or recording paths.
+Exports exactly `Task`, `ScientificModel`, and `TaskResult`. `Task::stateful`
+binds a model type to a constants-borrowing writer factory;
+`Task::one_shot` binds a typed callback without inventing an empty state or
+writer. `ScientificModel` requires typed constants, initialization, canonical
+state access, a completion predicate, and one-step scientific evolution. It
+offers only an optional target-iteration hint beyond those requirements.
+
+The canonical application model must directly own the `SystemState` returned
+by `state()`. Rust cannot structurally prove field ownership through a trait,
+so the requirement is prominently documented and runtime enforces the
+observable contract: stable state address, exact schema allocation, strictly
+increasing iteration after every successful step, and valid monotonic optional
+targets.
+
+There is no `TaskRun` or task/model context. Model state is the authority for
+scientific output; it does not duplicate information into progress objects,
+step reports, shared counters, or messages.
 
 ### `task::advanced` export scope
 
-Re-exports `task::basic`, then adds supported integration contracts for task
-definition discovery, typed-input factories, read-only derived identity,
-progress observation, capability injection, and terminal outcome reporting.
-Config, runtime, record, and UI integrate through these contracts without
-reaching into task implementation files.
+Re-exports `task::basic`, then adds `TaskKind`, `TaskDescriptor`,
+`TaskDefinition`, and `TaskExecutionHost`. The descriptor exposes only
+stateful-versus-one-shot shape, a diagnostic constants type name, and whether
+a schema is required. `TaskDefinition` lets runtime inspect and synchronously
+execute an opaque task against one config-owned `ResolvedTaskInput`. `TaskExecutionHost`
+is the runtime port for the canonical schema, cancellation checks, initial
+writer handoff, successful-step observations, and the final model boundary.
 
-Registry mutation remains constrained to bootstrap adapters, and derived
-identities remain read-only. Advanced access must not let a consumer redirect
-output or report a task complete independently of the executor.
+Identity, registry mutation, prepared models, worker handles, lifecycle
+outcomes, display models, and concrete cancellation/storage mechanisms remain
+private to config/runtime/record/UI. Advanced task access cannot redirect
+output, construct identity, or independently mark a task complete.
 
 ### `task/api.md`
 
 Documents all task-facing and integration APIs in separate Basic API and
-Advanced API sections. It describes typed configuration ownership, stateful
-versus one-shot tasks, cancellation guarantees, task result conversion,
-messages, inferred progress, factory registration, identity stability, and
-capability lifetimes. The advanced section includes examples for adding a task
-discovery mechanism or executor without bypassing lifecycle rules.
+Advanced API sections. It exhaustively describes typed constants ownership,
+direct canonical state ownership, stateful and one-shot construction,
+initialization and step contracts, schema/state/iteration/target enforcement,
+cooperative cancellation, automatic observation and messaging boundaries,
+task result conversion, descriptor stability, and host lifetimes. Its example
+runs from a typed model definition to the minimal replacement-runtime call.
 
 ### `task/definition.rs`
 
-Defines the task contract and its typed configuration binding. Stateful tasks
-associate their state and writer definitions. One-shot tasks declare that they
-produce no state recording.
+Defines opaque reusable `Task` ownership and the two constructors. Each task
+stores a shared type-erased definition so cloning does not duplicate closures,
+models, states, constants, or writers. It supplies no public execution,
+identity, label, path, metadata, progress, recording, or lifecycle methods.
 
-The contract must not require user-supplied task IDs, labels, categories,
-configuration ordinals, recording paths, or provenance metadata. A task may
-provide an optional human description, but the absence of one is valid and a
-display label is inferred from the task declaration in `study.json`.
+### `task/model.rs`
 
-### `task/context.rs`
+Defines `ScientificModel`. Initialization consumes the one decoded constants
+value and borrows the runtime-loaded schema. The returned model is fully usable
+and directly owns its canonical state. `state`, `is_complete`, and
+`target_iteration` are side-effect-free inspection; `step` performs exactly
+one observable transition and returns no duplicate report value.
 
-Implements the minimal context passed to running task code. It contains only
-facts or controls that cannot be inferred from task-local data, including:
+### `task/execution.rs`
 
-- the already-decoded typed task configuration;
-- replicate-specific deterministic RNG access;
-- verified input artifact access;
-- cooperative cancellation inspection;
-- infrequent human-facing detail or message reporting; and
-- access to the runtime-managed observation handle for stateful tasks.
+Defines the supported advanced descriptor, type-erased definition, and host
+port, plus private stateful/one-shot adapters and model-contract validation.
+Stateful execution validates its writer before model initialization, emits an
+initial host boundary, checks cancellation between steps, validates the same
+state owner/schema and advancing iteration after each success, and emits step
+and final host boundaries. One-shot execution skips schema and writer access.
 
-It does not expose schedulers, renderers, phase mutation, raw execution scopes,
-recording directories, or metadata maps.
+Runtime and UI use these observation boundaries to automate messages. The
+standard snapshot includes the label from `study.json`, lifecycle, current
+`StateTime` iteration, optional target, and elapsed time. Users may select
+additional scientific state fields in `study.json`; runtime validates the
+selection against the schema and extracts bounded values at the same boundary.
+Formatting, truncation, throttling, channels, and shared counters are internal.
 
-### `task/registry.rs`
+### `task/result.rs`
 
-Matches compiled task definitions to task names declared in `study.json`.
-It rejects missing implementations, duplicate registrations, unused required
-definitions, and incompatible task/configuration shapes before output is
-created.
-
-Registration order never becomes identity. Manifest declaration and resolved
-configuration determine identity, so refactoring Rust source order cannot
-silently redirect output.
-
-### `task/identity.rs`
-
-Derives stable internal task identities from the manifest task name, phase
-position or name, resolved configuration identity, and replicate index where
-appropriate. It also derives display labels and recording-directory names.
-
-Identity construction is private. The advanced tier may publish a read-only
-identity view for integrations, but users cannot manufacture identities or
-keep a second naming scheme synchronized with them.
-
-### `task/progress.rs`
-
-Stores the internal progress snapshot observed by the scheduler and UI.
-Stateful progress is updated from writer observations. Known finite work can
-derive its target from validated configuration. One-shot work exposes only
-lifecycle status.
-
-Explicit progress reporting is retained only as a fallback for tasks whose
-work cannot be represented by state observations or a known work unit.
-
-### `task/completion.rs`
-
-Represents internal task terminal outcomes: completed, failed, cancelled, or
-reused through a validated enclosing result. It binds the returned task result
-to recording finalization and lifecycle provenance.
-
-This file does not decide whether a whole phase is reusable; that decision
-belongs to `runtime::completion`.
-
-### `task/error.rs`
-
-Defines task-owned failures for registration, typed input decoding, identity
-derivation, invalid progress, and workload execution. Basic and advanced
-publish only the variants promised by `task/api.md`; executor-only state
-transition failures remain private.
+Defines `TaskResult<T = ()>` as a thread-safe owned boxed-error result. This
+lets application error enums retain their source chains without publishing a
+large task-owned union. Contract-check error representations remain private;
+runtime treats returned failure, its own cancellation flag, and successful
+completion as distinct lifecycle inputs.
 
 ## `config`: strict JSON and inference
 
-The `config` module turns authored JSON into one complete, validated
-description of a launch. Ordinary users write configuration and normally do
-not invoke its parser directly. Its advanced tier nevertheless forms a
-self-contained supported boundary for embedding or replacing discovery,
-parsing, and expansion.
+The `config` module is the sole compiler for a project's declarative files. It
+turns one typed project-root path into an immutable `ProjectSpecification`.
+Ordinary users write files and never invoke config from Rust; runtime consumes
+its advanced boundary.
 
-The conventional input layout is:
+Vocabulary separates Workflow declarations from application input:
+
+- `study.json` is the **study manifest**;
+- `config/state.json` is the **state schema document**;
+- referenced files below `config/inputs/` are **task input documents**;
+- one concrete selection is a **resolved task input**; and
+- its typed Rust value is one set of **model constants** or one-shot input.
+
+Config is the only subsystem that opens or parses these project files. State
+receives an already parsed schema document for field-semantic validation. Task
+receives `ResolvedTaskInput` and obtains typed constants only through the
+config-owned `decode` operation. Runtime, record, and UI do not reread sources
+or inspect raw task-input JSON.
 
 ```text
-study-root/
+<project-root>/
 ├── study.json
 └── config/
-    ├── parameters.json
-    └── other application-selected JSON files
+    ├── state.json
+    └── inputs/
+        └── <application-selected>.json
 ```
 
-`study.json` owns orchestration policy: replicates, seeds, phases, task names,
-dependencies, selection, completion policy, and output policy. Files beneath
-`config/` own scientific inputs and named external resources. Exact filenames
-may be referenced by `study.json`; application code does not manually load and
-join their paths.
+The future runtime takes only `project_root: &Path`. Config derives the study
+manifest, `config` directory, and state schema path. Each manifest task
+declares an opaque compiled `definition` and an `input` path below
+`config/inputs`. Absolute paths, parent traversal, non-normal components,
+non-JSON inputs, and canonical symlink escapes are rejected.
 
 ### `src/config.rs`
 
-Declares the config tiers and coordinates the private discovery, parsing,
-expansion, defaults, and validation implementation. It performs no loading at
-module initialization.
+Declares an intentionally empty basic tier and the supported advanced project
+compiler boundary. It coordinates private document parsing, manifest
+validation, selection expansion, typed-input storage, and specification
+assembly. Importing it performs no loading.
 
 ### `config::basic` export scope
 
-Exports only configuration concepts that ordinary task authors must name, such
-as the marker/decoding contract for a typed task input and read-only access to
-explicit application resources when those cannot be injected more narrowly.
-Most applications receive their decoded configuration through `TaskContext`
-and need no direct loader.
+Intentionally exports no symbols. Configuration's user API is its documented
+file grammar. Application code declares `ScientificModel::Constants` or a
+one-shot input type and receives one owned config-supplied value through task
+execution. It does not load, query, expand, or resolve project files.
 
 ### `config::advanced` export scope
 
-Re-exports `config::basic`, then publishes the self-contained configuration
-engine boundary: source documents, strict parser inputs, immutable manifest
-declarations, resolved combinations, expansion descriptors, discovery ports,
-and detailed validation errors. Runtime consumes these types and performs
-cross-validation against `task::advanced` without config depending on the task
-registry.
+Re-exports the empty basic tier, then publishes `ProjectSpecification`,
+`StudyManifest`, `ReplicatePolicy`, `ReplicateScheduling`, `FailurePolicy`,
+`PhaseSpecification`, `ResolvedTaskInput`, `ProjectDocument`,
+`StateSchemaDocument`, and `ConfigError`.
 
-Filesystem readers and environment discovery are expressed as replaceable
-ports. Mutable parser internals and partially validated raw structures remain
-private.
+`ProjectSpecification::load(&Path)` is the sole entry. It canonicalizes the
+root, parses each unique source once, resolves deterministic defaults,
+validates the dependency graph and path containment, expands task input
+selections, and preserves exact source bytes. The result is immutable,
+clone-cheap, `Send`, and `Sync`.
+
+Config remains independent of compiled task implementations. Runtime matches
+each opaque `definition` to `task::advanced::TaskDefinition`. Task depends only
+on config's advanced `ResolvedTaskInput` contract so typed constants cannot be
+supplied by raw JSON or another parser.
 
 ### `config/api.md`
 
-Documents the typed-input API and every advanced parser/expansion boundary in
-separate sections. It gives the accepted JSON grammar, strictness rules,
-duplicate-key behavior, source preservation, deterministic expansion order,
-default resolution, path containment, error locations, and side-effect-free
-guarantees. The advanced section explains how to replace source discovery or
-embed configuration documents while producing the same validated models.
+Documents the intentionally empty Basic API and every advanced symbol. It
+defines the study-manifest and task-input grammars, central parser authority,
+terminology, typed constants supply, duplicate-key behavior, source
+preservation, deterministic expansion, defaults, containment, dependency
+validation, errors, examples, and replacement constraints.
 
-### `config/discovery.rs`
+### `config/document.rs`
 
-Finds the study root and conventional files without a user-supplied Rust path.
-The initial process resolves the root deterministically from its launch
-environment and `study.json`; replicate workers receive the exact resolved
-root through a reserved Workflow environment value.
+Owns strict duplicate-preserving JSON parsing and immutable project source
+documents. `ProjectDocument` retains canonical paths and exact bytes for
+provenance. `StateSchemaDocument` also retains the parsed value passed to the
+state advanced semantic-validation seam. Raw syntax trees and visitors remain
+private.
 
-Discovery fails on ambiguity instead of silently selecting a plausible study.
-It performs no output creation.
+### `config/manifest.rs`
 
-### `config/source.rs`
-
-Reads source documents, preserves their exact bytes and canonical source
-paths, and attaches path context to parse errors. Preserved bytes can be
-included in provenance without rereading a file that may have changed.
-
-### `config/strict_json.rs`
-
-Implements strict JSON parsing shared by every input document. It rejects
-duplicate keys, malformed numbers, unknown fields in Workflow-owned objects,
-and unsupported format versions.
-
-This is the only JSON parser used for configuration boundaries.
-
-### `config/study.rs`
-
-Defines the private deserialization model for `study.json`. It validates
-replicate policy, phase order, task declarations, dependencies, selection,
-completion behavior, output settings, and references to configuration files.
-
-Numeric phase IDs are not required in application code. Stable names or
-manifest positions supply internal identities. Scheduling settings live here
-only when they represent a genuine study choice; otherwise defaults are
-inferred.
-
-### `config/task.rs`
-
-Loads the configuration document associated with each manifest task and
-checks its top-level shape against the registered task definition. It binds
-task names to compiled input types without exposing a general-purpose
-configuration loader to application code.
+Defines the private strict manifest deserialization grammar and public
+read-only effective policy models. It validates names, replicate counts, task
+declarations, display-field uniqueness, dependency existence, duplicates,
+self-dependencies, and cycles. Object order remains deterministic phase order.
 
 ### `config/expansion.rs`
 
-Expands fixed values, sweeps, explicit cases, and shared scopes into a
-deterministic sequence of task configurations. It defines ordering once so
-task identity, output layout, plans, and provenance cannot disagree.
+Recursively expands literal values, independent `$sweep` markers, and
+correlated `$cases` into deterministic complete inputs. Ordinary arrays remain
+literal. It validates markers, choices, case field sets, disjoint paths, and
+safe Cartesian allocation.
 
-### `config/resolved.rs`
+### `config/input.rs`
 
-Holds one fully resolved configuration combination and its internal identity.
-It decodes the combination once into the task's declared Rust input type and
-retains the resolved JSON for provenance.
+Defines `ResolvedTaskInput`, owning one expanded value, definition key,
+canonical source path, combination ordinal, display selection, timeout, and
+provenance JSON. Generic `decode<T>` is the sole constants supplier and
+contextualizes failures without exposing individual-key or raw-value APIs.
 
-Tasks receive the typed value. They do not repeatedly decode JSON pointers or
-attach the resolved document to task metadata themselves.
+### `config/specification.rs`
 
-### `config/defaults.rs`
-
-Centralizes inferred operational defaults, including bounded queue size,
-chunk target, ordinary concurrency, display choice, and default failure
-behavior. Defaults may consider validated task and state characteristics but
-must remain deterministic and recorded in the launch plan.
-
-Any default that affects reproducibility or output interpretation is persisted
-as an effective setting. Silent machine-dependent scientific behavior is not
-allowed.
-
-### `config/validation.rs`
-
-Performs validation across configuration documents: dependency references,
-task-to-config source references, expansion scopes, and output paths against
-the launch root. It produces neutral validated declarations without importing
-the task, writer, or state implementations.
-
-Registry-to-manifest, typed-input, and writer-to-state cross-validation occurs
-in `runtime::bootstrap` through the participating modules' advanced contracts.
-
-All validation that can occur without side effects finishes before replicate
-directories or lifecycle records are created.
+Implements the one-root loading transaction, canonical containment, unique
+input cache, state-document acquisition, expansion assembly, and immutable
+`ProjectSpecification`. It performs no output creation, compiled-task matching,
+state semantics, scheduling, or execution.
 
 ### `config/error.rs`
 
-Defines config-owned errors for discovery, reading, parsing, expansion,
-decoding, defaults, and cross-document validation. Exported diagnostic forms
-are selected by the basic and advanced scopes. Errors always retain the source
-file and nearest meaningful JSON location.
+Defines non-exhaustive config-owned errors for reads, syntax, duplicate keys,
+document grammar, containment, dependency references, expansion, and complete
+typed-input decoding. Errors retain typed paths, JSON locations, definition
+and ordinal context, and underlying I/O/Serde chains.
+
+The old `configuration` module remains only as a temporary compatibility
+surface for unmigrated study/execution/example code. It is not an alias and is
+not part of the target config tiers.
 
 ## `runtime`: inferred orchestration
 
@@ -970,8 +929,8 @@ retaining the validated plan and lifecycle invariants.
 
 ### `runtime/bootstrap.rs`
 
-Implements the end-to-end startup transaction. It discovers inputs, validates
-configuration and task definitions, builds the plan, decides controller versus
+Implements the end-to-end startup transaction. It loads the project
+specification, validates task-definition matches, builds the plan, decides controller versus
 worker mode, initializes records and UI, executes selected work, and returns
 the root result.
 
@@ -982,15 +941,15 @@ partial startup sequence.
 
 Owns controller/worker process isolation, replicate scheduling, failure
 policy, deterministic replicate indices, and reserved environment transfer.
-Output roots and seeds come from the validated launch configuration.
+Output roots and seeds come from the validated effective plan.
 
 Applications never instantiate a replicate executor or branch manually on an
 optional replicate context.
 
 ### `runtime/plan.rs`
 
-Builds the immutable effective launch plan from the validated manifest,
-expanded task configurations, registered definitions, and inferred defaults.
+Builds the immutable effective launch plan from the validated project
+specification, resolved task inputs, registered definitions, and inferred defaults.
 The plan is deterministic and serializable before execution.
 
 It is the single source for scheduler input, UI declaration, output identities,
@@ -1012,10 +971,11 @@ The scheduler knows nothing about model equations or state field meaning.
 
 ### `runtime/executor.rs`
 
-Runs one prepared task. It constructs the minimal `TaskContext`, opens the
-runtime-managed writer/recording session when applicable, catches task
-outcomes, requests finalization or failure marking, and reports lifecycle
-events.
+Runs one prepared task by implementing `TaskExecutionHost`. It supplies the
+canonical schema and cancellation state, opens the runtime-managed
+writer/recording session at the initial model boundary, observes successful
+steps and completion, catches outcomes, requests finalization or failure
+marking, and reports automatic lifecycle/progress/message events.
 
 This file is the only place where application task execution and recording
 lifecycle meet.
@@ -1121,11 +1081,12 @@ stream descriptions, effective settings, timing, and terminal summaries.
 ### `record/provenance.rs`
 
 Collects provenance automatically from the validated launch: exact source
-documents, resolved task configuration, effective inferred defaults, task and
+documents, resolved task inputs, effective inferred defaults, task and
 replicate identity, named resources, software format version, artifacts, RNG
 records, and lifecycle timing.
 
-Applications do not attach configuration or project paths manually.
+Applications do not attach source documents, resolved task inputs, or project
+paths manually.
 
 ### `record/queue.rs`
 
@@ -1207,7 +1168,7 @@ or storage authority.
 ### `src/ui.rs`
 
 Declares private UI implementations and defines inline `ui::basic` and
-`ui::advanced` export scopes. Runtime configuration selects terminal, plain,
+`ui::advanced` export scopes. Study-manifest policy selects terminal, plain,
 or hidden presentation through these contracts.
 
 ### `ui::basic` export scope
@@ -1279,10 +1240,10 @@ backend implementation details remain private.
 ```text
 application State + Writer + Task definitions
                          │
-study.json + config/*.json
+study manifest + state schema + task input documents
              │           │
              ▼           ▼
-       config discovery, strict parsing, expansion, and validation
+       config loading, strict parsing, expansion, and validation
                          │
                          ▼
                immutable effective runtime plan
@@ -1294,7 +1255,7 @@ study.json + config/*.json
                                      ▼
                            phase scheduler/executor
                                      │
-                      typed config ──┤
+                    model constants ─┤
                                      ▼
                               application Task
                                      │
@@ -1314,22 +1275,23 @@ study.json + config/*.json
               verified recording reader
 ```
 
-The important direction is downward: configuration and runtime may invoke a
-task, and a task may submit state observations, but state and writer modules do
+The important direction is downward: runtime invokes a task with constants
+supplied by config, and task execution automatically exposes checked state observation
+boundaries to its runtime host, but application models, state, and writer do
 not reach upward into orchestration.
 
 ## What is inferred
 
 The refactor should remove the following application-supplied Rust parameters:
 
-- study root when conventional discovery is unambiguous;
+- every project path below the one user-supplied project root;
 - output root and replicate directory construction;
 - replicate executor construction and controller/worker branching;
 - phase IDs and builder calls;
-- task IDs, labels, categories, and configuration ordinals;
+- task IDs, labels, categories, and resolved-input ordinals;
 - task recording directories and study-record paths;
-- configuration provenance and named-path metadata attachment;
-- explicit progress initialization when state/configuration supplies it;
+- source-document and resolved-input provenance attachment;
+- explicit progress initialization when state or task input supplies it;
 - writer lifecycle calls for create, complete, and fail;
 - operational timestamps and timing metadata;
 - chunk filenames, stream directories, queue workers, and atomic installation;
@@ -1351,8 +1313,7 @@ meaning:
 - task input types and task behavior;
 - replicate count, seed, study structure, and task dependencies in JSON when
   the study requires them;
-- scientific parameter values, sweeps, and explicit cases in configuration
-  JSON; and
+- scientific input values, sweeps, and explicit cases in task input documents;
 - references to external scientific inputs.
 
 An option does not remain public merely because the current implementation has
@@ -1374,7 +1335,7 @@ The refactor consolidates the current boundaries as follows:
 | `study`, phases, tasks, plans, and scheduling | `task` definition plus `runtime` tiers with private scheduling implementation |
 | `execution` and replicate scopes | `runtime`, with scopes private and replacement ports advanced |
 | `artifact` | `record::artifact` |
-| `rng_record` | `record::rng` with task-context access |
+| `rng_record` | `record::rng` with runtime-owned task integration |
 | terminal study display | private `ui` |
 | current split preludes | replaced by central `prelude::basic` and `prelude::advanced`, each aggregating module-owned tiers |
 | private `clock` | `runtime::clock` |

@@ -126,21 +126,6 @@ impl SystemStateSchema {
         SystemState::new(self.clone(), time)
     }
 
-    /// Reports whether two specification handles share one immutable layout.
-    ///
-    /// This is an identity comparison, not structural equality. Two templates
-    /// loaded independently may declare identical fields but still return
-    /// `false`; states derived by cloning one `SystemStateSchema` return `true` without
-    /// comparing field names, descriptions, source paths, or lookup maps.
-    ///
-    /// Identity is useful when building a homogeneous collection of states.
-    /// Once a collection accepts only states sharing its canonical layout,
-    /// later indexing and serialization can rely on one field order without
-    /// repeating structural comparisons.
-    pub(crate) fn shares_schema_instance(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
     /// Resolves a declared field name to its payload-slot index.
     ///
     /// This is crate-private because compact indices are an implementation
@@ -192,6 +177,24 @@ impl SystemStateSchema {
 /// Import this trait from [`crate::state::advanced`] when schema metadata is
 /// needed. Ordinary state construction requires only the inherent basic API.
 pub trait StateSchemaAccess {
+    /// Validates a centrally parsed JSON value as a state schema.
+    ///
+    /// `source_path` is retained for provenance and contextual errors. Config
+    /// must already have performed strict JSON parsing and duplicate-key
+    /// rejection; state owns field-layout semantic validation.
+    fn from_json_template_value(
+        source_path: &Path,
+        document: &serde_json::Value,
+    ) -> Result<SystemStateSchema, StateError>
+    where
+        Self: Sized;
+
+    /// Reports whether two schema handles share one immutable allocation.
+    ///
+    /// This is an identity comparison, not structural equality. Independently
+    /// loaded but textually identical schemas do not share an instance.
+    fn shares_schema_instance(&self, other: &SystemStateSchema) -> bool;
+
     /// Returns the path from which this schema was loaded.
     fn template_path(&self) -> &Path;
 
@@ -215,6 +218,22 @@ pub trait StateSchemaAccess {
 }
 
 impl StateSchemaAccess for SystemStateSchema {
+    fn from_json_template_value(
+        source_path: &Path,
+        document: &serde_json::Value,
+    ) -> Result<SystemStateSchema, StateError> {
+        let template =
+            StateTemplate::deserialize(document).map_err(|source| StateError::TemplateParse {
+                path: source_path.to_path_buf(),
+                source,
+            })?;
+        Self::from_template(source_path.to_path_buf(), template)
+    }
+
+    fn shares_schema_instance(&self, other: &SystemStateSchema) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     fn template_path(&self) -> &Path {
         &self.inner.source
     }

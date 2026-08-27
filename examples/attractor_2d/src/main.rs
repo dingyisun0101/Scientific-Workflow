@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use scientific_workflow::prelude::basic::*;
 use scientific_workflow::prelude::study::*;
+use scientific_workflow::study::Task as StudyTask;
 
 use attractor_run::AttractorRun;
 
@@ -24,9 +25,8 @@ fn main() -> AppResult<()> {
     let study_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let settings = StudySettings::load(study_root)?;
     let output_root = ProjectPaths::load(study_root)?.resolve_path("output_root")?;
-    let Some(replicate) =
-        ReplicateExecutor::new(settings.replicate_settings(), output_root)
-            .dispatch_current_executable()?
+    let Some(replicate) = ReplicateExecutor::new(settings.replicate_settings(), output_root)
+        .dispatch_current_executable()?
     else {
         return Ok(());
     };
@@ -37,8 +37,7 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
     let study_configuration = StudyConfiguration::load(study_root)?;
     let simulation_configurations = study_configuration.workload("attractor", "dynamics")?;
     let validation_configurations = study_configuration.workload("attractor", "validation")?;
-    let schema =
-        SystemStateSchema::load_json_template(&study_root.join("config/state.json"))?;
+    let schema = SystemStateSchema::load_json_template(&study_root.join("config/state.json"))?;
 
     // Replicate dispatch created this isolated scope before starting the worker.
     // It does not create task recordings: each simulation task remains
@@ -91,7 +90,7 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
     let rendering_output = replicate.output_directory().join("plots");
     let rendering = Phase::builder(3, "trajectory rendering")
         .task(
-            Task::one_shot(
+            StudyTask::one_shot(
                 "render-trajectories",
                 "render all trajectories",
                 move |context| {
@@ -119,7 +118,7 @@ fn run_replicate(study_root: &Path, replicate: &ReplicateContext) -> AppResult<(
     Ok(())
 }
 
-fn simulation_task(run: AttractorRun, schema: SystemStateSchema) -> Task {
+fn simulation_task(run: AttractorRun, schema: SystemStateSchema) -> StudyTask {
     let provenance = run.configuration().clone();
     let task_id = run.task_id().to_owned();
     let label = format!(
@@ -127,7 +126,7 @@ fn simulation_task(run: AttractorRun, schema: SystemStateSchema) -> Task {
         run.mu(),
         run.angular_frequency()
     );
-    Task::progress(task_id, label, move |context| {
+    StudyTask::progress(task_id, label, move |context| {
         task_execution::run_task(
             &schema,
             run.recording_directory(),
@@ -142,7 +141,7 @@ fn simulation_task(run: AttractorRun, schema: SystemStateSchema) -> Task {
 fn validation_tasks(
     producers: &[AttractorRun],
     configurations: &WorkloadConfiguration,
-) -> AppResult<Vec<Task>> {
+) -> AppResult<Vec<StudyTask>> {
     let mut tasks = Vec::new();
     for configuration in configurations.combinations() {
         let mut matched = false;
@@ -164,7 +163,7 @@ fn validation_tasks(
     Ok(tasks)
 }
 
-fn validation_task(producer: AttractorRun, configuration: ResolvedConfiguration) -> Task {
+fn validation_task(producer: AttractorRun, configuration: ResolvedConfiguration) -> StudyTask {
     let provenance = configuration.clone();
     let task_id = format!(
         "validate-{}-v{:06}",
@@ -181,7 +180,7 @@ fn validation_task(producer: AttractorRun, configuration: ResolvedConfiguration)
         "configuration_ordinal": producer.configuration().ordinal(),
         "recording_directory": producer.recording_directory(),
     });
-    Task::one_shot(task_id, label, move |context| {
+    StudyTask::one_shot(task_id, label, move |context| {
         validation::validate_recording(
             producer.recording_directory(),
             producer.configuration(),

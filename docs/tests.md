@@ -36,13 +36,27 @@ of unsupported commands.
 Integration tests verify that phases own concurrency, prepared-queue capacity,
 delay, timeouts, deadlines, dependencies, and failure policy.
 
-Task workloads report only through `TaskContext`. Tests cover progress targets,
-absolute iteration updates, detail text, messages, completion, failure, and
-cooperative cancellation.
+Legacy `study::Task` workloads report only through `study::TaskContext`. Those
+tests cover progress targets, absolute iteration updates, detail text,
+messages, completion, failure, and cooperative cancellation. The separate
+new-task tests below cover context-free `ScientificModel` execution.
 
 ## Configuration tests
 
-`configuration_workflow.rs` verifies the complete configuration contract:
+`config_workflow.rs` verifies the target project-specification contract:
+
+```text
+project root → centrally parsed documents → resolved task inputs → typed constants
+```
+
+Coverage includes strict study-manifest parsing, exact source preservation,
+canonical containment beneath `config/inputs`, state-schema handoff without a
+second file read, effective policies, dependency validation, Cartesian sweeps,
+correlated cases, literal arrays, deterministic ordinals, config-owned typed
+decoding, contextual errors, and advanced-prelude exports.
+
+`configuration_workflow.rs` continues to verify the transitional legacy
+configuration contract:
 
 ```text
 parameters.json → StudyConfiguration → WorkloadConfiguration → ResolvedConfiguration values
@@ -60,8 +74,10 @@ Coverage includes:
 - missing values and type errors retaining the combination ordinal;
 - malformed JSON, duplicate keys, invalid documents, and fixed/sweep conflicts.
 
-Configuration tests deliberately do not cover task creation, named paths,
-schemas, scheduling, or display because those concerns are outside the module.
+Target config tests deliberately stop before compiled-task matching,
+state-schema semantics, scheduling, display-field/schema validation, output,
+and execution. Those compositions belong to runtime and the participating
+module boundaries.
 
 ## Replicate execution tests
 
@@ -79,6 +95,11 @@ declared count, and binds every worker to the matching lazy seed deriver.
   surface, inferred all-field defaults, schema-bound canonical field order,
   validation failures, strict basic/advanced tiering, checked borrowed
   observations, canonical owned encoding, and the replaceable sink port.
+- `task_workflow.rs` verifies config-supplied single-decode stateful and one-shot
+  definitions, automatic initial/step/final host boundaries, writer validation
+  before model initialization, cooperative cancellation, task descriptors,
+  strict basic/advanced tiering, direct-state observable enforcement, schema
+  allocation identity, advancing iterations, and target validity.
 - `analysis_workflow.rs` verifies ordered in-memory `StateSeries` behavior and
   ordinary borrowed access without a separate view type.
 - `storage_workflow.rs`, `storage_resilience.rs`, and `resume_workflow.rs`
@@ -100,7 +121,8 @@ The repository also checks:
   ensemble tasks;
 - Dispatcher-owned study directories, inputs, paths, phases, and plans;
 - the attractor example's direct mapping from `WorkloadConfiguration`
-  combinations into tasks.
+  combinations into explicitly named transitional `StudyTask` values.
 
 These builds ensure downstream programs retain ownership of model-specific
-inputs while depending only on the shared Task → Phase → Study contract.
+inputs while the runtime migration replaces the transitional
+study-task → phase → study contract with the new context-free task boundary.

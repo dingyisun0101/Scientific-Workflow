@@ -37,6 +37,23 @@ The writer defaults to one `state` stream containing every field at every
 iteration. Its complete contract and inference rules are documented in
 `writer/api.md`.
 
+It re-exports the complete `task::basic` definition boundary:
+
+- `Task` for opaque reusable stateful or one-shot definitions;
+- `ScientificModel` for an application model that directly owns its canonical
+  `SystemState`; and
+- `TaskResult<T = ()>` for thread-safe application failures.
+
+Task definitions accept no user-supplied identity, path, lifecycle, progress,
+message, or recording administration. Their complete execution and ownership
+contract is documented in `task/api.md`.
+
+It also re-exports the complete `config::basic` scope, which is intentionally
+empty. Ordinary applications
+write a study manifest, state schema, and task input documents; they do not
+load or query them through Rust. Consequently, it contributes no names to
+`prelude::basic`.
+
 It also re-exports these existing application APIs while their owning modules
 await the same tier refactor:
 
@@ -60,7 +77,7 @@ await the same tier refactor:
 The transitional storage builder accepts `Writer` through `with_writer`; it
 infers stream metadata, cadence metadata, axis names, stream directories, and
 a default persistence policy. `StateStreamStorage` remains temporarily public
-for explicit record-layer tuning and will move behind validated configuration
+for explicit record-layer tuning and will move behind the validated effective plan
 when `record` is refactored.
 
 These are identity-preserving `pub use` declarations. A value imported through
@@ -84,7 +101,7 @@ integration boundary:
 
 - `StateFieldSchema` for immutable validated field metadata;
 - `StateSchemaAccess` for schema provenance, traversal, lookup, size, and JSON
-  representation;
+  representation, including immutable schema-allocation identity;
 - `StateMaintenance` for explicit structural cloning, time replacement,
   payload counting/type inspection, and clearing;
 - `StateSchemaSource` for deriving a borrowed schema from a state or schema;
@@ -101,6 +118,31 @@ boundary:
 - `EncodedObservation` for an owned backend handoff; and
 - `ObservationSink` and `SessionOutcome` for replaceable persistence
   integration.
+
+It also re-exports the complete additional `task::advanced` runtime boundary:
+
+- `TaskKind` and `TaskDescriptor` for read-only execution-shape inspection;
+- `TaskDefinition` for executing opaque compiled work from one config-owned
+  `ResolvedTaskInput`; and
+- `TaskExecutionHost` for canonical schema access, cooperative cancellation,
+  and automatic initial/step/final observation boundaries.
+
+It additionally re-exports the complete `config::advanced` integration
+boundary:
+
+- `ProjectSpecification`, `StudyManifest`, `ReplicatePolicy`,
+  `ReplicateScheduling`, `FailurePolicy`, and `PhaseSpecification` for the
+  immutable effective project declaration;
+- `ResolvedTaskInput` for config-owned complete typed-input supply;
+- `ProjectDocument` and `StateSchemaDocument` for exact source provenance and
+  the already-parsed state integration seam; and
+- `ConfigError` for contextual loading, strict parsing, path-containment,
+  expansion, dependency, and typed-decode failures.
+
+These target config names coexist temporarily with the old
+`configuration::*` inventory in `prelude::basic` while legacy study and
+execution code is migrated. The old types are not aliases for the new config
+boundary.
 
 The advanced scope grants supported integration responsibility, not access to
 private implementation files. Peer subsystems should import the narrow owning
@@ -157,10 +199,15 @@ SystemStateSchema};`.
 The prelude contains no constructors, wrapper types, adapter traits, macros,
 extension behavior, or private fallback exports. Implementation files beneath
 an owning module remain private even when a public type is re-exported here.
-In particular, writer sampling internals, encoding helpers, and the concrete
-writer session are not reachable through either prelude.
+In particular, writer sampling internals, encoding helpers, the concrete
+writer session, task type-erasure adapters, task contract errors, and runtime
+progress/message machinery are not reachable through either prelude.
 
 The removed `prelude::basics` spelling is not a compatibility alias.
 `prelude::study` is transitional and does not establish a third long-term API
-tier. Import order, compiler glob-resolution details, and undocumented names
+tier. It currently exports the legacy `study::Task`, while `prelude::basic`
+exports the new context-free `task::Task`; code importing both glob scopes must
+name the legacy type explicitly (for example,
+`use scientific_workflow::study::Task as StudyTask`) until runtime migration
+removes the overlap. Import order, compiler glob-resolution details, and undocumented names
 reachable only through an owning implementation path are not supported API.

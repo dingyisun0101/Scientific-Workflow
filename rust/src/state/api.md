@@ -206,12 +206,30 @@ name and optional description, not its private compact position.
 
 This extension trait is implemented for `SystemStateSchema`. Importing it adds:
 
+- `SystemStateSchema::from_json_template_value(source_path, document)` through
+  the trait's associated function, for state-semantic validation of a JSON
+  value already parsed centrally by config;
+- `shares_schema_instance(other)` for allocation identity rather than
+  structural equality;
 - `template_path()` for borrowed provenance as `&Path`;
 - `field_schemas()` for deterministic immutable field traversal;
 - `field_schema(name)` for optional name lookup;
 - `contains_field(name)` for declaration membership;
 - `len()` and `is_empty()` for layout size; and
 - `to_json_template()` for strict pretty-printed schema JSON.
+
+`from_json_template_value` accepts a borrowed typed `&Path` for provenance and
+a borrowed `serde_json::Value`. It performs no filesystem I/O and assumes
+config already rejected malformed JSON and duplicate keys. State still owns
+strict schema shape, unknown-property rejection, normalized field names,
+descriptions, duplicates, deterministic ordering, and schema allocation.
+Failure returns `TemplateParse`, `EmptyFieldName`, or `DuplicateField` without
+publishing a partial schema.
+
+`shares_schema_instance` is constant-time. It returns `true` only when both
+handles refer to the same immutable schema allocation; independently loading
+identical JSON returns `false`. Writer, task, and series integrations use this
+to establish one field-order authority without publishing compact indices.
 
 Inspection does not mutate or allocate except `to_json_template`, which
 allocates its returned `String` and may return `serde_json::Error`. The trait is
@@ -336,8 +354,10 @@ subsystem replacement:
   implementation;
 - `StateSlot`, retained `ValueType`, compact field indices, lookup maps, and
   schema `Arc` layout;
-- JSON deserialization-only template structs and the in-memory byte parser;
-- schema-instance identity checks used by `StateSeries`;
+- JSON deserialization-only template structs and the standalone basic loader's
+  byte parser;
+- the schema `Arc` and pointer-comparison implementation behind the supported
+  `shares_schema_instance` result;
 - tuple-sealing types, tuple-generation macros, and disjoint-slot algorithms;
 - the writer-only serializable payload accessor; and
 - constructors for field descriptors and ownership-preserving error wrappers.

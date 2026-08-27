@@ -165,7 +165,9 @@ stream ordering is the portable contract.
 `Observation<'a>` is a checked, copyable borrowed pair of one descriptor and
 one live `SystemState`. `Observation::new(writer, state)` performs an exact
 schema-allocation identity check and returns `SchemaMismatch` on failure. It
-does not inspect payload slots.
+does not inspect payload slots. The check uses the supported
+`state::advanced::StateSchemaAccess` contract, so writer does not depend on the
+state module's allocation internals.
 
 - `time()` returns the state's `StateTime` by value.
 - `state()` returns the original borrowed state.

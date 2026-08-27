@@ -3,27 +3,31 @@
 //! `scientific-workflow` provides the data and execution foundations needed to
 //! describe scientific systems, record their evolution, and organize scoped
 //! computational work. The crate is intentionally divided by responsibility:
-//! state representation and series, scientific observation, storage, orchestration, and
-//! language bridges remain separate modules rather than accumulating behind
-//! one monolithic interface.
+//! state representation and series, project declarations, scientific
+//! observation, typed task behavior, storage, and orchestration remain
+//! separate modules rather than accumulating behind one monolithic interface.
 //!
 //! # Module boundaries (public API ownership)
 //!
 //! The boundary map is strict: each module owns only one slice of behavior, and
 //! callers move data between boundaries without duplicating the same concern.
 //!
-//! - `study`: declarative study/phase/task planning and run execution. It owns
-//!   declaration validation, scheduling, cancellation, execution timing, and
-//!   progress summaries. It does not own model semantics, storage formats, or
-//!   schema declarations.
-//! - `configuration`: strict study-level replicate settings, study-wide
-//!   `parameters.json`, phase-scoped expansion, named paths, and resolved
-//!   combinations. It owns input validation and parameter expansion only. It
-//!   does not own task construction, state schemas, or persistence.
 //! - `state`: typed heterogeneous state values, schema, scientific time, and
 //!   ordered in-memory collections.
 //! - `writer`: minimal application definitions for scientific streams and the
 //!   advanced observation/backend integration boundary.
+//! - `task`: typed scientific models and one-shot work behind one uniform,
+//!   reusable runtime definition.
+//! - `config`: central strict parsing of `study.json`, `config/state.json`, and
+//!   task input documents, plus deterministic input expansion and typed
+//!   constants supply. Its ordinary user interface is the file grammar, so
+//!   `config::basic` is intentionally empty.
+//! - `study`: transitional declarative study/phase/task planning and run
+//!   execution. It owns declaration validation, scheduling, cancellation,
+//!   execution timing, and progress summaries until `runtime` replaces it.
+//! - `configuration`: transitional parameter and named-path APIs retained only
+//!   for unmigrated orchestration and examples. It is not the target `config`
+//!   boundary.
 //! - `storage`: asynchronous buffered persistence and completed-run reconstruction.
 //! - `execution`: replicate subprocess dispatch, isolated output scopes, and
 //!   directory-scoped recording path derivation.
@@ -33,23 +37,24 @@
 //!   reproducibility metadata for caller-owned RNG sources.
 //! - `prelude`: curated import surfaces that preserve public boundaries.
 //!
-//! # Study vocabulary
+//! # Transitional study vocabulary
 //!
-//! A [`study::Study`] is the largest scope. It owns scheduling, cancellation,
+//! A [`study::Study`] is the current largest orchestration scope. It owns scheduling, cancellation,
 //! recording, and display for an ordered set of [`study::Phase`] values. A
 //! phase owns many [`study::Task`] values plus their concurrency, delay,
 //! timeout, dependency, and failure policies. A task owns one workload, which
 //! reports progress, detail, messages, and cancellation through
-//! [`study::TaskContext`]. Progress and one-shot work are modes of the same
-//! task type.
+//! [`study::TaskContext`]. That legacy `study::Task` is distinct from the new
+//! [`task::basic::Task`], whose runtime migration removes user-managed context,
+//! identity, progress, and messaging.
 //!
-//! [`configuration`] is deliberately outside that hierarchy. It validates
-//! process-level replicate policy from `study.json`, resolves a study-wide
-//! `parameters.json`, then selects one string-keyed phase whose
-//! global, group-shared, and local choices expand into deterministic
-//! [`configuration::ResolvedConfiguration`] values. The downstream application
-//! decides how each combination becomes a task and owns all schemas, model
-//! inputs, storage, and other effects captured by the workload.
+//! The target [`config`] boundary replaces application-managed loading and
+//! combination iteration. A future runtime will accept one `project_root:
+//! &Path`, ask [`config::advanced::ProjectSpecification`] to load every project
+//! declaration, and create one task invocation per resolved task input.
+//! Stateful tasks receive one typed `ScientificModel::Constants` value through
+//! config-owned decoding; application code does not call `combinations()`,
+//! query JSON keys, or attach input provenance.
 //!
 //! # Supporting modules
 //!
@@ -95,7 +100,7 @@
 //! use scientific_workflow::prelude::basic::*;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let spec = SystemStateSchema::load_json_template(Path::new("state.json"))?;
+//! let spec = SystemStateSchema::load_json_template(Path::new("config/state.json"))?;
 //! let mut state = spec.create_empty_state(StateTime::from_iteration(0));
 //!
 //! state.initialize_payload("population", vec![10_u64, 20, 30])?;
@@ -111,8 +116,10 @@
 //! # }
 //! ```
 //!
-//! Future orchestration-layer features will organize scoped workflow execution
-//! without changing the public state-value ownership or storage contracts.
+//! The task boundary now organizes typed application behavior without changing
+//! public state-value ownership or storage contracts. The new config boundary
+//! supplies its typed constants. The runtime migration will connect project
+//! loading, phases, recording, and display.
 //!
 //! # Release stability
 //!
@@ -122,15 +129,17 @@
 //! ## Downstream no-overlap policy
 //!
 //! For downstream consumers, preserve boundary ownership:
-//! keep orchestration in `study`, observation policy in `writer`, persistence
-//! in `storage`, and pure state in `state`. Do not implement overlapping behavior in a
-//! downstream layer; if a seam is missing, negotiate an explicit API addition.
+//! keep typed scientific behavior in `task`, transitional orchestration in
+//! `study`, observation policy in `writer`, persistence in `storage`, and pure
+//! state in `state`. Do not implement overlapping behavior in a downstream
+//! layer; if a seam is missing, negotiate an explicit API addition.
 
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 
 mod clock;
 
 pub mod artifact;
+pub mod config;
 pub mod configuration;
 pub mod execution;
 pub mod prelude;
@@ -139,4 +148,5 @@ pub mod state;
 pub mod storage;
 #[path = "study.rs"]
 pub mod study;
+pub mod task;
 pub mod writer;

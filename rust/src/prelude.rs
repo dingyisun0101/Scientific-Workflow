@@ -11,6 +11,8 @@ pub mod basic {
         ArtifactDescriptor, ArtifactDisposition, ArtifactError, ArtifactLoadError,
         PersistedArtifact, VerifiedArtifact, load_verified_artifact, persist_artifact,
     };
+    #[allow(unused_imports)]
+    pub use crate::config::basic::*;
     pub use crate::configuration::{
         ConfigurationError, ConfigurationIter, ProjectPaths, ReplicateFailurePolicy,
         ReplicateScheduling, ReplicateSettings, ResolvedConfiguration, StudyConfiguration,
@@ -30,17 +32,24 @@ pub mod basic {
         StateStreamStorage, StorageError, StoredStateSeriesReader, SystemStateWriter,
         SystemStateWriterBuilder,
     };
+    pub use crate::task::basic::*;
     pub use crate::writer::basic::*;
 }
 
 /// Supported imports for advanced users and Workflow integrations.
 pub mod advanced {
     pub use super::basic::*;
+    pub use crate::config::advanced::{
+        ConfigError, FailurePolicy, PhaseSpecification, ProjectDocument, ProjectSpecification,
+        ReplicatePolicy, ReplicateScheduling, ResolvedTaskInput, StateSchemaDocument,
+        StudyManifest,
+    };
     #[doc(hidden)]
     pub use crate::state::advanced::PayloadTuple;
     pub use crate::state::advanced::{
         StateFieldSchema, StateMaintenance, StateSchemaAccess, StateSchemaSource,
     };
+    pub use crate::task::advanced::{TaskDefinition, TaskDescriptor, TaskExecutionHost, TaskKind};
     pub use crate::writer::advanced::{
         EncodedObservation, Observation, ObservationSink, SessionOutcome, StreamDescriptor,
         WriterDescriptor,

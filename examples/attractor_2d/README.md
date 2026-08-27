@@ -42,6 +42,11 @@ from the merged global/component/workload selection. The concise phase helpers a
 callable to every generated task; advanced per-task `FnOnce` factories remain
 available when a task must own a unique non-Clone resource.
 
+This example still exercises the transitional orchestration API, so `main.rs`
+names its phase-owned type `StudyTask`. That explicit alias distinguishes
+legacy `study::Task` from the new context-free `task::Task` now re-exported by
+`prelude::basic`; the runtime refactor will migrate the example to the latter.
+
 `StudySettings` validates `study.json` before any output is created. The
 example deliberately declares `replicates: 1` and `scheduling: "sequential"`.
 The initial process dispatches one worker; that worker runs the study inside

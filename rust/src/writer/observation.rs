@@ -1,6 +1,6 @@
 //! Checked borrowed observations of live scientific state.
 
-use crate::state::advanced::{StateTime, SystemState};
+use crate::state::advanced::{StateSchemaAccess, StateTime, SystemState};
 
 use super::definition::WriterDescriptor;
 use super::encoding::{EncodedObservation, encode};
