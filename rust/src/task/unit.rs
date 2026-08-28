@@ -21,7 +21,7 @@ const SEED_DERIVATION_ALGORITHM: &str = "scientific-workflow.seed.v1";
 /// deterministic unit may ignore it. A stochastic unit requests only the
 /// named seeds it actually needs; Workflow derives them without counters or
 /// request-order dependence and records successful requests with the affected
-/// model's output metadata.
+/// member's output metadata.
 pub struct InitializationContext {
     master_seed: Option<u64>,
     replicate_ordinal: u64,
@@ -51,7 +51,7 @@ impl InitializationContext {
         self.master_seed.is_some()
     }
 
-    /// Derives a seed shared by all models in this execution unit.
+    /// Derives a seed shared by all members in this execution unit.
     ///
     /// `purpose` is a stable, nonempty semantic name such as `"pairing"`.
     /// Repeating the same request returns the same seed and metadata entry.
@@ -59,15 +59,15 @@ impl InitializationContext {
         self.seed(SeedScope::Shared, purpose)
     }
 
-    /// Derives a seed belonging to one model exposed by this execution unit.
+    /// Derives a seed belonging to one member exposed by this execution unit.
     ///
-    /// `model_identity` must exactly match that model's [`ModelView`] identity;
+    /// `member_identity` must exactly match that member's [`MemberView`] identity;
     /// Workflow rejects an initialization that requested a seed for an unknown
-    /// model. `purpose` is a stable, nonempty semantic name such as
+    /// member. `purpose` is a stable, nonempty semantic name such as
     /// `"initialization"` or `"replacement"`.
-    pub fn model_seed(&self, model_identity: &str, purpose: &str) -> Result<u64, SeedError> {
-        validate_name(model_identity, "model identity")?;
-        self.seed(SeedScope::Model(model_identity.into()), purpose)
+    pub fn member_seed(&self, member_identity: &str, purpose: &str) -> Result<u64, SeedError> {
+        validate_name(member_identity, "member identity")?;
+        self.seed(SeedScope::Member(member_identity.into()), purpose)
     }
 
     fn seed(&self, scope: SeedScope, purpose: &str) -> Result<u64, SeedError> {
@@ -89,7 +89,7 @@ impl InitializationContext {
         hash_part(&mut digest, self.execution_unit_key.as_bytes());
         match &request.scope {
             SeedScope::Shared => digest.update([0]),
-            SeedScope::Model(identity) => {
+            SeedScope::Member(identity) => {
                 digest.update([1]);
                 hash_part(&mut digest, identity.as_bytes());
             }
@@ -100,16 +100,16 @@ impl InitializationContext {
         Ok(seed)
     }
 
-    pub(crate) fn validate_model_identities<'a>(
+    pub(crate) fn validate_member_identities<'a>(
         &self,
         identities: impl IntoIterator<Item = &'a str>,
     ) -> Result<(), SeedError> {
         let identities = identities.into_iter().collect::<BTreeSet<_>>();
         for request in self.request_ledger().keys() {
-            if let SeedScope::Model(identity) = &request.scope
+            if let SeedScope::Member(identity) = &request.scope
                 && !identities.contains(identity.as_ref())
             {
-                return Err(SeedError::UnknownModelIdentity {
+                return Err(SeedError::UnknownMemberIdentity {
                     identity: identity.to_string(),
                 });
             }
@@ -117,7 +117,7 @@ impl InitializationContext {
         Ok(())
     }
 
-    pub(crate) fn metadata_for_model(&self, model_identity: &str) -> Option<Value> {
+    pub(crate) fn metadata_for_member(&self, member_identity: &str) -> Option<Value> {
         let requests = self
             .request_ledger()
             .iter()
@@ -127,15 +127,15 @@ impl InitializationContext {
                     ("purpose".to_owned(), request.purpose.to_string().into()),
                     ("seed".to_owned(), (*seed).into()),
                 ]))),
-                SeedScope::Model(identity) if identity.as_ref() == model_identity => {
+                SeedScope::Member(identity) if identity.as_ref() == member_identity => {
                     Some(Value::Object(Map::from_iter([
-                        ("scope".to_owned(), "model".into()),
-                        ("model_identity".to_owned(), identity.to_string().into()),
+                        ("scope".to_owned(), "member".into()),
+                        ("member_identity".to_owned(), identity.to_string().into()),
                         ("purpose".to_owned(), request.purpose.to_string().into()),
                         ("seed".to_owned(), (*seed).into()),
                     ])))
                 }
-                SeedScope::Model(_) => None,
+                SeedScope::Member(_) => None,
             })
             .collect::<Vec<_>>();
         (!requests.is_empty()).then(|| {
@@ -183,7 +183,7 @@ struct SeedRequest {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SeedScope {
     Shared,
-    Model(Box<str>),
+    Member(Box<str>),
 }
 
 /// Failure to make or validate a deterministic initialization seed request.
@@ -201,30 +201,59 @@ pub enum SeedError {
         /// The rejected value.
         value: String,
     },
-    /// A model seed was requested for an identity the unit did not expose.
-    #[error("seed requested for unknown model identity `{identity}`")]
-    UnknownModelIdentity {
+    /// A member seed was requested for an identity the unit did not expose.
+    #[error("seed requested for unknown member identity `{identity}`")]
+    UnknownMemberIdentity {
         /// The requested identity absent from the execution unit.
         identity: String,
     },
 }
 
-/// A borrowed view of one independently stateful model inside an execution unit.
+/// The optional completion declaration for one execution-unit member.
+///
+/// This borrowed value distinguishes an incomplete member from a completed
+/// member with or without a structured reason. The execution unit retains the
+/// reason object; Workflow copies it only when the member first completes.
+#[derive(Clone, Copy, Debug)]
+pub struct MemberCompletion<'a> {
+    reason: Option<&'a Map<String, Value>>,
+}
+
+impl<'a> MemberCompletion<'a> {
+    /// Declares completion without a structured reason.
+    pub const fn without_reason() -> Self {
+        Self { reason: None }
+    }
+
+    /// Declares completion with a borrowed structured JSON reason.
+    pub const fn with_reason(reason: &'a Map<String, Value>) -> Self {
+        Self {
+            reason: Some(reason),
+        }
+    }
+
+    /// Returns the structured reason, when the execution unit supplied one.
+    pub const fn reason(self) -> Option<&'a Map<String, Value>> {
+        self.reason
+    }
+}
+
+/// A borrowed view of one independently stateful member inside an execution unit.
 ///
 /// The identity, state owner, and schema allocation must remain stable at the
-/// same model index for the complete execution. `complete` and
+/// same member index for the complete execution. `completion` and
 /// `target_iteration` are declarations inspected by Workflow; constructing a
 /// view has no side effects.
 #[derive(Clone, Copy, Debug)]
-pub struct ModelView<'a> {
+pub struct MemberView<'a> {
     identity: &'a str,
     state: &'a SystemState,
-    complete: bool,
+    completion: Option<MemberCompletion<'a>>,
     target_iteration: Option<u64>,
 }
 
-impl<'a> ModelView<'a> {
-    /// Describes one model owned by an [`ExecutionUnit`].
+impl<'a> MemberView<'a> {
+    /// Describes one member owned by an [`ExecutionUnit`].
     ///
     /// `identity` must be nonempty, contain no surrounding whitespace, and be
     /// unique within the unit. `state` must remain at the same address and use
@@ -233,69 +262,74 @@ impl<'a> ModelView<'a> {
     pub const fn new(
         identity: &'a str,
         state: &'a SystemState,
-        complete: bool,
+        completion: Option<MemberCompletion<'a>>,
         target_iteration: Option<u64>,
     ) -> Self {
         Self {
             identity,
             state,
-            complete,
+            completion,
             target_iteration,
         }
     }
 
-    /// Returns the stable identity of this model within its execution unit.
+    /// Returns the stable identity of this member within its execution unit.
     pub const fn identity(self) -> &'a str {
         self.identity
     }
 
-    /// Borrows this model's directly owned canonical state.
+    /// Borrows this member's directly owned canonical state.
     pub const fn state(self) -> &'a SystemState {
         self.state
     }
 
-    /// Returns whether this model requires no further transition.
-    pub const fn is_complete(self) -> bool {
-        self.complete
+    /// Returns completion details, or `None` while the member is incomplete.
+    pub const fn completion(self) -> Option<MemberCompletion<'a>> {
+        self.completion
     }
 
-    /// Returns this model's optional expected final iteration.
+    /// Returns this member's optional expected final iteration.
     pub const fn target_iteration(self) -> Option<u64> {
         self.target_iteration
     }
 }
 
-/// One schedulable scientific execution containing one or more models.
+/// One schedulable scientific execution containing one or more members.
 ///
 /// Workflow manages every implementation through the same lifecycle and does
-/// not distinguish a standalone model from a coordinated ensemble. A normal
-/// model returns one [`ModelView`]; an ensemble returns one view per member and
+/// not distinguish a standalone unit from a coordinated ensemble. A normal
+/// unit returns one [`MemberView`]; an ensemble returns one view per member and
 /// keeps all internal parallelism, shared inputs, and synchronization private.
-/// Each exposed model owns a distinct [`SystemState`].
+/// Each exposed member owns a distinct [`SystemState`].
 ///
-/// Model count, index order, identities, state owners, and schema allocations
+/// Member count, index order, identities, state owners, and schema allocations
 /// must remain stable after initialization. One successful [`Self::step`] must
-/// strictly advance at least one incomplete model and must never advance a
-/// model that was already complete. Other incomplete models may wait during a
+/// strictly advance at least one incomplete member and must never advance a
+/// member that was already complete. Other incomplete members may wait during a
 /// coordinated step, which permits synchronized ensembles and restored members
 /// at different iterations.
 pub trait ExecutionUnit: Send + Sized + 'static {
     /// One complete set of constants supplied by Config.
     type Constants: DeserializeOwned + 'static;
 
-    /// Defines the observations recorded independently for every model.
+    /// Validates unit-owned configuration and defines per-member observations.
     ///
     /// All members of one execution unit use the state schema selected by the
     /// task and this common observation plan. The default records every field
-    /// at every iteration. This preflight operation must have no external side
-    /// effects.
-    fn observation_plan(_constants: &Self::Constants) -> TaskResult<ObservationPlan> {
+    /// at every iteration without additional validation. An override owns all
+    /// domain validation that can be performed before initialization; Study
+    /// trusts a successful result. This preflight operation must not create
+    /// output, initialize the unit, or mutate external state.
+    fn preflight(
+        _constants: &Self::Constants,
+        _schema: &SystemStateSchema,
+    ) -> TaskResult<ObservationPlan> {
         Ok(ObservationPlan::all_fields())
     }
 
-    /// Builds a fully initialized standalone model or ensemble.
+    /// Builds a fully initialized standalone unit or ensemble.
     ///
-    /// Every state subsequently exposed through [`Self::model`] must have been
+    /// Every state subsequently exposed through [`Self::member`] must have been
     /// created from this exact schema allocation.
     fn initialize(
         constants: Self::Constants,
@@ -303,21 +337,21 @@ pub trait ExecutionUnit: Send + Sized + 'static {
         context: &InitializationContext,
     ) -> TaskResult<Self>;
 
-    /// Returns the stable positive number of independently stateful models.
-    fn model_count(&self) -> usize;
+    /// Returns the stable positive number of independently stateful members.
+    fn member_count(&self) -> usize;
 
-    /// Borrows one model by stable zero-based index.
+    /// Borrows one member by stable zero-based index.
     ///
     /// The method must be side-effect free. Workflow calls it repeatedly before
-    /// and after coordinated steps. An index below [`Self::model_count`] must
+    /// and after coordinated steps. An index below [`Self::member_count`] must
     /// always return `Some`; all other indices must return `None`.
-    fn model(&self, index: usize) -> Option<ModelView<'_>>;
+    fn member(&self, index: usize) -> Option<MemberView<'_>>;
 
     /// Performs one coordinated scientific transition.
     ///
-    /// A standalone model advances itself. An ensemble may advance members in
+    /// A standalone unit advances itself. An ensemble may advance members in
     /// parallel or share generated inputs, but it must return only after the
-    /// complete logical step is visible through [`Self::model`].
+    /// complete logical step is visible through [`Self::member`].
     fn step(&mut self) -> TaskResult;
 }
 
@@ -328,20 +362,20 @@ mod tests {
     #[test]
     fn named_seed_derivation_is_stable_and_request_order_independent() {
         let first = InitializationContext::new(Some(99), 3, "phase/task", "ensemble");
-        let first_model = first.model_seed("alpha", "initialization").unwrap();
+        let first_member = first.member_seed("alpha", "initialization").unwrap();
         let first_shared = first.shared_seed("pairing").unwrap();
-        assert_eq!(first_model, 16_741_472_295_366_384_357);
+        assert_eq!(first_member, 16_741_472_295_366_384_357);
         assert_eq!(first_shared, 1_632_703_961_247_452_931);
 
         let second = InitializationContext::new(Some(99), 3, "phase/task", "ensemble");
         assert_eq!(second.shared_seed("pairing").unwrap(), first_shared);
         assert_eq!(
-            second.model_seed("alpha", "initialization").unwrap(),
-            first_model
+            second.member_seed("alpha", "initialization").unwrap(),
+            first_member
         );
         assert_ne!(
-            second.model_seed("beta", "initialization").unwrap(),
-            first_model
+            second.member_seed("beta", "initialization").unwrap(),
+            first_member
         );
 
         let next_replicate = InitializationContext::new(Some(99), 4, "phase/task", "ensemble");
@@ -356,6 +390,6 @@ mod tests {
             context.shared_seed("pairing"),
             Err(SeedError::MissingMasterSeed)
         ));
-        assert!(context.metadata_for_model("model").is_none());
+        assert!(context.metadata_for_member("member").is_none());
     }
 }

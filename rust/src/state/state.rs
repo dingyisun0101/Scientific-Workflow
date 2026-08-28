@@ -151,7 +151,7 @@ impl SystemState {
         self.time
     }
 
-    /// Advances the iteration by one after one completed model step.
+    /// Advances the iteration by one after one completed execution-unit step.
     ///
     /// Passing `None` increments only the authoritative iteration and
     /// preserves the current optional physical coordinate. Passing

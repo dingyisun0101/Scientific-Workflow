@@ -9,7 +9,7 @@ from .errors import (
     RecordingNotCompleteError,
     UnknownStreamError,
 )
-from .model import StateField, StateRecord, StateSeries
+from .state import StateField, StateRecord, StateSeries
 from .reader import (
     FORMAT_NAME,
     FORMAT_VERSION,

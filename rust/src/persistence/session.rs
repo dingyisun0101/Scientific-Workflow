@@ -1,4 +1,4 @@
-//! Private automatic model-recording and program-workspace sessions.
+//! Private automatic member-recording and program-workspace sessions.
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
@@ -17,36 +17,36 @@ pub(crate) struct PersistenceSession {
     writer: Option<SystemStateWriter>,
 }
 
-/// Owned semantic provenance supplied when one model recording begins.
+/// Owned semantic provenance supplied when one member recording begins.
 #[derive(Clone)]
-pub(crate) struct ModelRecordingProvenance {
+pub(crate) struct MemberRecordingProvenance {
     task_identity: Box<str>,
-    model: Box<str>,
+    execution_unit: Box<str>,
     state: Box<str>,
     parameter_ordinal: u64,
     parameter_source: PathBuf,
-    model_constants: Value,
+    constants: Value,
     member_index: Option<usize>,
     member_identity: Option<Box<str>>,
     seed_derivation: Option<Value>,
 }
 
-impl ModelRecordingProvenance {
+impl MemberRecordingProvenance {
     pub(crate) fn new(
         task_identity: &str,
-        model: &str,
+        execution_unit: &str,
         state: &str,
         parameter_ordinal: u64,
         parameter_source: &Path,
-        model_constants: Value,
+        constants: Value,
     ) -> Self {
         Self {
             task_identity: task_identity.into(),
-            model: model.into(),
+            execution_unit: execution_unit.into(),
             state: state.into(),
             parameter_ordinal,
             parameter_source: parameter_source.to_path_buf(),
-            model_constants,
+            constants,
             member_index: None,
             member_identity: None,
             seed_derivation: None,
@@ -81,8 +81,11 @@ impl ModelRecordingProvenance {
                 "task_identity".to_owned(),
                 Value::String(self.task_identity.into()),
             ),
-            ("kind".to_owned(), "model".into()),
-            ("model".to_owned(), Value::String(self.model.into())),
+            ("kind".to_owned(), "execution_unit".into()),
+            (
+                "execution_unit".to_owned(),
+                Value::String(self.execution_unit.into()),
+            ),
             ("state".to_owned(), Value::String(self.state.into())),
             (
                 "member_index".to_owned(),
@@ -110,7 +113,7 @@ impl ModelRecordingProvenance {
             workflow.insert("seed_derivation".to_owned(), seed_derivation);
         }
         Map::from_iter([
-            ("model_constants".to_owned(), self.model_constants),
+            ("constants".to_owned(), self.constants),
             ("workflow".to_owned(), Value::Object(workflow)),
         ])
     }
@@ -321,12 +324,12 @@ impl PersistenceSession {
         directory: PathBuf,
         observation_plan: BoundObservationPlan,
         persistence_plan: PersistencePlan,
-        provenance: ModelRecordingProvenance,
+        provenance: MemberRecordingProvenance,
         initial_state: &SystemState,
     ) -> Result<Self, PersistenceError> {
         if let Some(parent) = directory.parent() {
             fs::create_dir_all(parent).map_err(|source| PersistenceError::Io {
-                operation: "create model recording parent directories",
+                operation: "create member recording parent directories",
                 path: parent.to_path_buf(),
                 source,
             })?;
@@ -353,11 +356,22 @@ impl PersistenceSession {
             .observe_state(state)
     }
 
-    pub(crate) fn complete(&mut self, state: &SystemState) -> Result<(), PersistenceError> {
+    pub(crate) fn complete(
+        &mut self,
+        state: &SystemState,
+        completion_reason: Option<Map<String, Value>>,
+    ) -> Result<(), PersistenceError> {
+        let mut terminal_metadata = Map::new();
+        if let Some(completion_reason) = completion_reason {
+            terminal_metadata.insert(
+                "completion_reason".to_owned(),
+                Value::Object(completion_reason),
+            );
+        }
         self.writer
             .take()
             .expect("active persistence session owns its backend")
-            .complete_recording_with_final_state(state)?;
+            .complete_recording_with_final_state(state, terminal_metadata)?;
         Ok(())
     }
 

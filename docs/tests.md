@@ -22,8 +22,8 @@ public.
   declarations, cadence, units, validation, and the Advanced-as-public-superset
   rule. Schema binding and encoding are private.
 - `rust/tests/task_workflow.rs` exercises the downstream
-  `ExecutionUnit`/registration-attribute surface, including stable per-model
-  states exposed by `ModelView` and coupled mutation through the public typed
+  `ExecutionUnit`/registration-attribute surface, including stable per-member
+  states exposed by `MemberView` and coupled mutation through the public typed
   tuple-borrow API. Catalogs, type erasure, and host execution stay internal.
 
 ## Internal compiler and execution tests
@@ -36,10 +36,10 @@ public.
 - `rust/src/config/tests/config_workflow.rs` covers the required `wf_configs/`
   root and reserved files, optional `states/` grouping, rejection of schemas
   outside that root, duplicate keys, strict unknown-field rejection, canonical
-  `wf_configs/parameters.json`, automatic model-key section selection, named
-  state-path maps and explicit per-model selectors, unknown/missing state
+  `wf_configs/parameters.json`, automatic execution unit-key section selection, named
+  state-path maps and explicit per-task selectors, unknown/missing state
   selectors, rejection of legacy task input paths, manifest/persistence
-  defaults, positive limits, dependencies, generic model/program/Python task
+  defaults, positive limits, dependencies, generic execution unit/program/Python task
   grammar, executable resolution, all supported Python environment lowering
   and executable preflight, contained/escaping JSON symlinks, authored
   snapshot keys, non-UTF-8 document and project-root rejection before JSON
@@ -57,11 +57,11 @@ public.
   progression invariants through a private fake host. A direct program-port
   test verifies Task's semantic invocation view, including Python provenance,
   without exposing Config's resolved-program representation to Runtime.
-- `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
-  effect-free loading, unknown models, typed
+- `rust/src/study/tests/study_workflow.rs` covers linked execution unit discovery,
+  effect-free loading, unknown execution units, typed
   constants and one-time observation preflight, contextual named-schema
   validation errors, Study/error `Send + Sync`, deterministic internal
-  identities, per-model binding of multiple named state schemas, phase
+  identities, per-task binding of multiple named state schemas, phase
   composition, replicate/persistence policy, runtime
   scheduling, automatic task recordings, and crate-level `run(&Path)`. Its
   recording checks require canonical `parameter_ordinal`/`parameter_source`
@@ -78,8 +78,8 @@ public.
   fail-fast cancellation, parallel finish-all completion, phase-level failure
   policies, start-interval/concurrency admission, deterministic task order,
   and distinct sequential/parallel replicate admission. It also runs a
-  two-model execution unit end to end and verifies independent recordings,
-  member provenance, final iterations, and `ModelRunSummary` paths. Study execution tests
+  two-member execution unit end to end and verifies independent recordings,
+  member provenance, final iterations, and `MemberRunSummary` paths. Study execution tests
   retain topology and program/Python handoff coverage; successful program
   summaries verify the public program-kind and Python-script accessors.
 - `rust/src/ui/command.rs` verifies the former editor and exact lowercase
@@ -132,12 +132,12 @@ Package inspection must also verify that every first-level module's `api.md`,
 
 The attractor example is an executable integration demonstration, not merely a
 compile fixture. A manual or release validation run should confirm that its six
-model tasks produce completed recordings and its dependent Python task writes
+execution unit tasks produce completed recordings and its dependent Python task writes
 `attractor-sweep.svg` plus `plot-summary.json` beneath the configured
 `output/plots` directory. The Python task uses the public verified reader and
 the `plot` section of central `wf_configs/parameters.json`; it has no Rust caller
 wrapper. It consumes the reader's immutable metadata mapping and verifies each
-recording's model, named-state selector, parameter ordinal, and canonical
+recording's execution unit, named-state selector, parameter ordinal, and canonical
 parameter source before plotting. Project-file regression coverage preserves
 the named state map/selector, central parameter sections, and phase-owned
 two-second `start_interval_ms`; a public

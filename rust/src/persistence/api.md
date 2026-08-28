@@ -1,17 +1,17 @@
 # Persistence API
 
 The `persistence` subsystem owns every Workflow-managed durable task output and
-verified model-state reconstruction. Config parses optional operational sizing,
+verified member-state reconstruction. Config parses optional operational sizing,
 Study retains the effective private plan, and Runtime constructs and drives one
-private session for every exposed model. A standalone execution unit produces
-one session; an ensemble produces one per member. A model session records observed state; a
+private session for every exposed member. A standalone unit produces
+one session; an ensemble produces one per member. A execution unit session records observed state; a
 program session—including a Config-lowered Python invocation—prepares one
 isolated bookkeeping workspace, snapshots inputs, captures logs, and commits
-status. Models never receive a writer, destination, queue, flush operation, or
+status. Execution units never receive a writer, destination, queue, flush operation, or
 lifecycle handle. External programs own their domain-specific filesystem IO;
 Rust Persistence manages only their workspace and launch evidence.
 
-For model tasks, Observation decides which scientific fields and cadences matter. Persistence
+For execution unit tasks, Observation decides which scientific fields and cadences matter. Persistence
 only stores the resulting encoded observations, lifecycle metadata, and
 Workflow provenance. It does not parse project JSON, bind tasks, or schedule
 execution.
@@ -36,7 +36,7 @@ loading. `queue_capacity_mb` follows the same unit/default and becomes the
 per-stream queued-data backpressure capacity. No JSON persistence-size field
 accepts bytes. Conversion overflow and invalid settings fail during
 Config/Study loading before output exists. The backend and all destinations
-are inferred. These settings apply to model-state streams; external program
+are inferred. These settings apply to member-state streams; external program
 workspaces require no separate user setting.
 
 Program persistence is equally automatic. Each program task gets this private
@@ -68,15 +68,15 @@ frozen `wf_configs/parameters.json` snapshot and write there directly. The bundl
 plotter uses `output/plots`. Such files are program-owned: Persistence does not
 move, publish, validate, or reconstruct them.
 
-Scientific task layout depends only on model cardinality:
+Scientific task layout depends only on execution-unit cardinality:
 
 ```text
-task-NNNNNN/                         one-model execution unit recording
+task-NNNNNN/                         one-member recording
 
-task-NNNNNN/                         multi-model execution unit root
-└── models/
-    ├── model-000000/                first model recording
-    └── model-000001/                second model recording
+task-NNNNNN/                         multi-member execution-unit root
+└── members/
+    ├── member-000000/               first member recording
+    └── member-000001/               second member recording
 ```
 
 Stable numeric indices—not application identities—form paths. Each recording's
@@ -85,9 +85,9 @@ alongside the registered key, named state, parameter provenance, and effective
 persistence plan. If the unit successfully requested Workflow-derived seeds,
 the same object contains `seed_derivation`: its versioned `algorithm`, authored
 `master_seed`, and deterministic `requests` array. Each entry stores `scope`,
-`purpose`, the actual `seed`, and `model_identity` for model-scoped requests.
+`purpose`, the actual `seed`, and `member_identity` for member-scoped requests.
 Every recording contains shared requests plus only those belonging to that
-recording's model.
+recording's member.
 
 ## Advanced API
 
@@ -103,7 +103,7 @@ format and successful terminal status, and retains one immutable metadata
 snapshot. The reader is intentionally non-`Clone` because custom decoders may
 not have meaningful clone semantics.
 
-This reader opens only completed model recording directories. It does not
+This reader opens only completed member recording directories. It does not
 interpret program workspaces, `program.json`, logs, or arbitrary artifacts;
 workspace results are ordinary files discovered from
 `TaskRunSummary::output_directory()`; configured external destinations are
@@ -114,10 +114,12 @@ Inspection and reconstruction methods:
 - `recording_directory() -> &Path` returns the retained typed path;
 - `stream_names()` iterates logical streams in metadata order;
 - `format_version()` returns the validated wire-format version;
-- `user_metadata()` borrows creation-time model constants and Workflow
+- `user_metadata()` borrows creation-time execution unit constants and Workflow
   provenance, including stable execution-unit member identity/index and any
   applicable actual seed derivations;
-- `terminal_metadata()` borrows completion-time metadata;
+- `terminal_metadata()` borrows completion-time metadata. A structured
+  execution-unit completion reason appears as `completion_reason`; reasonless
+  completion leaves this object empty;
 - `recording_timing() -> &RecordingTiming` returns verified host timing;
 - `stream_record_count(stream)` and `stream_encoded_bytes(stream)` compute
   checked metadata aggregates;
@@ -136,7 +138,7 @@ filesystem IO and allocate owned payloads, but start no worker and never mutate
 the recording. Any failure returns no partial state/series.
 
 On the private write side, failure to encode or admit the initial or terminal
-model observation triggers a best-effort transition from `running` to `failed`
+execution unit observation triggers a best-effort transition from `running` to `failed`
 before the original observation/persistence error is returned. Accepted data
 is drained first; an inability to publish failed metadata never replaces the
 authoritative triggering error.
@@ -236,8 +238,8 @@ println!("{}", trajectory.len());
 # }
 ```
 
-The example path is discovered from `TaskRunSummary::models()` in production;
-it is not supplied to model or Study code.
+The example path is discovered from `TaskRunSummary::members()` in production;
+it is not supplied to execution unit or Study code.
 
 ### Crate-visible write peer API
 
@@ -246,13 +248,13 @@ The automatic write path is a named closed contract through
 
 - `PersistencePlan` carries the already-validated effective nonzero chunk and
   queue byte limits.
-- `ModelRecordingProvenance` owns semantic model facts supplied by Runtime. It
+- `MemberRecordingProvenance` owns semantic execution unit facts supplied by Runtime. It
   does not accept an arbitrary metadata map; Persistence alone constructs the
-  exact `model_constants`, `workflow`, backend, and effective-setting JSON.
+  exact `constants`, `workflow`, backend, and effective-setting JSON.
   Runtime derives one member-specific value with a stable index and identity
   before opening each recording. Every retained path is exact UTF-8 already guaranteed by Config preflight;
   Persistence never substitutes replacement characters in provenance.
-- `PersistenceSession` owns model-recording start, bounded observation
+- `PersistenceSession` owns member-recording start, bounded observation
   submission, successful completion, and best-effort failure terminalization.
 - `ProgramLaunch` and `ProgramPersistenceSession` own external-program launcher
   provenance, frozen config/dependency files, logs, artifacts, and terminal
@@ -277,13 +279,13 @@ already-bound observation plan, provenance, destination, and shared storage
 policy. There is no builder, resume/continuation API, per-stream storage
 override, explicit flush, or public completion result.
 
-`PersistencePlan`, `ModelRecordingProvenance`, `PersistenceSession`,
+`PersistencePlan`, `MemberRecordingProvenance`, `PersistenceSession`,
 `ProgramPersistenceSession`, and `ProgramLaunch` are crate-visible peer API;
 their backing layout and local mechanics remain replaceable. None is a
 downstream writer API.
 
 Future local or remote adapters belong behind the private session boundary; adding
-one must not broaden the model/task API. A replacement backend must preserve
+one must not broaden the execution unit/task API. A replacement backend must preserve
 observation order, bounded backpressure, program/Python input/log/status and
 launcher-provenance capture,
 failure evidence, terminal metadata, effective-setting provenance, and the

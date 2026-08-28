@@ -17,7 +17,7 @@ struct CounterConstants {
     steps: u64,
 }
 
-struct CounterModel {
+struct CounterUnit {
     state: SystemState,
     steps: u64,
 }
@@ -27,12 +27,12 @@ struct EnergyConstants {
     initial: f64,
 }
 
-struct EnergyModel {
+struct EnergyUnit {
     state: SystemState,
 }
 
-#[scientific_workflow::model("energy")]
-impl ExecutionUnit for EnergyModel {
+#[scientific_workflow::execution_unit("energy")]
+impl ExecutionUnit for EnergyUnit {
     type Constants = EnergyConstants;
 
     fn initialize(
@@ -45,16 +45,16 @@ impl ExecutionUnit for EnergyModel {
         Ok(Self { state })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
-            ModelView::new(
+            MemberView::new(
                 "energy",
                 &self.state,
-                self.state.time().iteration() == 1,
+                (self.state.time().iteration() == 1).then_some(MemberCompletion::without_reason()),
                 Some(1),
             )
         })
@@ -67,9 +67,19 @@ impl ExecutionUnit for EnergyModel {
     }
 }
 
-#[scientific_workflow::model("counter")]
-impl ExecutionUnit for CounterModel {
+#[scientific_workflow::execution_unit("counter")]
+impl ExecutionUnit for CounterUnit {
     type Constants = CounterConstants;
+
+    fn preflight(
+        constants: &Self::Constants,
+        _schema: &SystemStateSchema,
+    ) -> TaskResult<ObservationPlan> {
+        if constants.initial == u64::MAX {
+            return Err("counter initial value is reserved".into());
+        }
+        Ok(ObservationPlan::all_fields())
+    }
 
     fn initialize(
         constants: Self::Constants,
@@ -84,16 +94,17 @@ impl ExecutionUnit for CounterModel {
         })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
-            ModelView::new(
+            MemberView::new(
                 "counter",
                 &self.state,
-                self.state.time().iteration() == self.steps,
+                (self.state.time().iteration() == self.steps)
+                    .then_some(MemberCompletion::without_reason()),
                 Some(self.steps),
             )
         })
@@ -125,7 +136,7 @@ impl Project {
                     .and_then(serde_json::Value::as_array_mut)
                 {
                     for task in tasks {
-                        if task.get("model").is_some() && task.get("state").is_none() {
+                        if task.get("execution_unit").is_some() && task.get("state").is_none() {
                             task.as_object_mut()
                                 .unwrap()
                                 .insert("state".to_owned(), "default".into());
@@ -178,11 +189,11 @@ const STUDY: &str = r#"
   "phases": {
     "measure": {
       "after": ["simulate"],
-      "tasks": [{"model":"counter"}]
+      "tasks": [{"execution_unit":"counter"}]
     },
     "simulate": {
       "tasks": [{
-        "model":"counter"
+        "execution_unit":"counter"
       }],
       "max_concurrency": 2
     }
@@ -199,7 +210,7 @@ fn study_and_its_error_are_send_and_sync() {
 }
 
 #[test]
-fn study_binds_registered_models_and_infers_plan_facts_without_output() {
+fn study_binds_registered_units_and_infers_plan_facts_without_output() {
     let project = Project::new(STUDY, r#"{"initial":5,"steps":2}"#);
     let study = Study::load(project.path()).unwrap();
 
@@ -217,7 +228,10 @@ fn study_binds_registered_models_and_infers_plan_facts_without_output() {
         study.phases()[0].dependencies().collect::<Vec<_>>(),
         ["simulate"]
     );
-    assert_eq!(study.phases()[1].tasks()[0].model(), Some("counter"));
+    assert_eq!(
+        study.phases()[1].tasks()[0].execution_unit(),
+        Some("counter")
+    );
     assert_eq!(
         study.phases()[0].tasks()[0].identity(),
         "measure/000000/counter-000000"
@@ -249,8 +263,11 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
         assert!(metadata_path.is_file());
         let metadata: serde_json::Value =
             serde_json::from_slice(&fs::read(metadata_path).unwrap()).unwrap();
-        assert_eq!(metadata["user_metadata"]["model_constants"]["initial"], 5);
-        assert_eq!(metadata["user_metadata"]["workflow"]["model"], "counter");
+        assert_eq!(metadata["user_metadata"]["constants"]["initial"], 5);
+        assert_eq!(
+            metadata["user_metadata"]["workflow"]["execution_unit"],
+            "counter"
+        );
         assert_eq!(metadata["user_metadata"]["workflow"]["state"], "default");
         assert_eq!(
             metadata["user_metadata"]["workflow"]["parameter_ordinal"],
@@ -278,7 +295,7 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
 }
 
 #[test]
-fn one_study_binds_each_model_task_to_its_selected_named_state() {
+fn one_study_binds_each_execution_unit_task_to_its_selected_named_state() {
     let project = Project::new(
         r#"{
           "paths":{"states":{
@@ -286,8 +303,8 @@ fn one_study_binds_each_model_task_to_its_selected_named_state() {
             "energy-state":"wf_configs/states/energy.json"
           }},
           "phases":{"simulate":{"tasks":[
-            {"model":"counter","state":"counter-state"},
-            {"model":"energy","state":"energy-state"}
+            {"execution_unit":"counter","state":"counter-state"},
+            {"execution_unit":"energy","state":"energy-state"}
           ]}}
         }"#,
         r#"{"initial":2,"steps":1}"#,
@@ -309,16 +326,16 @@ fn one_study_binds_each_model_task_to_its_selected_named_state() {
     let summary = execute(Study::load(project.path()).unwrap()).unwrap();
     let tasks = summary.replicates()[0].phases()[0].tasks();
     assert_eq!(tasks.len(), 2);
-    assert_eq!(tasks[0].model(), Some("counter"));
+    assert_eq!(tasks[0].execution_unit(), Some("counter"));
     assert_eq!(tasks[0].final_iteration(), Some(1));
-    assert_eq!(tasks[1].model(), Some("energy"));
+    assert_eq!(tasks[1].execution_unit(), Some("energy"));
     assert_eq!(tasks[1].final_iteration(), Some(1));
 }
 
 #[test]
 fn crate_level_run_is_the_complete_ordinary_entry_point() {
     let project = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"counter"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
         r#"{"initial":1,"steps":1}"#,
     );
     let study = Study::load(project.path()).unwrap();
@@ -331,7 +348,7 @@ fn crate_level_run_is_the_complete_ordinary_entry_point() {
 #[test]
 fn preflight_rejects_invalid_binding_without_output() {
     let missing = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"absent"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"absent"}]}}}"#,
         r#"{"initial":1,"steps":1}"#,
     );
     fs::write(
@@ -341,24 +358,34 @@ fn preflight_rejects_invalid_binding_without_output() {
     .unwrap();
     assert!(matches!(
         Study::load(missing.path()),
-        Err(StudyError::UnknownModel { model, .. }) if model == "absent"
+        Err(StudyError::UnknownExecutionUnit { execution_unit, .. }) if execution_unit == "absent"
     ));
     assert!(!missing.path().join("output").exists());
 
     let bad_constants = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"counter"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
         r#"{"initial":"wrong","steps":1}"#,
     );
     assert!(matches!(
         Study::load(bad_constants.path()),
-        Err(StudyError::ModelPreflight { model, .. }) if model == "counter"
+        Err(StudyError::ExecutionUnitPreflight { execution_unit, .. }) if execution_unit == "counter"
     ));
     assert!(!bad_constants.path().join("output").exists());
+
+    let rejected_by_unit = Project::new(
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
+        &format!(r#"{{"initial":{},"steps":1}}"#, u64::MAX),
+    );
+    assert!(matches!(
+        Study::load(rejected_by_unit.path()),
+        Err(StudyError::ExecutionUnitPreflight { execution_unit, .. }) if execution_unit == "counter"
+    ));
+    assert!(!rejected_by_unit.path().join("output").exists());
 
     let bad_state = Project::new(
         r#"{
           "paths":{"states":{"broken":"wf_configs/states/broken.json"}},
-          "phases":{"only":{"tasks":[{"model":"counter","state":"broken"}]}}
+          "phases":{"only":{"tasks":[{"execution_unit":"counter","state":"broken"}]}}
         }"#,
         r#"{"initial":1,"steps":1}"#,
     );
@@ -386,7 +413,7 @@ fn generic_program_task_receives_captured_config_and_dependency_outputs() {
     {
       "phases": {
         "simulate": {
-          "tasks": [{"model":"counter"}]
+          "tasks": [{"execution_unit":"counter"}]
         },
         "plot": {
           "after": ["simulate"],
@@ -439,7 +466,7 @@ result = {
     assert_eq!(replicate.phases()[1].name(), "plot");
     let program_summary = &replicate.phases()[1].tasks()[0];
     assert_eq!(program_summary.kind(), TaskRunKind::Program);
-    assert_eq!(program_summary.model(), None);
+    assert_eq!(program_summary.execution_unit(), None);
     assert_eq!(program_summary.program(), Some(program.as_path()));
     assert_eq!(program_summary.program_kind(), Some("program"));
     assert_eq!(program_summary.python_script(), None);
@@ -456,7 +483,7 @@ result = {
     .unwrap();
     assert_eq!(result["title"], "captured title");
     assert_eq!(result["phase"], "simulate");
-    assert_eq!(result["dependency_kind"], "model");
+    assert_eq!(result["dependency_kind"], "execution_unit");
     assert_eq!(result["dependency_exists"], true);
 
     let metadata: serde_json::Value = serde_json::from_slice(

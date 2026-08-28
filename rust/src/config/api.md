@@ -5,12 +5,12 @@ captures `wf_configs/study.json`, every named state schema declared by
 `study.json.paths.states`, and the canonical `wf_configs/parameters.json` in a
 central immutable `Config`. The parameters
 document is the one arbitrary nested namespace for every user-project setting:
-model constants and sweeps, plotting settings, validation tolerances, and
+execution unit constants and sweeps, plotting settings, validation tolerances, and
 external-program options. Config also resolves environment-managed Python
 declarations into concrete invocations. Applications author files rather than
 constructing Rust configuration objects.
 
-Config never discovers model types, initializes a model, creates output,
+Config never discovers execution unit types, initializes an execution unit, creates output,
 schedules work, or persists state. Study owns cross-domain binding; Runtime
 owns effects.
 
@@ -32,10 +32,10 @@ Its ordinary user-facing API is this project layout:
 The user passes only `project_root: &Path` to `scientific_workflow::run`.
 The required `wf_configs/` directory identifies that path as a Workflow project
 root; `wf_configs/study.json` and `wf_configs/parameters.json` are both required
-for a valid project. Config derives both reserved document paths. Model tasks do
-not name parameter files: their stable model key selects the same-named
-top-level section in `parameters.json`. Each model task explicitly selects a
-named state schema. Missing declared documents, state keys, and model sections
+for a valid project. Config derives both reserved document paths. Execution unit tasks do
+not name parameter files: their stable execution unit key selects the same-named
+top-level section in `parameters.json`. Each execution unit task explicitly selects a
+named state schema. Missing declared documents, state keys, and execution unit sections
 fail loading before output exists.
 
 `wf_configs/states/` is recommended for readable organization, but it is not a
@@ -69,7 +69,7 @@ and two optional objects:
     "simulate": {
       "after": [],
       "tasks": [
-        {"model": "population", "state": "population"}
+        {"execution_unit": "population", "state": "population"}
       ],
       "max_concurrency": 1,
       "start_interval_ms": 0,
@@ -83,13 +83,13 @@ and two optional objects:
 Unknown properties are rejected at every Workflow-owned level.
 
 - `seed` is an optional unsigned 64-bit master seed. Config parses it once;
-  Runtime places it in each model task's immutable initialization context.
+  Runtime places it in each execution unit task's immutable initialization context.
   Deterministic execution units need not declare it. A unit that requests a
   derived seed fails clearly when it is absent.
 - `paths.states` maps nonblank, whitespace-exact semantic state names to JSON
   paths. Paths must be project-root-relative, resolve once during Config
   loading, and identify captured `.json` documents beneath the canonical
-  `wf_configs/` root. Multiple models may share one state key, while one project
+  `wf_configs/` root. Multiple execution units may share one state key, while one project
   may declare any number of schemas.
 - `replicates.count` defaults to `1` and must be positive.
 - `replicates.scheduling` is `"sequential"` by default or `"parallel"`.
@@ -114,7 +114,7 @@ Unknown properties are rejected at every Workflow-owned level.
   admitted immediately. Phase and task `timeout_ms` are optional nonnegative
   millisecond counts.
 - each task is exactly one of:
-  - a model task with nonblank `model`, required nonblank `state`, and optional
+  - an execution-unit task with nonblank `execution_unit`, required nonblank `state`, and optional
     `timeout_ms`; or
   - a program task with required `program`, optional `args`, and optional
     `timeout_ms`, for example
@@ -132,11 +132,11 @@ Unknown properties are rejected at every Workflow-owned level.
   exact values cross language-neutral JSON snapshot or provenance boundaries.
   Config rejects them during preflight rather than applying lossy conversion
   during execution.
-- Model keys remain opaque until Study matches them to linked `#[execution_unit]`
+- Execution unit keys remain opaque until Study matches them to linked `#[execution_unit]`
   registrations.
-- Model `state` keys are resolved during effect-free assembly. The selected
-  parsed document is validated by State, bound to that exact model task, and
-  recorded in task provenance. There is no implicit model-name fallback or
+- Execution unit `state` keys are resolved during effect-free assembly. The selected
+  parsed document is validated by State, bound to that exact execution unit task, and
+  recorded in task provenance. There is no implicit execution unit-name fallback or
   single global schema.
 
 ### Python tasks
@@ -198,7 +198,7 @@ paths are declared. Config parses each document once and rejects duplicate JSON
 keys. State owns its semantic grammar; the current shape is an ordered `fields`
 array whose entries contain `name` and optional `description`. Study passes each
 already parsed value to State validation without rereading the file, then binds
-model tasks by their explicit `state` key.
+execution unit tasks by their explicit `state` key.
 
 ### `wf_configs/parameters.json`
 
@@ -218,11 +218,11 @@ the stable key of its consumer:
 }
 ```
 
-For `{"model":"population","state":"population"}`, Config selects only the
+For `{"execution_unit":"population","state":"population"}`, Config selects only the
 `population` section, expands it, and decodes each result as one complete
 `ExecutionUnit::Constants`. Other sections remain arbitrary and are available
 to external programs through the frozen central snapshot. Config owns two
-expansion markers inside a selected model section:
+expansion markers inside a selected execution unit section:
 
 - `{"$sweep": [a, b, ...]}` selects independent alternatives at that object
   position. Multiple sweeps form a deterministic Cartesian product.
@@ -236,7 +236,7 @@ Choices and cases must be nonempty. A `$sweep` object has no siblings.
 Reserved markers cannot occur inside a choice/case, and unknown `$...` keys
 are rejected. Ordinary arrays are literal constants, not implicit sweeps.
 Expansion order is object declaration order, then choice order. Each concrete
-result becomes one internal resolved model-parameter value and is decoded as
+result becomes one internal resolved execution unit-parameter value and is decoded as
 one complete owned constants value during Study preflight.
 
 ### Central configuration snapshot
@@ -255,7 +255,7 @@ snapshot:
 {
   "study": {
     "paths": {"states": {"population": "wf_configs/states/population.json"}},
-    "phases": {"simulate": {"tasks": [{"model":"population","state":"population"}]}}
+    "phases": {"simulate": {"tasks": [{"execution_unit":"population","state":"population"}]}}
   },
   "config": {
     "parameters.json": {
@@ -281,7 +281,7 @@ snapshot. Config does not require a schema for arbitrary documents.
 
 All documents undergo duplicate-key detection when `Study::load` captures the
 project, including currently unreferenced arbitrary documents. Loading is
-failure-atomic with respect to output: no directory, model, task thread, or
+failure-atomic with respect to output: no directory, execution unit, task thread, or
 persistence session exists yet. Later edits on disk do not affect the retained
 Study or an execution made from it.
 
@@ -310,12 +310,12 @@ private implementation paths.
 - `InvalidProgram { path, reason }` reports an unsafe, missing, non-executable
   program/manager or invalid Python script/environment declaration;
 - `UnknownDependency { phase, dependency }` reports a missing phase edge;
-- `UnknownState { phase, model, state }` reports a model task whose selector
+- `UnknownState { phase, execution unit, state }` reports an execution-unit task whose selector
   does not name a declared state schema;
 - `ExpansionOverflow { path }` prevents unrepresentable or unallocatable
   combination products; and
-- `DecodeModelConstants { model, path, ordinal, source }` contextualizes a
-  Serde mismatch between one expanded parameter combination and its model
+- `DecodeExecutionUnitConstants { execution_unit, path, ordinal, source }` contextualizes a
+  Serde mismatch between one expanded parameter combination and its execution unit
   constants type.
 
 Paths and explanatory strings are owned, so an error remains useful after the
@@ -340,8 +340,8 @@ These `pub(crate)` contracts are available only through `config::advanced`:
 - `StudyManifest`, `PhaseSpecification`, `PersistenceSpecification`,
   `ReplicatePolicy`, `ReplicateScheduling`, and `FailurePolicy` are the strict
   resolved procedural and operational views used during Study assembly.
-- `ResolvedTask`, `ResolvedModelParameters`, and `ResolvedProgramTask` carry
-  complete model constants/provenance or direct program/Python launch intent.
+- `ResolvedTask`, `ResolvedExecutionUnitParameters`, and `ResolvedProgramTask` carry
+  complete execution unit constants/provenance or direct program/Python launch intent.
   Their accessors expose semantic facts, not Config's document representation.
 
 These are closed subsystem-to-subsystem contracts, not a downstream builder
@@ -362,7 +362,7 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 
 Config reads `wf_configs/study.json` and every other JSON document beneath
 `wf_configs/` as part of that call. Any config failure returns before Runtime
-creates output. A phase may then declare a model task followed by a direct
+creates output. A phase may then declare an execution-unit task followed by a direct
 Python task:
 
 ```json
@@ -370,7 +370,7 @@ Python task:
   "paths": {"states": {"population":"wf_configs/states/population.json"}},
   "phases": {
     "simulate": {
-      "tasks": [{"model":"population","state":"population"}]
+      "tasks": [{"execution_unit":"population","state":"population"}]
     },
     "plot": {
       "after": ["simulate"],
@@ -396,8 +396,8 @@ inspect them.
 
 A replacement config implementation must preserve the required `wf_configs`
 project boundary, canonical manifest and parameters files, named state-path
-resolution, explicit per-model state
-selection, model-key parameter selection, typed `Path` containment, duplicate-key
+resolution, explicit per-task state
+selection, execution unit-key parameter selection, typed `Path` containment, duplicate-key
 rejection, deterministic expansion,
 centralized one-pass parsing, immutable complete-project snapshots, complete
 constants decoding, direct executable and Python-environment resolution,

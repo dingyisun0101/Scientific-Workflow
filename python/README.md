@@ -98,7 +98,7 @@ The reader validates:
 - strictly increasing iterations across chunk boundaries.
 
 Checksums detect storage corruption and accidental alteration. They do not
-establish model correctness, authorship, or cryptographic authenticity.
+establish scientific correctness, authorship, or cryptographic authenticity.
 
 The fixture under `tests/fixtures/complete` is also opened by Workflow's Rust
 reader, making it a cross-language conformance contract.

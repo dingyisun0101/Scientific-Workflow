@@ -103,7 +103,7 @@ def _recordings() -> list[Path]:
             raise ValueError("dependency phase tasks must be an array")
         for task in tasks:
             task = _object(task, "dependency task")
-            if task.get("kind") != "model":
+            if task.get("kind") != "execution_unit":
                 continue
             recordings.append(Path(_string(task.get("output_directory"), "task output")))
     if not recordings:
@@ -133,10 +133,13 @@ def _trajectories(stream: str) -> list[dict[str, Any]]:
         if not points:
             raise ValueError(f"recording {recording} has an empty {stream!r} stream")
         metadata = _object(reader.user_metadata, "recording user metadata")
-        constants = _object(metadata.get("model_constants"), "model constants")
+        constants = _object(metadata.get("constants"), "constants")
         workflow = _object(metadata.get("workflow"), "workflow provenance")
-        if workflow.get("kind") != "model" or workflow.get("model") != "attractor":
-            raise ValueError(f"recording {recording} is not an attractor model recording")
+        if (
+            workflow.get("kind") != "execution_unit"
+            or workflow.get("execution_unit") != "attractor"
+        ):
+            raise ValueError(f"recording {recording} is not an attractor recording")
         if workflow.get("state") != "attractor":
             raise ValueError(
                 f"recording {recording} was not assembled with the attractor state"
@@ -158,10 +161,10 @@ def _trajectories(stream: str) -> list[dict[str, Any]]:
                 "recording": str(recording),
                 "parameter_ordinal": parameter_ordinal,
                 "state": workflow["state"],
-                "mu": _number(constants.get("mu"), "model_constants.mu"),
+                "mu": _number(constants.get("mu"), "constants.mu"),
                 "omega": _number(
                     constants.get("angular_frequency"),
-                    "model_constants.angular_frequency",
+                    "constants.angular_frequency",
                 ),
                 "points": points,
             }

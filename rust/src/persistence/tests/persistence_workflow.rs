@@ -499,7 +499,9 @@ fn heterogeneous_pip_payload_round_trips_through_the_generic_json_contract() {
         16_384,
         65_536,
     );
-    writer.complete_recording_with_final_state(&state).unwrap();
+    writer
+        .complete_recording_with_final_state(&state, serde_json::Map::new())
+        .unwrap();
 
     let decoders = JsonPayloadDecoderRegistry::new()
         .with_json_field::<PhysObj>("particles")

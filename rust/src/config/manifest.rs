@@ -166,8 +166,8 @@ pub(crate) struct ParsedPhase {
 }
 
 pub(crate) enum ParsedTask {
-    Model {
-        model: Box<str>,
+    ExecutionUnit {
+        execution_unit: Box<str>,
         state: Box<str>,
         timeout: Option<Duration>,
     },
@@ -309,12 +309,17 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("{phase_pointer}/tasks/{index}");
             let timeout = task.timeout_ms.map(Duration::from_millis);
-            match (task.model, task.state, task.program, task.python) {
-                (Some(model), Some(state), None, None) if task.args.is_empty() => {
-                    validate_identifier(path, &format!("{pointer}/model"), &model, "model")?;
+            match (task.execution_unit, task.state, task.program, task.python) {
+                (Some(execution_unit), Some(state), None, None) if task.args.is_empty() => {
+                    validate_identifier(
+                        path,
+                        &format!("{pointer}/execution_unit"),
+                        &execution_unit,
+                        "execution unit",
+                    )?;
                     validate_identifier(path, &format!("{pointer}/state"), &state, "state")?;
-                    tasks.push(ParsedTask::Model {
-                        model: model.into_boxed_str(),
+                    tasks.push(ParsedTask::ExecutionUnit {
+                        execution_unit: execution_unit.into_boxed_str(),
                         state: state.into_boxed_str(),
                         timeout,
                     });
@@ -343,7 +348,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `model` with `state`, `program`, or `python`; top-level `args` are valid only for a program",
+                        "a task must declare exactly `execution_unit` with `state`, `program`, or `python`; top-level `args` are valid only for a program",
                     ));
                 }
             }
@@ -526,7 +531,7 @@ const fn default_max_concurrency() -> usize {
 #[serde(deny_unknown_fields)]
 struct RawTask {
     #[serde(default)]
-    model: Option<String>,
+    execution_unit: Option<String>,
     #[serde(default)]
     state: Option<String>,
     #[serde(default)]

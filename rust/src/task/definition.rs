@@ -1,14 +1,16 @@
-//! Opaque generic task definitions created from models or programs.
+//! Opaque generic task definitions created from execution units or programs.
 
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
+use crate::config::advanced::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
 use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::SystemStateSchema;
 
-use super::execution::{ProgramDefinition, StatefulDefinition, TaskDefinition, TaskExecutionHost};
+use super::execution::{
+    ExecutionUnitDefinition, ProgramDefinition, TaskDefinition, TaskExecutionHost,
+};
 use super::result::TaskResult;
 use super::unit::ExecutionUnit;
 
@@ -16,7 +18,7 @@ use super::unit::ExecutionUnit;
 ///
 /// `Task` deliberately carries no user-supplied identity, output path,
 /// lifecycle callback, persistence session, or scheduler policy. Study derives
-/// those concerns while the descriptor records only irreducible model/program
+/// those concerns while the descriptor records only irreducible execution-unit/program
 /// invocation intent.
 #[derive(Clone)]
 pub(crate) struct Task {
@@ -26,28 +28,28 @@ pub(crate) struct Task {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TaskKind {
-    Model,
+    ExecutionUnit,
     Program,
 }
 
 #[derive(Clone)]
 enum TaskDescriptor {
-    Model {
-        parameters: ResolvedModelParameters,
+    ExecutionUnit {
+        parameters: ResolvedExecutionUnitParameters,
         state: Box<str>,
     },
     Program(ResolvedProgramTask),
 }
 
-/// Borrowed semantic provenance for one configured model invocation.
-pub(crate) struct ModelTaskProvenance<'a> {
-    parameters: &'a ResolvedModelParameters,
+/// Borrowed semantic provenance for one configured execution-unit invocation.
+pub(crate) struct ExecutionUnitTaskProvenance<'a> {
+    parameters: &'a ResolvedExecutionUnitParameters,
     state: &'a str,
 }
 
-impl ModelTaskProvenance<'_> {
-    pub(crate) fn model(&self) -> &str {
-        self.parameters.model()
+impl ExecutionUnitTaskProvenance<'_> {
+    pub(crate) fn execution_unit(&self) -> &str {
+        self.parameters.execution_unit()
     }
 
     pub(crate) fn state(&self) -> &str {
@@ -68,22 +70,22 @@ impl ModelTaskProvenance<'_> {
 }
 
 impl Task {
-    pub(crate) fn for_model<M>(
-        parameters: ResolvedModelParameters,
+    pub(crate) fn for_execution_unit<U>(
+        parameters: ResolvedExecutionUnitParameters,
         state: Box<str>,
         schema: SystemStateSchema,
         observation_plan: BoundObservationPlan,
     ) -> Self
     where
-        M: ExecutionUnit,
+        U: ExecutionUnit,
     {
         Self {
-            definition: Arc::new(StatefulDefinition::<M>::new(
+            definition: Arc::new(ExecutionUnitDefinition::<U>::new(
                 parameters.clone(),
                 schema,
                 observation_plan,
             )),
-            descriptor: TaskDescriptor::Model { parameters, state },
+            descriptor: TaskDescriptor::ExecutionUnit { parameters, state },
         }
     }
 
@@ -96,29 +98,29 @@ impl Task {
 
     pub(crate) fn kind(&self) -> TaskKind {
         match self.descriptor {
-            TaskDescriptor::Model { .. } => TaskKind::Model,
+            TaskDescriptor::ExecutionUnit { .. } => TaskKind::ExecutionUnit,
             TaskDescriptor::Program(_) => TaskKind::Program,
         }
     }
 
     pub(crate) fn kind_name(&self) -> &'static str {
         match &self.descriptor {
-            TaskDescriptor::Model { .. } => "model",
+            TaskDescriptor::ExecutionUnit { .. } => "execution_unit",
             TaskDescriptor::Program(program) => program.kind_name(),
         }
     }
 
-    pub(crate) fn model(&self) -> Option<&str> {
+    pub(crate) fn execution_unit(&self) -> Option<&str> {
         match &self.descriptor {
-            TaskDescriptor::Model { parameters, .. } => Some(parameters.model()),
+            TaskDescriptor::ExecutionUnit { parameters, .. } => Some(parameters.execution_unit()),
             TaskDescriptor::Program(_) => None,
         }
     }
 
-    pub(crate) fn model_provenance(&self) -> Option<ModelTaskProvenance<'_>> {
+    pub(crate) fn execution_unit_provenance(&self) -> Option<ExecutionUnitTaskProvenance<'_>> {
         match &self.descriptor {
-            TaskDescriptor::Model { parameters, state } => {
-                Some(ModelTaskProvenance { parameters, state })
+            TaskDescriptor::ExecutionUnit { parameters, state } => {
+                Some(ExecutionUnitTaskProvenance { parameters, state })
             }
             TaskDescriptor::Program(_) => None,
         }
@@ -126,7 +128,7 @@ impl Task {
 
     fn program(&self) -> Option<&ResolvedProgramTask> {
         match &self.descriptor {
-            TaskDescriptor::Model { .. } => None,
+            TaskDescriptor::ExecutionUnit { .. } => None,
             TaskDescriptor::Program(program) => Some(program),
         }
     }
@@ -145,14 +147,14 @@ impl Task {
 
     pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
         match &self.descriptor {
-            TaskDescriptor::Model { parameters, .. } => parameters.timeout(),
+            TaskDescriptor::ExecutionUnit { parameters, .. } => parameters.timeout(),
             TaskDescriptor::Program(program) => program.timeout(),
         }
     }
 
     pub(crate) fn subject(&self) -> &str {
         match &self.descriptor {
-            TaskDescriptor::Model { parameters, .. } => parameters.model(),
+            TaskDescriptor::ExecutionUnit { parameters, .. } => parameters.execution_unit(),
             TaskDescriptor::Program(program) => program.subject(),
         }
     }

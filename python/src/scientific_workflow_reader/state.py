@@ -1,4 +1,4 @@
-"""Structurally read-only representations reconstructed from recordings."""
+"""Structurally read-only state representations reconstructed from recordings."""
 
 from __future__ import annotations
 

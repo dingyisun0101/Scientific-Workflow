@@ -1,4 +1,4 @@
-//! Deterministic expansion of model-parameter selections.
+//! Deterministic expansion of execution-unit parameter selections.
 
 use std::path::Path;
 

@@ -10,7 +10,9 @@ use serde::Deserialize;
 use crate::runtime::advanced::{RuntimeError, TaskRunSummary, execute};
 use crate::state::advanced::{StateTime, SystemState, SystemStateSchema};
 use crate::study::advanced::Study;
-use crate::task::basic::{ExecutionUnit, InitializationContext, ModelView, TaskResult};
+use crate::task::basic::{
+    ExecutionUnit, InitializationContext, MemberCompletion, MemberView, TaskResult,
+};
 
 use super::execution::task_exceeded_timeout;
 
@@ -78,12 +80,12 @@ impl Drop for Project {
 #[serde(deny_unknown_fields)]
 struct PanicConstants {}
 
-struct PanicAfterBeginModel {
+struct PanicAfterBeginUnit {
     state: SystemState,
 }
 
-#[scientific_workflow::model("runtime-panic-after-begin")]
-impl ExecutionUnit for PanicAfterBeginModel {
+#[scientific_workflow::execution_unit("runtime-panic-after-begin")]
+impl ExecutionUnit for PanicAfterBeginUnit {
     type Constants = PanicConstants;
 
     fn initialize(
@@ -96,12 +98,12 @@ impl ExecutionUnit for PanicAfterBeginModel {
         Ok(Self { state })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
-        (index == 0).then(|| ModelView::new("panic", &self.state, false, None))
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| MemberView::new("panic", &self.state, None, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -115,13 +117,13 @@ struct SlowConstants {
     sleep_ms: u64,
 }
 
-struct SlowModel {
+struct SlowUnit {
     state: SystemState,
     sleep: Duration,
 }
 
-#[scientific_workflow::model("runtime-slow")]
-impl ExecutionUnit for SlowModel {
+#[scientific_workflow::execution_unit("runtime-slow")]
+impl ExecutionUnit for SlowUnit {
     type Constants = SlowConstants;
 
     fn initialize(
@@ -137,16 +139,16 @@ impl ExecutionUnit for SlowModel {
         })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
-            ModelView::new(
+            MemberView::new(
                 "slow",
                 &self.state,
-                self.state.time().iteration() == 1,
+                (self.state.time().iteration() == 1).then_some(MemberCompletion::without_reason()),
                 Some(1),
             )
         })
@@ -174,8 +176,8 @@ impl ExecutionUnit for RuntimeEnsemble {
         context: &InitializationContext,
     ) -> TaskResult<Self> {
         let _ = context.shared_seed("coordination")?;
-        let _ = context.model_seed("first", "initialization")?;
-        let _ = context.model_seed("second", "initialization")?;
+        let _ = context.member_seed("first", "initialization")?;
+        let _ = context.member_seed("second", "initialization")?;
         let mut states = Vec::with_capacity(2);
         for initial in [10_u64, 20] {
             let mut state = schema.create_empty_state(StateTime::from_iteration(0));
@@ -185,16 +187,17 @@ impl ExecutionUnit for RuntimeEnsemble {
         Ok(Self { states })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         self.states.len()
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         let state = self.states.get(index)?;
-        Some(ModelView::new(
+        Some(MemberView::new(
             ["first", "second"][index],
             state,
-            state.time().iteration() >= (index as u64 + 1),
+            (state.time().iteration() >= (index as u64 + 1))
+                .then_some(MemberCompletion::without_reason()),
             Some(index as u64 + 1),
         ))
     }
@@ -210,8 +213,8 @@ impl ExecutionUnit for RuntimeEnsemble {
     }
 }
 
-fn model_study(model: &str, timeout_ms: Option<u64>) -> serde_json::Value {
-    let mut task = serde_json::json!({"model": model, "state": "value"});
+fn execution_unit_study(execution_unit: &str, timeout_ms: Option<u64>) -> serde_json::Value {
+    let mut task = serde_json::json!({"execution_unit": execution_unit, "state": "value"});
     if let Some(timeout_ms) = timeout_ms {
         task["timeout_ms"] = timeout_ms.into();
     }
@@ -254,8 +257,8 @@ fn runtime_public_results_are_send_and_sync() {
 }
 
 #[test]
-fn an_ensemble_task_persists_and_summarizes_each_model_independently() {
-    let mut study = model_study("runtime-ensemble", None);
+fn an_ensemble_task_persists_and_summarizes_each_member_independently() {
+    let mut study = execution_unit_study("runtime-ensemble", None);
     study["seed"] = 42.into();
     let project = Project::new(study, serde_json::json!({"runtime-ensemble": {}}));
 
@@ -263,27 +266,26 @@ fn an_ensemble_task_persists_and_summarizes_each_model_independently() {
     let task = &summary.replicates()[0].phases()[0].tasks()[0];
     assert_eq!(task.final_iteration(), Some(2));
     assert_eq!(
-        task.models()
+        task.members()
             .iter()
-            .map(|model| (model.identity(), model.final_iteration()))
+            .map(|unit| (unit.identity(), unit.final_iteration()))
             .collect::<Vec<_>>(),
         [("first", 1), ("second", 2)]
     );
-    for (index, model) in task.models().iter().enumerate() {
+    for (index, unit) in task.members().iter().enumerate() {
         assert!(
-            model
-                .output_directory()
-                .ends_with(format!("models/model-{index:06}"))
+            unit.output_directory()
+                .ends_with(format!("members/member-{index:06}"))
         );
         let metadata: serde_json::Value = serde_json::from_slice(
-            &fs::read(model.output_directory().join("metadata.json")).unwrap(),
+            &fs::read(unit.output_directory().join("metadata.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(metadata["status"]["state"], "complete");
         assert_eq!(metadata["user_metadata"]["workflow"]["member_index"], index);
         assert_eq!(
             metadata["user_metadata"]["workflow"]["member_identity"],
-            model.identity()
+            unit.identity()
         );
         let derivation = &metadata["user_metadata"]["workflow"]["seed_derivation"];
         assert_eq!(derivation["algorithm"], "scientific-workflow.seed.v1");
@@ -304,8 +306,8 @@ fn an_ensemble_task_persists_and_summarizes_each_model_independently() {
                 .unwrap()
                 .iter()
                 .any(|request| {
-                    request["scope"] == "model"
-                        && request["model_identity"] == model.identity()
+                    request["scope"] == "member"
+                        && request["member_identity"] == unit.identity()
                         && request["purpose"] == "initialization"
                 })
         );
@@ -326,9 +328,9 @@ fn completion_timestamp_controls_task_timeout_classification() {
 }
 
 #[test]
-fn a_panicking_model_is_reported_and_its_active_recording_is_failed() {
+fn a_panicking_unit_is_reported_and_its_active_recording_is_failed() {
     let project = Project::new(
-        model_study("runtime-panic-after-begin", None),
+        execution_unit_study("runtime-panic-after-begin", None),
         serde_json::json!({"runtime-panic-after-begin": {}}),
     );
 
@@ -356,7 +358,7 @@ fn a_panicking_model_is_reported_and_its_active_recording_is_failed() {
 #[test]
 fn a_task_finishing_after_its_deadline_is_timed_out_and_not_completed() {
     let project = Project::new(
-        model_study("runtime-slow", Some(20)),
+        execution_unit_study("runtime-slow", Some(20)),
         serde_json::json!({"runtime-slow": {"sleep_ms": 80}}),
     );
 
@@ -377,7 +379,7 @@ fn a_task_finishing_after_its_deadline_is_timed_out_and_not_completed() {
 
 #[test]
 fn a_phase_finishing_after_its_deadline_is_timed_out_and_not_completed() {
-    let mut study = model_study("runtime-slow", None);
+    let mut study = execution_unit_study("runtime-slow", None);
     study["phases"]["run"]["timeout_ms"] = 20.into();
     let project = Project::new(study, serde_json::json!({"runtime-slow": {"sleep_ms": 80}}));
 

@@ -3,14 +3,14 @@
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
 Config to capture one project root and fully resolve its declarations, retains
 that central immutable Config, asks State to validate the centrally parsed
-named schemas, discovers linked models, binds each Config-expanded constants
-value to its registered model and selected schema, binds its observation plan
+named schemas, discovers linked execution units, binds each Config-expanded constants
+value to its registered execution unit and selected schema, binds its observation plan
 to that schema, and produces one immutable execution plan of generic tasks.
 Executable paths, Python environments, parameter selection, and expansion are
 Config responsibilities completed before Study performs this cross-domain
 binding.
 
-Study creates no output, starts no worker, initializes no model, and writes no
+Study creates no output, starts no worker, initializes no execution unit, and writes no
 recording. Runtime alone owns active effects.
 
 ## Basic API
@@ -36,13 +36,13 @@ moved or shared across host threads without mutable planning state.
 
 - `Study::load(project_root: &Path) -> Result<Study, StudyError>` performs the
   complete effect-free loading and preflight transaction. Config first
-  canonicalizes paths, parses JSON, expands model parameters, and resolves
+  canonicalizes paths, parses JSON, expands execution unit parameters, and resolves
   programs, Python scripts, interpreters, and environment managers. Study then
-  validates registration keys and duplicates, resolves every model key,
+  validates registration keys and duplicates, resolves every execution unit key,
   validates every named state document, retains the optional top-level master
-  seed, decodes every concrete constants value,
-  calls each model's side-effect-free `observation_plan` exactly once, and binds
-  that plan to the schema explicitly selected by that model task. It does not
+  seed, decodes every concrete constants value, calls each execution unit's
+  side-effect-free `preflight` exactly once, trusts its domain validation, and binds
+  that plan to the schema explicitly selected by that execution unit task. It does not
   call `ExecutionUnit::initialize`. Loading is synchronous and may block on
   ordinary configuration reads and executable metadata/resolution, but starts
   no worker thread and creates no output.
@@ -53,7 +53,7 @@ moved or shared across host threads without mutable planning state.
 
 `Clone` increments shared reference counts; it does not reread files, repeat
 preflight, clone scientific payloads, or duplicate constants documents.
-`Debug` prints bounded root/plan information and never model captures or raw
+`Debug` prints bounded root/plan information and never execution unit captures or raw
 constants.
 
 There is no public manual-catalog loader, phase accessor, task accessor, state
@@ -72,7 +72,7 @@ Runtime consumes a deliberately narrow peer API through `study::advanced`:
 - `StudyPhase` supplies only its semantic name, dependencies, admission policy,
   and compiled task slice.
 - `StudyTask` supplies its stable identity/label, timeout, generic execution
-  definition, semantic model provenance, and program summary facts. Runtime no
+  definition, semantic execution unit provenance, and program summary facts. Runtime no
   longer reaches through it to Task descriptors or Config-resolved types.
 
 This view is crate-visible, not downstream-public. Its explicit names and
@@ -88,17 +88,17 @@ execution.
 - `State { state, path, source }` identifies the semantic manifest key and
   canonical source path of a rejected named schema while preserving its
   original `StateError`;
-- `InvalidModelRegistration { reason }` reports an invalid or duplicate
-  linked `#[execution_unit]` key (or compatibility `#[model]`) without exposing the private catalog type;
-- `UnknownModel { phase, model }` reports a manifest key with no linked
+- `InvalidExecutionUnitRegistration { reason }` reports an invalid or duplicate
+  linked `#[execution_unit]` key without exposing the private catalog type;
+- `UnknownExecutionUnit { phase, execution_unit }` reports a manifest key with no linked
   registration;
-- `ModelPreflight { phase, model, ordinal, source }` contextualizes constants
+- `ExecutionUnitPreflight { phase, execution_unit, ordinal, source }` contextualizes constants
   decoding, observation declaration, or schema binding for one concrete task;
   and
 - `TaskIdentityOverflow` prevents a plan whose deterministic global task
   ordinal cannot fit in `u64`.
 
-Every variant occurs before output creation and model initialization. An
+Every variant occurs before output creation and execution unit initialization. An
 invalid program or Python declaration is reported through the wrapped
 `ConfigError`.
 Source errors remain available through `std::error::Error::source`. A failed load
@@ -137,8 +137,8 @@ println!("actual execution: {}", summary.output_directory().display());
 
 ## Not API
 
-`ProjectSpecification`, explicit model catalogs, `StudyInner`, central
-`Config`, resolved model parameters/programs and Python launchers,
+`ProjectSpecification`, explicit execution unit catalogs, `StudyInner`, central
+`Config`, resolved execution unit parameters/programs and Python launchers,
 type-erased task definitions,
 named and task-bound state schemas, bound observation plans,
 replicate/persistence policies, UI plan, global
@@ -147,7 +147,7 @@ output ordinals, identity/label formats, and topological planning data are priva
 above; their backing representation remains private.
 
 A replacement Study must remain output-free, consume and retain Config exactly
-once, perform complete state/model/constants/observation binding over Config's
+once, perform complete state/execution unit/constants/observation binding over Config's
 already-resolved program/Python tasks, infer deterministic identities and
 roots, retain immutable execution intent, and expose no mutable lifecycle to
 applications. Runtime must be able to execute the retained snapshot after

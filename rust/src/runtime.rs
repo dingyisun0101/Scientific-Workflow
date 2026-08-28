@@ -4,7 +4,7 @@
 //! scheduling, task admission, cooperative cancellation, and automatic
 //! persistence lifecycle. It also publishes inferred facts to the automatic UI.
 //! It accepts only a completed Study and never opens project declarations or
-//! binds model keys itself.
+//! binds execution unit keys itself.
 
 mod error;
 mod execution;
@@ -30,7 +30,7 @@ pub mod advanced {
     pub use super::error::RuntimeError;
     pub use super::execution::execute;
     pub use super::summary::{
-        ModelRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind,
+        MemberRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind,
         TaskRunSummary,
     };
 }

@@ -1,7 +1,7 @@
 # Two-dimensional attractor study
 
 This is a complete small scientific project rather than a collection of API
-fragments. Rust owns the stateful Hopf model, JSON owns the study and all
+fragments. Rust owns the stateful Hopf execution unit, JSON owns the study and all
 configuration, and a final Python task turns the completed recordings into an
 SVG figure.
 
@@ -10,10 +10,10 @@ attractor_2d/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                 one scientific_workflow::run(&Path) call
-│   └── hopf_model.rs           registered one-model execution unit
+│   └── hopf_unit.rs           registered one-member execution unit
 ├── wf_configs/                 required Workflow configuration root
 │   ├── study.json              simulate phase followed by plot phase
-│   ├── parameters.json         every model and plotting parameter
+│   ├── parameters.json         execution-unit and plotting parameters
 │   └── states/                 recommended schema grouping
 │       └── attractor.json      canonical scientific state schema
 └── scripts/
@@ -22,28 +22,28 @@ attractor_2d/
 
 ## Scientific workload
 
-`HopfModel` directly owns its canonical `SystemState`. It initializes the
+`HopfUnit` directly owns its canonical `SystemState`. It initializes the
 two-dimensional `point` and derived `radius`, advances both values and physical
 time in `step`, and reports completion through its configured iteration count.
 Initial assembly uses `initialize_payload`, so an accidental second
 initialization fails instead of silently becoming replacement.
-The model retains its decoded `AttractorConstants` directly rather than
+The execution unit retains its decoded `AttractorConstants` directly rather than
 duplicating the same immutable values across runtime fields.
-Its `model(0)` method exposes a `ModelView` containing a direct immutable state
+Its `member(0)` method exposes a `MemberView` containing a direct immutable state
 borrow, completion, target iteration, and the stable `hopf-attractor` member
-identity. `model_count()` is one, so this is the standalone-model form of the
+identity. `member_count()` is one, so this is the single-member form of the
 same API an ensemble uses. Inside the
-model, `step` obtains `point` and `radius` together with the typed tuple call
-`borrow_payloads_mut::<(Vec<f64>, f64)>(("point", "radius"))`; model fields are
+execution unit, `step` obtains `point` and `radius` together with the typed tuple call
+`borrow_payloads_mut::<(Vec<f64>, f64)>(("point", "radius"))`; state fields are
 not generated or accessed by a macro. The `#[execution_unit("attractor")]` attribute is
 only the automatic registration link to `wf_configs/study.json`.
-For presentation only, `HopfModel::DEMONSTRATION_STEP_DELAY` sleeps for one
+For presentation only, `HopfUnit::DEMONSTRATION_STEP_DELAY` sleeps for one
 millisecond after every successful step so the automatic dashboard remains
 visible long enough to inspect. It is deliberately implementation-owned rather
 than project configuration because it is not scientific input. Do not remove
 it from the bundled example: the workload otherwise finishes too quickly to
 demonstrate live concurrent progress. It never changes scientific time or
-persisted model constants.
+persisted constants.
 
 Its custom `ObservationPlan` records:
 
@@ -53,11 +53,11 @@ Its custom `ObservationPlan` records:
 
 The `attractor` section of `wf_configs/parameters.json` sweeps three growth-rate
 values and two angular frequencies. Config selects that section from the
-registered model key and expands its Cartesian product into six model tasks;
+registered execution unit key and expands its Cartesian product into six execution-unit tasks;
 Runtime executes up to three concurrently and automatically records every
 observation stream. The phase's `start_interval_ms: 2000` setting waits two
 seconds between successive task admissions (the first eligible task starts
-immediately). This phase-owned scheduling delay is separate from the model's
+immediately). This phase-owned scheduling delay is separate from the execution unit's
 one-millisecond per-step presentation delay. With the supplied workload, a
 normal run takes roughly 16 seconds, subject to machine and IO overhead.
 
@@ -68,7 +68,7 @@ Parameter wiring uses two distinct kinds of key matching:
 ```text
 #[execution_unit("attractor")]
           |
-          +-- study.json task: {"model":"attractor","state":"attractor"}
+          +-- study.json task: {"execution_unit":"attractor","state":"attractor"}
           |
           `-- parameters.json["attractor"]
                             |
@@ -80,20 +80,20 @@ Parameter wiring uses two distinct kinds of key matching:
                                          |
                                   AttractorConstants
                                          |
-                   HopfModel::initialize(constants, schema, context)
+                   HopfUnit::initialize(constants, schema, context)
                                          |
-                            HopfModel { state, constants }
+                            HopfUnit { state, constants }
                                          |
-                    model(0) -> ModelView("hopf-attractor", &state, ...)
+                    member(0) -> MemberView("hopf-attractor", &state, ...)
 ```
 
-The stable model key comes from `#[execution_unit("attractor")]`. The model task's
-`"model": "attractor"` selects that linked Rust implementation, and Config
+The stable execution unit key comes from `#[execution_unit("attractor")]`. The execution unit task's
+`"execution_unit": "attractor"` selects that linked Rust implementation, and Config
 uses the same key to select the top-level `attractor` section of
 `wf_configs/parameters.json`. No parameter filename or Rust type name is
 inferred. The task's separate `"state": "attractor"` value selects the named
 schema registered in `study.json.paths.states`; it does not select parameters,
-and model and state keys are not required to have the same spelling.
+and execution unit and state keys are not required to have the same spelling.
 
 Within the selected parameter object, Serde matches JSON property names such
 as `initial_point`, `step_count`, and `angular_frequency` to the identically
@@ -105,22 +105,22 @@ preflight instead of being silently ignored.
 Config expands the independent `mu` and `angular_frequency` `$sweep` markers
 into their deterministic three-by-two Cartesian product before decoding. Study
 deserializes each complete object once to validate its constants type and to
-call `HopfModel::observation_plan` during preflight. Task deserializes a fresh,
-equivalent owned value from the retained immutable JSON when that model task
+call `HopfUnit::preflight` during preflight. Task deserializes a fresh,
+equivalent owned value from the retained immutable JSON when that execution unit task
 actually executes. This second decode lets the constants type remain local to
 the execution thread rather than requiring it to be shared between planning
-and Runtime. `HopfModel::initialize` consumes that value and retains it directly
-beside the model-owned `SystemState`. Workflow manages `HopfModel` through the
+and Runtime. `HopfUnit::initialize` consumes that value and retains it directly
+beside the execution unit-owned `SystemState`. Workflow manages `HopfUnit` through the
 same execution-unit lifecycle it uses for an ensemble; the difference is only
-that this example exposes one model rather than several. An ensemble would
-return one stable `ModelView` per internal model and perform its shared or
+that this example exposes one member rather than several. An ensemble would
+return one stable `MemberView` per internal member and perform its shared or
 parallel advancement inside the same `step()` method.
 
 Runtime also passes an `InitializationContext`. This attractor is deterministic,
 so it names that argument `_context` and does not require a top-level study
 seed. A stochastic unit would call `shared_seed(purpose)` for unit-wide random
-work or `model_seed(identity, purpose)` for one model. Workflow would then
-record each actual derived seed with the corresponding model metadata.
+work or `member_seed(identity, purpose)` for one member. Workflow would then
+record each actual derived seed with the corresponding member metadata.
 
 ## Python plot phase
 
@@ -150,11 +150,11 @@ output/plots/
 └── plot-summary.json
 ```
 
-For every dependency it verifies the current recording provenance: model kind
+For every dependency it verifies the current recording provenance: execution unit kind
 and key, explicitly selected `attractor` state key, parameter ordinal, and the
 canonical `wf_configs/parameters.json` source. The plot summary retains the
 state key and ordinal so the generated artifact remains traceable to the
-assembled task rather than inferring state from the model name. Reader metadata
+assembled task rather than inferring state from the execution unit name. Reader metadata
 is consumed through its immutable mapping interface; the example does not rely
 on a concrete mutable dictionary representation. These provenance fields are
 the `scientific-workflow-attractor-plot-v2` summary shape.
@@ -176,7 +176,7 @@ Python owns its configured `output/plots` destination directly. When stdin and
 stderr are interactive, the automatic Ratatui dashboard shows task rows,
 progress, timing, messages, and an `exit` command. The task section refreshes
 for each phase and shows that phase only; redirected runs use plain lifecycle
-lines. The model and plotter do not construct tasks, phases,
+lines. The execution unit and plotter do not construct tasks, phases,
 persistence sessions, progress counters, or message channels.
 
 The omitted replicate, timeout, UI, and persistence settings use Workflow's
@@ -185,7 +185,6 @@ cadence, parameter sweep, plotting choices, one justified concurrency bound,
 the two-second inter-task admission delay. The explicitly non-scientific
 per-step demonstration delay belongs to the example implementation itself.
 
-The example tests also load the project through `Study::load`, proving that the
-required `wf_configs/` root, canonical reserved documents, named-state path,
-model `state` selector, typed constants, Python environment, and complete
-effect-free preflight remain synchronized with the current crate specification.
+`Study::load` performs complete effect-free validation of the required
+`wf_configs/` root, reserved documents, named-state path, execution-unit
+selector, typed constants, and Python environment before Runtime creates output.

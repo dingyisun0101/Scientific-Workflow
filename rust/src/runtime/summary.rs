@@ -70,31 +70,31 @@ impl PhaseRunSummary {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskRunKind {
     /// A registered scientific execution-unit invocation.
-    Model,
+    ExecutionUnit,
     /// An external executable program invocation.
     Program,
 }
 
-/// Successful completion facts for one model inside an execution unit.
+/// Successful completion facts for one member inside an execution unit.
 #[derive(Clone, Debug)]
-pub struct ModelRunSummary {
+pub struct MemberRunSummary {
     pub(crate) identity: Box<str>,
     pub(crate) final_iteration: u64,
     pub(crate) output_directory: PathBuf,
 }
 
-impl ModelRunSummary {
-    /// Returns the stable model identity supplied by the execution unit.
+impl MemberRunSummary {
+    /// Returns the stable member identity supplied by the execution unit.
     pub fn identity(&self) -> &str {
         &self.identity
     }
 
-    /// Returns this model's final scientific iteration.
+    /// Returns this member's final scientific iteration.
     pub const fn final_iteration(&self) -> u64 {
         self.final_iteration
     }
 
-    /// Returns this model's completed recording directory.
+    /// Returns this member's completed recording directory.
     pub fn output_directory(&self) -> &Path {
         &self.output_directory
     }
@@ -105,12 +105,12 @@ impl ModelRunSummary {
 pub struct TaskRunSummary {
     pub(crate) identity: Box<str>,
     pub(crate) kind: TaskRunKind,
-    pub(crate) model: Option<Box<str>>,
+    pub(crate) execution_unit: Option<Box<str>>,
     pub(crate) program: Option<PathBuf>,
     pub(crate) program_kind: Option<Box<str>>,
     pub(crate) python_script: Option<PathBuf>,
     pub(crate) final_iteration: Option<u64>,
-    pub(crate) models: Box<[ModelRunSummary]>,
+    pub(crate) members: Box<[MemberRunSummary]>,
     pub(crate) output_directory: PathBuf,
 }
 
@@ -120,14 +120,14 @@ impl TaskRunSummary {
         &self.identity
     }
 
-    /// Returns whether this task executed a model or a program.
+    /// Returns whether this task executed an execution unit or a program.
     pub const fn kind(&self) -> TaskRunKind {
         self.kind
     }
 
-    /// Returns the registered model key for a model task.
-    pub fn model(&self) -> Option<&str> {
-        self.model.as_deref()
+    /// Returns the registration key for an execution-unit task.
+    pub fn execution_unit(&self) -> Option<&str> {
+        self.execution_unit.as_deref()
     }
 
     /// Returns the resolved launcher executable for a program task.
@@ -148,23 +148,23 @@ impl TaskRunSummary {
         self.python_script.as_deref()
     }
 
-    /// Returns the maximum final model iteration for a scientific task.
+    /// Returns the maximum final member iteration for an execution-unit task.
     pub const fn final_iteration(&self) -> Option<u64> {
         self.final_iteration
     }
 
-    /// Returns independently recorded model results in stable unit order.
+    /// Returns independently recorded member results in stable unit order.
     ///
-    /// A standalone model produces one entry, an ensemble produces one entry
-    /// per model, and a program task produces none.
-    pub fn models(&self) -> &[ModelRunSummary] {
-        &self.models
+    /// A standalone member produces one entry, an ensemble produces one entry
+    /// per member, and a program task produces none.
+    pub fn members(&self) -> &[MemberRunSummary] {
+        &self.members
     }
 
     /// Returns the task output root or program workspace directory.
     ///
-    /// This is also the recording directory for a one-model execution unit.
-    /// Use [`Self::models`] for every per-model recording path.
+    /// This is also the recording directory for a one-member execution unit.
+    /// Use [`Self::members`] for every per-member recording path.
     pub fn output_directory(&self) -> &Path {
         &self.output_directory
     }

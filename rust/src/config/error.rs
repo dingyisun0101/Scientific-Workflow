@@ -86,31 +86,31 @@ pub enum ConfigError {
         dependency: String,
     },
 
-    /// A model task selects no state schema declared by the study.
-    #[error("model `{model}` in phase `{phase}` selects unknown state `{state}`")]
+    /// An execution-unit task selects no state schema declared by the study.
+    #[error("execution unit `{execution_unit}` in phase `{phase}` selects unknown state `{state}`")]
     UnknownState {
         /// Containing phase key.
         phase: String,
-        /// Compiled model key.
-        model: String,
+        /// Compiled execution-unit key.
+        execution_unit: String,
         /// Missing state-schema key.
         state: String,
     },
 
-    /// A model-parameter expansion cannot be represented safely.
-    #[error("model parameter expansion in `{path}` exceeds supported combination counts")]
+    /// An execution-unit parameter expansion cannot be represented safely.
+    #[error("execution-unit parameter expansion in `{path}` exceeds supported combination counts")]
     ExpansionOverflow {
         /// Parameters document whose selection product overflowed.
         path: PathBuf,
     },
 
-    /// One resolved parameter combination could not decode as model constants.
+    /// One resolved parameter combination could not decode as execution-unit constants.
     #[error(
-        "failed to decode resolved parameter combination {ordinal} for model `{model}` from `{path}`"
+        "failed to decode resolved parameter combination {ordinal} for execution unit `{execution_unit}` from `{path}`"
     )]
-    DecodeModelConstants {
-        /// Compiled model key from the study manifest.
-        model: String,
+    DecodeExecutionUnitConstants {
+        /// Compiled execution-unit key from the study manifest.
+        execution_unit: String,
         /// Central parameters document path.
         path: PathBuf,
         /// Zero-based deterministic combination ordinal.

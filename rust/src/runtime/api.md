@@ -3,11 +3,11 @@
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
 admission, dependency scheduling, task concurrency, cooperative timeouts and
-cancellation, model or external-program invocation (including Config-lowered
+cancellation, execution unit or external-program invocation (including Config-lowered
 Python environments), automatic persistence lifecycle, and
 publication of inferred UI facts.
 
-Runtime does not parse JSON, discover models, decode constants for planning,
+Runtime does not parse JSON, discover execution units, decode constants for planning,
 or let application code construct phases/tasks. It never reparses the central
 Config retained by Study.
 
@@ -20,22 +20,22 @@ of the active-execution subsystem.
 
 After successful preflight, Runtime creates a unique execution directory
 beneath the inferred `<project-root>/output`, creates one isolated directory
-per replicate, executes all phases and tasks, and completes each model's
+per replicate, executes all phases and tasks, and completes each member's
 recording or each program workspace.
 
 For each task, Runtime derives the destination and constructs private
-persistence sessions. A standalone unit opens one model recording; an ensemble
-opens one recording per model. Model views submit independent initial/step/final
+persistence sessions. A standalone unit opens one member recording; an ensemble
+opens one recording per member. ExecutionUnit views submit independent initial/step/final
 observations with bounded backpressure. Program tasks receive frozen configuration snapshots, logs, and
 an artifacts workspace. Runtime commits terminal status and shuts the session
-down; application/model code performs none of this coordination.
+down; application/execution unit code performs none of this coordination.
 
-For each model task, Runtime also constructs one immutable
+For each execution unit task, Runtime also constructs one immutable
 `InitializationContext` from Study's optional master seed, replicate ordinal,
 task identity, and registered execution-unit key. The unit may request
-purpose-named shared or model-scoped seeds. Runtime validates model identities
-after initialization and passes each model's applicable actual requests into
-Persistence before that model's recording begins. Programs receive no context.
+purpose-named shared or member-scoped seeds. Runtime validates member identities
+after initialization and passes each member's applicable actual requests into
+Persistence before that execution unit's recording begins. Programs receive no context.
 
 Runtime also creates one automatic UI session from Study's private inferred UI
 plan. It publishes execution, replicate, phase, task, iteration, target,
@@ -47,7 +47,7 @@ terminal initialization/input/drawing, and plain-output failures panic rather
 than becoming `RuntimeError` or silent fallback.
 
 An execution blocks until all admitted work has stopped and all successful
-persistence sessions have durably completed. Model cancellation is cooperative
+persistence sessions have durably completed. ExecutionUnit cancellation is cooperative
 between steps, so blocking application code inside one step may delay return.
 External programs, including Python interpreters/environment managers, are
 polled and are killed and reaped when cancellation or a timeout is observed.
@@ -67,7 +67,7 @@ error vocabulary to the empty Basic scope.
 
 `execute(study: Study) -> Result<RunSummary, RuntimeError>` consumes one
 clone-cheap immutable Study. It is Runtime's sole execution entry and cannot
-accept a project root, manifest, model catalog, or unresolved declarations.
+accept a project root, manifest, execution unit catalog, or unresolved declarations.
 It is the supported embedding seam for callers that loaded and optionally
 inspected a Study first.
 
@@ -99,7 +99,7 @@ completed before its deadline is therefore not retroactively timed out. Phase
 deadlines likewise apply only while pending or unfinished work remains.
 
 An interactive exit request stops further admission across the execution,
-cancels active model/program workers, waits for their cleanup, restores the
+cancels active execution unit/program workers, waits for their cleanup, restores the
 terminal, and returns `RuntimeError::ExecutionCancelled`.
 
 ### `runtime::advanced::RunSummary`
@@ -129,7 +129,7 @@ index.
 
 ### `runtime::advanced::TaskRunKind`
 
-`TaskRunKind` is a non-exhaustive `Copy + Eq` enum distinguishing `Model` and
+`TaskRunKind` is a non-exhaustive `Copy + Eq` enum distinguishing `ExecutionUnit` and
 `Program`. Callers matching it must retain a fallback for future workload
 kinds.
 
@@ -137,40 +137,40 @@ kinds.
 
 - `identity() -> &str`: Study-inferred task identity;
 - `kind() -> TaskRunKind`: generic workload kind;
-- `model() -> Option<&str>`: registered key for model tasks only;
+- `execution_unit() -> Option<&str>`: registered key for execution unit tasks only;
 - `program() -> Option<&Path>`: resolved launcher executable for program tasks
   only. For a Python declaration this is its interpreter or environment
   manager;
 - `program_kind() -> Option<&str>`: `program` or `python` for program tasks,
-  and `None` for model tasks;
+  and `None` for execution unit tasks;
 - `python_script() -> Option<&Path>`: canonical script path for nested Python
   tasks only;
-- `final_iteration() -> Option<u64>`: maximum final model iteration for
+- `final_iteration() -> Option<u64>`: maximum final member iteration for
   scientific tasks and `None` for programs;
-- `models() -> &[ModelRunSummary]`: stable model order, containing one result
-  for a standalone model, several for an ensemble, and none for a program; and
+- `members() -> &[MemberRunSummary]`: stable member order, containing one result
+  for a standalone unit, several for an ensemble, and none for a program; and
 - `output_directory() -> &Path`: task output root or program workspace. For a
-  single-model unit this is also the recording directory; multi-model
-  recordings are exposed through `models()`.
+  single-member unit this is also the recording directory; multi-member
+  recordings are exposed through `members()`.
 
 Summary paths are owned `PathBuf` internally and borrowed as `&Path`. The
-model/program option pair and optional iteration agree with `kind`.
+execution unit/program option pair and optional iteration agree with `kind`.
 `program_kind` is populated exactly for program tasks, and `python_script` is
 populated exactly when that program kind is `python`. Summary values do not
-authorize append/resume and carry no live task, process, model, or state.
+authorize append/resume and carry no live task, process, execution unit, or state.
 Summaries and `RuntimeError` are `Send + Sync`.
 
-### `runtime::advanced::ModelRunSummary`
+### `runtime::advanced::MemberRunSummary`
 
-One immutable per-model result owned by its task summary:
+One immutable per-member result owned by its task summary:
 
 - `identity() -> &str` returns the stable identity supplied through
-  `ModelView`;
-- `final_iteration() -> u64` returns that model's terminal iteration; and
-- `output_directory() -> &Path` returns that model's completed recording.
+  `MemberView`;
+- `final_iteration() -> u64` returns that member's terminal iteration; and
+- `output_directory() -> &Path` returns that member's completed recording.
 
-For a multi-model unit, directories are
-`<task-output>/models/model-<index>` in stable model order. The identity is
+For a multi-member unit, directories are
+`<task-output>/members/member-<index>` in stable member order. The identity is
 metadata, not a filesystem fragment, so application identities cannot redirect
 persistence. Summary borrows are tied to the owning summary and perform no IO.
 
@@ -201,7 +201,7 @@ its captured snapshot: editing JSON after `Study::load` cannot alter these
 files.
 On completion Runtime writes terminal `program.json`; nonzero exit status is a
 task failure. Dependency JSON is deterministic and contains each dependency
-phase, task identity/kind, optional model/program/final iteration, per-model
+phase, task identity/kind, optional execution unit/program/final iteration, per-member
 identity/iteration/recording summaries, and output directory. Program entries additionally carry `program_kind` (`program` or
 `python`) and the optional canonical `python_script`; the same facts are
 available through the successful Rust task summary. Dependency JSON remains a
@@ -224,22 +224,22 @@ This non-exhaustive enum reports failures after a valid Study is available:
   cooperative cancellation;
 - `OutputScope { path, source }`: unique execution or replicate directory could
   not be created;
-- `Task { task, source }`: model, program, state, observation, config decode,
+- `Task { task, source }`: execution unit, program, state, observation, config decode,
   or persistence operation failed during invocation;
 - `TaskPanicked { task }`: task execution unwound; Runtime marks any active
-  model recording failed with a bounded diagnostic before returning the stable
+  member recording failed with a bounded diagnostic before returning the stable
   existing error shape;
-- `TaskTimedOut { task, timeout }`: a model observed its cooperative deadline
+- `TaskTimedOut { task, timeout }`: an execution unit observed its cooperative deadline
   or an external process was terminated after its deadline;
 - `TaskCancelled { task }`: runtime cancelled an active sibling;
 - `PhaseTimedOut { phase, timeout }`: phase exceeded its deadline; active
-  models stop cooperatively and active external programs are terminated;
+  execution units stop cooperatively and active external programs are terminated;
 - `StartWorker { scope, source }`: OS thread creation failed;
 - `ReplicatePanicked { index }`: parallel replicate worker unwound; and
 - `Replicate { index, source }`: contextual wrapper for a failed replicate.
 
 Sources retain their original error chains. A runtime error never represents a
-manifest grammar or model-key preflight failure; those remain `StudyError`.
+manifest grammar or execution unit-key preflight failure; those remain `StudyError`.
 
 ## Example
 
@@ -269,10 +269,10 @@ for replicate in summary.replicates() {
     for phase in replicate.phases() {
         for task in phase.tasks() {
             match task.kind() {
-                TaskRunKind::Model => {
-                    println!("unit {}", task.model().unwrap());
-                    for model in task.models() {
-                        println!("  model {} at {}", model.identity(), model.final_iteration());
+                TaskRunKind::ExecutionUnit => {
+                    println!("unit {}", task.execution_unit().unwrap());
+                    for member in task.members() {
+                        println!("  member {} at {}", member.identity(), member.final_iteration());
                     }
                 }
                 TaskRunKind::Program => println!("program {}", task.program().unwrap().display()),
@@ -290,19 +290,19 @@ for replicate in summary.replicates() {
 Scheduler polling, worker thread names, active task handles, atomic cancellation
 flags, completion channels/timestamps, bounded panic-payload formatting,
 task output ordinals, `RuntimeTaskHost`,
-model/program task environments, child-process polling, `PersistenceSession`,
+execution unit/program task environments, child-process polling, `PersistenceSession`,
 UI events/session, backend ownership, and
 topological-position calculation are private.
 
-Runtime passes `ModelRecordingProvenance` as semantic facts—task identity,
+Runtime passes `MemberRecordingProvenance` as semantic facts—task identity,
 registered unit key, selected state, parameter ordinal/source, and resolved constants—to
 Persistence. Runtime does not construct durable JSON namespaces and does not
 name the local backend or its format fields. Persistence authors recording
-metadata, which keeps complete resolved constants under `model_constants`
+metadata, which keeps complete resolved constants under `constants`
 and Workflow identity/source facts under a separate `workflow` object. The
 workflow object names the selected registration, `parameter_ordinal`, and canonical
 `parameter_source`, plus the explicitly selected `state` key; the effective
-object also records `member_index` and `member_identity` for every model;
+object also records `member_index` and `member_identity` for every execution unit;
 backend and byte settings are recorded under
 `workflow.persistence`. The user-authored `chunk_target_mb` and
 `queue_capacity_mb` have already been converted, so provenance deliberately

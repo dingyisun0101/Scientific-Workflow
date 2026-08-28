@@ -7,7 +7,7 @@ use super::document::{StateSchemaDocument, child_pointer};
 use super::error::ConfigError;
 use super::expansion;
 use super::manifest::{self, ParsedTask, PhaseSpecification, StudyManifest};
-use super::parameters::{ResolvedModelParameters, ResolvedTask};
+use super::parameters::{ResolvedExecutionUnitParameters, ResolvedTask};
 use super::program::{ResolvedProgramTask, resolve_executable};
 use super::python;
 use super::store::Config;
@@ -28,7 +28,7 @@ impl ProjectSpecification {
     ///
     /// The root is canonicalized once. `wf_configs/study.json` and every other
     /// JSON document beneath `wf_configs` are captured centrally. Reserved views,
-    /// model parameter sections, and executable paths are resolved from that
+    /// execution-unit parameter sections, and executable paths are resolved from that
     /// snapshot. Loading creates no output and executes no task.
     pub(crate) fn load(project_root: &Path) -> Result<Self, ConfigError> {
         let config = Config::load(project_root)?;
@@ -69,23 +69,23 @@ impl ProjectSpecification {
             let mut tasks = Vec::new();
             for task in phase.tasks {
                 match task {
-                    ParsedTask::Model {
-                        model,
+                    ParsedTask::ExecutionUnit {
+                        execution_unit,
                         state,
                         timeout,
                     } => {
                         if !state_schemas.contains_key(state.as_ref()) {
                             return Err(ConfigError::UnknownState {
                                 phase: phase.name.to_string(),
-                                model: model.to_string(),
+                                execution_unit: execution_unit.to_string(),
                                 state: state.to_string(),
                             });
                         }
-                        let value = parameter_sections.get(model.as_ref()).ok_or_else(|| {
+                        let value = parameter_sections.get(execution_unit.as_ref()).ok_or_else(|| {
                             ConfigError::invalid(
                                 parameters_path,
-                                child_pointer("/", &model),
-                                format!("registered model `{model}` has no parameter section"),
+                                child_pointer("/", &execution_unit),
+                                format!("registered execution unit `{execution_unit}` has no parameter section"),
                             )
                         })?;
                         let expanded = expansion::expand(parameters_path, value)?;
@@ -100,9 +100,9 @@ impl ProjectSpecification {
                                     path: parameters_path.to_path_buf(),
                                 }
                             })?;
-                            tasks.push(ResolvedTask::Model {
-                                parameters: ResolvedModelParameters::new(
-                                    model.clone(),
+                            tasks.push(ResolvedTask::ExecutionUnit {
+                                parameters: ResolvedExecutionUnitParameters::new(
+                                    execution_unit.clone(),
                                     parameters_path.to_path_buf(),
                                     ordinal,
                                     value,

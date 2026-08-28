@@ -1,8 +1,8 @@
 # UI API
 
 The `ui` subsystem is the sole presentation interface for execution facts
-already known by Runtime. It does not inspect models, scientific payloads,
-project JSON, or persistence files. Models never define display fields, format
+already known by Runtime. It does not inspect execution units, scientific payloads,
+project JSON, or persistence files. Execution units never define display fields, format
 messages, increment counters, or receive a UI handle.
 
 Study owns a private inferred UI policy. Runtime publishes planned-task,
@@ -24,8 +24,8 @@ Crossterm alternate screen and renders a Ratatui dashboard containing:
 - replicate and phase shown once in the task-panel title rather than repeated
   in every task row;
 - pending, running, completed, failed, cancelled, and skipped counts;
-- aggregate execution-unit iteration gauges when every `ModelView` target is known;
-- model spinners when the target is unknown;
+- aggregate execution-unit iteration gauges when every `MemberView` target is known;
+- execution-unit spinners when the target is unknown;
 - one-shot spinners while generic programs and Python tasks are running;
 - elapsed time and inferred ETA where enough progress exists;
 - the execution output path;
@@ -46,7 +46,7 @@ The command editor supports character insertion, Left/Right, Home/End,
 Backspace/Delete, Escape to clear, and Enter to submit. Exact lowercase `exit`
 (surrounding whitespace allowed) and Ctrl+C request cooperative cancellation.
 Unknown commands appear in the message panel. Once exit is requested, Runtime
-stops admission, asks active models to stop between steps, terminates active
+stops admission, asks active execution units to stop between steps, terminates active
 external programs, waits for cleanup, publishes cancellation, and then UI
 restores the terminal.
 
@@ -71,7 +71,7 @@ adds no public symbols. Runtime and Study use crate-visible boundaries:
 
 These are peer-subsystem contracts, not downstream API. Event strings and
 paths are copied into small UI-owned presentation snapshots as required; UI
-never retains a model, `SystemState`, payload, `Study`, recording writer, or
+never retains an execution unit, `SystemState`, payload, `Study`, recording writer, or
 runtime summary. The reducer retains all planned-task status internally but
 publishes only the most recently started replicate/phase to the task panel.
 Concurrent Runtime workers share one clone-cheap session. A
@@ -110,7 +110,7 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 
 Running it in a terminal shows the dashboard. Typing `exit` and pressing Enter
 requests cancellation. Redirecting standard error selects plain lifecycle
-lines automatically. No model or JSON change is involved.
+lines automatically. No execution unit or JSON change is involved.
 
 ## Not API
 
@@ -121,7 +121,7 @@ format, and cancellation atomics are private. Applications must not parse the
 human display as a machine protocol; durable facts belong to Runtime summaries
 and persistence metadata.
 
-A replacement UI must remain downstream of Runtime facts, require no model
+A replacement UI must remain downstream of Runtime facts, require no execution-unit
 participation, tolerate concurrent publishers, preserve plain noninteractive
 diagnostics, support cooperative `exit`, restore terminal state while
 unwinding, and treat failure of its selected presentation mode as a fatal

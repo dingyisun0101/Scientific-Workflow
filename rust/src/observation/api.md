@@ -14,12 +14,13 @@ metadata lifecycle, recovery policy, or completed-recording handle. The
 runtime and persistence backend infer and own those concerns.
 
 An ordinary application returns its observation plan from
-`ExecutionUnit::observation_plan(&Constants)`. The trait supplies
-`ObservationPlan::all_fields()` by default, so a model implements that method only when
+`ExecutionUnit::preflight(&Constants, &SystemStateSchema)`. The trait supplies
+`ObservationPlan::all_fields()` by default, so an execution unit implements that method only when
 field selection, named streams, cadence, or units carry scientific meaning.
-Study calls it once during preflight, binds the returned plan to the validated
+Study calls it once during preflight, trusts the unit-owned domain validation,
+binds the returned plan to the validated
 state schema, and stores that exact bound plan in the compiled task. Runtime
-never calls the model method again.
+never calls the execution unit method again.
 
 ## Basic API
 
@@ -178,7 +179,7 @@ let plan = ObservationPlan::streams([
 ])?
 .with_physical_time_unit("s")?;
 
-// ExecutionUnit::observation_plan returns `plan`; Workflow infers paths,
+// ExecutionUnit::preflight returns `plan`; Workflow infers paths,
 // schema metadata, lifecycle, and persistence policy. The all-fields stream
 // retains every field needed for complete state reconstruction.
 # let _ = (state, plan);

@@ -23,7 +23,7 @@ pub enum RuntimeError {
         source: std::io::Error,
     },
 
-    /// A model or program invocation returned an application, process, state,
+    /// An execution-unit or program invocation returned an application, process, state,
     /// observation, or persistence error.
     #[error("task `{task}` failed: {source}")]
     Task {
@@ -34,7 +34,7 @@ pub enum RuntimeError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    /// A task invocation panicked. Runtime fails any active model recording
+    /// A task invocation panicked. Runtime fails any active member recording
     /// before reporting this stable task identity.
     #[error("task `{task}` panicked")]
     TaskPanicked {
@@ -42,7 +42,7 @@ pub enum RuntimeError {
         task: String,
     },
 
-    /// A task exceeded its timeout; models stop cooperatively while external
+    /// A task exceeded its timeout; execution units stop cooperatively while external
     /// programs are terminated by Runtime.
     #[error("task `{task}` exceeded its timeout of {timeout:?}")]
     TaskTimedOut {
@@ -52,7 +52,7 @@ pub enum RuntimeError {
         timeout: Duration,
     },
 
-    /// A running task stopped because Runtime cancelled it. Models stop
+    /// A running task stopped because Runtime cancelled it. Execution units stop
     /// cooperatively while external programs are terminated.
     #[error("task `{task}` was cancelled")]
     TaskCancelled {
@@ -60,7 +60,7 @@ pub enum RuntimeError {
         task: String,
     },
 
-    /// A phase exceeded its timeout. Its active model tasks stop cooperatively
+    /// A phase exceeded its timeout. Its active execution-unit tasks stop cooperatively
     /// and its active external programs are terminated.
     #[error("phase `{phase}` exceeded its timeout of {timeout:?}")]
     PhaseTimedOut {

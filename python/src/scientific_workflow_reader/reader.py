@@ -20,7 +20,7 @@ from .errors import (
     RecordingNotCompleteError,
     UnknownStreamError,
 )
-from .model import StateField, StateRecord, StateSeries
+from .state import StateField, StateRecord, StateSeries
 
 FORMAT_NAME = "scientific-workflow-jsonl"
 FORMAT_VERSION = 7

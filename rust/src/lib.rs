@@ -17,7 +17,7 @@
 //! }
 //! ```
 //!
-//! A model carries its stable manifest key at its implementation:
+//! An execution unit carries its stable manifest key at its implementation:
 //!
 //! ```
 //! use serde::Deserialize;
@@ -26,10 +26,10 @@
 //! #[derive(Deserialize)]
 //! struct Constants { initial: u64, steps: u64 }
 //!
-//! struct Model { state: SystemState, target_iteration: u64 }
+//! struct ExampleUnit { state: SystemState, target_iteration: u64 }
 //!
 //! #[scientific_workflow::execution_unit("example")]
-//! impl ExecutionUnit for Model {
+//! impl ExecutionUnit for ExampleUnit {
 //!     type Constants = Constants;
 //!
 //!     fn initialize(
@@ -46,12 +46,13 @@
 //!         })
 //!     }
 //!
-//!     fn model_count(&self) -> usize { 1 }
-//!     fn model(&self, index: usize) -> Option<ModelView<'_>> {
-//!         (index == 0).then(|| ModelView::new(
+//!     fn member_count(&self) -> usize { 1 }
+//!     fn member(&self, index: usize) -> Option<MemberView<'_>> {
+//!         (index == 0).then(|| MemberView::new(
 //!             "example",
 //!             &self.state,
-//!             self.state.time().iteration() >= self.target_iteration,
+//!             (self.state.time().iteration() >= self.target_iteration)
+//!                 .then_some(MemberCompletion::without_reason()),
 //!             Some(self.target_iteration),
 //!         ))
 //!     }
@@ -71,12 +72,12 @@
 //!
 //! # Ownership boundaries
 //!
-//! - [`config`] alone reads and parses project JSON and supplies typed model
+//! - [`config`] alone reads and parses project JSON and supplies typed execution-unit
 //!   constants.
-//! - [`study`] composes parsed declarations, state semantics, and compiled model
+//! - [`study`] composes parsed declarations, state semantics, and compiled execution-unit
 //!   registrations into immutable, output-free intent.
 //! - [`runtime`] consumes a completed Study and owns active execution/output.
-//! - [`task`] owns the model contract and automatic observation boundaries.
+//! - [`task`] owns the execution-unit contract and automatic observation boundaries.
 //! - [`state`] owns canonical scientific state and schema.
 //! - [`observation`] owns scientific observation meaning, not persistence mechanics.
 //! - [`persistence`] owns automatic durable output and verified reading.
@@ -90,7 +91,7 @@
 //! aggregates those module-owned APIs and crate conveniences.
 //!
 //! Persistence write construction and output allocation are internal and are
-//! not available to model authors.
+//! not available to execution-unit authors.
 //!
 //! This crate is pre-1.0 test software and may make coordinated API changes.
 
@@ -112,7 +113,7 @@ pub mod task;
 pub mod ui;
 
 pub use error::basic::WorkflowError;
-pub use scientific_workflow_macros::{execution_unit, model};
+pub use scientific_workflow_macros::execution_unit;
 
 /// Loads, preflights, and executes the Workflow project rooted at
 /// `project_root`.
@@ -134,6 +135,6 @@ pub fn run(project_root: &std::path::Path) -> Result<(), WorkflowError> {
 /// the application crate. It is not a supported application API.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::task::advanced::ModelRegistration;
+    pub use crate::task::advanced::ExecutionUnitRegistration;
     pub use inventory;
 }

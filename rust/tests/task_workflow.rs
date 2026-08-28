@@ -7,12 +7,12 @@ struct Constants {
     active: bool,
 }
 
-struct Model {
+struct Unit {
     state: SystemState,
 }
 
-#[scientific_workflow::model("downstream-contract-test")]
-impl ExecutionUnit for Model {
+#[scientific_workflow::execution_unit("downstream-contract-test")]
+impl ExecutionUnit for Unit {
     type Constants = Constants;
 
     fn initialize(
@@ -26,16 +26,16 @@ impl ExecutionUnit for Model {
         Ok(Self { state })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
-            ModelView::new(
-                "model",
+            MemberView::new(
+                "unit",
                 &self.state,
-                self.state.time().iteration() == 1,
+                (self.state.time().iteration() == 1).then_some(MemberCompletion::without_reason()),
                 Some(1),
             )
         })
@@ -55,5 +55,5 @@ impl ExecutionUnit for Model {
 #[test]
 fn basic_prelude_contains_the_execution_unit_contract() {
     fn accepts_unit<M: ExecutionUnit>() {}
-    accepts_unit::<Model>();
+    accepts_unit::<Unit>();
 }

@@ -33,10 +33,10 @@ fn preludes_expose_the_complete_supported_inventories() {
     {
         #[allow(unused_imports)]
         use scientific_workflow::prelude::basic::{
-            ExecutionUnit, InitializationContext, ModelView, ObservationError, ObservationPlan,
-            ObservationStream, PayloadInsertError, SeedError, StateError, StateSeries,
-            StateSeriesError, StateSeriesPushError, StateTime, SystemState, SystemStateSchema,
-            TaskResult, WorkflowError, execution_unit, model, run,
+            ExecutionUnit, InitializationContext, MemberCompletion, MemberView, ObservationError,
+            ObservationPlan, ObservationStream, PayloadInsertError, SeedError, StateError,
+            StateSeries, StateSeriesError, StateSeriesPushError, StateTime, SystemState,
+            SystemStateSchema, TaskResult, WorkflowError, execution_unit, run,
         };
     }
 
@@ -44,13 +44,13 @@ fn preludes_expose_the_complete_supported_inventories() {
         #[allow(unused_imports)]
         use scientific_workflow::prelude::advanced::{
             ConfigError, ExecutionUnit, InitializationContext, JsonPayloadDecoder,
-            JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder, ModelView,
-            ObservationError, ObservationPlan, ObservationStream, PayloadInsertError,
+            JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder, MemberCompletion,
+            MemberView, ObservationError, ObservationPlan, ObservationStream, PayloadInsertError,
             PersistenceError, PhaseRunSummary, RecordingTiming, ReplicateRunSummary, RunSummary,
             RuntimeError, SeedError, StateError, StateFieldSchema, StateMaintenance,
             StateSchemaAccess, StateSeries, StateSeriesError, StateSeriesPushError, StateTime,
             StoredStateSeriesReader, Study, StudyError, SystemState, SystemStateSchema, TaskResult,
-            TaskRunKind, TaskRunSummary, WorkflowError, execute, execution_unit, model, run,
+            TaskRunKind, TaskRunSummary, WorkflowError, execute, execution_unit, run,
         };
     }
 }
@@ -103,9 +103,9 @@ fn runtime_advanced_accepts_only_a_completed_study() {
     #[allow(unused_imports)]
     use scientific_workflow::runtime::basic::*;
 
-    let kind = scientific_workflow::prelude::advanced::TaskRunKind::Model;
+    let kind = scientific_workflow::prelude::advanced::TaskRunKind::ExecutionUnit;
     assert_eq!(
         kind,
-        scientific_workflow::runtime::advanced::TaskRunKind::Model
+        scientific_workflow::runtime::advanced::TaskRunKind::ExecutionUnit
     );
 }

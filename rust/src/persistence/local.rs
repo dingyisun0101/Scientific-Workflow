@@ -2,7 +2,7 @@
 //!
 //! This module is not API. Runtime reaches it only through the parent
 //! `PersistenceSession`, which supplies Study's immutable plan, inferred path,
-//! observation plan, schema, and provenance. Models and applications cannot
+//! observation plan, schema, and provenance. Execution units and applications cannot
 //! construct or drive these writers.
 //!
 //! One bounded queue and worker serve every configured stream. Each stream
@@ -319,6 +319,7 @@ impl SystemStateWriter {
     /// impossible in safe Rust. If a writer fails, all remaining writers are
     /// still drained and a best-effort failed metadata transition is attempted
     /// before the originating writer error is returned.
+    #[cfg(test)]
     pub(crate) fn complete_recording(self) -> Result<(), PersistenceError> {
         self.complete_recording_with_terminal_metadata(Map::new())
     }
@@ -353,12 +354,13 @@ impl SystemStateWriter {
     pub(crate) fn complete_recording_with_final_state(
         mut self,
         state: &SystemState,
+        terminal_metadata: Map<String, Value>,
     ) -> Result<(), PersistenceError> {
         if let Err(error) = self.record_final_state(state) {
             let _ = self.mark_recording_failed(error.to_string());
             return Err(error);
         }
-        self.complete_recording()
+        self.complete_recording_with_terminal_metadata(terminal_metadata)
     }
 
     /// Encodes the supplied terminal state for streams that lack this iteration.

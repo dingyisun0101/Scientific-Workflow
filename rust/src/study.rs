@@ -1,7 +1,7 @@
 //! Effect-free compilation of project declarations into executable scientific intent.
 //!
 //! Config remains the sole parser. Study composes its immutable output with
-//! the retained central Config snapshot, compiled model registrations,
+//! the retained central Config snapshot, compiled execution unit registrations,
 //! already-resolved program/Python tasks, state semantics, deterministic
 //! identities, phase organization, inferred operational plans, and complete
 //! preflight. Runtime consumes a finished [`advanced::Study`] and never

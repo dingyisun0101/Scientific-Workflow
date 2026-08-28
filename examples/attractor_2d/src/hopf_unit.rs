@@ -9,17 +9,17 @@ const RADIUS_FIELD: &str = "radius";
 
 /// Scientific owner for one generated parameter-sweep task.
 ///
-/// The evolving fields live in Workflow's dynamic `SystemState`; the model
+/// The evolving fields live in Workflow's dynamic `SystemState`; the unit
 /// stores only the coefficients needed to advance them. This deliberately
 /// avoids defining an application-specific state mirror.
-pub(crate) struct HopfModel {
+pub(crate) struct HopfUnit {
     state: SystemState,
     constants: AttractorConstants,
 }
 
 // REQUIRED: Workflow uses Serde deserialization to match every property in an
 // expanded `parameters.json["attractor"]` object to these Rust field names.
-// Do not remove `Deserialize`; without it, this type cannot be the model's
+// Do not remove `Deserialize`; without it, this type cannot be the unit's
 // `ExecutionUnit::Constants`. `deny_unknown_fields` also makes stale or
 // misspelled parameter keys fail during Study preflight.
 #[derive(Deserialize)]
@@ -35,23 +35,26 @@ pub(crate) struct AttractorConstants {
     angular_frequency: f64,
 }
 
-impl HopfModel {
+impl HopfUnit {
     /// Deliberate wall-clock pacing for the bundled interactive demonstration.
     ///
     /// IMPORTANT: Do not remove this delay from the example. It keeps the
     /// automatic dashboard visible long enough to demonstrate concurrent task
     /// admission and progress. It is presentation pacing only and never enters
-    /// scientific time or the persisted model constants.
+    /// scientific time or persisted constants.
     const DEMONSTRATION_STEP_DELAY: Duration = Duration::from_millis(1);
 }
 
 // This attribute only links the ordinary Rust implementation to the stable
-// `attractor` manifest key. HopfModel itself owns and exposes all model state.
+// `attractor` manifest key. HopfUnit itself owns and exposes its member state.
 #[scientific_workflow::execution_unit("attractor")]
-impl ExecutionUnit for HopfModel {
+impl ExecutionUnit for HopfUnit {
     type Constants = AttractorConstants;
 
-    fn observation_plan(constants: &Self::Constants) -> TaskResult<ObservationPlan> {
+    fn preflight(
+        constants: &Self::Constants,
+        _schema: &SystemStateSchema,
+    ) -> TaskResult<ObservationPlan> {
         Ok(ObservationPlan::streams([
             ObservationStream::fields("trajectory", [POINT_FIELD])?
                 .every_iterations(constants.trajectory_sampling_interval)?,
@@ -81,16 +84,17 @@ impl ExecutionUnit for HopfModel {
         Ok(Self { state, constants })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
-            ModelView::new(
+            MemberView::new(
                 "hopf-attractor",
                 &self.state,
-                self.state.time().iteration() == self.constants.step_count,
+                (self.state.time().iteration() == self.constants.step_count)
+                    .then_some(MemberCompletion::without_reason()),
                 Some(self.constants.step_count),
             )
         })

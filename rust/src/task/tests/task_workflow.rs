@@ -8,17 +8,21 @@ use std::rc::Rc;
 
 use serde::{Deserialize, Deserializer};
 
-use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
+use crate::config::advanced::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
 use crate::observation::advanced::{BoundObservationPlan, ObservationPlan};
 use crate::state::advanced::{StateTime, SystemState, SystemStateSchema, schema_from_json_value};
 
-use super::catalog::{ModelCatalog, ModelCatalogError, ModelRegistration};
+use super::catalog::{ExecutionUnitCatalog, ExecutionUnitCatalogError, ExecutionUnitRegistration};
 use super::execution::{
-    ModelInitialization, ProgramDefinition, ProgramTaskInvocation, StatefulDefinition,
+    ExecutionUnitDefinition, MemberInitialization, ProgramDefinition, ProgramTaskInvocation,
     TaskDefinition, TaskExecutionHost,
 };
 use super::result::TaskResult;
-use super::unit::{ExecutionUnit, InitializationContext, ModelView};
+use super::unit::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView};
+
+fn completion(complete: bool) -> Option<MemberCompletion<'static>> {
+    complete.then_some(MemberCompletion::without_reason())
+}
 
 fn test_initialization_context() -> &'static InitializationContext {
     static CONTEXT: std::sync::OnceLock<InitializationContext> = std::sync::OnceLock::new();
@@ -70,26 +74,27 @@ impl TaskExecutionHost for ProgramInvocationHost {
         Ok(())
     }
 
-    fn begin_model(&mut self, _model: ModelInitialization<'_>) -> TaskResult {
-        panic!("program contract tests do not initialize models")
+    fn begin_member(&mut self, _member: MemberInitialization<'_>) -> TaskResult {
+        panic!("program contract tests do not initialize members")
     }
 
-    fn observe_model_step(
+    fn observe_member_step(
         &mut self,
         _index: usize,
         _state: &SystemState,
         _target_iteration: Option<u64>,
     ) -> TaskResult {
-        panic!("program contract tests do not observe models")
+        panic!("program contract tests do not observe members")
     }
 
-    fn observe_model_final(
+    fn observe_member_final(
         &mut self,
         _index: usize,
         _state: &SystemState,
         _target_iteration: Option<u64>,
+        _completion_reason: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> TaskResult {
-        panic!("program contract tests do not observe models")
+        panic!("program contract tests do not observe members")
     }
 }
 
@@ -103,19 +108,19 @@ impl TaskExecutionHost for RecordingHost {
     }
 
     fn execute_program(&mut self, _program: ProgramTaskInvocation<'_>) -> TaskResult {
-        panic!("model contract tests do not execute programs")
+        panic!("execution-unit contract tests do not execute programs")
     }
 
-    fn begin_model(&mut self, model: ModelInitialization<'_>) -> TaskResult {
-        self.identities.push(model.identity.into());
+    fn begin_member(&mut self, member: MemberInitialization<'_>) -> TaskResult {
+        self.identities.push(member.identity.into());
         self.events.push((
-            model.index,
-            Event::Begin(model.state.time().iteration(), model.target_iteration),
+            member.index,
+            Event::Begin(member.state.time().iteration(), member.target_iteration),
         ));
         Ok(())
     }
 
-    fn observe_model_step(
+    fn observe_member_step(
         &mut self,
         _index: usize,
         state: &SystemState,
@@ -131,11 +136,12 @@ impl TaskExecutionHost for RecordingHost {
         Ok(())
     }
 
-    fn observe_model_final(
+    fn observe_member_final(
         &mut self,
         _index: usize,
         state: &SystemState,
         target_iteration: Option<u64>,
+        _completion_reason: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> TaskResult {
         self.events.push((
             _index,
@@ -153,20 +159,20 @@ fn schema(source: &str) -> SystemStateSchema {
     .unwrap()
 }
 
-fn definition<M>(value: serde_json::Value) -> StatefulDefinition<M>
+fn definition<U>(value: serde_json::Value) -> ExecutionUnitDefinition<U>
 where
-    M: ExecutionUnit,
+    U: ExecutionUnit,
 {
     let schema = schema("wf_configs/states/value.json");
     let plan = BoundObservationPlan::bind(ObservationPlan::all_fields(), &schema).unwrap();
-    let parameters = ResolvedModelParameters::new(
+    let parameters = ResolvedExecutionUnitParameters::new(
         "test".into(),
         PathBuf::from("wf_configs/parameters.json"),
         0,
         value,
         None,
     );
-    StatefulDefinition::new(parameters, schema, plan)
+    ExecutionUnitDefinition::new(parameters, schema, plan)
 }
 
 struct LocalConstants {
@@ -192,12 +198,12 @@ impl<'de> Deserialize<'de> for LocalConstants {
     }
 }
 
-struct CountingModel {
+struct CountingUnit {
     state: SystemState,
     steps: u64,
 }
 
-impl ExecutionUnit for CountingModel {
+impl ExecutionUnit for CountingUnit {
     type Constants = LocalConstants;
 
     fn initialize(
@@ -213,16 +219,16 @@ impl ExecutionUnit for CountingModel {
         })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
-            ModelView::new(
+            MemberView::new(
                 "counting",
                 &self.state,
-                self.state.time().iteration() >= self.steps,
+                completion(self.state.time().iteration() >= self.steps),
                 Some(self.steps),
             )
         })
@@ -248,11 +254,11 @@ impl ExecutionUnit for PanicOnInitialize {
         panic!("initialization must not run after pre-execution cancellation")
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         unreachable!()
     }
 
-    fn model(&self, _index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, _index: usize) -> Option<MemberView<'_>> {
         unreachable!()
     }
 
@@ -261,11 +267,11 @@ impl ExecutionUnit for PanicOnInitialize {
     }
 }
 
-struct NonAdvancingModel {
+struct NonAdvancingUnit {
     state: SystemState,
 }
 
-impl ExecutionUnit for NonAdvancingModel {
+impl ExecutionUnit for NonAdvancingUnit {
     type Constants = ();
 
     fn initialize(
@@ -278,12 +284,12 @@ impl ExecutionUnit for NonAdvancingModel {
         Ok(Self { state })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
-        (index == 0).then(|| ModelView::new("nonadvancing", &self.state, false, None))
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| MemberView::new("nonadvancing", &self.state, None, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -291,13 +297,13 @@ impl ExecutionUnit for NonAdvancingModel {
     }
 }
 
-struct OwnerSwitchModel {
+struct OwnerSwitchUnit {
     first: SystemState,
     second: SystemState,
     use_second: bool,
 }
 
-impl ExecutionUnit for OwnerSwitchModel {
+impl ExecutionUnit for OwnerSwitchUnit {
     type Constants = ();
 
     fn initialize(
@@ -316,18 +322,18 @@ impl ExecutionUnit for OwnerSwitchModel {
         })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
             let state = if self.use_second {
                 &self.second
             } else {
                 &self.first
             };
-            ModelView::new("owner-switch", state, false, None)
+            MemberView::new("owner-switch", state, None, None)
         })
     }
 
@@ -338,11 +344,11 @@ impl ExecutionUnit for OwnerSwitchModel {
     }
 }
 
-struct SchemaSwitchModel {
+struct SchemaSwitchUnit {
     state: SystemState,
 }
 
-impl ExecutionUnit for SchemaSwitchModel {
+impl ExecutionUnit for SchemaSwitchUnit {
     type Constants = ();
 
     fn initialize(
@@ -355,12 +361,12 @@ impl ExecutionUnit for SchemaSwitchModel {
         Ok(Self { state })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
-        (index == 0).then(|| ModelView::new("schema-switch", &self.state, false, None))
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| MemberView::new("schema-switch", &self.state, None, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -377,13 +383,13 @@ struct TargetConstants {
     mode: String,
 }
 
-struct InvalidTargetModel {
+struct InvalidTargetUnit {
     state: SystemState,
     target: Option<u64>,
     mode: String,
 }
 
-impl ExecutionUnit for InvalidTargetModel {
+impl ExecutionUnit for InvalidTargetUnit {
     type Constants = TargetConstants;
 
     fn initialize(
@@ -407,12 +413,12 @@ impl ExecutionUnit for InvalidTargetModel {
         })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
-        (index == 0).then(|| ModelView::new("invalid-target", &self.state, false, self.target))
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| MemberView::new("invalid-target", &self.state, None, self.target))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -426,7 +432,7 @@ impl ExecutionUnit for InvalidTargetModel {
     }
 }
 
-struct FailingStepModel {
+struct FailingStepUnit {
     state: SystemState,
 }
 
@@ -455,17 +461,17 @@ impl ExecutionUnit for PairedUnit {
         })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         self.states.len()
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
         let state = self.states.get(index)?;
         let target = self.targets[index];
-        Some(ModelView::new(
+        Some(MemberView::new(
             ["short", "long"][index],
             state,
-            state.time().iteration() >= target,
+            completion(state.time().iteration() >= target),
             Some(target),
         ))
     }
@@ -481,7 +487,7 @@ impl ExecutionUnit for PairedUnit {
     }
 }
 
-impl ExecutionUnit for FailingStepModel {
+impl ExecutionUnit for FailingStepUnit {
     type Constants = ();
 
     fn initialize(
@@ -494,12 +500,12 @@ impl ExecutionUnit for FailingStepModel {
         Ok(Self { state })
     }
 
-    fn model_count(&self) -> usize {
+    fn member_count(&self) -> usize {
         1
     }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
-        (index == 0).then(|| ModelView::new("failing", &self.state, false, None))
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| MemberView::new("failing", &self.state, None, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -510,24 +516,24 @@ impl ExecutionUnit for FailingStepModel {
 #[test]
 fn catalog_rejects_invalid_and_duplicate_registration_keys() {
     assert!(matches!(
-        ModelCatalog::from_registrations([ModelRegistration::new::<CountingModel>(" ")]),
-        Err(ModelCatalogError::InvalidKey { key }) if key == " "
+        ExecutionUnitCatalog::from_registrations([ExecutionUnitRegistration::new::<CountingUnit>(" ")]),
+        Err(ExecutionUnitCatalogError::InvalidKey { key }) if key == " "
     ));
 
-    let duplicate = ModelRegistration::new::<CountingModel>("counter");
+    let duplicate = ExecutionUnitRegistration::new::<CountingUnit>("counter");
     assert!(matches!(
-        ModelCatalog::from_registrations([duplicate, duplicate]),
-        Err(ModelCatalogError::DuplicateKey { key }) if key == "counter"
+        ExecutionUnitCatalog::from_registrations([duplicate, duplicate]),
+        Err(ExecutionUnitCatalogError::DuplicateKey { key }) if key == "counter"
     ));
 
-    let catalog = ModelCatalog::from_registrations([duplicate]).unwrap();
+    let catalog = ExecutionUnitCatalog::from_registrations([duplicate]).unwrap();
     assert!(catalog.get("counter").is_some());
 }
 
 #[test]
 fn execution_observes_initial_steps_and_final_state_in_order() {
     let mut host = RecordingHost::default();
-    definition::<CountingModel>(serde_json::json!({"steps":2}))
+    definition::<CountingUnit>(serde_json::json!({"steps":2}))
         .execute(&mut host)
         .unwrap();
 
@@ -555,7 +561,7 @@ fn cancellation_prevents_initialization_and_stops_between_steps() {
         cancel_after_step: true,
         ..RecordingHost::default()
     };
-    definition::<CountingModel>(serde_json::json!({"steps":3}))
+    definition::<CountingUnit>(serde_json::json!({"steps":3}))
         .execute(&mut between)
         .unwrap();
     assert_eq!(
@@ -568,19 +574,19 @@ fn cancellation_prevents_initialization_and_stops_between_steps() {
 fn execution_rejects_changed_state_owner_schema_and_nonadvancing_steps() {
     for (result, expected) in [
         (
-            definition::<OwnerSwitchModel>(serde_json::Value::Null)
+            definition::<OwnerSwitchUnit>(serde_json::Value::Null)
                 .execute(&mut RecordingHost::default()),
             "different SystemState owner",
         ),
         (
-            definition::<SchemaSwitchModel>(serde_json::Value::Null)
+            definition::<SchemaSwitchUnit>(serde_json::Value::Null)
                 .execute(&mut RecordingHost::default()),
             "changed its state schema",
         ),
         (
-            definition::<NonAdvancingModel>(serde_json::Value::Null)
+            definition::<NonAdvancingUnit>(serde_json::Value::Null)
                 .execute(&mut RecordingHost::default()),
-            "did not advance any incomplete model",
+            "did not advance any incomplete member",
         ),
     ] {
         assert!(result.unwrap_err().to_string().contains(expected));
@@ -594,7 +600,7 @@ fn execution_rejects_invalid_target_progression() {
         ("decrease", "target iteration decreased"),
         ("disappear", "target iteration disappeared"),
     ] {
-        let result = definition::<InvalidTargetModel>(serde_json::json!({"mode":mode}))
+        let result = definition::<InvalidTargetUnit>(serde_json::json!({"mode":mode}))
             .execute(&mut RecordingHost::default());
         assert!(result.unwrap_err().to_string().contains(expected));
     }
@@ -603,14 +609,14 @@ fn execution_rejects_invalid_target_progression() {
 #[test]
 fn failed_steps_publish_no_successful_step_or_final_observation() {
     let mut host = RecordingHost::default();
-    let result = definition::<FailingStepModel>(serde_json::Value::Null).execute(&mut host);
+    let result = definition::<FailingStepUnit>(serde_json::Value::Null).execute(&mut host);
 
     assert_eq!(result.unwrap_err().to_string(), "step failed");
     assert_eq!(host.events, [(0, Event::Begin(0, None))]);
 }
 
 #[test]
-fn execution_manages_an_ensemble_as_one_unit_with_independent_model_lifecycles() {
+fn execution_manages_an_ensemble_as_one_unit_with_independent_member_lifecycles() {
     let mut host = RecordingHost::default();
     definition::<PairedUnit>(serde_json::Value::Null)
         .execute(&mut host)

@@ -34,7 +34,7 @@ impl ObservationPlan {
     /// Defines one inferred stream named `state` containing selected fields.
     ///
     /// Field names are trimmed and must be nonempty and unique. Their existence
-    /// is checked later against the model's state schema.
+    /// is checked later against the execution unit's state schema.
     ///
     /// # Errors
     ///

@@ -7,27 +7,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::config::advanced::ConfigSnapshot;
 use crate::persistence::advanced::{
-    ModelRecordingProvenance, PersistencePlan, PersistenceSession, ProgramLaunch,
+    MemberRecordingProvenance, PersistencePlan, PersistenceSession, ProgramLaunch,
     ProgramPersistenceSession,
 };
 use crate::state::advanced::SystemState;
 use crate::task::advanced::{
-    InitializationContext, ModelInitialization, ProgramTaskInvocation, TaskExecutionHost,
+    InitializationContext, MemberInitialization, ProgramTaskInvocation, TaskExecutionHost,
     TaskResult,
 };
 use crate::ui::advanced::TaskUi;
 
-use super::summary::ModelRunSummary;
+use super::summary::MemberRunSummary;
 
 pub(crate) struct RuntimeTaskHost {
     persistence_plan: PersistencePlan,
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
-    provenance: Option<ModelRecordingProvenance>,
+    provenance: Option<MemberRecordingProvenance>,
     initialization_context: Option<InitializationContext>,
     persistence: Vec<Option<PersistenceSession>>,
     member_iterations: Vec<u64>,
@@ -67,7 +68,7 @@ impl RuntimeTaskHost {
         persistence_plan: PersistencePlan,
         cancellation: Arc<AtomicBool>,
         output_directory: PathBuf,
-        provenance: Option<ModelRecordingProvenance>,
+        provenance: Option<MemberRecordingProvenance>,
         initialization_context: Option<InitializationContext>,
         task_ui: TaskUi,
         environment: RuntimeTaskEnvironment,
@@ -97,20 +98,22 @@ impl RuntimeTaskHost {
         self.final_iteration
     }
 
-    pub(crate) fn model_summaries(&self) -> Box<[ModelRunSummary]> {
+    pub(crate) fn member_summaries(&self) -> Box<[MemberRunSummary]> {
         self.member_identities
             .iter()
             .zip(&self.member_directories)
             .zip(&self.member_iterations)
-            .map(|((identity, directory), final_iteration)| ModelRunSummary {
-                identity: identity
-                    .clone()
-                    .expect("every completed model retains its identity"),
-                final_iteration: *final_iteration,
-                output_directory: directory
-                    .clone()
-                    .expect("every completed model retains its recording directory"),
-            })
+            .map(
+                |((identity, directory), final_iteration)| MemberRunSummary {
+                    identity: identity
+                        .clone()
+                        .expect("every completed member retains its identity"),
+                    final_iteration: *final_iteration,
+                    output_directory: directory
+                        .clone()
+                        .expect("every completed member retains its recording directory"),
+                },
+            )
             .collect()
     }
 
@@ -218,36 +221,36 @@ impl TaskExecutionHost for RuntimeTaskHost {
         }
     }
 
-    fn begin_model(&mut self, model: ModelInitialization<'_>) -> TaskResult {
-        let ModelInitialization {
+    fn begin_member(&mut self, member: MemberInitialization<'_>) -> TaskResult {
+        let MemberInitialization {
             index,
-            model_count,
+            member_count,
             identity,
             seed_derivation,
             plan,
             state,
             target_iteration,
-        } = model;
+        } = member;
         let provenance = self
             .provenance
             .as_ref()
-            .expect("a model task retains recording provenance")
+            .expect("an execution-unit task retains recording provenance")
             .clone()
             .with_member(index, identity)
             .with_seed_derivation(seed_derivation);
         if self.persistence.is_empty() {
-            self.persistence.resize_with(model_count, || None);
-            self.member_iterations.resize(model_count, 0);
-            self.member_targets.resize(model_count, None);
-            self.member_identities.resize(model_count, None);
-            self.member_directories.resize(model_count, None);
+            self.persistence.resize_with(member_count, || None);
+            self.member_iterations.resize(member_count, 0);
+            self.member_targets.resize(member_count, None);
+            self.member_identities.resize(member_count, None);
+            self.member_directories.resize(member_count, None);
         }
-        let directory = if model_count == 1 {
+        let directory = if member_count == 1 {
             self.output_directory.clone()
         } else {
             self.output_directory
-                .join("models")
-                .join(format!("model-{index:06}"))
+                .join("members")
+                .join(format!("member-{index:06}"))
         };
         let persistence = PersistenceSession::start(
             directory.clone(),
@@ -266,7 +269,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
         Ok(())
     }
 
-    fn observe_model_step(
+    fn observe_member_step(
         &mut self,
         index: usize,
         state: &SystemState,
@@ -277,7 +280,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
         }
         self.persistence[index]
             .as_mut()
-            .expect("begin_model precedes step observation")
+            .expect("begin_member precedes step observation")
             .observe(state)?;
         self.member_iterations[index] = state.time().iteration();
         self.member_targets[index] = target_iteration;
@@ -286,19 +289,20 @@ impl TaskExecutionHost for RuntimeTaskHost {
         Ok(())
     }
 
-    fn observe_model_final(
+    fn observe_member_final(
         &mut self,
         index: usize,
         state: &SystemState,
         target_iteration: Option<u64>,
+        completion_reason: Option<Map<String, Value>>,
     ) -> TaskResult {
         if self.cancellation_requested() {
             return Ok(());
         }
         self.persistence[index]
             .as_mut()
-            .expect("begin_model precedes final observation")
-            .complete(state)?;
+            .expect("begin_member precedes final observation")
+            .complete(state, completion_reason)?;
         self.persistence[index] = None;
         self.member_iterations[index] = state.time().iteration();
         self.member_targets[index] = target_iteration;

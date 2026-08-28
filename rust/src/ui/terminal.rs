@@ -305,7 +305,7 @@ fn progress_text(task: &TaskSnapshot, tick: usize) -> String {
     if task.status == TaskStatus::Pending || task.status == TaskStatus::Skipped {
         return String::new();
     }
-    if task.kind != "model" {
+    if task.kind != "execution_unit" {
         return if task.status == TaskStatus::Running {
             format!("{} {}", SPINNER[tick % SPINNER.len()], task.kind)
         } else {

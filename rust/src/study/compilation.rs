@@ -6,14 +6,14 @@ use crate::config::advanced::{
     PhaseSpecification, ProjectSpecification, ResolvedTask, StateSchemaDocument,
 };
 use crate::state::advanced::schema_from_json_value;
-use crate::task::advanced::{ModelCatalog, Task};
+use crate::task::advanced::{ExecutionUnitCatalog, Task};
 
 use super::error::StudyError;
 use super::plan::{Study, StudyPhase, StudyTask};
 
 pub(crate) fn compile(
     project: ProjectSpecification,
-    catalog: &ModelCatalog,
+    catalog: &ExecutionUnitCatalog,
 ) -> Result<Study, StudyError> {
     let mut schemas = BTreeMap::new();
     for (name, document) in project.state_schemas() {
@@ -30,30 +30,35 @@ pub(crate) fn compile(
         let mut tasks = Vec::with_capacity(phase.tasks().len());
         for resolved in phase.tasks() {
             let (identity_suffix, label, task) = match resolved {
-                ResolvedTask::Model { parameters, state } => {
+                ResolvedTask::ExecutionUnit { parameters, state } => {
                     let schema = schemas
                         .get(state.as_ref())
-                        .expect("config validated every model state reference");
-                    let registration = catalog.get(parameters.model()).ok_or_else(|| {
-                        StudyError::UnknownModel {
-                            phase: phase.name().to_owned(),
-                            model: parameters.model().to_owned(),
-                        }
-                    })?;
+                        .expect("config validated every execution-unit state reference");
+                    let registration =
+                        catalog.get(parameters.execution_unit()).ok_or_else(|| {
+                            StudyError::UnknownExecutionUnit {
+                                phase: phase.name().to_owned(),
+                                execution_unit: parameters.execution_unit().to_owned(),
+                            }
+                        })?;
                     let observation_plan =
                         registration
                             .preflight(parameters, schema)
                             .map_err(|source| {
-                                StudyError::model_preflight(
+                                StudyError::execution_unit_preflight(
                                     phase.name(),
-                                    parameters.model(),
+                                    parameters.execution_unit(),
                                     parameters.ordinal(),
                                     source,
                                 )
                             })?;
                     (
-                        format!("{}-{:06}", parameters.model(), parameters.ordinal()),
-                        format!("{} #{}", parameters.model(), parameters.ordinal()),
+                        format!(
+                            "{}-{:06}",
+                            parameters.execution_unit(),
+                            parameters.ordinal()
+                        ),
+                        format!("{} #{}", parameters.execution_unit(), parameters.ordinal()),
                         registration.make_task(
                             parameters.clone(),
                             state.clone(),

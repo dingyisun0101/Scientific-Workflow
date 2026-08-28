@@ -7,7 +7,7 @@ supported and are preferred in reusable libraries.
 
 ## Basic API
 
-`scientific_workflow::prelude::basic::*` is the ordinary model-author surface.
+`scientific_workflow::prelude::basic::*` is the ordinary execution unit-author surface.
 It re-exports:
 
 - every `state::basic` symbol: `StateError`, `StateSeriesError`,
@@ -16,10 +16,10 @@ It re-exports:
 - every `observation::basic` symbol: `ObservationPlan`, `ObservationStream`,
   and `ObservationError`;
 - every `task::basic` symbol: `ExecutionUnit`, `InitializationContext`,
-  `ModelView`, `SeedError`, and `TaskResult`;
+  `MemberCompletion`, `MemberView`, `SeedError`, and `TaskResult`;
 - every `error::basic` symbol: only `WorkflowError`;
 - the crate-level `run(&Path)` facade;
-- the crate-level `execution_unit` attribute and its `model` compatibility spelling; and
+- the crate-level `execution_unit` attribute; and
 - no symbols from the intentionally empty `runtime::basic` scope.
 
 `config::basic`, `study::basic`, `runtime::basic`, `persistence::basic`, and
@@ -28,8 +28,8 @@ behavior is reached through project declarations and the crate facade.
 Re-exporting empty tiers keeps the uniform subsystem rule without inventing
 construction APIs.
 
-The Basic prelude deliberately does not export `Task`, `Study`, model catalogs,
-project parsers, resolved model parameters, output allocators, persistence writers/readers,
+The Basic prelude deliberately does not export `Task`, `Study`, execution unit catalogs,
+project parsers, resolved execution unit parameters, output allocators, persistence writers/readers,
 schedulers, summaries, or runtime adapters. Those
 are not required to complete an ordinary project.
 
@@ -54,14 +54,14 @@ re-exports the complete supported advanced tiers from:
   encoding machinery is crate-private;
 - `persistence::advanced`: `PersistenceError`, verified reader/timing types,
   and JSON payload decoder contracts;
-- `task::advanced`: the Basic model APIs; its documentation-hidden
-  `ModelRegistration` is visible only because downstream attribute-macro
+- `task::advanced`: the Basic execution unit APIs; its documentation-hidden
+  `ExecutionUnitRegistration` is visible only because downstream attribute-macro
   expansion must name registration metadata, while catalogs, tasks, and host
   machinery remain crate-private;
 - `study::advanced`: only `Study` and `StudyError`; its phase/task graph is
   crate-private; and
 - `runtime::advanced`: `execute`, `RuntimeError`, `RunSummary`,
-  `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunKind`, `ModelRunSummary`, and
+  `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunKind`, `MemberRunSummary`, and
   `TaskRunSummary`; and
 - `ui::advanced`: no public additions; its plan, events, session, and renderer
   remain crate-private.
@@ -75,7 +75,7 @@ empty and its Advanced tier exposes no plan, writer, or lifecycle constructor.
 
 ## Example
 
-An ordinary project normally needs one glob import in its model file:
+An ordinary project normally needs one glob import in its execution unit file:
 
 ```rust,no_run
 use serde::Deserialize;
@@ -84,10 +84,10 @@ use scientific_workflow::prelude::basic::*;
 #[derive(Deserialize)]
 struct Constants { initial: u64, steps: u64 }
 
-struct Model { state: SystemState, target_iteration: u64 }
+struct ExecutionUnit { state: SystemState, target_iteration: u64 }
 
 #[scientific_workflow::execution_unit("example")]
-impl ExecutionUnit for Model {
+impl ExecutionUnit for ExecutionUnit {
     type Constants = Constants;
     fn initialize(
         constants: Constants,
@@ -102,12 +102,13 @@ impl ExecutionUnit for Model {
             target_iteration: constants.steps,
         })
     }
-    fn model_count(&self) -> usize { 1 }
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
-        (index == 0).then(|| ModelView::new(
+    fn member_count(&self) -> usize { 1 }
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| MemberView::new(
             "example",
             &self.state,
-            self.state.time().iteration() >= self.target_iteration,
+            (self.state.time().iteration() >= self.target_iteration)
+                .then_some(MemberCompletion::without_reason()),
             Some(self.target_iteration),
         ))
     }
@@ -150,10 +151,10 @@ println!("{}", summary.output_directory().display());
 ## Not API
 
 Prelude ordering, individual `pub use` statements, hidden `PayloadTuple`,
-hidden `ModelRegistration`, and the crate's macro-support `__private` namespace
+hidden `ExecutionUnitRegistration`, and the crate's macro-support `__private` namespace
 are not APIs. `PayloadTuple` is reachable solely because it seals the public
-tuple-borrow bounds. `ModelRegistration` is pulled through the Task Advanced
+tuple-borrow bounds. `ExecutionUnitRegistration` is pulled through the Task Advanced
 glob solely for attribute-macro expansion; applications register execution units with
-`#[execution_unit]` (or compatibility `#[model]`) and must not construct it. Consumers must not infer subsystem
+`#[execution_unit]` and must not construct it. Consumers must not infer subsystem
 ownership from a prelude path; ownership is always the symbol's canonical
 `module::basic` or `module::advanced` path.

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::local::*;
 use super::plan::PersistencePlan;
 use super::session::{
-    ModelRecordingProvenance, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
+    MemberRecordingProvenance, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
 };
 use crate::observation::advanced::BoundObservationPlan;
 use scientific_workflow::prelude::basic::*;
@@ -179,10 +179,10 @@ fn bound_observation(schema: &SystemStateSchema) -> BoundObservationPlan {
     BoundObservationPlan::bind(observation_plan(1), schema).unwrap()
 }
 
-fn model_provenance() -> ModelRecordingProvenance {
-    ModelRecordingProvenance::new(
-        "test/000000/model-000000",
-        "model",
+fn execution_unit_provenance() -> MemberRecordingProvenance {
+    MemberRecordingProvenance::new(
+        "test/000000/unit-000000",
+        "unit",
         "state",
         0,
         Path::new("wf_configs/parameters.json"),
@@ -191,7 +191,7 @@ fn model_provenance() -> ModelRecordingProvenance {
 }
 
 #[test]
-fn private_model_sessions_terminalize_initial_and_final_observation_failures() {
+fn private_member_sessions_terminalize_initial_and_final_observation_failures() {
     let schema = spec();
 
     let initial = TempWorkspace::new("session-initial");
@@ -201,7 +201,7 @@ fn private_model_sessions_terminalize_initial_and_final_observation_failures() {
         initial.run(),
         bound_observation(&schema),
         effective_plan(64),
-        model_provenance(),
+        execution_unit_provenance(),
         &oversized_initial,
     ) {
         Ok(_) => panic!("oversized initial observation must fail"),
@@ -218,14 +218,14 @@ fn private_model_sessions_terminalize_initial_and_final_observation_failures() {
         final_observation.run(),
         bound_observation(&schema),
         effective_plan(512),
-        model_provenance(),
+        execution_unit_provenance(),
         &initial_state,
     )
     .unwrap();
     let mut oversized_final = populated_state(&schema, 1);
     *oversized_final.payload_mut::<String>("activity").unwrap() = "x".repeat(4_096);
     assert!(matches!(
-        session.complete(&oversized_final),
+        session.complete(&oversized_final, None),
         Err(PersistenceError::RecordTooLarge { .. })
     ));
     let final_metadata: Value =

@@ -1,4 +1,4 @@
-//! Complete expanded model parameters and config-owned typed decoding.
+//! Complete expanded execution-unit parameters and config-owned typed decoding.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,30 +13,30 @@ use super::program::ResolvedProgramTask;
 /// One centrally resolved generic task declaration.
 #[derive(Clone, Debug)]
 pub(crate) enum ResolvedTask {
-    Model {
-        parameters: ResolvedModelParameters,
+    ExecutionUnit {
+        parameters: ResolvedExecutionUnitParameters,
         state: Box<str>,
     },
     Program(ResolvedProgramTask),
 }
 
-/// One complete model-parameter combination after deterministic expansion.
+/// One complete execution-unit parameter combination after deterministic expansion.
 #[derive(Clone)]
-pub(crate) struct ResolvedModelParameters {
-    inner: Arc<ResolvedModelParametersInner>,
+pub(crate) struct ResolvedExecutionUnitParameters {
+    inner: Arc<ResolvedExecutionUnitParametersInner>,
 }
 
-impl ResolvedModelParameters {
+impl ResolvedExecutionUnitParameters {
     pub(crate) fn new(
-        model: Box<str>,
+        execution_unit: Box<str>,
         source_path: PathBuf,
         ordinal: u64,
         value: Value,
         timeout: Option<std::time::Duration>,
     ) -> Self {
         Self {
-            inner: Arc::new(ResolvedModelParametersInner {
-                model,
+            inner: Arc::new(ResolvedExecutionUnitParametersInner {
+                execution_unit,
                 source_path,
                 ordinal,
                 value,
@@ -45,9 +45,9 @@ impl ResolvedModelParameters {
         }
     }
 
-    /// Returns the stable manifest key selecting a compiled scientific model.
-    pub(crate) fn model(&self) -> &str {
-        &self.inner.model
+    /// Returns the stable manifest key selecting a compiled execution unit.
+    pub(crate) fn execution_unit(&self) -> &str {
+        &self.inner.execution_unit
     }
 
     /// Returns the canonical project parameters document path.
@@ -69,16 +69,18 @@ impl ResolvedModelParameters {
     ///
     /// This is the sole supported constants-supply operation. It never rereads
     /// or reparses the source file and contextualizes type errors with the
-    /// model key, source path, and combination ordinal.
+    /// execution-unit key, source path, and combination ordinal.
     pub(crate) fn decode<T>(&self) -> Result<T, ConfigError>
     where
         T: DeserializeOwned,
     {
-        T::deserialize(&self.inner.value).map_err(|source| ConfigError::DecodeModelConstants {
-            model: self.model().to_owned(),
-            path: self.source_path().to_path_buf(),
-            ordinal: self.ordinal(),
-            source,
+        T::deserialize(&self.inner.value).map_err(|source| {
+            ConfigError::DecodeExecutionUnitConstants {
+                execution_unit: self.execution_unit().to_owned(),
+                path: self.source_path().to_path_buf(),
+                ordinal: self.ordinal(),
+                source,
+            }
         })
     }
 
@@ -88,11 +90,11 @@ impl ResolvedModelParameters {
     }
 }
 
-impl fmt::Debug for ResolvedModelParameters {
+impl fmt::Debug for ResolvedExecutionUnitParameters {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ResolvedModelParameters")
-            .field("model", &self.model())
+            .debug_struct("ResolvedExecutionUnitParameters")
+            .field("execution_unit", &self.execution_unit())
             .field("source_path", &self.source_path())
             .field("ordinal", &self.ordinal())
             .field("timeout", &self.timeout())
@@ -100,8 +102,8 @@ impl fmt::Debug for ResolvedModelParameters {
     }
 }
 
-struct ResolvedModelParametersInner {
-    model: Box<str>,
+struct ResolvedExecutionUnitParametersInner {
+    execution_unit: Box<str>,
     source_path: PathBuf,
     ordinal: u64,
     value: Value,

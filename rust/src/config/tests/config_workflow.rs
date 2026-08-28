@@ -30,7 +30,7 @@ impl TestProject {
                     .and_then(serde_json::Value::as_array_mut)
                 {
                     for task in tasks {
-                        if task.get("model").is_some() && task.get("state").is_none() {
+                        if task.get("execution_unit").is_some() && task.get("state").is_none() {
                             task.as_object_mut()
                                 .unwrap()
                                 .insert("state".to_owned(), "default".into());
@@ -106,7 +106,7 @@ fn manifest() -> &'static str {
       "phases": {
         "simulate": {
           "tasks": [{
-            "model": "model",
+            "execution_unit": "unit",
             "timeout_ms": 250
           }],
           "max_concurrency": 2,
@@ -115,7 +115,7 @@ fn manifest() -> &'static str {
         "analyze": {
           "after": ["simulate"],
           "tasks": [{
-            "model": "analysis"
+            "execution_unit": "analysis"
           }],
           "timeout_ms": 500,
           "failure_policy": "finish_all"
@@ -124,23 +124,23 @@ fn manifest() -> &'static str {
     }"#
 }
 
-fn model_task(task: &ResolvedTask) -> &ResolvedModelParameters {
+fn execution_unit_task(task: &ResolvedTask) -> &ResolvedExecutionUnitParameters {
     match task {
-        ResolvedTask::Model { parameters, .. } => parameters,
-        ResolvedTask::Program(_) => panic!("expected a model task"),
+        ResolvedTask::ExecutionUnit { parameters, .. } => parameters,
+        ResolvedTask::Program(_) => panic!("expected a unit task"),
     }
 }
 
-fn model_state(task: &ResolvedTask) -> &str {
+fn execution_unit_state(task: &ResolvedTask) -> &str {
     match task {
-        ResolvedTask::Model { state, .. } => state,
-        ResolvedTask::Program(_) => panic!("expected a model task"),
+        ResolvedTask::ExecutionUnit { state, .. } => state,
+        ResolvedTask::Program(_) => panic!("expected a unit task"),
     }
 }
 
 fn program_task(task: &ResolvedTask) -> &ResolvedProgramTask {
     match task {
-        ResolvedTask::Model { .. } => panic!("expected a program task"),
+        ResolvedTask::ExecutionUnit { .. } => panic!("expected a program task"),
         ResolvedTask::Program(program) => program,
     }
 }
@@ -151,7 +151,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
         manifest(),
         &[
             (
-                "model",
+                "unit",
                 r#"{
                   "shape": [64, 64],
                   "temperature": {"$sweep": [280.0, 300.0]},
@@ -196,8 +196,8 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
     let decoded = simulation
         .tasks()
         .iter()
-        .map(model_task)
-        .map(ResolvedModelParameters::decode::<Constants>)
+        .map(execution_unit_task)
+        .map(ResolvedExecutionUnitParameters::decode::<Constants>)
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(
@@ -233,14 +233,17 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
             },
         ]
     );
-    assert_eq!(model_task(&simulation.tasks()[3]).model(), "model");
-    assert_eq!(model_task(&simulation.tasks()[3]).ordinal(), 3);
     assert_eq!(
-        model_task(&simulation.tasks()[3]).timeout(),
+        execution_unit_task(&simulation.tasks()[3]).execution_unit(),
+        "unit"
+    );
+    assert_eq!(execution_unit_task(&simulation.tasks()[3]).ordinal(), 3);
+    assert_eq!(
+        execution_unit_task(&simulation.tasks()[3]).timeout(),
         Some(Duration::from_millis(250))
     );
     assert_eq!(
-        model_task(&simulation.tasks()[3]).resolved_value(),
+        execution_unit_task(&simulation.tasks()[3]).resolved_value(),
         &serde_json::json!({
             "shape": [64, 64],
             "temperature": 300.0,
@@ -257,8 +260,8 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
 #[test]
 fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
-        &[("model", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
     let document = &specification.state_schemas()["default"];
@@ -269,7 +272,7 @@ fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() 
 }
 
 #[test]
-fn named_state_paths_are_resolved_once_and_selected_explicitly_by_model_tasks() {
+fn named_state_paths_are_resolved_once_and_selected_explicitly_by_execution_unit_tasks() {
     let project = TestProject::new(
         r#"{
           "paths": {
@@ -281,13 +284,13 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_model_tasks() 
           "phases": {
             "only": {
               "tasks": [
-                {"model":"model", "state":"population"},
-                {"model":"analysis", "state":"energy"}
+                {"execution_unit":"unit", "state":"population"},
+                {"execution_unit":"analysis", "state":"energy"}
               ]
             }
           }
         }"#,
-        &[("model", "{}"), ("analysis", "{}")],
+        &[("unit", "{}"), ("analysis", "{}")],
     );
     fs::write(
         project.path().join("wf_configs/population.json"),
@@ -313,30 +316,33 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_model_tasks() 
             .ends_with("wf_configs/states/energy.json")
     );
     assert_eq!(
-        model_state(&specification.phases()[0].tasks()[0]),
+        execution_unit_state(&specification.phases()[0].tasks()[0]),
         "population"
     );
-    assert_eq!(model_state(&specification.phases()[0].tasks()[1]), "energy");
+    assert_eq!(
+        execution_unit_state(&specification.phases()[0].tasks()[1]),
+        "energy"
+    );
 
     let unknown = TestProject::new(
         r#"{
           "paths":{"states":{"known":"wf_configs/states/default.json"}},
-          "phases":{"only":{"tasks":[{"model":"model","state":"missing"}]}}
+          "phases":{"only":{"tasks":[{"execution_unit":"unit","state":"missing"}]}}
         }"#,
-        &[("model", "{}")],
+        &[("unit", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(unknown.path()),
-        Err(ConfigError::UnknownState { phase, model, state })
-            if phase == "only" && model == "model" && state == "missing"
+        Err(ConfigError::UnknownState { phase, execution_unit, state })
+            if phase == "only" && execution_unit == "unit" && state == "missing"
     ));
 
     let missing_selector = TestProject::new_raw(
         r#"{
           "paths":{"states":{"known":"wf_configs/states/default.json"}},
-          "phases":{"only":{"tasks":[{"model":"model"}]}}
+          "phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}
         }"#,
-        &[("model", "{}")],
+        &[("unit", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(missing_selector.path()),
@@ -347,9 +353,9 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_model_tasks() 
 #[test]
 fn correlated_cases_become_complete_typed_constant_values() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[(
-            "model",
+            "unit",
             r#"{
               "shape": [64],
               "$cases": [
@@ -369,7 +375,7 @@ fn correlated_cases_become_complete_typed_constant_values() {
     let values = specification.phases()[0]
         .tasks()
         .iter()
-        .map(model_task)
+        .map(execution_unit_task)
         .map(|parameters| parameters.decode::<Constants>().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(values.len(), 2);
@@ -399,7 +405,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let unknown = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"x","mystery":true}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x","mystery":true}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -407,8 +413,21 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
         Err(ConfigError::InvalidDocument { pointer, .. }) if pointer == "/phases/one"
     ));
 
+    let removed_model_field = TestProject::new_raw(
+        r#"{
+          "paths":{"states":{"default":"wf_configs/states/default.json"}},
+          "phases":{"one":{"tasks":[{"model":"x","state":"default"}]}}
+        }"#,
+        &[("x", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(removed_model_field.path()),
+        Err(ConfigError::InvalidDocument { reason, .. })
+            if reason.contains("unknown field `model`")
+    ));
+
     let invalid_persistence = TestProject::new(
-        r#"{"persistence":{"chunk_target_mb":0},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        r#"{"persistence":{"chunk_target_mb":0},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -417,7 +436,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let legacy_chunk_bytes = TestProject::new(
-        r#"{"persistence":{"chunk_target_bytes":1048576},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        r#"{"persistence":{"chunk_target_bytes":1048576},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -426,7 +445,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let legacy_queue_bytes = TestProject::new(
-        r#"{"persistence":{"queue_capacity_bytes":1048576},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        r#"{"persistence":{"queue_capacity_bytes":1048576},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -435,7 +454,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let overflowing_chunk_mb = TestProject::new(
-        r#"{"persistence":{"chunk_target_mb":18446744073709551615},"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        r#"{"persistence":{"chunk_target_mb":18446744073709551615},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -445,7 +464,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let duplicate_parameters = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", r#"{"value":1,"value":2}"#)],
     );
     assert!(matches!(
@@ -457,8 +476,8 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
 #[test]
 fn workflow_project_root_requires_reserved_wf_configs_documents() {
     let legacy_layout = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
-        &[("model", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
     );
     fs::rename(
         legacy_layout.path().join("wf_configs"),
@@ -471,8 +490,8 @@ fn workflow_project_root_requires_reserved_wf_configs_documents() {
     ));
 
     let missing_study = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
-        &[("model", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
     );
     fs::rename(
         missing_study.path().join("wf_configs/study.json"),
@@ -485,8 +504,8 @@ fn workflow_project_root_requires_reserved_wf_configs_documents() {
     ));
 
     let missing_parameters = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
-        &[("model", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
     );
     fs::remove_file(missing_parameters.path().join("wf_configs/parameters.json")).unwrap();
     assert!(matches!(
@@ -500,9 +519,9 @@ fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
     let project = TestProject::new_raw(
         r#"{
           "paths":{"states":{"outside":"state.json"}},
-          "phases":{"only":{"tasks":[{"model":"model","state":"outside"}]}}
+          "phases":{"only":{"tasks":[{"execution_unit":"unit","state":"outside"}]}}
         }"#,
-        &[("model", "{}")],
+        &[("unit", "{}")],
     );
     fs::write(
         project.path().join("state.json"),
@@ -516,8 +535,8 @@ fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
     ));
 
     let absolute = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
-        &[("model", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
     );
     let manifest_path = absolute.path().join("wf_configs/study.json");
     let mut manifest: serde_json::Value =
@@ -537,9 +556,9 @@ fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
 }
 
 #[test]
-fn legacy_model_input_paths_are_rejected() {
+fn removed_per_task_input_paths_are_rejected() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"x","input":"inputs/x.json"}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x","input":"inputs/x.json"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -549,10 +568,10 @@ fn legacy_model_input_paths_are_rejected() {
 }
 
 #[test]
-fn every_model_key_requires_its_canonical_parameter_section() {
+fn every_execution_unit_key_requires_its_canonical_parameter_section() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"missing"}]}}}"#,
-        &[("another_model", "{}")],
+        r#"{"phases":{"one":{"tasks":[{"execution_unit":"missing"}]}}}"#,
+        &[("another_unit", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(project.path()),
@@ -564,7 +583,7 @@ fn every_model_key_requires_its_canonical_parameter_section() {
 #[test]
 fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     let missing = TestProject::new(
-        r#"{"phases":{"one":{"after":["absent"],"tasks":[{"model":"x"}]}}}"#,
+        r#"{"phases":{"one":{"after":["absent"],"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -575,8 +594,8 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     let cycle = TestProject::new(
         r#"{
           "phases": {
-            "one": {"after":["two"],"tasks":[{"model":"x"}]},
-            "two": {"after":["one"],"tasks":[{"model":"x"}]}
+            "one": {"after":["two"],"tasks":[{"execution_unit":"x"}]},
+            "two": {"after":["one"],"tasks":[{"execution_unit":"x"}]}
           }
         }"#,
         &[("x", "{}")],
@@ -587,7 +606,7 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     ));
 
     let mixed = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"x"}]}}}"#,
+        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[(
             "x",
             r#"{"choice":{"$sweep":[1,2]},"$cases":[{"value":1},{"value":2}]}"#,
@@ -600,10 +619,10 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
 }
 
 #[test]
-fn typed_decode_errors_retain_model_source_and_combination() {
+fn typed_decode_errors_retain_execution_unit_source_and_combination() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"model":"model"}]}}}"#,
-        &[("model", r#"{"steps":"wrong"}"#)],
+        r#"{"phases":{"one":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", r#"{"steps":"wrong"}"#)],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
     #[derive(Deserialize)]
@@ -612,21 +631,21 @@ fn typed_decode_errors_retain_model_source_and_combination() {
         steps: u64,
     }
     assert!(matches!(
-        model_task(&specification.phases()[0].tasks()[0]).decode::<Constants>(),
-        Err(ConfigError::DecodeModelConstants {
-            model,
+        execution_unit_task(&specification.phases()[0].tasks()[0]).decode::<Constants>(),
+        Err(ConfigError::DecodeExecutionUnitConstants {
+            execution_unit,
             ordinal: 0,
             ..
-        }) if model == "model"
+        }) if execution_unit == "unit"
     ));
 }
 
 #[test]
 fn central_config_captures_all_project_parameters_in_one_namespace() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[
-            ("model", r#"{"steps":1}"#),
+            ("unit", r#"{"steps":1}"#),
             ("plot", r#"{"title":"Captured configuration","dpi":160}"#),
         ],
     );
@@ -635,8 +654,8 @@ fn central_config_captures_all_project_parameters_in_one_namespace() {
     let snapshot: serde_json::Value =
         serde_json::from_slice(specification.config().snapshot().bytes()).unwrap();
     assert_eq!(
-        snapshot["study"]["phases"]["only"]["tasks"][0]["model"],
-        "model"
+        snapshot["study"]["phases"]["only"]["tasks"][0]["execution_unit"],
+        "unit"
     );
     assert_eq!(
         snapshot["config"]["states/default.json"]["fields"][0]["name"],
@@ -651,8 +670,8 @@ fn central_config_captures_all_project_parameters_in_one_namespace() {
 #[test]
 fn invalid_unreferenced_json_is_rejected_because_config_manages_all_documents() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
-        &[("model", "{}")],
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
     );
     fs::write(
         project.path().join("wf_configs/unreferenced.json"),
@@ -675,7 +694,7 @@ fn diagnostics_escape_authored_json_pointer_keys() {
     ));
 
     let parameters = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"model":"a/b~c"}]}}}"#,
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"a/b~c"}]}}}"#,
         &[("different", "{}")],
     );
     assert!(matches!(
@@ -693,8 +712,8 @@ fn empty_and_overlapping_expansion_markers_are_rejected() {
         r#"{"$unknown":[1,2]}"#,
     ] {
         let project = TestProject::new(
-            r#"{"phases":{"only":{"tasks":[{"model":"model"}]}}}"#,
-            &[("model", source)],
+            r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+            &[("unit", source)],
         );
         assert!(matches!(
             ProjectSpecification::load(project.path()),
@@ -711,9 +730,9 @@ fn json_file_symlinks_preserve_authored_keys_and_enforce_containment() {
     let contained = TestProject::new(
         r#"{
           "paths":{"states":{"alias":"wf_configs/alias.json"}},
-          "phases":{"only":{"tasks":[{"model":"model","state":"alias"}]}}
+          "phases":{"only":{"tasks":[{"execution_unit":"unit","state":"alias"}]}}
         }"#,
-        &[("model", "{}")],
+        &[("unit", "{}")],
     );
     symlink(
         "states/default.json",

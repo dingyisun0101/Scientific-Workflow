@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::config::advanced::ConfigError;
 use crate::state::advanced::StateError;
-use crate::task::advanced::ModelCatalogError;
+use crate::task::advanced::ExecutionUnitCatalogError;
 
 /// A failure while compiling complete declared intent into an immutable study.
 #[derive(Debug, Error)]
@@ -28,34 +28,34 @@ pub enum StudyError {
         source: StateError,
     },
 
-    /// Compiled model registrations are invalid or ambiguous.
-    #[error("invalid compiled model registration: {reason}")]
-    InvalidModelRegistration {
+    /// Compiled execution-unit registrations are invalid or ambiguous.
+    #[error("invalid compiled execution-unit registration: {reason}")]
+    InvalidExecutionUnitRegistration {
         /// Stable explanation of the invalid or duplicate registration.
         reason: String,
     },
 
-    /// A manifest task references no compiled model.
-    #[error("phase `{phase}` references unregistered model `{model}`")]
-    UnknownModel {
+    /// A manifest task references no compiled execution unit.
+    #[error("phase `{phase}` references unregistered execution unit `{execution_unit}`")]
+    UnknownExecutionUnit {
         /// Phase containing the unresolved reference.
         phase: String,
-        /// Stable model key requested by the manifest.
-        model: String,
+        /// Stable execution-unit key requested by the manifest.
+        execution_unit: String,
     },
 
-    /// Typed constants or observation-plan binding failed during model preflight.
+    /// Typed constants or observation-plan binding failed during execution-unit preflight.
     #[error(
-        "model `{model}` failed preflight for resolved parameters {ordinal} in phase `{phase}`"
+        "execution unit `{execution_unit}` failed preflight for resolved parameters {ordinal} in phase `{phase}`"
     )]
-    ModelPreflight {
+    ExecutionUnitPreflight {
         /// Phase containing the rejected invocation.
         phase: String,
-        /// Stable compiled model key.
-        model: String,
+        /// Stable compiled execution-unit key.
+        execution_unit: String,
         /// Deterministic parameter expansion ordinal.
         ordinal: u64,
-        /// Original config, observation, or model-declaration error.
+        /// Original config, observation, or execution-unit declaration error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
@@ -65,9 +65,9 @@ pub enum StudyError {
     TaskIdentityOverflow,
 }
 
-impl From<ModelCatalogError> for StudyError {
-    fn from(source: ModelCatalogError) -> Self {
-        Self::InvalidModelRegistration {
+impl From<ExecutionUnitCatalogError> for StudyError {
+    fn from(source: ExecutionUnitCatalogError) -> Self {
+        Self::InvalidExecutionUnitRegistration {
             reason: source.to_string(),
         }
     }
@@ -82,15 +82,15 @@ impl StudyError {
         }
     }
 
-    pub(crate) fn model_preflight(
+    pub(crate) fn execution_unit_preflight(
         phase: &str,
-        model: &str,
+        execution_unit: &str,
         ordinal: u64,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     ) -> Self {
-        Self::ModelPreflight {
+        Self::ExecutionUnitPreflight {
             phase: phase.to_owned(),
-            model: model.to_owned(),
+            execution_unit: execution_unit.to_owned(),
             ordinal,
             source,
         }

@@ -382,10 +382,10 @@ mod tests {
         state.apply(&UiEvent::TaskPlanned {
             replicate: 0,
             phase: "simulate",
-            identity: "simulate/000000/model-000000",
-            label: "model #0",
-            kind: "model",
-            subject: "model",
+            identity: "simulate/000000/unit-000000",
+            label: "unit #0",
+            kind: "unit",
+            subject: "unit",
         });
         state.apply(&UiEvent::ExecutionStarted {
             output_directory: Path::new("output/execution-0"),
@@ -400,14 +400,14 @@ mod tests {
         state.apply(&UiEvent::TaskStarted {
             replicate: 0,
             phase: "simulate",
-            identity: "simulate/000000/model-000000",
-            label: "model #0",
-            kind: "model",
-            subject: "model",
+            identity: "simulate/000000/unit-000000",
+            label: "unit #0",
+            kind: "unit",
+            subject: "unit",
         });
         state.apply(&UiEvent::TaskProgress {
             replicate: 0,
-            identity: "simulate/000000/model-000000",
+            identity: "simulate/000000/unit-000000",
             iteration: 25,
             target_iteration: Some(100),
         });
@@ -502,8 +502,8 @@ mod tests {
                 phase: "simulate",
                 identity,
                 label: identity,
-                kind: "model",
-                subject: "model",
+                kind: "unit",
+                subject: "unit",
             });
         }
         state.apply(&UiEvent::PhaseStarted {
@@ -516,8 +516,8 @@ mod tests {
             phase: "simulate",
             identity: "active",
             label: "active",
-            kind: "model",
-            subject: "model",
+            kind: "unit",
+            subject: "unit",
         });
         state.request_exit();
         state.apply(&UiEvent::TaskCancelled {
@@ -596,16 +596,16 @@ mod tests {
             phase: "phase",
             identity: "task",
             label: "task",
-            kind: "model",
-            subject: "model",
+            kind: "unit",
+            subject: "unit",
         });
         state.apply(&UiEvent::TaskStarted {
             replicate: 0,
             phase: "phase",
             identity: "task",
             label: "task",
-            kind: "model",
-            subject: "model",
+            kind: "unit",
+            subject: "unit",
         });
         state.apply(&UiEvent::TaskCancelled {
             replicate: 0,

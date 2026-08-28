@@ -1,9 +1,9 @@
-//! Automatic durable model recordings and program workspaces.
+//! Automatic durable member recordings and program workspaces.
 //!
 //! Ordinary applications configure persistence only through
 //! `wf_configs/study.json`.
 //! Study owns an immutable effective plan, while Runtime privately constructs
-//! and drives persistence. Model tasks receive structured state recordings;
+//! and drives persistence. Execution unit tasks receive structured state recordings;
 //! generic program and Python tasks receive config/dependency snapshots,
 //! captured logs, launcher provenance, and an artifact directory. The Basic API is intentionally empty; Advanced exposes
 //! verified state-recording readers, never write-session construction.
@@ -37,6 +37,6 @@ pub mod advanced {
     };
     pub(crate) use super::plan::PersistencePlan;
     pub(crate) use super::session::{
-        ModelRecordingProvenance, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
+        MemberRecordingProvenance, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
     };
 }

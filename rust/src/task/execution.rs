@@ -3,14 +3,15 @@
 use std::ffi::OsString;
 use std::path::Path;
 
+use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
+use crate::config::advanced::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
 use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::{StateSchemaAccess, SystemState, SystemStateSchema};
 
 use super::result::TaskResult;
-use super::unit::{ExecutionUnit, InitializationContext, ModelView};
+use super::unit::{ExecutionUnit, InitializationContext, MemberView};
 
 /// The runtime-owned services a task may use while executing.
 ///
@@ -22,7 +23,7 @@ pub(crate) trait TaskExecutionHost {
     /// Reports whether cooperative cancellation has been requested.
     fn cancellation_requested(&self) -> bool;
 
-    /// Returns initialization facts for a model task.
+    /// Returns initialization facts for an execution-unit task.
     fn initialization_context(&self) -> Option<&InitializationContext>;
 
     /// Executes one validated external program in Runtime's standardized task
@@ -31,11 +32,11 @@ pub(crate) trait TaskExecutionHost {
 
     /// Accepts the validated observation plan and emits the initial observation and
     /// automatic initialized snapshot for `state`.
-    fn begin_model(&mut self, model: ModelInitialization<'_>) -> TaskResult;
+    fn begin_member(&mut self, member: MemberInitialization<'_>) -> TaskResult;
 
     /// Emits the automatic observation and progress snapshot after one
-    /// successful model step.
-    fn observe_model_step(
+    /// successful member step.
+    fn observe_member_step(
         &mut self,
         index: usize,
         state: &SystemState,
@@ -43,19 +44,20 @@ pub(crate) trait TaskExecutionHost {
     ) -> TaskResult;
 
     /// Emits the final observation and completion snapshot exactly once
-    /// after the model reports completion.
-    fn observe_model_final(
+    /// after the member reports completion.
+    fn observe_member_final(
         &mut self,
         index: usize,
         state: &SystemState,
         target_iteration: Option<u64>,
+        completion_reason: Option<Map<String, Value>>,
     ) -> TaskResult;
 }
 
-/// Complete semantic handoff when one model recording begins.
-pub(crate) struct ModelInitialization<'a> {
+/// Complete semantic handoff when one member recording begins.
+pub(crate) struct MemberInitialization<'a> {
     pub(crate) index: usize,
-    pub(crate) model_count: usize,
+    pub(crate) member_count: usize,
     pub(crate) identity: &'a str,
     pub(crate) seed_derivation: Option<serde_json::Value>,
     pub(crate) plan: BoundObservationPlan,
@@ -109,8 +111,8 @@ impl<'a> From<&'a ResolvedProgramTask> for ProgramTaskInvocation<'a> {
 /// Type-erased execution contract consumed by the Workflow runtime.
 ///
 /// Study ordinarily constructs [`super::definition::Task`] from a registered
-/// model. Application code does not implement this trait. Replacement runtimes
-/// may execute a task from resolved model parameters through this boundary.
+/// execution unit. Application code does not implement this trait. Replacement runtimes
+/// may execute a task from resolved execution-unit parameters through this boundary.
 pub(crate) trait TaskDefinition: Send + Sync {
     /// Obtains typed constants from resolved parameters and executes through `host`.
     ///
@@ -120,19 +122,19 @@ pub(crate) trait TaskDefinition: Send + Sync {
     fn execute(&self, host: &mut dyn TaskExecutionHost) -> TaskResult;
 }
 
-pub(crate) struct StatefulDefinition<M> {
-    parameters: ResolvedModelParameters,
+pub(crate) struct ExecutionUnitDefinition<U> {
+    parameters: ResolvedExecutionUnitParameters,
     schema: SystemStateSchema,
     observation_plan: BoundObservationPlan,
-    marker: std::marker::PhantomData<fn() -> M>,
+    marker: std::marker::PhantomData<fn() -> U>,
 }
 
-impl<M> StatefulDefinition<M>
+impl<U> ExecutionUnitDefinition<U>
 where
-    M: ExecutionUnit,
+    U: ExecutionUnit,
 {
     pub(crate) fn new(
-        parameters: ResolvedModelParameters,
+        parameters: ResolvedExecutionUnitParameters,
         schema: SystemStateSchema,
         observation_plan: BoundObservationPlan,
     ) -> Self {
@@ -145,80 +147,87 @@ where
     }
 }
 
-impl<M> TaskDefinition for StatefulDefinition<M>
+impl<U> TaskDefinition for ExecutionUnitDefinition<U>
 where
-    M: ExecutionUnit,
+    U: ExecutionUnit,
 {
     fn execute(&self, host: &mut dyn TaskExecutionHost) -> TaskResult {
         if host.cancellation_requested() {
             return Ok(());
         }
 
-        let constants: M::Constants = self.parameters.decode()?;
+        let constants: U::Constants = self.parameters.decode()?;
         let schema = self.schema.clone();
 
         let context = host
             .initialization_context()
-            .expect("a model task retains an initialization context");
-        let mut unit = M::initialize(constants, &schema, context)?;
-        let model_count = unit.model_count();
-        if model_count == 0 {
-            return Err(ModelContractError::EmptyExecutionUnit.into());
+            .expect("an execution-unit task retains an initialization context");
+        let mut unit = U::initialize(constants, &schema, context)?;
+        let member_count = unit.member_count();
+        if member_count == 0 {
+            return Err(MemberContractError::EmptyExecutionUnit.into());
         }
-        if unit.model(model_count).is_some() {
-            return Err(
-                ModelContractError::ModelOutsideDeclaredCount { index: model_count }.into(),
-            );
+        if unit.member(member_count).is_some() {
+            return Err(MemberContractError::MemberOutsideDeclaredCount {
+                index: member_count,
+            }
+            .into());
         }
 
-        let mut models = inspect_initial_models(&unit, &schema, model_count)?;
-        context.validate_model_identities(models.iter().map(|model| model.identity.as_ref()))?;
-        let seed_derivations = models
+        let mut members = inspect_initial_members(&unit, &schema, member_count)?;
+        context
+            .validate_member_identities(members.iter().map(|member| member.identity.as_ref()))?;
+        let seed_derivations = members
             .iter()
-            .map(|model| context.metadata_for_model(&model.identity))
+            .map(|member| context.metadata_for_member(&member.identity))
             .collect::<Vec<_>>();
-        for (index, model) in models.iter().enumerate() {
-            let view = required_model(&unit, index)?;
-            host.begin_model(ModelInitialization {
+        for (index, member) in members.iter().enumerate() {
+            let view = required_member(&unit, index)?;
+            host.begin_member(MemberInitialization {
                 index,
-                model_count,
-                identity: &model.identity,
+                member_count,
+                identity: &member.identity,
                 seed_derivation: seed_derivations[index].clone(),
                 plan: self.observation_plan.clone(),
                 state: view.state(),
-                target_iteration: model.target,
+                target_iteration: member.target,
             })?;
-            if model.complete {
-                host.observe_model_final(index, view.state(), model.target)?;
+            if member.complete {
+                host.observe_member_final(
+                    index,
+                    view.state(),
+                    member.target,
+                    completion_reason(view),
+                )?;
             }
         }
 
-        while models.iter().any(|model| !model.complete) {
+        while members.iter().any(|member| !member.complete) {
             if host.cancellation_requested() {
                 return Ok(());
             }
 
             unit.step()?;
-            if unit.model_count() != model_count {
-                return Err(ModelContractError::ModelCountChanged {
-                    previous: model_count,
-                    next: unit.model_count(),
+            if unit.member_count() != member_count {
+                return Err(MemberContractError::MemberCountChanged {
+                    previous: member_count,
+                    next: unit.member_count(),
                 }
                 .into());
             }
-            let next_models = inspect_models(&unit, &schema, &models)?;
+            let next_members = inspect_members(&unit, &schema, &members)?;
             let mut advanced = false;
-            for (index, (previous, next)) in models.iter().zip(&next_models).enumerate() {
-                let view = required_model(&unit, index)?;
+            for (index, (previous, next)) in members.iter().zip(&next_members).enumerate() {
+                let view = required_member(&unit, index)?;
                 if previous.complete {
                     if !next.complete {
-                        return Err(ModelContractError::CompletionReversed {
+                        return Err(MemberContractError::CompletionReversed {
                             identity: next.identity.clone(),
                         }
                         .into());
                     }
                     if next.iteration != previous.iteration {
-                        return Err(ModelContractError::CompletedModelAdvanced {
+                        return Err(MemberContractError::CompletedMemberAdvanced {
                             identity: next.identity.clone(),
                             previous: previous.iteration,
                             next: next.iteration,
@@ -228,7 +237,7 @@ where
                     continue;
                 }
                 if next.iteration < previous.iteration {
-                    return Err(ModelContractError::IterationRegressed {
+                    return Err(MemberContractError::IterationRegressed {
                         identity: next.identity.clone(),
                         previous: previous.iteration,
                         next: next.iteration,
@@ -237,16 +246,21 @@ where
                 }
                 if next.iteration > previous.iteration {
                     advanced = true;
-                    host.observe_model_step(index, view.state(), next.target)?;
+                    host.observe_member_step(index, view.state(), next.target)?;
                 }
                 if next.complete {
-                    host.observe_model_final(index, view.state(), next.target)?;
+                    host.observe_member_final(
+                        index,
+                        view.state(),
+                        next.target,
+                        completion_reason(view),
+                    )?;
                 }
             }
             if !advanced {
-                return Err(ModelContractError::NonAdvancingStep.into());
+                return Err(MemberContractError::NonAdvancingStep.into());
             }
-            models = next_models;
+            members = next_members;
         }
         Ok(())
     }
@@ -275,19 +289,19 @@ fn validate_state(
     state: &SystemState,
     schema: &SystemStateSchema,
     expected_address: *const SystemState,
-) -> Result<(), ModelContractError> {
+) -> Result<(), MemberContractError> {
     if !std::ptr::eq(state, expected_address) {
-        return Err(ModelContractError::StateOwnerChanged);
+        return Err(MemberContractError::StateOwnerChanged);
     }
     if !schema.shares_schema_instance(state.schema()) {
-        return Err(ModelContractError::SchemaChanged {
+        return Err(MemberContractError::SchemaChanged {
             iteration: state.time().iteration(),
         });
     }
     Ok(())
 }
 
-struct ModelSnapshot {
+struct MemberSnapshot {
     identity: Box<str>,
     state_address: *const SystemState,
     iteration: u64,
@@ -295,79 +309,86 @@ struct ModelSnapshot {
     target: Option<u64>,
 }
 
-fn required_model<M>(unit: &M, index: usize) -> Result<ModelView<'_>, ModelContractError>
+fn required_member<M>(unit: &M, index: usize) -> Result<MemberView<'_>, MemberContractError>
 where
     M: ExecutionUnit,
 {
-    unit.model(index)
-        .ok_or(ModelContractError::MissingModel { index })
+    unit.member(index)
+        .ok_or(MemberContractError::MissingMember { index })
 }
 
-fn inspect_initial_models<M>(
+fn inspect_initial_members<M>(
     unit: &M,
     schema: &SystemStateSchema,
-    model_count: usize,
-) -> Result<Vec<ModelSnapshot>, ModelContractError>
+    member_count: usize,
+) -> Result<Vec<MemberSnapshot>, MemberContractError>
 where
     M: ExecutionUnit,
 {
-    let mut identities = std::collections::HashSet::with_capacity(model_count);
-    let mut models = Vec::with_capacity(model_count);
-    for index in 0..model_count {
-        let model = required_model(unit, index)?;
-        validate_identity(model.identity(), index)?;
-        if !identities.insert(model.identity()) {
-            return Err(ModelContractError::DuplicateIdentity {
-                identity: model.identity().into(),
+    let mut identities = std::collections::HashSet::with_capacity(member_count);
+    let mut members = Vec::with_capacity(member_count);
+    for index in 0..member_count {
+        let member = required_member(unit, index)?;
+        validate_identity(member.identity(), index)?;
+        if !identities.insert(member.identity()) {
+            return Err(MemberContractError::DuplicateIdentity {
+                identity: member.identity().into(),
             });
         }
-        validate_state(model.state(), schema, model.state() as *const SystemState)?;
-        models.push(ModelSnapshot {
-            identity: model.identity().into(),
-            state_address: model.state() as *const SystemState,
-            iteration: model.state().time().iteration(),
-            complete: model.is_complete(),
-            target: validate_target(model.state(), model.target_iteration())?,
+        validate_state(member.state(), schema, member.state() as *const SystemState)?;
+        members.push(MemberSnapshot {
+            identity: member.identity().into(),
+            state_address: member.state() as *const SystemState,
+            iteration: member.state().time().iteration(),
+            complete: member.completion().is_some(),
+            target: validate_target(member.state(), member.target_iteration())?,
         });
     }
-    Ok(models)
+    Ok(members)
 }
 
-fn inspect_models<M>(
+fn inspect_members<M>(
     unit: &M,
     schema: &SystemStateSchema,
-    previous: &[ModelSnapshot],
-) -> Result<Vec<ModelSnapshot>, ModelContractError>
+    previous: &[MemberSnapshot],
+) -> Result<Vec<MemberSnapshot>, MemberContractError>
 where
     M: ExecutionUnit,
 {
-    let mut models = Vec::with_capacity(previous.len());
+    let mut members = Vec::with_capacity(previous.len());
     for (index, expected) in previous.iter().enumerate() {
-        let model = required_model(unit, index)?;
-        if model.identity() != expected.identity.as_ref() {
-            return Err(ModelContractError::IdentityChanged {
+        let member = required_member(unit, index)?;
+        if member.identity() != expected.identity.as_ref() {
+            return Err(MemberContractError::IdentityChanged {
                 index,
                 previous: expected.identity.clone(),
-                next: model.identity().into(),
+                next: member.identity().into(),
             });
         }
-        validate_state(model.state(), schema, expected.state_address)?;
-        let target = validate_target(model.state(), model.target_iteration())?;
+        validate_state(member.state(), schema, expected.state_address)?;
+        let target = validate_target(member.state(), member.target_iteration())?;
         validate_target_progress(expected.target, target)?;
-        models.push(ModelSnapshot {
+        members.push(MemberSnapshot {
             identity: expected.identity.clone(),
             state_address: expected.state_address,
-            iteration: model.state().time().iteration(),
-            complete: model.is_complete(),
+            iteration: member.state().time().iteration(),
+            complete: member.completion().is_some(),
             target,
         });
     }
-    Ok(models)
+    Ok(members)
 }
 
-fn validate_identity(identity: &str, index: usize) -> Result<(), ModelContractError> {
+fn completion_reason(view: MemberView<'_>) -> Option<Map<String, Value>> {
+    view.completion()
+        .expect("a completed member exposes completion details")
+        .reason()
+        .cloned()
+}
+
+fn validate_identity(identity: &str, index: usize) -> Result<(), MemberContractError> {
     if identity.is_empty() || identity.trim() != identity {
-        Err(ModelContractError::InvalidIdentity {
+        Err(MemberContractError::InvalidIdentity {
             index,
             identity: identity.into(),
         })
@@ -379,11 +400,11 @@ fn validate_identity(identity: &str, index: usize) -> Result<(), ModelContractEr
 fn validate_target(
     state: &SystemState,
     target: Option<u64>,
-) -> Result<Option<u64>, ModelContractError> {
+) -> Result<Option<u64>, MemberContractError> {
     if let Some(target) = target {
         let current = state.time().iteration();
         if target < current {
-            return Err(ModelContractError::TargetBeforeCurrent { target, current });
+            return Err(MemberContractError::TargetBeforeCurrent { target, current });
         }
     }
     Ok(target)
@@ -392,55 +413,55 @@ fn validate_target(
 fn validate_target_progress(
     previous: Option<u64>,
     next: Option<u64>,
-) -> Result<(), ModelContractError> {
+) -> Result<(), MemberContractError> {
     match (previous, next) {
-        (Some(previous), None) => Err(ModelContractError::TargetRemoved { previous }),
+        (Some(previous), None) => Err(MemberContractError::TargetRemoved { previous }),
         (Some(previous), Some(next)) if next < previous => {
-            Err(ModelContractError::TargetDecreased { previous, next })
+            Err(MemberContractError::TargetDecreased { previous, next })
         }
         _ => Ok(()),
     }
 }
 
 #[derive(Debug, Error)]
-enum ModelContractError {
-    #[error("a scientific execution unit must expose at least one model")]
+enum MemberContractError {
+    #[error("a scientific execution unit must expose at least one member")]
     EmptyExecutionUnit,
-    #[error("execution unit did not expose declared model index {index}")]
-    MissingModel { index: usize },
-    #[error("execution unit exposed model index {index} outside its declared count")]
-    ModelOutsideDeclaredCount { index: usize },
-    #[error("execution unit model count changed from {previous} to {next}")]
-    ModelCountChanged { previous: usize, next: usize },
-    #[error("model identity `{identity}` at index {index} is empty or has surrounding whitespace")]
+    #[error("execution unit did not expose declared member index {index}")]
+    MissingMember { index: usize },
+    #[error("execution unit exposed member index {index} outside its declared count")]
+    MemberOutsideDeclaredCount { index: usize },
+    #[error("execution unit member count changed from {previous} to {next}")]
+    MemberCountChanged { previous: usize, next: usize },
+    #[error("member identity `{identity}` at index {index} is empty or has surrounding whitespace")]
     InvalidIdentity { index: usize, identity: Box<str> },
-    #[error("model identity `{identity}` appears more than once in one execution unit")]
+    #[error("member identity `{identity}` appears more than once in one execution unit")]
     DuplicateIdentity { identity: Box<str> },
-    #[error("model identity at index {index} changed from `{previous}` to `{next}`")]
+    #[error("member identity at index {index} changed from `{previous}` to `{next}`")]
     IdentityChanged {
         index: usize,
         previous: Box<str>,
         next: Box<str>,
     },
-    #[error("the scientific model returned a different SystemState owner")]
+    #[error("the scientific member returned a different SystemState owner")]
     StateOwnerChanged,
-    #[error("the scientific model changed its state schema at iteration {iteration}")]
+    #[error("the scientific member changed its state schema at iteration {iteration}")]
     SchemaChanged { iteration: u64 },
-    #[error("a successful execution-unit step did not advance any incomplete model")]
+    #[error("a successful execution-unit step did not advance any incomplete member")]
     NonAdvancingStep,
-    #[error("model `{identity}` iteration regressed from {previous} to {next}")]
+    #[error("member `{identity}` iteration regressed from {previous} to {next}")]
     IterationRegressed {
         identity: Box<str>,
         previous: u64,
         next: u64,
     },
-    #[error("completed model `{identity}` advanced from {previous} to {next}")]
-    CompletedModelAdvanced {
+    #[error("completed member `{identity}` advanced from {previous} to {next}")]
+    CompletedMemberAdvanced {
         identity: Box<str>,
         previous: u64,
         next: u64,
     },
-    #[error("completed model `{identity}` became incomplete")]
+    #[error("completed member `{identity}` became incomplete")]
     CompletionReversed { identity: Box<str> },
     #[error("target iteration {target} is before current iteration {current}")]
     TargetBeforeCurrent { target: u64, current: u64 },

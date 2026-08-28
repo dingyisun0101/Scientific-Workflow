@@ -9,7 +9,9 @@ use crate::config::advanced::{
     ReplicatePolicy, StudyManifest,
 };
 use crate::persistence::advanced::PersistencePlan;
-use crate::task::advanced::{ModelCatalog, ModelTaskProvenance, Task, TaskDefinition, TaskKind};
+use crate::task::advanced::{
+    ExecutionUnitCatalog, ExecutionUnitTaskProvenance, Task, TaskDefinition, TaskKind,
+};
 use crate::ui::advanced::UiPlan;
 
 use super::compilation;
@@ -22,13 +24,13 @@ pub struct Study {
 }
 
 impl Study {
-    /// Loads project declarations and binds all linked `#[model]` registrations.
+    /// Loads project declarations and binds all linked `#[execution_unit]` registrations.
     ///
     /// This performs complete preflight without creating output or initializing
-    /// a scientific model. Config is the only file reader and JSON parser.
+    /// an execution unit. Config is the only file reader and JSON parser.
     pub fn load(project_root: &Path) -> Result<Self, StudyError> {
         let project = ProjectSpecification::load(project_root)?;
-        let catalog = ModelCatalog::discovered()?;
+        let catalog = ExecutionUnitCatalog::discovered()?;
         compilation::compile(project, &catalog)
     }
 
@@ -149,7 +151,7 @@ impl StudyPhase {
         self.dependencies.iter().map(Box::as_ref)
     }
 
-    /// Returns bound model/program invocations in deterministic plan order.
+    /// Returns bound execution-unit/program invocations in deterministic plan order.
     pub(crate) fn tasks(&self) -> &[StudyTask] {
         &self.tasks
     }
@@ -175,7 +177,7 @@ impl StudyPhase {
     }
 }
 
-/// One generic model or program task compiled from project configuration.
+/// One generic execution-unit or program task compiled from project configuration.
 #[derive(Clone)]
 pub(crate) struct StudyTask {
     pub(crate) identity: Box<str>,
@@ -203,9 +205,9 @@ impl StudyTask {
         self.task.kind_name()
     }
 
-    /// Returns the model key when this is a model task.
-    pub(crate) fn model(&self) -> Option<&str> {
-        self.task.model()
+    /// Returns the registration key when this is an execution-unit task.
+    pub(crate) fn execution_unit(&self) -> Option<&str> {
+        self.task.execution_unit()
     }
 
     /// Returns the generic task subject used in lifecycle presentation.
@@ -226,8 +228,8 @@ impl StudyTask {
         &self.task
     }
 
-    pub(crate) fn model_provenance(&self) -> Option<ModelTaskProvenance<'_>> {
-        self.task.model_provenance()
+    pub(crate) fn execution_unit_provenance(&self) -> Option<ExecutionUnitTaskProvenance<'_>> {
+        self.task.execution_unit_provenance()
     }
 
     pub(crate) fn program_path(&self) -> Option<&Path> {

@@ -1,15 +1,7 @@
 # Scientific Workflow Rust crate
 
 Scientific Workflow is an inference-first library for typed scientific state,
-configuration-driven model or program execution, and durable outputs.
-
-> **Breaking 0.11 update:** Version 0.11.0 replaces the 0.10
-> `ScientificModel` task boundary with `ExecutionUnit` and `ModelView`. One
-> execution unit may be a standalone model or a coordinated ensemble; every
-> exposed model still owns one independent `SystemState`, recording, and
-> result. `ScientificModel` has no compatibility alias. The former `#[model]`
-> attribute remains as a spelling alias for preferred `#[execution_unit]`.
-> The required `wf_configs/` project layout introduced in 0.10 is unchanged.
+configuration-driven execution unit or program execution, and durable outputs.
 
 ## Workflow at a glance
 
@@ -29,17 +21,18 @@ Runtime (owns active execution, scheduling, cancellation, and coordination)
 |           |   +-- retains: selected validated schema
 |           |   +-- retains: bound observation plan
 |           |   `-- creates: ExecutionUnit with immutable InitializationContext
-|           |       +-- standalone model -> SystemState
+|           |       +-- standalone unit
+|           |       |   `-- member -> SystemState
 |           |       `-- ensemble
-|           |           +-- model -> SystemState
-|           |           `-- model -> SystemState
+|           |           +-- member -> SystemState
+|           |           `-- member -> SystemState
 |           |
 |           `-- program/Python task
 |               `-- retains: resolved executable, arguments, and environment
 |
 +-- creates and coordinates: Persistence sessions
-|   +-- one recording per exposed model
-|   |   +-- borrows that model's SystemState at automatic boundaries
+|   +-- one recording per exposed member
+|   |   +-- borrows that member's SystemState at automatic boundaries
 |   |   +-- records applicable requested seed derivations
 |   |   `-- owns bounded stream writers
 |   |       `-- commit metadata + immutable chunks
@@ -52,8 +45,8 @@ Runtime (owns active execution, scheduling, cancellation, and coordination)
 
 Runtime consumes a completed Study but does not reinterpret it. Study retains
 Config and the assembled phase/task graph. Each scientific task retains its own
-selected, validated schema; every live model directly owns its `SystemState`.
-Persistence—not the model—owns recording lifecycle, writer threads, durable
+selected, validated schema; every live member directly owns its `SystemState`.
+Persistence—not the execution unit—owns recording lifecycle, writer threads, durable
 chunks, program workspaces, metadata representation, and reconstruction rules.
 Runtime passes semantic task provenance rather than authoring storage JSON, and
 active program tasks retain only Config's frozen byte snapshot. External
@@ -79,7 +72,7 @@ lifecycle and progress facts.
                               v
 [5. Study performs effect-free assembly and preflight]
     - validate every named state schema
-    - resolve model keys, programs, and Python environments
+    - resolve execution unit keys, programs, and Python environments
     - expand/decode parameters and bind observation plans
                               |
                               v
@@ -93,7 +86,7 @@ lifecycle and progress facts.
  initialize unit with context        launch resolved invocation
  observe each initial state         capture config/dependencies
  coordinated step + observe         capture logs/status/workspace
- finalize each model                           |
+ finalize each member                           |
               |                               |
               v                               |
     [Persistence writers commit]              |
@@ -107,7 +100,7 @@ lifecycle and progress facts.
 
 Configuration or preflight failures stop before output exists. Once execution
 starts, Runtime owns scheduling, cancellation, and task coordination;
-successful model recordings are published only after Persistence finalizes
+successful member recordings are published only after Persistence finalizes
 their metadata and writers.
 
 ## Installation
@@ -137,9 +130,9 @@ downstream application. The execution-unit attribute is re-exported by
 The published crate is the right choice when the supported workflow matches
 the project:
 
-- Rust workloads can implement `ExecutionUnit`, expose one or more models that
+- Rust workloads can implement `ExecutionUnit`, expose one or more members that
   each own `SystemState`, and use JSON-deserializable constants;
-- work can be expressed as dependency-ordered model, executable, or Python
+- work can be expressed as dependency-ordered execution unit, executable, or Python
   tasks in `wf_configs/study.json`;
 - named JSON state schemas and the central `wf_configs/parameters.json` are suitable
   configuration boundaries;
@@ -182,7 +175,7 @@ Create a fork when the required behavior deliberately exceeds the supported
 replacement boundaries or must be maintained independently. Typical reasons
 include:
 
-- exposing a different public orchestration or model contract;
+- exposing a different public orchestration or execution unit contract;
 - implementing a custom persistence backend, writer lifecycle, or incompatible
   recording format;
 - replacing scheduling, cancellation, output-layout, or UI policy;
@@ -190,7 +183,7 @@ include:
   or
 - preparing a pull request through a personal remote.
 
-Do not fork merely to define new models, payload types, observation plans,
+Do not fork merely to define new execution units, payload types, observation plans,
 field decoders, executable tasks, Python tasks, or project configuration; those
 are supported extension points. Before changing internals, read the subsystem
 `api.md` replacement contract and pin dependent applications to a known fork
@@ -203,20 +196,20 @@ The canonical ordinary import is `scientific_workflow::prelude::basic::*`.
 Advanced readers and embedding hosts use
 `scientific_workflow::prelude::advanced::*`, which is a strict superset.
 The tables below list every supported public symbol and callable operation.
-Documentation-hidden `__private`, `ModelRegistration`, and `PayloadTuple`
+Documentation-hidden `__private`, `ExecutionUnitRegistration`, and `PayloadTuple`
 exports exist only for procedural-macro expansion or sealed tuple bounds and
 are not supported application APIs.
 
 The complete supported symbol inventory is:
 
-- Basic: `run`, `execution_unit`, compatibility `model`, `WorkflowError`,
-  `ExecutionUnit`, `InitializationContext`, `ModelView`, `SeedError`, `TaskResult`,
+- Basic: `run`, `execution_unit`, `WorkflowError`, `ExecutionUnit`,
+  `InitializationContext`, `MemberCompletion`, `MemberView`, `SeedError`, `TaskResult`,
   `ObservationPlan`, `ObservationStream`, `ObservationError`, `StateTime`,
   `SystemStateSchema`, `SystemState`, `StateSeries`, `StateSeriesPushError`,
   `PayloadInsertError`, `StateError`, and `StateSeriesError`.
 - Advanced-only additions: `ConfigError`, `Study`, `StudyError`, `execute`,
   `RunSummary`, `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunSummary`,
-  `ModelRunSummary`,
+  `MemberRunSummary`,
   `TaskRunKind`, `RuntimeError`, `StateFieldSchema`, `StateSchemaAccess`,
   `StateMaintenance`, `JsonPayloadDecoder`, `JsonPayloadDecoderRegistry`,
   `JsonStringDecoder`, `JsonVecF64Decoder`, `StoredStateSeriesReader`,
@@ -227,8 +220,7 @@ The complete supported symbol inventory is:
 | API | Parameters | Purpose |
 | --- | --- | --- |
 | `scientific_workflow::run(project_root)` | `project_root: &Path` | Loads and preflights a project, executes it, and returns `Result<(), WorkflowError>`. This is the ordinary entry point. |
-| `#[scientific_workflow::execution_unit("key")]` | One nonempty, whitespace-exact string literal on an `ExecutionUnit` impl | Registers the standalone model or ensemble under the stable key selected by `wf_configs/study.json` and `wf_configs/parameters.json`. |
-| `#[scientific_workflow::model("key")]` | Same parameters | Compatibility spelling with identical registration behavior. |
+| `#[scientific_workflow::execution_unit("key")]` | One nonempty, whitespace-exact string literal on an `ExecutionUnit` impl | Registers the standalone execution unit or ensemble under the stable key selected by `wf_configs/study.json` and `wf_configs/parameters.json`. |
 | `WorkflowError` | Variants `Study(StudyError)` and `Runtime(RuntimeError)` | Distinguishes effect-free loading/preflight failure from active execution failure. |
 | `prelude::basic` | Glob import; no parameters | Re-exports `run`, registration attributes, ordinary state, observation, task, and workflow-error APIs. |
 | `prelude::advanced` | Glob import; no parameters | Re-exports Basic plus Study loading, Runtime execution/summaries, verified persistence reading, Config errors, and advanced State traits. |
@@ -241,7 +233,7 @@ is declarative or automatic. `error::advanced`, `observation::advanced`, and
 ### Execution-unit and task API
 
 `task::basic::TaskResult<T = ()>` is
-`Result<T, Box<dyn Error + Send + Sync + 'static>>` and is the common model
+`Result<T, Box<dyn Error + Send + Sync + 'static>>` and is the common execution unit
 error boundary.
 
 `task::basic::ExecutionUnit` is `Send + Sized + 'static` and has one
@@ -251,15 +243,15 @@ and consumed within its current thread:
 
 | Method | Parameters | Purpose |
 | --- | --- | --- |
-| `observation_plan(constants)` | `constants: &Self::Constants` | Optional side-effect-free declaration hook over Study's preflight decode. The default returns `ObservationPlan::all_fields()`; overrides may select streams, fields, cadence, and units. |
-| `initialize(constants, schema, context)` | fresh equivalent owned `Self::Constants`; `schema: &SystemStateSchema`; `context: &InitializationContext` | Required Runtime constructor for a standalone model or ensemble. Every exposed state uses this schema allocation. Deterministic units may ignore the context; stochastic units request named seeds from it. |
-| `model_count()` | `&self` | Returns the stable positive number of independently stateful models. |
-| `model(index)` | `&self`; zero-based `usize` | Returns `Some(ModelView)` for every declared index and `None` outside the count. |
-| `step()` | `&mut self` | Required coordinated transition. Every success advances at least one incomplete model; completed members cannot advance. |
+| `preflight(constants, schema)` | `constants: &Self::Constants`; `schema: &SystemStateSchema` | Optional side-effect-free unit-owned validation and observation declaration hook. Study trusts success. The default returns `ObservationPlan::all_fields()`; overrides may validate domain rules and select streams, fields, cadence, and units. |
+| `initialize(constants, schema, context)` | fresh equivalent owned `Self::Constants`; `schema: &SystemStateSchema`; `context: &InitializationContext` | Required Runtime constructor for a standalone execution unit or ensemble. Every exposed state uses this schema allocation. Deterministic units may ignore the context; stochastic units request named seeds from it. |
+| `member_count()` | `&self` | Returns the stable positive number of independently stateful members. |
+| `member(index)` | `&self`; zero-based `usize` | Returns `Some(MemberView)` for every declared index and `None` outside the count. |
+| `step()` | `&mut self` | Required coordinated transition. Every success advances at least one incomplete member; completed members cannot advance. |
 
 Units receive no paths, writers, persistence sessions, progress callbacks, or
 UI handles. Runtime checks cancellation between steps and automatically
-observes initial, successful-step, and final states for each model.
+observes initial, successful-step, and final states for each member.
 Study and Runtime independently decode equivalent constants from the same
 immutable Config value; custom `Deserialize` implementations must therefore be
 deterministic and side-effect-free.
@@ -267,27 +259,30 @@ deterministic and side-effect-free.
 `task::basic::InitializationContext` is a Workflow-created, immutable
 initialization service. `has_master_seed()` reports whether the study declared
 one. `shared_seed(purpose)` derives a seed for unit-wide coordination;
-`model_seed(model_identity, purpose)` derives one for a specific exposed model.
+`member_seed(member_identity, purpose)` derives one for a specific exposed member.
 Both return `Result<u64, SeedError>`. Names must be stable, nonempty, and free
 of surrounding whitespace. Derivation is versioned, includes study/runtime
 identity facts, and is independent of request order and thread scheduling.
 Every successful request and its actual seed is stored automatically with its
-associated model recording. Deterministic units do not need a study seed and
+associated member recording. Deterministic units do not need a study seed and
 simply ignore the context.
 
 `task::basic::SeedError` is the non-exhaustive error for a missing master seed,
-invalid request name, or model-scoped request that does not match an exposed
-`ModelView` identity. Its variants are `MissingMasterSeed`,
-`InvalidName { field, value }`, and `UnknownModelIdentity { identity }`. It
+invalid request name, or member-scoped request that does not match an exposed
+`MemberView` identity. Its variants are `MissingMasterSeed`,
+`InvalidName { field, value }`, and `UnknownMemberIdentity { identity }`. It
 converts through `?` into `TaskResult`.
 
-`task::basic::ModelView<'a>` is a copyable borrow created with
-`ModelView::new(identity, state, complete, target_iteration)`. Its getters are
-`identity()`, `state()`, `is_complete()`, and `target_iteration()`. Identity,
+`task::basic::MemberView<'a>` is a copyable borrow created with
+`MemberView::new(identity, state, completion, target_iteration)`. Its getters are
+`identity()`, `state()`, `completion()`, and `target_iteration()`. Identity,
 index order, state address, and schema allocation are stable for the execution;
 identity is nonempty, whitespace-exact, and unique. Completion is monotonic,
-and a present target cannot decrease or disappear. A single model returns one
-view; an ensemble returns one per member.
+and a present target cannot decrease or disappear. A single execution unit returns one
+view; an ensemble returns one per member. `completion()` is `None` while active
+and `Some(MemberCompletion)` when complete. Use
+`MemberCompletion::without_reason()` or `MemberCompletion::with_reason(&json_object)`;
+`reason()` returns the optional borrowed object.
 
 ### Observation API
 
@@ -304,7 +299,7 @@ view; an ensemble returns one per member.
 | `ObservationError` | Non-exhaustive error enum | Reports `EmptyPlan`, `EmptyStreamName`, `DuplicateStreamName`, `EmptyFieldName`, `EmptyFieldSelection`, `DuplicateField`, `UnknownField`, `InvalidSamplingInterval`, `EmptyAxisUnit`, `SchemaMismatch`, `StateAccess`, `EncodeField`, or `NonIncreasingObservation`. |
 
 Plans and streams are immutable, cloneable declarations. They perform no IO;
-Study binds them to the model task's selected schema during preflight.
+Study binds them to the execution unit task's selected schema during preflight.
 
 ### State Basic API
 
@@ -397,11 +392,11 @@ Import the extension traits from `state::advanced` or `prelude::advanced`:
 
 | API | Parameters | Purpose |
 | --- | --- | --- |
-| `ConfigError` | Non-exhaustive enum | Reports `Read`, `Parse`, `DuplicateKey`, `InvalidDocument`, `PathOutsideConfig`, `InvalidProgram`, `UnknownDependency`, `UnknownState`, `ExpansionOverflow`, or `DecodeModelConstants`. Context fields retain paths, JSON pointers, model/state/phase keys, ordinals, and sources as applicable. |
-| `Study::load(project_root)` | `project_root: &Path` | Performs complete effect-free Config loading, state validation, model discovery, parameter decode, program/Python resolution, and observation preflight. |
+| `ConfigError` | Non-exhaustive enum | Reports `Read`, `Parse`, `DuplicateKey`, `InvalidDocument`, `PathOutsideConfig`, `InvalidProgram`, `UnknownDependency`, `UnknownState`, `ExpansionOverflow`, or `DecodeExecutionUnitConstants`. Context fields retain paths, JSON pointers, execution unit/state/phase keys, ordinals, and sources as applicable. |
+| `Study::load(project_root)` | `project_root: &Path` | Performs complete effect-free Config loading, state validation, execution unit discovery, parameter decode, program/Python resolution, and observation preflight. |
 | `study.project_root()` | `&self` | Borrows Config's canonical project root. |
 | `study.output_root()` | `&self` | Borrows the inferred `<project-root>/output` path; it need not exist yet. |
-| `StudyError` | Non-exhaustive enum | Reports `Config`, contextual `State { state, path, source }`, `InvalidModelRegistration`, `UnknownModel`, `ModelPreflight`, or `TaskIdentityOverflow`. Every variant occurs before Runtime creates output. |
+| `StudyError` | Non-exhaustive enum | Reports `Config`, contextual `State { state, path, source }`, `InvalidExecutionUnitRegistration`, `UnknownExecutionUnit`, `ExecutionUnitPreflight`, or `TaskIdentityOverflow`. Every variant occurs before Runtime creates output. |
 
 `Study` is immutable and clone-cheap through shared ownership. Its phase graph,
 tasks, selected schemas, resolved constants, and policies are intentionally not
@@ -420,17 +415,17 @@ publicly mutable or inspectable.
 | `PhaseRunSummary::name()` | `&self` | Borrows the manifest phase key. |
 | `PhaseRunSummary::tasks()` | `&self` | Borrows task summaries in deterministic Study order. |
 | `TaskRunSummary::identity()` | `&self` | Borrows the Study-inferred identity. |
-| `TaskRunSummary::kind()` | `&self` | Returns non-exhaustive `TaskRunKind::Model` or `TaskRunKind::Program`. |
-| `TaskRunSummary::model()` | `&self` | Returns the model key for model tasks. |
+| `TaskRunSummary::kind()` | `&self` | Returns non-exhaustive `TaskRunKind::ExecutionUnit` or `TaskRunKind::Program`. |
+| `TaskRunSummary::execution_unit()` | `&self` | Returns the registration key for execution-unit tasks. |
 | `TaskRunSummary::program()` | `&self` | Returns the resolved executable/interpreter/manager path for program tasks. |
 | `TaskRunSummary::program_kind()` | `&self` | Returns `program` or `python` for a program task. |
 | `TaskRunSummary::python_script()` | `&self` | Borrows the canonical script path for a nested Python task. |
-| `TaskRunSummary::final_iteration()` | `&self` | Returns the maximum final model iteration for scientific tasks. |
-| `TaskRunSummary::models()` | `&self` | Borrows stable per-model `ModelRunSummary` values; one for a standalone model, multiple for an ensemble, none for a program. |
+| `TaskRunSummary::final_iteration()` | `&self` | Returns the maximum final member iteration for execution-unit tasks. |
+| `TaskRunSummary::members()` | `&self` | Borrows stable per-member `MemberRunSummary` values; one for a standalone unit, multiple for an ensemble, none for a program. |
 | `TaskRunSummary::output_directory()` | `&self` | Borrows the task root or program-workspace directory. |
-| `ModelRunSummary::identity()` | `&self` | Borrows the execution-unit model identity. |
-| `ModelRunSummary::final_iteration()` | `&self` | Returns that model's terminal iteration. |
-| `ModelRunSummary::output_directory()` | `&self` | Borrows that model's completed recording directory. |
+| `MemberRunSummary::identity()` | `&self` | Borrows the member identity supplied by the execution unit. |
+| `MemberRunSummary::final_iteration()` | `&self` | Returns that member's terminal iteration. |
+| `MemberRunSummary::output_directory()` | `&self` | Borrows that member's completed recording directory. |
 | `RuntimeError` | Non-exhaustive enum | Reports `ExecutionCancelled`, `OutputScope`, `Task`, `TaskPanicked`, `TaskTimedOut`, `TaskCancelled`, `PhaseTimedOut`, `StartWorker`, `ReplicatePanicked`, or contextual `Replicate` failure. |
 
 Summary objects are cloneable, read-only owned values and perform no IO.
@@ -438,7 +433,7 @@ Summary objects are cloneable, read-only owned values and perform no IO.
 ### Persistence Advanced read API
 
 Persistence writing is automatic and has no public writer constructor. The
-public surface reconstructs completed model recordings:
+public surface reconstructs completed member recordings:
 
 | Type or method | Parameters | Purpose |
 | --- | --- | --- |
@@ -485,11 +480,11 @@ the subsystem contracts linked at the end of this guide.
 
 ## Complete user procedure
 
-### 1. Define a model
+### 1. Define an execution unit
 
-The model directly owns its canonical `SystemState`. Its associated constants
+The execution unit directly owns its canonical `SystemState`. Its associated constants
 type is the complete typed form of one expanded section selected from
-`wf_configs/parameters.json` by the model's registration key.
+`wf_configs/parameters.json` by the execution unit's registration key.
 In the fixed-duration example below, `StateTime::iteration()` is the current
 completed iteration, while `target_iteration` retains the configured stopping
 target; it is not a second progress counter.
@@ -505,13 +500,13 @@ struct Constants {
     steps: u64,
 }
 
-struct PopulationModel {
+struct PopulationUnit {
     state: SystemState,
     target_iteration: u64,
 }
 
 #[scientific_workflow::execution_unit("population")]
-impl ExecutionUnit for PopulationModel {
+impl ExecutionUnit for PopulationUnit {
     type Constants = Constants;
 
     fn initialize(
@@ -528,13 +523,14 @@ impl ExecutionUnit for PopulationModel {
         })
     }
 
-    fn model_count(&self) -> usize { 1 }
+    fn member_count(&self) -> usize { 1 }
 
-    fn model(&self, index: usize) -> Option<ModelView<'_>> {
-        (index == 0).then(|| ModelView::new(
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| MemberView::new(
             "population",
             &self.state,
-            self.state.time().iteration() >= self.target_iteration,
+            (self.state.time().iteration() >= self.target_iteration)
+                .then_some(MemberCompletion::without_reason()),
             Some(self.target_iteration),
         ))
     }
@@ -553,27 +549,27 @@ impl ExecutionUnit for PopulationModel {
 }
 ```
 
-`ExecutionUnit::observation_plan` defaults to
+`ExecutionUnit::preflight` defaults to
 `ObservationPlan::all_fields()`. Override it only
-when selected fields, named streams, cadence, or units carry scientific
-meaning. The observation-plan function may inspect constants but must be
-deterministic and side-effect-free.
+when domain validation or selected fields, named streams, cadence, or units
+carry scientific meaning. The preflight function may inspect constants and
+the selected schema but must be deterministic and side-effect-free.
 
-The model is an ordinary Rust owner: its single `ModelView` returns a direct
+The execution unit is an ordinary Rust owner: its single `MemberView` returns a direct
 borrow of its `SystemState`, and coupled field access uses a typed tuple expansion. The
-attribute does not define the model or generate field access. Its stable key is
+attribute does not define the execution unit or generate field access. Its stable key is
 only the automatic bridge from `wf_configs/study.json` to compiled Rust behavior, so there
 is no separate registry list in `main`.
 
-For an ensemble, the registered implementor owns a stable collection of models:
+For an ensemble, the registered implementor owns a stable collection of members:
 
 ```text
 Task -> ExecutionUnit (ensemble; one coordinated lifecycle)
-          +-- ModelView[0] -> model A -> SystemState A -> recording A
-          `-- ModelView[1] -> model B -> SystemState B -> recording B
+          +-- MemberView[0] -> SystemState A -> recording A
+          `-- MemberView[1] -> SystemState B -> recording B
 ```
 
-Its `model_count()` returns the collection length, `model(index)` reports each
+Its `member_count()` returns the collection length, `member(index)` reports each
 member's independent completion and target, and `step()` owns all shared inputs,
 synchronization, and internal parallelism. Workflow does not inspect or control
 that parallelism. Member count/order/identity and state addresses remain stable;
@@ -645,7 +641,7 @@ recommended organization, not a requirement: schemas may live anywhere beneath
   "phases": {
     "simulate": {
       "tasks": [
-        {"model":"population","state":"population"}
+        {"execution_unit":"population","state":"population"}
       ],
       "max_concurrency": 2
     },
@@ -669,7 +665,7 @@ The top-level `seed` is optional for deterministic projects. A stochastic
 execution unit requests purpose-named derived seeds through its
 `InitializationContext`; if it makes a request while `seed` is absent, that
 task fails instead of silently drawing entropy. The derived values are stable
-across scheduling changes and recorded in model metadata.
+across scheduling changes and recorded in the applicable member metadata.
 
 Persistence is automatic. The omitted root `persistence` object infers the
 local backend with a 64 MB decimal chunk target and queue capacity.
@@ -690,7 +686,7 @@ Users never provide Rust recording paths, construct a backend, submit
 observations, or finalize a recording. External programs may own a
 project-relative domain output such as the Python plotter's `output/plots`.
 
-UI is also automatic. No `ui` object or model display fields are required.
+UI is also automatic. No `ui` object or execution unit display fields are required.
 Interactive stdin and stderr select the Ratatui dashboard with inferred task
 rows for only the current phase, progress, timing, lifecycle messages, and the
 `exit` command. The task-panel title carries the replicate and phase once.
@@ -718,11 +714,11 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 ```
 
 That call loads all declarations, discovers execution units, validates typed constants,
-binds each observation plan to its model task's explicitly selected state
+binds each observation plan to its execution unit task's explicitly selected state
 schema, resolves program paths and Python
 environments, creates immutable generic tasks and phases, compiles the
 effective persistence plan, infers identities/output paths, schedules work,
-and persists every exposed model automatically while publishing inferred
+and persists every exposed member automatically while publishing inferred
 aggregate terminal progress.
 
 Each program or Python script receives absolute `WORKFLOW_CONFIG_PATH` and
@@ -741,7 +737,7 @@ succeeds.
 - `state`: canonical typed scientific state and schema;
 - `observation`: observation meaning and borrowed encoding;
 - `task`: generic scientific/program tasks (including Python), `ExecutionUnit`,
-  per-model `ModelView`, registration, and uniform invocation;
+  per-member `MemberView`, registration, and uniform invocation;
 - `config`: sole all-JSON parser, immutable snapshot, executable/Python
   environment resolver, and typed constants supplier;
 - `study`: effect-free binding and immutable declared intent;
@@ -759,12 +755,12 @@ Advanced consumers may use `Study::load` and `runtime::advanced::execute`, but
 ordinary projects should not.
 
 The repository's [`attractor_2d`](../examples/attractor_2d) project combines
-these pieces end to end: six swept Rust model tasks feed one directly declared
+these pieces end to end: six swept Rust execution unit tasks feed one directly declared
 Python plotting phase that opens the verified recordings and emits an SVG in
 the configured `output/plots` directory.
 
 Each target subsystem publishes `module::basic` and `module::advanced`, with
-the latter a strict superset. `prelude::basic` contains the small model-author
+the latter a strict superset. `prelude::basic` contains the small execution unit-author
 surface. Persistence writing is automatic and private; only verified reading
 appears in the Advanced tier.
 

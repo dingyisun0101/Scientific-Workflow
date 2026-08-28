@@ -6,7 +6,7 @@ every source file does.
 
 ## User workflow
 
-An application author supplies scientific Rust models and/or executable
+An application author supplies scientific Rust execution units and/or executable
 programs plus project JSON:
 
 ```text
@@ -30,21 +30,21 @@ schema may use any path beneath `wf_configs/`, but its project-root-relative
 path must be registered explicitly in `study.json.paths.states`. State paths
 outside the canonical `wf_configs/` boundary are rejected.
 
-Each registered unit exposes one or more independently stateful models and is
+Each registered unit exposes one or more independently stateful members and is
 linked by a stable semantic key:
 
 ```rust,ignore
 #[scientific_workflow::execution_unit("population")]
-impl ExecutionUnit for PopulationModel {
-    // Constants, initialization, model views, and one coordinated step.
+impl ExecutionUnit for PopulationUnit {
+    // Constants, initialization, member views, and one coordinated step.
 }
 ```
 
 The attribute only submits registration metadata. It does not create the
-unit, generate state fields, wrap model state, or change field access.
+unit, generate state fields, wrap member state, or change field access.
 A standalone implementation owns an ordinary `SystemState` field and returns
-one `ModelView`; an ensemble owns multiple models and returns one stable view
-per model. Implementations access coupled payloads through typed tuple borrowing such
+one `MemberView`; an ensemble owns multiple members and returns one stable view
+per member. Implementations access coupled payloads through typed tuple borrowing such
 as `borrow_payloads_mut::<(Position, Velocity)>(("position", "velocity"))`.
 
 The executable needs no registry or orchestration builder:
@@ -70,10 +70,10 @@ The current first-level library modules are:
 - `observation`: application-authored scientific selection, cadence, units,
   and private encoding;
 - `task`: generic scientific/program workload abstraction (including Python
-  lowering), `ExecutionUnit`/`ModelView` contract, linked registration, and
+  lowering), `ExecutionUnit`/`MemberView` contract, linked registration, and
   uniform private execution;
 - `config`: sole reader/parser of all project JSON, immutable central snapshot,
-  executable/Python-environment resolution, and sole typed model-constants
+  executable/Python-environment resolution, and sole typed execution unit-constants
   supplier;
 - `study`: effect-free coordinator of all declared intent and preflight;
 - `runtime`: sole coordinator of active execution and output creation;
@@ -102,7 +102,7 @@ config
         │ private Config / ProjectSpecification / ResolvedTask
         ▼
 study
-  retained Config + named state semantics + model discovery + constants decode
+  retained Config + named state semantics + execution unit discovery + constants decode
   + generic program/Python tasks + one-time observation-plan binding
   + identities + phases
         │ immutable Study returned to the crate facade
@@ -111,8 +111,8 @@ runtime::execute
   execution directory + replicates + scheduling + cancellation
   + immutable initialization context + execution-unit stepping
   + direct program/Python invocation
-        ├──── per-model observation boundaries ────► persistence
-        │                                             one private bounded writer per model
+        ├──── per-member observation boundaries ────► persistence
+        │                                             one private bounded writer per member
         │                                             + atomic metadata/chunks
         │                                             + verified reads
         ├──── program snapshot/log/status/artifacts ─► persistence
@@ -123,7 +123,7 @@ runtime::execute
 
 The crate facade owns only the transition from project root to Study to
 Runtime. Study is the ultimate coordinator of declared intent. Runtime is the
-ultimate coordinator of active execution. Config never discovers Rust model
+ultimate coordinator of active execution. Config never discovers Rust execution unit
 types or performs execution.
 
 During `Study::load`, Config is the sole subsystem that discovers, reads, and
@@ -135,7 +135,7 @@ execution/replicate directories and launch external programs; external
 programs own their declared domain artifacts, and UI owns terminal output.
 Other subsystems consume typed or validated in-memory values instead of
 reopening configuration or interpreting persistence files.
-Study never creates output or initializes a model. Study and Runtime never
+Study never creates output or initializes an execution unit. Study and Runtime never
 reparse the captured documents. Persistence never decides scientific
 observation meaning.
 
@@ -162,7 +162,7 @@ Current public surface:
 basic
 ├── state construction and manipulation
 ├── ObservationPlan / ObservationStream
-├── ExecutionUnit / InitializationContext / ModelView / SeedError / TaskResult
+├── ExecutionUnit / InitializationContext / MemberView / SeedError / TaskResult
 │   / #[execution_unit]
 ├── crate-facade run(&Path)
 └── WorkflowError
@@ -190,8 +190,8 @@ prelude aggregates supported tiers
 ```
 
 Peers import another subsystem through its `advanced` boundary. Config does
-not depend on task: it treats model keys as opaque. Study owns the cross-domain
-match. Task asks config-owned resolved model parameters for one complete typed
+not depend on task: it treats execution unit keys as opaque. Study owns the cross-domain
+match. Task asks config-owned resolved execution unit parameters for one complete typed
 constants value or delegates one resolved program. Runtime receives only a
 fully preflighted Study and its retained Config.
 
@@ -241,11 +241,11 @@ workflow/
 │   │   │
 │   │   ├── task.rs                   task root and inline API tiers
 │   │   ├── task/api.md               exhaustive execution-unit contract and example
-│   │   ├── task/unit.rs              ExecutionUnit and borrowed ModelView contract
+│   │   ├── task/unit.rs              ExecutionUnit and borrowed MemberView contract
 │   │   ├── task/result.rs            boxed application error alias
 │   │   ├── task/catalog.rs           linked registrations and sorted validation
-│   │   ├── task/definition.rs        type-erased model/program execution definitions
-│   │   ├── task/execution.rs         host port and model invariant enforcement
+│   │   ├── task/definition.rs        type-erased execution unit/program execution definitions
+│   │   ├── task/execution.rs         host port and execution unit invariant enforcement
 │   │   └── task/tests/task_workflow.rs private catalog/execution contract tests
 │   │   │
 │   │   ├── config.rs                 config root; empty Basic, error-only Advanced
@@ -255,7 +255,7 @@ workflow/
 │   │   ├── config/store.rs           central immutable all-document Config snapshot
 │   │   ├── config/manifest.rs        study grammar, defaults, dependency checks
 │   │   ├── config/expansion.rs       deterministic $sweep/$cases compiler
-│   │   ├── config/parameters.rs      resolved model parameters + typed decode
+│   │   ├── config/parameters.rs      resolved execution unit parameters + typed decode
 │   │   ├── config/program.rs         validated resolved executable declaration
 │   │   ├── config/python.rs          nested Python environment validation/lowering
 │   │   ├── config/specification.rs   one-root loading transaction
@@ -272,7 +272,7 @@ workflow/
 │   │   ├── runtime/api.md            execute/summary/error contract
 │   │   ├── runtime/error.rs          active execution RuntimeError
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
-│   │   ├── runtime/host.rs           model/program execution and persistence adapter
+│   │   ├── runtime/host.rs           execution unit/program execution and persistence adapter
 │   │   ├── runtime/execution.rs      Study-only replicate/phase/task schedulers
 │   │   ├── runtime/summary.rs        successful immutable RunSummary tree
 │   │   └── runtime/tests/runtime_workflow.rs private scheduler/lifecycle tests
@@ -289,7 +289,7 @@ workflow/
 │   │   ├── persistence.rs            persistence root; empty Basic, read Advanced
 │   │   ├── persistence/api.md        complete settings/read/error contract
 │   │   ├── persistence/plan.rs       private effective operational settings
-│   │   ├── persistence/session.rs    model recording/program workspace lifecycle
+│   │   ├── persistence/session.rs    member recording/program workspace lifecycle
 │   │   ├── persistence/local.rs      private local recording coordinator/lease
 │   │   ├── persistence/local/error.rs exact read/write persistence failures
 │   │   ├── persistence/local/jsonl_format.rs metadata/chunk wire structures
@@ -315,7 +315,7 @@ workflow/
 │   ├── src/scientific_workflow_reader/
 │   │   ├── __init__.py                supported reader exports
 │   │   ├── errors.py                  typed verification/read failures
-│   │   ├── model.py                   read-only field/record/series containers
+│   │   ├── state.py                  read-only field/record/series containers
 │   │   ├── reader.py                  format-v7 validation and reconstruction
 │   │   └── py.typed                   typing marker
 │   └── tests/
@@ -325,10 +325,10 @@ workflow/
 └── examples/attractor_2d/
     ├── Cargo.toml / Cargo.lock         standalone example package
     ├── src/main.rs                     one run(&Path) call
-    ├── src/hopf_model.rs               registered state-owning model
+    ├── src/hopf_unit.rs               registered state-owning execution unit
     ├── wf_configs/
     │   ├── study.json                  swept simulation then Python plot phase
-    │   ├── parameters.json             model sweeps + plotter settings
+    │   ├── parameters.json             execution unit sweeps + plotter settings
     │   └── states/attractor.json       named `attractor` state schema
     └── scripts/plot.py                 direct verified-recording SVG task
 ```
@@ -343,15 +343,16 @@ reread named state documents. Persistence reconstructs schemas directly from
 decoded ordered field metadata rather than serializing and reparsing JSON.
 Observation borrows serializable payloads through a crate-visible State port,
 not slot internals. `SystemState` owns fixed heterogeneous slots and
-`StateTime`; application models mutate payloads and advance time. Advanced
+`StateTime`; application execution units mutate payloads and advance time. Advanced
 inspection exposes field metadata and schema identity. The old generic
 schema-source adapter was removed with the persistence builder that needed it.
 
 ### Observation
 
-An execution unit's `observation_plan(&Constants)` defaults to all fields. Study calls
-it once during preflight and stores the exact schema-bound plan. Runtime does
-not call it again. Private sessions select due streams, borrow/encode selected
+An execution unit's `preflight(&Constants, &SystemStateSchema)` owns its domain
+validation and defaults to an all-fields plan. Study calls it once, trusts a
+successful result, and stores the exact schema-bound plan. Runtime does not
+call it again. Private sessions select due streams, borrow/encode selected
 payloads, and deduplicate the final iteration. The resulting canonical owned
 JSON record is the explicit handoff to Persistence: encoding occurs while the
 mutable, potentially non-`Sync` state is synchronously borrowed, then the bytes
@@ -361,34 +362,34 @@ files, or lifecycle; Persistence owns no field-selection or cadence policy.
 ### Task
 
 `ExecutionUnit` is the irreducible user contract for stateful Rust science.
-It generalizes the former top-level model contract from exactly one model to a
-positive, stable collection. Task itself is generic: Study may instead bind a resolved executable with
+It represents either a single stateful member or a coordinated, positive,
+stable collection of members. Task itself is generic: Study may instead bind a resolved executable with
 direct arguments and no public Rust adapter. Config lowers a nested Python
 script/environment declaration to that same executable boundary. Study and
 Runtime decode equivalent constants instances independently from Config's same
 retained JSON value, so the constants type itself need not be `Send` or `Sync`.
 The unit initializes from its task-bound selected schema and a Workflow-owned
 `InitializationContext`, then exposes stable
-`ModelView`s. Each view names one independently complete model and directly
-borrows that model's state. The unit performs one coordinated `step`; a normal
-model is the one-view case, while an ensemble may synchronize or parallelize
+`MemberView`s. Each view names one independently complete member and directly
+borrows that member's state. The unit performs one coordinated `step`; a normal
+execution unit is the one-view case, while an ensemble may synchronize or parallelize
 members internally. Task enforces stable count/order/identity/state/schema,
-monotonic completion and targets, and progress by at least one incomplete model.
+monotonic completion and targets, and progress by at least one incomplete member.
 The macro submits immutable registration metadata; the private catalog
 rejects bad or duplicate keys and ignores linker order.
-State definition and access remain macro-free: each model owns the concrete
-`SystemState`, exposes it through its unit's view, and uses the state's typed single- or
+State definition and access remain macro-free: each execution unit owns the concrete
+`SystemState`, exposes it through its member view, and uses the state's typed single- or
 tuple-payload borrowing methods directly.
 Task passes a semantic borrowed `ProgramTaskInvocation` through its execution
 host port, so Runtime does not depend on Config's resolved-program
 representation.
 Deterministic units ignore the initialization context. Stochastic units request
-stable purpose-named shared or per-model seeds only when needed. Seed
+stable purpose-named shared or per-member seeds only when needed. Seed
 derivation incorporates the optional study master seed, replicate, task,
-execution-unit key, scope, model identity, and purpose without an order-sensitive
-counter. Runtime validates model-scoped requests against the initialized views;
-Persistence records shared requests plus the applicable model requests and
-their actual derived values in each model's metadata.
+execution-unit key, scope, member identity, and purpose without an order-sensitive
+counter. Runtime validates member-scoped requests against the initialized views;
+Persistence records shared requests plus the applicable member requests and
+their actual derived values in each member's metadata.
 
 ### Config
 
@@ -401,7 +402,7 @@ The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
 intent; neither layer draws random values.
 `wf_configs/study.json.paths.states` maps semantic state keys to configuration documents; every
-model task explicitly selects one key. A model key automatically selects its
+execution unit task explicitly selects one key. An execution unit key automatically selects its
 same-name parameter section; no per-task parameter path exists. Config expands
 selections deterministically, resolves program paths and Python scripts/environment
 managers once, and creates a deterministic language-neutral snapshot for
@@ -414,8 +415,8 @@ closed peer types are explicitly named through the same owning scope.
 ### Study
 
 `Study::load(&Path)` performs all cross-domain checks before output: every
-named state's semantics, every model task's state lookup, linked registration
-validation, model-key resolution, constants decoding, and
+named state's semantics, every execution unit task's state lookup, linked registration
+validation, execution unit-key resolution, constants decoding, and
 observation/task-schema binding over Config's already-resolved generic program
 and Python tasks. It retains
 the central Config and infers stable identities, labels, the output root, and
@@ -432,7 +433,7 @@ entry point: it consumes only complete immutable intent. Runtime alone creates
 `output/execution-<pid>-<sequence>`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
 topologically schedules generic tasks, applies concurrency/start intervals and
-fail-fast/finish-all policy, checks cooperative cancellation between model
+fail-fast/finish-all policy, checks cooperative cancellation between execution-unit
 steps, directly starts programs and resolved Python launchers without a shell,
 and returns deterministic successful summaries. Parallel replicate workers
 report completion as it occurs, allowing replicate-level fail-fast to cancel
@@ -442,20 +443,20 @@ task deadline outcomes; phase timeouts apply only while work remains. A
 blocking user `step` cannot be forcibly killed safely, but cancellation
 observed when it returns prevents a successful final recording transition. An
 external child is killed and reaped on observed cancellation. A task panic is
-caught while its host is alive so any active model recording becomes durably
+caught while its host is alive so any active member recording becomes durably
 failed before the existing `TaskPanicked { task }` error is returned.
-Runtime passes semantic model provenance into Persistence and does not author
+Runtime passes semantic execution unit provenance into Persistence and does not author
 durable metadata JSON, backend names, or local format fields.
 
 ### Persistence
 
-Persistence is constructed and run only by Runtime. The model constructor
+Persistence is constructed and run only by Runtime. The member-recording constructor
 accepts an inferred destination, the already-bound observation plan, semantic provenance,
 and one effective shared chunk/queue policy. A bounded worker owns all stream
 writes and commits immutable JSONL chunks plus one authoritative
 `metadata.json` lifecycle. There is no writer builder, per-stream storage
 override, public flush, resume/continuation path, or completion handle.
-Persistence alone converts model provenance and effective policy into exact
+Persistence alone converts execution-unit provenance and effective policy into exact
 durable metadata, including the current local-backend field.
 
 Users author every persistence size as a positive integer decimal MB, with one
@@ -468,12 +469,12 @@ exact byte values.
 Advanced users can only open completed recordings with a decoder registry.
 Readers verify metadata, sizes, hashes, framing, ordering, schema, decoding,
 and StateSeries invariants before publishing owned results. A future local or
-remote adapter belongs behind the private `PersistenceSession`, not in model
+remote adapter belongs behind the private `PersistenceSession`, not in execution unit
 or task APIs. A separate private program session creates an isolated artifacts
 directory, freezes central config and dependency JSON, captures stdout/stderr,
 records generic-program or Python launcher provenance, and atomically publishes
 and directory-synchronizes running/complete/failed metadata. Initial and final
-model-observation failures best-effort terminalize an active recording as
+member-observation failures best-effort terminalize an active recording as
 failed before preserving the triggering error. Latest-state reconstruction
 validates every record and descriptor fact in the newest chunk, not only its
 last line. The workspace remains the external task's
@@ -481,14 +482,14 @@ default working area, but Python or another external program owns its
 domain-specific IO and may write to a safe project-relative destination from
 `wf_configs/parameters.json`; the attractor plotter uses `output/plots`.
 
-Model recording provenance calls the selected combination
+Member-recording provenance calls the selected combination
 `parameter_ordinal` and its canonical `wf_configs/parameters.json` document
 `parameter_source`; `state` records the named schema selector bound during
 assembly. The removed per-task input-file vocabulary is not retained on disk.
 When an execution unit requested Workflow-derived seeds, the recording's
 `user_metadata.workflow.seed_derivation` stores the versioned algorithm,
-master seed, and actual applicable shared/per-model requests. Requests for a
-different ensemble member are intentionally absent from that model's metadata.
+master seed, and actual applicable shared/per-member requests. Requests for a
+different ensemble member are intentionally absent from that member's metadata.
 
 ### UI
 
@@ -496,7 +497,7 @@ Study owns a private zero-configuration `UiPlan`; its current effective policy
 is inferred rather than authored in `wf_configs/study.json`. Runtime constructs one
 clone-cheap `UiSession` after creating the execution output and publishes
 borrowed execution, replicate, phase, task, iteration, outcome, and path facts.
-Model progress comes from the same host boundaries already used for automatic
+Execution unit progress comes from the same host boundaries already used for automatic
 persistence. Programs publish generic lifecycle facts without invented
 iteration values, so neither workload supplies UI code or values.
 
@@ -513,7 +514,7 @@ elapsed/ETA fields, a bounded message panel, and the former command editor.
 Every phase-start event replaces the visible task set. Replicate and phase
 appear once in the panel title; rows contain only task-specific information.
 Exact lowercase `exit` or Ctrl+C requests cooperative Runtime cancellation,
-stops further admission, and waits for active model/program cleanup before
+stops further admission, and waits for active execution unit/program cleanup before
 terminal restoration. One private refresh thread retains presentation facts
 but never scientific payloads. Its public Basic and Advanced tiers remain
 empty. Early phase, replicate, or execution termination closes affected
@@ -530,7 +531,7 @@ source chains, retain `Send + Sync`, and do not absorb fatal UI renderer panics.
 `error::advanced` is currently the same supported set.
 
 Prelude Basic aggregates all subsystem Basic scopes plus the crate-owned
-`run`, `execution_unit`, compatibility `model`, and `WorkflowError` conveniences. Prelude Advanced is its
+`run`, `execution_unit`, and `WorkflowError` conveniences. Prelude Advanced is its
 strict superset and aggregates every subsystem Advanced scope. Neither prelude
 owns behavior or creates an alternative canonical implementation path.
 
@@ -542,14 +543,14 @@ owns behavior or creates an alternative canonical implementation path.
    executable/Python-environment resolver, and typed constants supplier.
 3. Study completes all execution-unit/constants/observation and program/Python binding
    before output and retains the exact Config snapshot.
-4. Model registration keys are authored stable semantics, never Rust type names.
+4. Execution unit registration keys are authored stable semantics, never Rust type names.
 5. Execution units are initialized only during active Runtime execution.
-6. An execution unit exposes a stable positive set of model identities, and
-   each model directly owns one stable canonical `SystemState`.
+6. An execution unit exposes a stable positive set of member identities, and
+   each member directly owns one stable canonical `SystemState`.
 7. Every successful unit `step` strictly advances at least one incomplete
-   model and cannot advance a completed model.
-8. Observation plans are deterministic, side-effect-free, evaluated once, and
-   stored bound to each model task's explicitly selected named schema.
+   member and cannot advance a completed member.
+8. Execution-unit preflight is deterministic, side-effect-free, evaluated
+   once, and returns an observation plan bound to the task's selected schema.
 9. The crate facade alone turns a project root into a Study and then invokes
    Runtime; Runtime accepts only a completed Study.
 10. Runtime alone creates output and owns scheduling/cancellation and external
@@ -590,7 +591,7 @@ owns behavior or creates an alternative canonical implementation path.
   cadence, clone-free borrowing, deterministic encoded order, and the owned
   canonical-record handoff to Persistence.
 - A task replacement preserves config-owned constants decode, stable
-  execution-unit/model/state boundaries, independent model observation and
+  execution-unit/execution unit/state boundaries, independent execution unit observation and
   completion, and generic program
   delegation without public adapters.
 - A config replacement preserves the grammar, typed-path containment,
@@ -604,9 +605,9 @@ owns behavior or creates an alternative canonical implementation path.
   order, owns scope orchestration, and passes semantic rather than formatted
   persistence provenance.
 - A persistence replacement remains behind the private session and preserves
-  bounded model submission, program workspace isolation/snapshots/logs,
+  bounded execution unit submission, program workspace isolation/snapshots/logs,
   ownership of durable metadata/format concerns, terminal evidence/provenance,
-  and verified model reads.
-- A UI replacement remains downstream of Runtime, requires no model/config
+  and verified execution unit reads.
+- A UI replacement remains downstream of Runtime, requires no execution unit/config
   participation, handles concurrent publishers, restores terminal state while
   unwinding, and treats renderer failure as fatal rather than cancellation.

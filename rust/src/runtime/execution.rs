@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::config::advanced::{ConfigSnapshot, FailurePolicy, ReplicateScheduling};
-use crate::persistence::advanced::{ModelRecordingProvenance, PersistencePlan};
+use crate::persistence::advanced::{MemberRecordingProvenance, PersistencePlan};
 use crate::study::advanced::{Study, StudyPhase, StudyTask};
 use crate::task::advanced::InitializationContext;
 use crate::task::advanced::TaskKind;
@@ -602,7 +602,7 @@ fn run_task(
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
-    let initialization_context = task.model().map(|execution_unit_key| {
+    let initialization_context = task.execution_unit().map(|execution_unit_key| {
         InitializationContext::new(
             runtime.master_seed,
             runtime.replicate,
@@ -610,10 +610,10 @@ fn run_task(
             execution_unit_key,
         )
     });
-    let provenance = task.model_provenance().map(|provenance| {
-        ModelRecordingProvenance::new(
+    let provenance = task.execution_unit_provenance().map(|provenance| {
+        MemberRecordingProvenance::new(
             task.identity(),
-            provenance.model(),
+            provenance.execution_unit(),
             provenance.state(),
             provenance.parameter_ordinal(),
             provenance.parameter_source(),
@@ -658,38 +658,39 @@ fn run_task(
             task: task.identity().to_owned(),
         });
     }
-    let (kind, model, program, program_kind, python_script, final_iteration) = match task.kind() {
-        TaskKind::Model => (
-            TaskRunKind::Model,
-            task.model().map(Into::into),
-            None,
-            None,
-            None,
-            host.final_iteration(),
-        ),
-        TaskKind::Program => {
-            let program = task
-                .program_path()
-                .expect("program task retains its resolved invocation");
-            (
-                TaskRunKind::Program,
+    let (kind, execution_unit, program, program_kind, python_script, final_iteration) =
+        match task.kind() {
+            TaskKind::ExecutionUnit => (
+                TaskRunKind::ExecutionUnit,
+                task.execution_unit().map(Into::into),
                 None,
-                Some(program.to_path_buf()),
-                task.program_kind_name().map(Into::into),
-                task.python_script().map(Path::to_path_buf),
                 None,
-            )
-        }
-    };
+                None,
+                host.final_iteration(),
+            ),
+            TaskKind::Program => {
+                let program = task
+                    .program_path()
+                    .expect("program task retains its resolved invocation");
+                (
+                    TaskRunKind::Program,
+                    None,
+                    Some(program.to_path_buf()),
+                    task.program_kind_name().map(Into::into),
+                    task.python_script().map(Path::to_path_buf),
+                    None,
+                )
+            }
+        };
     Ok(TaskRunSummary {
         identity: task.identity().into(),
         kind,
-        model,
+        execution_unit,
         program,
         program_kind,
         python_script,
         final_iteration,
-        models: host.model_summaries(),
+        members: host.member_summaries(),
         output_directory: host.output_directory().to_path_buf(),
     })
 }
@@ -725,21 +726,21 @@ fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box
                     serde_json::json!({
                         "identity": task.identity(),
                         "kind": match task.kind() {
-                            TaskRunKind::Model => "model",
+                            TaskRunKind::ExecutionUnit => "execution_unit",
                             TaskRunKind::Program => "program",
                         },
-                        "model": task.model(),
+                        "execution_unit": task.execution_unit(),
                         "program": task.program().map(|path| path.to_str()
                             .expect("Config preflight requires UTF-8 program paths")),
                         "program_kind": task.program_kind(),
                         "python_script": task.python_script().map(|path| path.to_str()
                             .expect("Config preflight requires UTF-8 Python script paths")),
                         "final_iteration": task.final_iteration(),
-                        "models": task.models().iter().map(|model| {
+                        "members": task.members().iter().map(|member| {
                             serde_json::json!({
-                                "identity": model.identity(),
-                                "final_iteration": model.final_iteration(),
-                                "output_directory": model.output_directory().to_str()
+                                "identity": member.identity(),
+                                "final_iteration": member.final_iteration(),
+                                "output_directory": member.output_directory().to_str()
                                     .expect("UTF-8 project roots produce UTF-8 output paths")
                             })
                         }).collect::<Vec<_>>(),

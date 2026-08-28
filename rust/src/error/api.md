@@ -16,7 +16,7 @@ re-exported as `scientific_workflow::WorkflowError` and through
 
 It has two variants:
 
-- `Study(StudyError)` means project loading, parsing, expansion, model
+- `Study(StudyError)` means project loading, parsing, expansion, execution unit
   discovery, constants decoding, observation binding, or another preflight
   operation failed before Runtime received a Study and before output creation;
 - `Runtime(RuntimeError)` means active execution failed after a valid immutable
