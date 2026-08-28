@@ -28,7 +28,7 @@ Runtime (owns active execution, scheduling, cancellation, and coordination)
 |       `-- phases own assembled tasks
 |           +-- scientific task
 |           |   +-- retains: resolved parameters
-|           |   +-- retains: selected validated schema
+|           |   +-- retains: selected project schema OR validated standard provider
 |           |   +-- retains: bound observation plan
 |           |   `-- creates: ExecutionUnit with immutable InitializationContext
 |           |       +-- standalone unit
@@ -69,8 +69,8 @@ lifecycle and progress facts.
 [1. Implement/register execution units and prepare program or Python tasks]
                               |
                               v
-[2. Author wf_configs/study.json, named state schemas,
-    and wf_configs/parameters.json]
+[2. Author wf_configs/study.json and wf_configs/parameters.json]
+    - add named project state schemas when not using a linked provider
     - add one top-level seed when stochastic units request derived seeds
                               |
                               v
@@ -81,7 +81,7 @@ lifecycle and progress facts.
                               |
                               v
 [5. Study performs effect-free assembly and preflight]
-    - validate every named state schema
+    - validate every named project schema or linked standard provider
     - resolve execution unit keys, programs, and Python environments
     - expand/decode parameters and bind observation plans
                               |
@@ -121,14 +121,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.4"
+scientific-workflow = "0.11.5"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.4
+cargo add scientific-workflow@0.11.5
 cargo add serde --features derive
 ```
 
@@ -145,7 +145,8 @@ the project:
 - work can be expressed as dependency-ordered execution unit, executable, or Python
   tasks in `wf_configs/study.json`;
 - named JSON state schemas and the central `wf_configs/parameters.json` are suitable
-  configuration boundaries;
+  configuration boundaries, or an upstream crate can provide a standard
+  embedded schema to a receiving unit;
 - automatic local recordings, program workspaces, and terminal UI are desired;
   and
 - completed recordings can be analyzed through `StoredStateSeriesReader` and
@@ -220,7 +221,7 @@ The complete supported symbol inventory is:
 - Owning module roots: `ConfigError`, `Study`, `StudyError`, `execute`,
   `RunSummary`, `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunSummary`,
   `MemberRunSummary`,
-  `TaskRunKind`, `RuntimeError`, `StateFieldSchema`, `JsonPayloadDecoder`,
+  `TaskRunKind`, `RuntimeError`, `StateFieldSchema`, `StateSchemaProvider`, `JsonPayloadDecoder`,
   `JsonPayloadDecoderRegistry`, `StoredStateSeriesReader`,
   `RecordingTiming`, and `PersistenceError`.
 
@@ -251,6 +252,7 @@ and consumed within its current thread:
 
 | Method | Parameters | Purpose |
 | --- | --- | --- |
+| `standard_state_schema()` | no parameters; returns `Option<StateSchemaProvider>` | Optional static upstream schema used only when the task omits project `state`. The default is `None`; explicit project selection takes precedence. |
 | `preflight(constants, schema)` | `constants: &Self::Constants`; `schema: &SystemStateSchema` | Optional side-effect-free unit-owned validation and observation declaration hook. Study trusts success. The default returns `ObservationPlan::all_fields()`; overrides may validate domain rules and select streams, fields, cadence, and units. |
 | `initialize(constants, schema, context)` | fresh equivalent owned `Self::Constants`; `schema: &SystemStateSchema`; `context: &InitializationContext` | Required Runtime constructor for a standalone execution unit or ensemble. Every exposed state uses this schema allocation. Deterministic units may ignore the context; stochastic units request named seeds from it. |
 | `member_count()` | `&self` | Returns the stable positive number of independently stateful members. |
@@ -325,6 +327,8 @@ Study binds them to the execution unit task's selected schema during preflight.
 
 | Method | Parameters | Purpose |
 | --- | --- | --- |
+| `StateSchemaProvider::new(id, document)` | `id: &'static str`; `document: &'static [u8]` | Creates a const static handoff for a code-owned standard JSON schema. Parsing remains a Study responsibility. |
+| `provider.id()` / `provider.document()` | `self` | Returns the stable provenance ID or borrowed static JSON bytes. This specialized type lives at `scientific_workflow::state`. |
 | `SystemStateSchema::load_json_template(path)` | `path: &Path` | Reads and strictly validates a standalone JSON state schema. Composed Workflow instead supplies Config's already parsed named documents internally. |
 | `schema.create_empty_state(time)` | `time: StateTime` | Creates an empty `SystemState` sharing the schema. |
 | `state.time()` | `&self` | Returns the current `StateTime` by value. |
@@ -404,7 +408,7 @@ These are inherent methods; no extension-trait import is required:
 | `Study::load(project_root)` | `project_root: &Path` | Performs complete effect-free Config loading, state validation, execution unit discovery, parameter decode, program/Python resolution, and observation preflight. |
 | `study.project_root()` | `&self` | Borrows Config's canonical project root. |
 | `study.output_root()` | `&self` | Borrows the inferred `<project-root>/output` path; it need not exist yet. |
-| `StudyError` | Non-exhaustive enum | Reports `Config`, contextual `State { state, path, source }`, `InvalidExecutionUnitRegistration`, `UnknownExecutionUnit`, `ExecutionUnitPreflight`, or `TaskIdentityOverflow`. Every variant occurs before Runtime creates output. |
+| `StudyError` | Non-exhaustive enum | Reports `Config`, contextual project `State`, `ProvidedState`, `InvalidStateSchemaProvider`, `MissingStateSchema`, `InvalidExecutionUnitRegistration`, `UnknownExecutionUnit`, `ExecutionUnitPreflight`, or `TaskIdentityOverflow`. Every variant occurs before Runtime creates output. |
 
 `Study` is immutable and clone-cheap through shared ownership. Its phase graph,
 tasks, selected schemas, resolved constants, and policies are intentionally not
@@ -478,6 +482,45 @@ For exhaustive invariants, failure atomicity, thread-safety, and examples, use
 the subsystem contracts linked at the end of this guide.
 
 ## Complete user procedure
+
+### Standard upstream state providers
+
+Use a provider when one upstream crate—not each application project—owns the
+canonical state layout. The upstream embeds its JSON and exports a typed
+descriptor; it does not know the receiver, dispatcher, or project root:
+
+```rust,ignore
+use scientific_workflow::state::StateSchemaProvider;
+
+pub const fn ecological_state_schema() -> StateSchemaProvider {
+    StateSchemaProvider::new(
+        "eco_core.ecological-state.v1",
+        include_bytes!("../schemas/ecological_state.json"),
+    )
+}
+```
+
+The downstream execution unit is the receiver and delegates its optional trait
+hook to that upstream API:
+
+```rust,ignore
+impl ExecutionUnit for GlvUnit {
+    type Constants = GlvConstants;
+
+    fn standard_state_schema() -> Option<StateSchemaProvider> {
+        Some(eco_core::ecological_state_schema())
+    }
+
+    // preflight, initialize, member_count, member, and step follow.
+}
+```
+
+Its project task can then be `{"execution_unit":"glv"}` with no `state` and no
+`paths.states`. Study validates and caches the embedded document, passes the
+resulting `SystemStateSchema` to `preflight` and `initialize`, and records
+`eco_core.ecological-state.v1` as state provenance. If a project does declare
+`{"execution_unit":"glv","state":"experiment"}`, that explicit schema wins.
+Omission without either an explicit selection or a provider fails before output.
 
 ### 1. Define an execution unit
 
@@ -599,7 +642,11 @@ to Workflow. Both `wf_configs/study.json` and
 `wf_configs/parameters.json` are required. The `states/` directory is the
 recommended organization, not a requirement: schemas may live anywhere beneath
 `wf_configs/` when their exact project-root-relative paths are supplied in
-`study.json.paths.states`. Paths outside `wf_configs/` are rejected.
+`study.json.paths.states`. Paths outside `wf_configs/` are rejected. When a
+receiving execution unit declares a linked standard provider, its task may
+omit `state`; a project that uses only providers needs neither `paths.states`
+nor project state-schema files. An empty `state` string is never equivalent to
+omission.
 
 `wf_configs/states/population.json`:
 
@@ -699,7 +746,7 @@ plain renderer are the only presentation modes. Failure of the selected mode
 is fatal and panics rather than silently degrading or being reported as
 cooperative workflow cancellation.
 
-Config alone reads `wf_configs/study.json`, every named state document, and the complete
+Config alone reads `wf_configs/study.json`, every named project state document, and the complete
 arbitrary `wf_configs/parameters.json` namespace once. `$sweep` creates independent Cartesian
 choices; `$cases` creates correlated alternatives; ordinary arrays remain
 literal. Program arguments are optional opaque strings and executables are
@@ -718,8 +765,8 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 ```
 
 That call loads all declarations, discovers execution units, validates typed constants,
-binds each observation plan to its execution unit task's explicitly selected state
-schema, resolves program paths and Python
+binds each observation plan to its execution unit task's explicitly selected
+project schema or linked standard provider, resolves program paths and Python
 environments, creates immutable generic tasks and phases, compiles the
 effective persistence plan, infers identities/output paths, schedules work,
 and persists every exposed member automatically while publishing inferred

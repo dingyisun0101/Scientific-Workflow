@@ -2,7 +2,8 @@
 
 Task owns Workflow's uniform scientific execution boundary. A configured
 scientific task selects one registered `ExecutionUnit`, one resolved constants
-value, and one named state schema. The unit may be a standalone member or an
+value, and one resolved state schema. The schema is either explicitly named by
+the project or supplied by the unit's standard upstream provider. The unit may be a standalone member or an
 ensemble; Runtime and Study never branch on that distinction.
 
 ```text
@@ -34,6 +35,12 @@ Associated type:
 
 Methods:
 
+- `standard_state_schema() -> Option<StateSchemaProvider>` optionally declares
+  the linked upstream schema used when an execution-unit task omits `state`.
+  The default is `None`. A receiver normally returns a descriptor exported by
+  the upstream crate that owns the JSON; it must not read a project file here.
+  An explicit project `state` always takes precedence, so this hook is a
+  default rather than an override.
 - `preflight(constants: &Self::Constants, schema: &SystemStateSchema)
   -> UnitResult<ObservationPlan>` is the optional, effect-free preflight hook.
   The unit owns its domain validation and Study trusts a successful result. The
@@ -201,9 +208,10 @@ directory creation and durable status transitions.
 
 ## Cross-module contract
 
-- Config alone reads and expands constants and named schema documents.
+- Config alone reads and expands constants and explicit project schema documents.
 - Study matches registration keys, binds the common observation plan to the
-  selected schema, and retains immutable execution intent.
+  selected explicit schema or the unit's validated standard provider, and
+  retains immutable execution intent.
 - Task decodes constants, owns unit contract enforcement, and emits per-member
   observation boundaries.
 - State owns each member's `SystemState`; Task only borrows it.
@@ -237,6 +245,13 @@ struct Counter {
 #[scientific_workflow::execution_unit("counter")]
 impl ExecutionUnit for Counter {
     type Constants = Constants;
+
+    fn standard_state_schema() -> Option<scientific_workflow::state::StateSchemaProvider> {
+        Some(scientific_workflow::state::StateSchemaProvider::new(
+            "example.counter-state.v1",
+            br#"{"fields":[{"name":"count"}]}"#,
+        ))
+    }
 
     fn initialize(
         constants: Constants,

@@ -74,11 +74,13 @@ impl ProjectSpecification {
                         state,
                         timeout,
                     } => {
-                        if !state_schemas.contains_key(state.as_ref()) {
+                        if let Some(state) = state.as_deref()
+                            && !state_schemas.contains_key(state)
+                        {
                             return Err(ConfigError::UnknownState {
                                 phase: phase.name.to_string(),
                                 execution_unit: execution_unit.to_string(),
-                                state: state.to_string(),
+                                state: state.to_owned(),
                             });
                         }
                         let value = parameter_sections.get(execution_unit.as_ref()).ok_or_else(|| {

@@ -2,7 +2,7 @@
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by
-`study.json.paths.states`, and the canonical `wf_configs/parameters.json` in a
+an optional `study.json.paths.states`, and the canonical `wf_configs/parameters.json` in a
 central immutable `Config`. The parameters
 document is the one arbitrary nested namespace for every user-project setting:
 execution unit constants and sweeps, plotting settings, validation tolerances, and
@@ -33,19 +33,22 @@ The required `wf_configs/` directory identifies that path as a Workflow project
 root; `wf_configs/study.json` and `wf_configs/parameters.json` are both required
 for a valid project. Config derives both reserved document paths. Execution unit tasks do
 not name parameter files: their stable execution unit key selects the same-named
-top-level section in `parameters.json`. Each execution unit task explicitly selects a
-named state schema. Missing declared documents, state keys, and execution unit sections
-fail loading before output exists.
+top-level section in `parameters.json`. An execution-unit task may explicitly
+select a named project schema or omit `state` for later resolution through its
+registered unit's standard provider. Missing declared documents, unknown
+explicit state keys, and execution unit sections fail loading before output exists.
 
 `wf_configs/states/` is recommended for readable organization, but it is not a
 required directory. State-schema documents may be placed anywhere beneath
-`wf_configs/`; each one must be registered with its project-root-relative path
-in `study.json.paths.states`. A state path outside `wf_configs/` is rejected.
+`wf_configs/`; each project-owned one must be registered with its
+project-root-relative path in `study.json.paths.states`. A state path outside
+`wf_configs/` is rejected. A project using only linked standard providers needs
+no state-schema file or `paths` object.
 
 ### `wf_configs/study.json`
 
-The root object has required `paths` and `phases` objects, an optional `seed`,
-and two optional objects:
+The root object has a required `phases` object and optional `paths`, `seed`,
+`replicates`, and `persistence` objects:
 
 ```json
 {
@@ -85,7 +88,7 @@ Unknown properties are rejected at every Workflow-owned level.
   Runtime places it in each execution unit task's immutable initialization context.
   Deterministic execution units need not declare it. A unit that requests a
   derived seed fails clearly when it is absent.
-- `paths.states` maps nonblank, whitespace-exact semantic state names to JSON
+- `paths.states` defaults to an empty map and maps nonblank, whitespace-exact semantic state names to JSON
   paths. Paths must be project-root-relative, resolve once during Config
   loading, and identify captured `.json` documents beneath the canonical
   `wf_configs/` root. Multiple execution units may share one state key, while one project
@@ -113,8 +116,8 @@ Unknown properties are rejected at every Workflow-owned level.
   admitted immediately. Phase and task `timeout_ms` are optional nonnegative
   millisecond counts.
 - each task is exactly one of:
-  - an execution-unit task with nonblank `execution_unit`, required nonblank `state`, and optional
-    `timeout_ms`; or
+  - an execution-unit task with nonblank `execution_unit`, optional nonblank
+    `state`, and optional `timeout_ms`; or
   - a program task with required `program`, optional `args`, and optional
     `timeout_ms`, for example
     `{"program":"bin/analyze","args":["--publication"]}`; or
@@ -133,10 +136,12 @@ Unknown properties are rejected at every Workflow-owned level.
   during execution.
 - Execution unit keys remain opaque until Study matches them to linked `#[execution_unit]`
   registrations.
-- Execution unit `state` keys are resolved during effect-free assembly. The selected
-  parsed document is validated by State, bound to that exact execution unit task, and
-  recorded in task provenance. There is no implicit execution unit-name fallback or
-  single global schema.
+- An explicit execution unit `state` key is resolved during effect-free
+  assembly. Its parsed document is validated by State, bound to that exact
+  task, and recorded in provenance. If the field is omitted, Config retains
+  that omission and Study asks the registered unit for its standard provider.
+  There is no execution-unit-name fallback or global schema registry. An empty
+  string is invalid; “no project state” means the field is absent.
 
 ### Python tasks
 
@@ -199,6 +204,12 @@ array whose entries contain `name` and optional `description`. Study passes each
 already parsed value to State validation without rereading the file, then binds
 execution unit tasks by their explicit `state` key.
 
+This section is optional. When a task omits `state`, Config reads no replacement
+schema from disk; Study resolves the linked static provider after matching the
+execution-unit registration. Provider bytes are code-owned data rather than a
+project configuration document and therefore do not appear in Config's
+snapshot.
+
 ### `wf_configs/parameters.json`
 
 This required root object contains every custom-project parameter, grouped by
@@ -217,7 +228,8 @@ the stable key of its consumer:
 }
 ```
 
-For `{"execution_unit":"population","state":"population"}`, Config selects only the
+For `{"execution_unit":"population","state":"population"}` or
+`{"execution_unit":"population"}`, Config selects only the
 `population` section, expands it, and decodes each result as one complete
 `ExecutionUnit::Constants`. Other sections remain arbitrary and are available
 to external programs through the frozen central snapshot. Config owns two
@@ -394,8 +406,8 @@ inspect them.
 
 A replacement config implementation must preserve the required `wf_configs`
 project boundary, canonical manifest and parameters files, named state-path
-resolution, explicit per-task state
-selection, execution unit-key parameter selection, typed `Path` containment, duplicate-key
+resolution, optional explicit per-task state selection, execution unit-key
+parameter selection, typed `Path` containment, duplicate-key
 rejection, deterministic expansion,
 centralized one-pass parsing, immutable complete-project snapshots, complete
 constants decoding, direct executable and Python-environment resolution,

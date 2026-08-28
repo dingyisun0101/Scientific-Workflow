@@ -65,6 +65,39 @@ pub struct SystemStateSchema {
     inner: Arc<StateLayout>,
 }
 
+/// One reusable static state-schema document supplied by an upstream crate.
+///
+/// An execution unit may return this descriptor from
+/// [`ExecutionUnit::standard_state_schema`](crate::task::ExecutionUnit::standard_state_schema)
+/// when its ordinary state layout is fixed by a linked dependency. Study
+/// validates and caches the borrowed document during preflight. The provider
+/// performs no filesystem IO and retains no project or runtime state.
+#[derive(Clone, Copy, Debug)]
+pub struct StateSchemaProvider {
+    id: &'static str,
+    document: &'static [u8],
+}
+
+impl StateSchemaProvider {
+    /// Declares one stable provider identity and its complete JSON template.
+    ///
+    /// Validation is intentionally deferred to Study so this constructor can
+    /// remain `const` and providers can expose ordinary static descriptors.
+    pub const fn new(id: &'static str, document: &'static [u8]) -> Self {
+        Self { id, document }
+    }
+
+    /// Returns the stable, versionable provider identity retained as provenance.
+    pub const fn id(self) -> &'static str {
+        self.id
+    }
+
+    /// Returns the borrowed static JSON schema document.
+    pub const fn document(self) -> &'static [u8] {
+        self.document
+    }
+}
+
 impl SystemStateSchema {
     /// Loads and validates a state specification from a JSON template.
     ///
@@ -183,6 +216,14 @@ pub(crate) fn schema_from_json_value(
     document: &serde_json::Value,
 ) -> Result<SystemStateSchema, StateError> {
     SystemStateSchema::from_json_template_value(source_path, document)
+}
+
+/// Validates one static provider document without reading a file.
+pub(crate) fn schema_from_json_bytes(
+    source_path: &Path,
+    document: &[u8],
+) -> Result<SystemStateSchema, StateError> {
+    SystemStateSchema::parse(source_path.to_path_buf(), document)
 }
 
 /// Reconstructs a schema directly from already-decoded ordered field metadata.

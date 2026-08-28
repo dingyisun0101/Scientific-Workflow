@@ -15,7 +15,7 @@ name = "attractor-2d"
 path = "src/main.rs"
 
 [dependencies]
-scientific-workflow = { version = "0.11.4", path = "../../rust" }
+scientific-workflow = { version = "0.11.5", path = "../../rust" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

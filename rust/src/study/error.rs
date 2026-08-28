@@ -28,6 +28,25 @@ pub enum StudyError {
         source: StateError,
     },
 
+    /// State rejected a static schema document supplied by a linked provider.
+    #[error("failed to validate standard state-schema provider `{provider}`")]
+    ProvidedState {
+        /// Stable provider identity declared by the receiving execution unit.
+        provider: String,
+        /// Original State semantic-validation failure.
+        #[source]
+        source: StateError,
+    },
+
+    /// One standard provider declaration is invalid or conflicts with another.
+    #[error("invalid standard state-schema provider `{provider}`: {reason}")]
+    InvalidStateSchemaProvider {
+        /// Rejected stable provider identity.
+        provider: String,
+        /// Stable explanation of the rejected declaration.
+        reason: String,
+    },
+
     /// Compiled execution-unit registrations are invalid or ambiguous.
     #[error("invalid compiled execution-unit registration: {reason}")]
     InvalidExecutionUnitRegistration {
@@ -41,6 +60,17 @@ pub enum StudyError {
         /// Phase containing the unresolved reference.
         phase: String,
         /// Stable execution-unit key requested by the manifest.
+        execution_unit: String,
+    },
+
+    /// A task omitted its state and its execution unit supplies no standard provider.
+    #[error(
+        "execution unit `{execution_unit}` in phase `{phase}` requires an explicit project state because it has no standard state-schema provider"
+    )]
+    MissingStateSchema {
+        /// Phase containing the unresolved invocation.
+        phase: String,
+        /// Registered execution-unit key with no schema source.
         execution_unit: String,
     },
 

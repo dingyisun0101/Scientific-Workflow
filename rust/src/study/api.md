@@ -4,7 +4,7 @@ The `study` subsystem is the ultimate coordinator of declared intent. It asks
 Config to capture one project root and fully resolve its declarations, retains
 that central immutable Config, asks State to validate the centrally parsed
 named schemas, discovers linked execution units, binds each Config-expanded constants
-value to its registered execution unit and selected schema, binds its observation plan
+value to its registered execution unit and resolved explicit-or-provided schema, binds its observation plan
 to that schema, and produces one immutable execution plan of generic tasks.
 Executable paths, Python environments, parameter selection, and expansion are
 Config responsibilities completed before Study performs this cross-domain
@@ -37,10 +37,13 @@ moved or shared across host threads without mutable planning state.
   canonicalizes paths, parses JSON, expands execution unit parameters, and resolves
   programs, Python scripts, interpreters, and environment managers. Study then
   validates registration keys and duplicates, resolves every execution unit key,
-  validates every named state document, retains the optional top-level master
+  validates every named state document, resolves an omitted task state through
+  `ExecutionUnit::standard_state_schema`, validates and caches each static
+  provider once per provider ID, retains the optional top-level master
   seed, decodes every concrete constants value, calls each execution unit's
   side-effect-free `preflight` exactly once, trusts its domain validation, and binds
-  that plan to the schema explicitly selected by that execution unit task. It does not
+  that plan to the resolved schema. An explicit project state takes precedence
+  over a standard provider. It does not
   call `ExecutionUnit::initialize`. Loading is synchronous and may block on
   ordinary configuration reads and executable metadata/resolution, but starts
   no worker thread and creates no output.
@@ -86,6 +89,12 @@ execution.
 - `State { state, path, source }` identifies the semantic manifest key and
   canonical source path of a rejected named schema while preserving its
   original `StateError`;
+- `ProvidedState { provider, source }` identifies an invalid static provider
+  document while preserving its original `StateError`;
+- `InvalidStateSchemaProvider { provider, reason }` rejects an empty or
+  whitespace-padded provider ID, or the same ID supplying different bytes;
+- `MissingStateSchema { phase, execution_unit }` reports a task that omitted
+  project `state` when its registered unit supplies no standard provider;
 - `InvalidExecutionUnitRegistration { reason }` reports an invalid or duplicate
   linked `#[execution_unit]` key without exposing the private catalog type;
 - `UnknownExecutionUnit { phase, execution_unit }` reports a manifest key with no linked

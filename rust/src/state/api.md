@@ -51,6 +51,27 @@ Loading may return `TemplateRead`, `TemplateParse`, `EmptyFieldName`, or
 schema is an atomic reference-count increment and does not clone field names or
 lookup tables. Immutable schema handles can be shared across threads.
 
+### `state::StateSchemaProvider`
+
+`StateSchemaProvider` is the specialized static handoff used when an upstream
+crate owns a standard schema and a downstream execution unit consumes it. It is
+available from `scientific_workflow::state`, not the ordinary prelude.
+
+- `StateSchemaProvider::new(id, document)` accepts a stable `&'static str`
+  identity and complete `&'static [u8]` JSON schema document. Construction is
+  `const` and deliberately does not parse or read anything.
+- `id()` returns the provider identity. Study records this value as the task's
+  resolved state provenance when the project omits an explicit state.
+- `document()` returns the borrowed static JSON bytes.
+
+An upstream library normally embeds its sole canonical schema with
+`include_bytes!` and returns the descriptor from a public function. A receiving
+`ExecutionUnit` delegates `standard_state_schema()` to that function. Study
+validates the bytes once per provider ID, caches the resulting
+`SystemStateSchema`, and rejects the same ID with different bytes. The ID must
+be nonempty and have no surrounding whitespace. The document must remain
+static; providers perform no filesystem IO and cannot depend on a project root.
+
 Metadata inspection stays at the state module root but outside the ordinary
 prelude. Unit code needs no field-index API to construct or use a state.
 
@@ -259,6 +280,8 @@ State's non-public peer contracts are crate-private:
 - `schema_from_json_value(source_path, document)` validates Config's
   already-parsed schema value. It performs no disk IO and applies the same
   semantic normalization and duplicate checks as the public loader.
+- `schema_from_json_bytes(source_path, document)` validates one static provider
+  document without exposing a public raw-bytes parser.
 - `schema_from_fields(source_path, fields)` reconstructs a schema directly from
   Persistence's decoded ordered `(name, description)` metadata. It deliberately
   avoids serializing those fields to JSON and parsing them back.

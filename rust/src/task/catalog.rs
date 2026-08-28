@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::config::ResolvedExecutionUnitParameters;
 use crate::observation::BoundObservationPlan;
-use crate::state::SystemStateSchema;
+use crate::state::{StateSchemaProvider, SystemStateSchema};
 
 use super::definition::Task;
 use super::result::TaskResult;
@@ -26,6 +26,7 @@ pub struct ExecutionUnitRegistration {
         &ResolvedExecutionUnitParameters,
         &SystemStateSchema,
     ) -> TaskResult<BoundObservationPlan>,
+    standard_state_schema: fn() -> Option<StateSchemaProvider>,
 }
 
 impl ExecutionUnitRegistration {
@@ -43,6 +44,7 @@ impl ExecutionUnitRegistration {
             key,
             make_task: Task::for_execution_unit::<U>,
             preflight: preflight_execution_unit::<U>,
+            standard_state_schema: U::standard_state_schema,
         }
     }
 
@@ -62,6 +64,10 @@ impl ExecutionUnitRegistration {
         schema: &SystemStateSchema,
     ) -> TaskResult<BoundObservationPlan> {
         (self.preflight)(parameters, schema)
+    }
+
+    pub(crate) fn standard_state_schema(self) -> Option<StateSchemaProvider> {
+        (self.standard_state_schema)()
     }
 }
 

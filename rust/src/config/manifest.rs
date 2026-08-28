@@ -168,7 +168,7 @@ pub(crate) struct ParsedPhase {
 pub(crate) enum ParsedTask {
     ExecutionUnit {
         execution_unit: Box<str>,
-        state: Box<str>,
+        state: Option<Box<str>>,
         timeout: Option<Duration>,
     },
     Program {
@@ -309,22 +309,24 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("{phase_pointer}/tasks/{index}");
             let timeout = task.timeout_ms.map(Duration::from_millis);
-            match (task.execution_unit, task.state, task.program, task.python) {
-                (Some(execution_unit), Some(state), None, None) if task.args.is_empty() => {
+            match (task.execution_unit, task.program, task.python) {
+                (Some(execution_unit), None, None) if task.args.is_empty() => {
                     validate_identifier(
                         path,
                         &format!("{pointer}/execution_unit"),
                         &execution_unit,
                         "execution unit",
                     )?;
-                    validate_identifier(path, &format!("{pointer}/state"), &state, "state")?;
+                    if let Some(state) = task.state.as_deref() {
+                        validate_identifier(path, &format!("{pointer}/state"), state, "state")?;
+                    }
                     tasks.push(ParsedTask::ExecutionUnit {
                         execution_unit: execution_unit.into_boxed_str(),
-                        state: state.into_boxed_str(),
+                        state: task.state.map(String::into_boxed_str),
                         timeout,
                     });
                 }
-                (None, None, Some(program), None) => {
+                (None, Some(program), None) if task.state.is_none() => {
                     if program.as_os_str().is_empty() {
                         return Err(ConfigError::invalid(
                             path,
@@ -338,7 +340,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                         timeout,
                     });
                 }
-                (None, None, None, Some(declaration)) if task.args.is_empty() => {
+                (None, None, Some(declaration)) if task.state.is_none() && task.args.is_empty() => {
                     tasks.push(ParsedTask::Python {
                         declaration,
                         timeout,
@@ -348,7 +350,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `execution_unit` with `state`, `program`, or `python`; top-level `args` are valid only for a program",
+                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit and top-level `args` only for a program",
                     ));
                 }
             }
@@ -452,6 +454,7 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawStudy {
+    #[serde(default)]
     paths: RawPaths,
     #[serde(default)]
     seed: Option<u64>,
@@ -462,9 +465,10 @@ struct RawStudy {
     phases: Map<String, Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPaths {
+    #[serde(default)]
     states: BTreeMap<String, PathBuf>,
 }
 

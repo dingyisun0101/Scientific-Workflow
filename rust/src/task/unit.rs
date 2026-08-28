@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::observation::ObservationPlan;
-use crate::state::{SystemState, SystemStateSchema};
+use crate::state::{StateSchemaProvider, SystemState, SystemStateSchema};
 
 use super::result::UnitResult;
 
@@ -311,6 +311,16 @@ impl<'a> MemberView<'a> {
 pub trait ExecutionUnit: Send + Sized + 'static {
     /// One complete set of constants supplied by Config.
     type Constants: DeserializeOwned + 'static;
+
+    /// Returns the standard static schema supplied for this unit, if any.
+    ///
+    /// Study uses this provider only when the task omits an explicit project
+    /// `state`. The default requires callers to select a project schema. An
+    /// upstream provider owns the JSON document; this unit merely declares
+    /// that it can receive states using that standard layout.
+    fn standard_state_schema() -> Option<StateSchemaProvider> {
+        None
+    }
 
     /// Validates unit-owned configuration and defines per-member observations.
     ///

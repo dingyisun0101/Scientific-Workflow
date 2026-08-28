@@ -80,13 +80,19 @@ task-NNNNNN/                         multi-member execution-unit root
 
 Stable numeric indices—not application identities—form paths. Each recording's
 `user_metadata.workflow` object retains `member_index` and `member_identity`
-alongside the registered key, named state, parameter provenance, and effective
+alongside the registered key, resolved state provenance, parameter provenance, and effective
 persistence plan. If the unit successfully requested Workflow-derived seeds,
 the same object contains `seed_derivation`: its versioned `algorithm`, authored
 `master_seed`, and deterministic `requests` array. Each entry stores `scope`,
 `purpose`, the actual `seed`, and `member_identity` for member-scoped requests.
 Every recording contains shared requests plus only those belonging to that
 recording's member.
+
+The `state` provenance value is the explicit semantic key from
+`study.json.paths.states` when the task selected a project schema. When the
+task omitted `state`, it is instead the stable ID of the unit's validated
+`StateSchemaProvider`. Persistence does not distinguish their storage behavior;
+both are already-resolved Study facts.
 
 ## Public completed-recording API
 

@@ -28,7 +28,9 @@ project requires `wf_configs/study.json` and `wf_configs/parameters.json`.
 The `states/` subdirectory is organizational convention, not grammar. A state
 schema may use any path beneath `wf_configs/`, but its project-root-relative
 path must be registered explicitly in `study.json.paths.states`. State paths
-outside the canonical `wf_configs/` boundary are rejected.
+outside the canonical `wf_configs/` boundary are rejected. Both `paths.states`
+and the directory may be omitted when every execution unit receives a linked
+standard schema from an upstream crate.
 
 Each registered unit exposes one or more independently stateful members and is
 linked by a stable semantic key:
@@ -102,7 +104,7 @@ config
         │ private Config / ProjectSpecification / ResolvedTask
         ▼
 study
-  retained Config + named state semantics + execution unit discovery + constants decode
+  retained Config + explicit-or-provided state semantics + execution unit discovery + constants decode
   + generic program/Python tasks + one-time observation-plan binding
   + identities + phases
         │ immutable Study returned to the crate facade
@@ -129,7 +131,9 @@ types or performs execution.
 During `Study::load`, Config is the sole subsystem that discovers, reads, and
 parses authored project JSON. State's standalone public `&Path` loader remains
 a deliberate independent-use exception; composed Workflow passes State
-already parsed values. Persistence alone owns the Workflow recording format,
+already parsed project values. A linked `StateSchemaProvider` is immutable
+code-owned JSON bytes rather than a project file: Study asks the selected unit
+for it and State validates it without disk IO. Persistence alone owns the Workflow recording format,
 its writes, and verified reconstruction. Runtime may create high-level
 execution/replicate directories and launch external programs; external
 programs own their declared domain artifacts, and UI owns terminal output.
@@ -394,8 +398,10 @@ clone-cheap immutable Config retains the entire value graph.
 The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
 intent; neither layer draws random values.
-`wf_configs/study.json.paths.states` maps semantic state keys to configuration documents; every
-execution unit task explicitly selects one key. An execution unit key automatically selects its
+`wf_configs/study.json.paths.states` optionally maps semantic state keys to
+configuration documents. An execution-unit task may explicitly select one key;
+otherwise Study resolves the unit's `standard_state_schema` provider. Explicit
+selection takes precedence, and omission without a provider is an error. An execution unit key automatically selects its
 same-name parameter section; no per-task parameter path exists. Config expands
 selections deterministically, resolves program paths and Python scripts/environment
 managers once, and creates a deterministic language-neutral snapshot for
@@ -408,7 +414,8 @@ closed peer types are explicitly named through the same owning scope.
 ### Study
 
 `Study::load(&Path)` performs all cross-domain checks before output: every
-named state's semantics, every execution unit task's state lookup, linked registration
+named state's semantics, every execution unit task's explicit lookup or static
+provider resolution, linked registration
 validation, execution unit-key resolution, constants decoding, and
 observation/task-schema binding over Config's already-resolved generic program
 and Python tasks. It retains
@@ -477,8 +484,9 @@ domain-specific IO and may write to a safe project-relative destination from
 
 Member-recording provenance calls the selected combination
 `parameter_ordinal` and its canonical `wf_configs/parameters.json` document
-`parameter_source`; `state` records the named schema selector bound during
-assembly. The removed per-task input-file vocabulary is not retained on disk.
+`parameter_source`; `state` records either the named project selector or the
+standard provider ID bound during assembly. The removed per-task input-file
+vocabulary is not retained on disk.
 When an execution unit requested Workflow-derived seeds, the recording's
 `user_metadata.workflow.seed_derivation` stores the versioned algorithm,
 master seed, and actual applicable shared/per-member requests. Requests for a

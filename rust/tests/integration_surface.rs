@@ -47,7 +47,7 @@ fn specialized_capabilities_live_at_their_owning_module_roots() {
         TaskRunKind, TaskRunSummary, execute,
     };
     #[allow(unused_imports)]
-    use scientific_workflow::state::StateFieldSchema;
+    use scientific_workflow::state::{StateFieldSchema, StateSchemaProvider};
     #[allow(unused_imports)]
     use scientific_workflow::study::{Study, StudyError};
 }

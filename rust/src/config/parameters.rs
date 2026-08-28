@@ -15,7 +15,7 @@ use super::program::ResolvedProgramTask;
 pub(crate) enum ResolvedTask {
     ExecutionUnit {
         parameters: ResolvedExecutionUnitParameters,
-        state: Box<str>,
+        state: Option<Box<str>>,
     },
     Program(ResolvedProgramTask),
 }

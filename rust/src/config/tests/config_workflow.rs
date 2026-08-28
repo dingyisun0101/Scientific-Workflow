@@ -133,7 +133,9 @@ fn execution_unit_task(task: &ResolvedTask) -> &ResolvedExecutionUnitParameters 
 
 fn execution_unit_state(task: &ResolvedTask) -> &str {
     match task {
-        ResolvedTask::ExecutionUnit { state, .. } => state,
+        ResolvedTask::ExecutionUnit { state, .. } => state
+            .as_deref()
+            .expect("test helper expects an explicit project state"),
         ResolvedTask::Program(_) => panic!("expected a unit task"),
     }
 }
@@ -143,6 +145,27 @@ fn program_task(task: &ResolvedTask) -> &ResolvedProgramTask {
         ResolvedTask::ExecutionUnit { .. } => panic!("expected a program task"),
         ResolvedTask::Program(program) => program,
     }
+}
+
+#[test]
+fn execution_unit_state_and_state_paths_may_be_omitted_for_later_provider_resolution() {
+    let project = TestProject::new_raw(
+        r#"{
+          "phases": {
+            "simulate": {
+              "tasks": [{"execution_unit":"unit"}]
+            }
+          }
+        }"#,
+        &[("unit", r#"{"steps":1}"#)],
+    );
+
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    assert!(specification.state_schemas().is_empty());
+    assert!(matches!(
+        &specification.phases()[0].tasks()[0],
+        ResolvedTask::ExecutionUnit { state: None, .. }
+    ));
 }
 
 #[test]
@@ -344,9 +367,10 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_execution_unit
         }"#,
         &[("unit", "{}")],
     );
+    let specification = ProjectSpecification::load(missing_selector.path()).unwrap();
     assert!(matches!(
-        ProjectSpecification::load(missing_selector.path()),
-        Err(ConfigError::InvalidDocument { reason, .. }) if reason.contains("with `state`")
+        &specification.phases()[0].tasks()[0],
+        ResolvedTask::ExecutionUnit { state: None, .. }
     ));
 }
 
@@ -386,15 +410,6 @@ fn correlated_cases_become_complete_typed_constant_values() {
 
 #[test]
 fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields() {
-    let missing_paths = TestProject::new_raw(
-        r#"{"phases":{"one":{"tasks":[{"program":"anything"}]}}}"#,
-        &[],
-    );
-    assert!(matches!(
-        ProjectSpecification::load(missing_paths.path()),
-        Err(ConfigError::InvalidDocument { reason, .. }) if reason.contains("missing field `paths`")
-    ));
-
     let duplicate = TestProject::new_raw(
         r#"{"paths":{"states":{}},"phases":{"one":{"tasks":[],"tasks":[]}}}"#,
         &[],

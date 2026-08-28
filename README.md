@@ -44,14 +44,14 @@ workflow/
 
 Each first-level Rust subsystem has an exhaustive API and replacement contract:
 
-- [State](rust/src/state/api.md): schemas, typed payload ownership, time, and
-  in-memory series.
+- [State](rust/src/state/api.md): schemas, static upstream schema providers,
+  typed payload ownership, time, and in-memory series.
 - [Observation](rust/src/observation/api.md): stream declarations, binding,
   cadence, and encoding boundaries.
 - [Task](rust/src/task/api.md): `ExecutionUnit`, immutable initialization/seed
   context, per-member `MemberView`, ensemble contracts, registration, and generic
   program tasks.
-- [Config](rust/src/config/api.md): project JSON, named state paths, parameter
+- [Config](rust/src/config/api.md): project JSON, optional named state paths, parameter
   expansion, and program/Python resolution.
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable
   execution intent.

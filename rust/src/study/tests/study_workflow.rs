@@ -6,6 +6,7 @@ use super::{Study, StudyError};
 use scientific_workflow::prelude::*;
 use scientific_workflow::runtime::TaskRunKind;
 use scientific_workflow::runtime::execute;
+use scientific_workflow::state::StateSchemaProvider;
 use serde::Deserialize;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -29,6 +30,51 @@ struct EnergyConstants {
 
 struct EnergyUnit {
     state: SystemState,
+}
+
+struct ConflictingProviderUnit {
+    state: SystemState,
+}
+
+#[scientific_workflow::execution_unit("conflicting-provider")]
+impl ExecutionUnit for ConflictingProviderUnit {
+    type Constants = CounterConstants;
+
+    fn standard_state_schema() -> Option<StateSchemaProvider> {
+        Some(StateSchemaProvider::new(
+            "test.counter-state.v1",
+            br#"{"fields":[{"name":"different"}]}"#,
+        ))
+    }
+
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> UnitResult<Self> {
+        Ok(Self {
+            state: schema.create_empty_state(StateTime::from_iteration(0)),
+        })
+    }
+
+    fn member_count(&self) -> usize {
+        1
+    }
+
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| {
+            MemberView::new(
+                "conflicting-provider",
+                &self.state,
+                Some(MemberCompletion::without_reason()),
+                Some(0),
+            )
+        })
+    }
+
+    fn step(&mut self) -> UnitResult {
+        Ok(())
+    }
 }
 
 #[scientific_workflow::execution_unit("energy")]
@@ -70,6 +116,13 @@ impl ExecutionUnit for EnergyUnit {
 #[scientific_workflow::execution_unit("counter")]
 impl ExecutionUnit for CounterUnit {
     type Constants = CounterConstants;
+
+    fn standard_state_schema() -> Option<StateSchemaProvider> {
+        Some(StateSchemaProvider::new(
+            "test.counter-state.v1",
+            br#"{"fields":[{"name":"count"}]}"#,
+        ))
+    }
 
     fn preflight(
         constants: &Self::Constants,
@@ -169,6 +222,18 @@ impl Project {
         Self(root)
     }
 
+    fn new_raw(study: &str, parameters: &str) -> Self {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "scientific-workflow-study-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("wf_configs")).unwrap();
+        fs::write(root.join("wf_configs/study.json"), study).unwrap();
+        fs::write(root.join("wf_configs/parameters.json"), parameters).unwrap();
+        Self(root)
+    }
+
     fn path(&self) -> &Path {
         &self.0
     }
@@ -240,6 +305,82 @@ fn study_binds_registered_units_and_infers_plan_facts_without_output() {
         study.phases()[1].tasks()[0].identity(),
         "simulate/000001/counter-000000"
     );
+}
+
+#[test]
+fn omitted_project_state_uses_the_units_standard_provider_and_records_its_identity() {
+    let project = Project::new_raw(
+        r#"{
+          "phases": {
+            "simulate": {
+              "tasks": [{"execution_unit":"counter"}]
+            }
+          }
+        }"#,
+        r#"{"counter":{"initial":5,"steps":1}}"#,
+    );
+
+    let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+    let task = &summary.replicates()[0].phases()[0].tasks()[0];
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(task.output_directory().join("metadata.json")).unwrap())
+            .unwrap();
+
+    assert!(!project.path().join("wf_configs/states").exists());
+    assert_eq!(
+        metadata["user_metadata"]["workflow"]["state"],
+        "test.counter-state.v1"
+    );
+    assert_eq!(task.final_iteration(), Some(1));
+}
+
+#[test]
+fn omitted_project_state_without_a_unit_provider_fails_before_output() {
+    let project = Project::new_raw(
+        r#"{
+          "phases": {
+            "simulate": {
+              "tasks": [{"execution_unit":"energy"}]
+            }
+          }
+        }"#,
+        r#"{"energy":{"initial":8.0}}"#,
+    );
+
+    assert!(matches!(
+        Study::load(project.path()),
+        Err(StudyError::MissingStateSchema { phase, execution_unit })
+            if phase == "simulate" && execution_unit == "energy"
+    ));
+    assert!(!project.path().join("output").exists());
+}
+
+#[test]
+fn one_provider_identity_cannot_resolve_to_different_documents() {
+    let project = Project::new_raw(
+        r#"{
+          "phases": {
+            "simulate": {
+              "tasks": [
+                {"execution_unit":"counter"},
+                {"execution_unit":"conflicting-provider"}
+              ]
+            }
+          }
+        }"#,
+        r#"{
+          "counter":{"initial":5,"steps":1},
+          "conflicting-provider":{"initial":0,"steps":0}
+        }"#,
+    );
+
+    assert!(matches!(
+        Study::load(project.path()),
+        Err(StudyError::InvalidStateSchemaProvider { provider, reason })
+            if provider == "test.counter-state.v1"
+                && reason.contains("different JSON documents")
+    ));
+    assert!(!project.path().join("output").exists());
 }
 
 #[test]

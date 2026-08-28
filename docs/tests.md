@@ -36,8 +36,8 @@ public.
   root and reserved files, optional `states/` grouping, rejection of schemas
   outside that root, duplicate keys, strict unknown-field rejection, canonical
   `wf_configs/parameters.json`, automatic execution unit-key section selection, named
-  state-path maps and explicit per-task selectors, unknown/missing state
-  selectors, rejection of legacy task input paths, manifest/persistence
+  state-path maps, explicit per-task selectors, omission for later provider
+  resolution, unknown state selectors, rejection of legacy task input paths, manifest/persistence
   defaults, positive limits, dependencies, generic execution unit/program/Python task
   grammar, executable resolution, all supported Python environment lowering
   and executable preflight, contained/escaping JSON symlinks, authored
@@ -60,7 +60,8 @@ public.
   effect-free loading, unknown execution units, typed
   constants and one-time observation preflight, contextual named-schema
   validation errors, Study/error `Send + Sync`, deterministic internal
-  identities, per-task binding of multiple named state schemas, phase
+  identities, per-task binding of multiple named state schemas, standard
+  provider resolution and provenance, missing-provider rejection before output, phase
   composition, replicate/persistence policy, runtime
   scheduling, automatic task recordings, and crate-level `run(&Path)`. Its
   recording checks require canonical `parameter_ordinal`/`parameter_source`
