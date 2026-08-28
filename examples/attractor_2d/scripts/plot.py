@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +26,8 @@ def _workflow_reader() -> Any:
         return importlib.import_module("scientific_workflow_reader")
 
 
-def _object(value: Any, name: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
+def _object(value: Any, name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
         raise ValueError(f"{name} must be a JSON object")
     return value
 
@@ -46,7 +47,19 @@ def _number(value: Any, name: str, *, positive: bool = False) -> float:
     return number
 
 
-def _settings() -> dict[str, Any]:
+def _integer(value: Any, name: str, *, nonnegative: bool = False) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if nonnegative and value < 0:
+        raise ValueError(f"{name} must be nonnegative")
+    return value
+
+
+def _project_root() -> Path:
+    return Path(os.environ["WORKFLOW_PROJECT_ROOT"]).resolve(strict=True)
+
+
+def _settings() -> Mapping[str, Any]:
     snapshot = json.loads(Path(os.environ["WORKFLOW_CONFIG_PATH"]).read_text())
     config = _object(snapshot, "configuration snapshot").get("config")
     documents = _object(config, "configuration snapshot.config")
@@ -56,7 +69,7 @@ def _settings() -> dict[str, Any]:
     return _object(parameters.get("plot"), "wf_configs/parameters.json.plot")
 
 
-def _output_directory(settings: dict[str, Any]) -> Path:
+def _output_directory(settings: Mapping[str, Any]) -> Path:
     authored = Path(
         _string(settings.get("output_directory"), "plot.output_directory")
     )
@@ -66,7 +79,7 @@ def _output_directory(settings: dict[str, Any]) -> Path:
         raise ValueError(
             "plot.output_directory must be a normalized project-relative path"
         )
-    project_root = Path(os.environ["WORKFLOW_PROJECT_ROOT"]).resolve(strict=True)
+    project_root = _project_root()
     output = (project_root / authored).resolve()
     if not output.is_relative_to(project_root):
         raise ValueError("plot.output_directory escapes the project root")
@@ -100,6 +113,9 @@ def _recordings() -> list[Path]:
 
 def _trajectories(stream: str) -> list[dict[str, Any]]:
     reader_module = _workflow_reader()
+    expected_parameter_source = (
+        _project_root() / "wf_configs" / "parameters.json"
+    ).resolve(strict=True)
     trajectories: list[dict[str, Any]] = []
     for recording in _recordings():
         reader = reader_module.open_completed_recording(recording)
@@ -116,10 +132,32 @@ def _trajectories(stream: str) -> list[dict[str, Any]]:
             points.append((float(point[0]), float(point[1])))
         if not points:
             raise ValueError(f"recording {recording} has an empty {stream!r} stream")
-        constants = _object(reader.user_metadata.get("model_constants"), "model constants")
+        metadata = _object(reader.user_metadata, "recording user metadata")
+        constants = _object(metadata.get("model_constants"), "model constants")
+        workflow = _object(metadata.get("workflow"), "workflow provenance")
+        if workflow.get("kind") != "model" or workflow.get("model") != "attractor":
+            raise ValueError(f"recording {recording} is not an attractor model recording")
+        if workflow.get("state") != "attractor":
+            raise ValueError(
+                f"recording {recording} was not assembled with the attractor state"
+            )
+        parameter_ordinal = _integer(
+            workflow.get("parameter_ordinal"),
+            "workflow.parameter_ordinal",
+            nonnegative=True,
+        )
+        parameter_source = Path(
+            _string(workflow.get("parameter_source"), "workflow.parameter_source")
+        ).resolve(strict=True)
+        if parameter_source != expected_parameter_source:
+            raise ValueError(
+                f"recording {recording} has unexpected parameter provenance"
+            )
         trajectories.append(
             {
                 "recording": str(recording),
+                "parameter_ordinal": parameter_ordinal,
+                "state": workflow["state"],
                 "mu": _number(constants.get("mu"), "model_constants.mu"),
                 "omega": _number(
                     constants.get("angular_frequency"),
@@ -132,7 +170,7 @@ def _trajectories(stream: str) -> list[dict[str, Any]]:
     return trajectories
 
 
-def _svg(settings: dict[str, Any], trajectories: list[dict[str, Any]]) -> str:
+def _svg(settings: Mapping[str, Any], trajectories: list[dict[str, Any]]) -> str:
     width = int(_number(settings.get("width"), "plot.width", positive=True))
     height = int(_number(settings.get("height"), "plot.height", positive=True))
     margin = _number(settings.get("margin"), "plot.margin", positive=True)
@@ -202,12 +240,14 @@ def main() -> None:
         raise ValueError("plot.output_file must be a plain `.svg` filename")
     (output / output_file).write_text(_svg(settings, trajectories), encoding="utf-8")
     summary = {
-        "format": "scientific-workflow-attractor-plot-v1",
+        "format": "scientific-workflow-attractor-plot-v2",
         "stream": stream,
         "output": output_file,
         "trajectories": [
             {
                 "recording": trajectory["recording"],
+                "parameter_ordinal": trajectory["parameter_ordinal"],
+                "state": trajectory["state"],
                 "mu": trajectory["mu"],
                 "angular_frequency": trajectory["omega"],
                 "record_count": len(trajectory["points"]),

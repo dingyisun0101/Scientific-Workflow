@@ -131,7 +131,10 @@ model tasks produce completed recordings and its dependent Python task writes
 `attractor-sweep.svg` plus `plot-summary.json` beneath the configured
 `output/plots` directory. The Python task uses the public verified reader and
 the `plot` section of central `wf_configs/parameters.json`; it has no Rust caller
-wrapper. A focused model test verifies that the demonstration-only configured
-per-step delay is actually applied. A manifest regression test and Config
-boundary coverage preserve the phase-owned two-second `start_interval_ms`
-admission delay used by the example.
+wrapper. It consumes the reader's immutable metadata mapping and verifies each
+recording's model, named-state selector, parameter ordinal, and canonical
+parameter source before plotting. Project-file regression coverage preserves
+the named state map/selector, central parameter sections, and phase-owned
+two-second `start_interval_ms`; a public
+`Study::load` test proves the complete example still passes current effect-free
+preflight.

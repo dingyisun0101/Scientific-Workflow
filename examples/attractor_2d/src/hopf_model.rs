@@ -14,25 +14,35 @@ const RADIUS_FIELD: &str = "radius";
 /// avoids defining an application-specific state mirror.
 pub(crate) struct HopfModel {
     state: SystemState,
-    mu: f64,
-    omega: f64,
-    physical_time_increment_per_step: f64,
-    artificial_step_delay: Duration,
-    step_count: u64,
+    constants: AttractorConstants,
 }
 
+// REQUIRED: Workflow uses Serde deserialization to match every property in an
+// expanded `parameters.json["attractor"]` object to these Rust field names.
+// Do not remove `Deserialize`; without it, this type cannot be the model's
+// `ScientificModel::Constants`. `deny_unknown_fields` also makes stale or
+// misspelled parameter keys fail during Study preflight.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttractorConstants {
     initial_point: [f64; 2],
     physical_time_increment_per_step: f64,
-    artificial_step_delay_ms: u64,
     step_count: u64,
     trajectory_sampling_interval: u64,
     radius_sampling_interval: u64,
     checkpoint_sampling_interval: u64,
     mu: f64,
     angular_frequency: f64,
+}
+
+impl HopfModel {
+    /// Deliberate wall-clock pacing for the bundled interactive demonstration.
+    ///
+    /// IMPORTANT: Do not remove this delay from the example. It keeps the
+    /// automatic dashboard visible long enough to demonstrate concurrent task
+    /// admission and progress. It is presentation pacing only and never enters
+    /// scientific time or the persisted model constants.
+    const DEMONSTRATION_STEP_DELAY: Duration = Duration::from_millis(1);
 }
 
 // This attribute only links the ordinary Rust implementation to the stable
@@ -62,16 +72,9 @@ impl ScientificModel for HopfModel {
             .expect("zero is a finite physical-time coordinate");
         let mut state = schema.create_empty_state(initial_time);
 
-        state.insert_payload(POINT_FIELD, constants.initial_point.to_vec())?;
-        state.insert_payload(RADIUS_FIELD, radius)?;
-        Ok(Self {
-            state,
-            mu: constants.mu,
-            omega: constants.angular_frequency,
-            physical_time_increment_per_step: constants.physical_time_increment_per_step,
-            artificial_step_delay: Duration::from_millis(constants.artificial_step_delay_ms),
-            step_count: constants.step_count,
-        })
+        state.initialize_payload(POINT_FIELD, constants.initial_point.to_vec())?;
+        state.initialize_payload(RADIUS_FIELD, radius)?;
+        Ok(Self { state, constants })
     }
 
     fn state(&self) -> &SystemState {
@@ -79,11 +82,11 @@ impl ScientificModel for HopfModel {
     }
 
     fn is_complete(&self) -> bool {
-        self.state.time().iteration() == self.step_count
+        self.state.time().iteration() == self.constants.step_count
     }
 
     fn target_iteration(&self) -> Option<u64> {
-        Some(self.step_count)
+        Some(self.constants.step_count)
     }
 
     fn step(&mut self) -> TaskResult {
@@ -99,10 +102,12 @@ impl ScientificModel for HopfModel {
             let x = point[0];
             let y = point[1];
             let radius_squared = x * x + y * y;
-            let dx = self.mu * x - self.omega * y - radius_squared * x;
-            let dy = self.omega * x + self.mu * y - radius_squared * y;
-            let next_x = x + self.physical_time_increment_per_step * dx;
-            let next_y = y + self.physical_time_increment_per_step * dy;
+            let dx =
+                self.constants.mu * x - self.constants.angular_frequency * y - radius_squared * x;
+            let dy =
+                self.constants.angular_frequency * x + self.constants.mu * y - radius_squared * y;
+            let next_x = x + self.constants.physical_time_increment_per_step * dx;
+            let next_y = y + self.constants.physical_time_increment_per_step * dy;
 
             point[0] = next_x;
             point[1] = next_y;
@@ -112,45 +117,11 @@ impl ScientificModel for HopfModel {
         // Time advances only after every scientific payload was updated
         // successfully, so the timestamp always describes the stored state.
         self.state
-            .advance_time(Some(self.physical_time_increment_per_step))?;
+            .advance_time(Some(self.constants.physical_time_increment_per_step))?;
 
-        // This project-only pacing delay keeps progress visible in the
-        // dashboard. It is not scientific time and Workflow does not infer it.
-        std::thread::sleep(self.artificial_step_delay);
+        // Keep this presentation delay: without it, the bundled calculation
+        // finishes too quickly for developers to inspect the live dashboard.
+        std::thread::sleep(Self::DEMONSTRATION_STEP_DELAY);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use std::time::{Duration, Instant};
-
-    use super::*;
-
-    #[test]
-    fn configured_artificial_delay_paces_each_successful_step() {
-        let schema_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("wf_configs/states/attractor.json");
-        let schema = SystemStateSchema::load_json_template(&schema_path).unwrap();
-        let delay = Duration::from_millis(15);
-        let constants = AttractorConstants {
-            initial_point: [0.25, 0.0],
-            physical_time_increment_per_step: 0.01,
-            artificial_step_delay_ms: u64::try_from(delay.as_millis()).unwrap(),
-            step_count: 1,
-            trajectory_sampling_interval: 1,
-            radius_sampling_interval: 1,
-            checkpoint_sampling_interval: 1,
-            mu: 0.25,
-            angular_frequency: 1.0,
-        };
-        let mut model = HopfModel::initialize(constants, &schema).unwrap();
-
-        let started = Instant::now();
-        model.step().unwrap();
-
-        assert!(started.elapsed() >= delay);
-        assert!(model.is_complete());
     }
 }
