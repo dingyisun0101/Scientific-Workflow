@@ -3,12 +3,13 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 
-> **Breaking update — 0.11.1:** this release supersedes the 0.11.0 public API
+> **Breaking update — 0.11.2:** this release supersedes the 0.11.0 public API
 > generation. Import ordinary unit-authoring APIs from
 > `scientific_workflow::prelude::*` and specialized APIs from their owning
 > module roots. Runtime workload summaries are now data-bearing variants, and
 > state inspection/maintenance methods are inherent. No compatibility aliases
-> are provided.
+> are provided. Do not use 0.11.1: its published macro dependency can expand to
+> the removed registration API; 0.11.2 requires the corrected macro.
 
 ## Workflow at a glance
 
@@ -118,14 +119,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.1"
+scientific-workflow = "0.11.2"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.1
+cargo add scientific-workflow@0.11.2
 cargo add serde --features derive
 ```
 

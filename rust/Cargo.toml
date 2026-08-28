@@ -1,6 +1,6 @@
 [package]
 name = "scientific-workflow"
-version = "0.11.1"
+version = "0.11.2"
 edition = "2024"
 rust-version = "1.97"
 authors = ["Dingyi Sun"]
@@ -30,7 +30,7 @@ ratatui = { version = "0.30.0", default-features = false, features = ["crossterm
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = "0.11"
-scientific-workflow-macros = { version = "0.2.0", path = "../macros" }
+scientific-workflow-macros = { version = "0.2.1", path = "../macros" }
 thiserror = "2"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
