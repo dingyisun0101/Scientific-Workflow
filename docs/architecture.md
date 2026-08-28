@@ -318,7 +318,7 @@ workflow/
 └── examples/attractor_2d/
     ├── Cargo.toml / Cargo.lock         standalone example package
     ├── src/main.rs                     one run(&Path) call
-    ├── src/hopf_unit.rs               registered state-owning execution unit
+    ├── src/hopf_model.rs              domain model implementing ExecutionUnit
     ├── wf_configs/
     │   ├── study.json                  swept simulation then Python plot phase
     │   ├── parameters.json             execution unit sweeps + plotter settings

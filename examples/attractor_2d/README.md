@@ -1,7 +1,7 @@
 # Two-dimensional attractor study
 
 This is a complete small scientific project rather than a collection of API
-fragments. Rust owns the stateful Hopf execution unit, JSON owns the study and all
+fragments. Rust owns the stateful Hopf model, JSON owns the study and all
 configuration, and a final Python task turns the completed recordings into an
 SVG figure.
 
@@ -10,7 +10,7 @@ attractor_2d/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                 one scientific_workflow::run(&Path) call
-│   └── hopf_unit.rs           registered one-member execution unit
+│   └── hopf_model.rs          Hopf model registered as one execution unit
 ├── wf_configs/                 required Workflow configuration root
 │   ├── study.json              simulate phase followed by plot phase
 │   ├── parameters.json         execution-unit and plotting parameters
@@ -22,7 +22,14 @@ attractor_2d/
 
 ## Scientific workload
 
-`HopfUnit` directly owns its canonical `SystemState`. It initializes the
+`HopfModel` is the downstream application's scientific model. Workflow itself
+intentionally has no narrower "model" abstraction: implementing
+`ExecutionUnit` makes this model a unit that Workflow can validate, initialize,
+schedule, observe, and advance. This README therefore calls the concrete
+application object a **model** and uses **execution unit** only for the generic
+Workflow contract through which it is managed.
+
+`HopfModel` directly owns its canonical `SystemState`. It initializes the
 two-dimensional `point` and derived `radius`, advances both values and physical
 time in `step`, and reports completion through its configured iteration count.
 Initial assembly uses `initialize_payload`, so an accidental second
@@ -37,7 +44,7 @@ execution unit, `step` obtains `point` and `radius` together with the typed tupl
 `borrow_payloads_mut::<(Vec<f64>, f64)>(("point", "radius"))`; state fields are
 not generated or accessed by a macro. The `#[execution_unit("attractor")]` attribute is
 only the automatic registration link to `wf_configs/study.json`.
-For presentation only, `HopfUnit::DEMONSTRATION_STEP_DELAY` sleeps for one
+For presentation only, `HopfModel::DEMONSTRATION_STEP_DELAY` sleeps for one
 millisecond after every successful step so the automatic dashboard remains
 visible long enough to inspect. It is deliberately implementation-owned rather
 than project configuration because it is not scientific input. Do not remove
@@ -80,9 +87,9 @@ Parameter wiring uses two distinct kinds of key matching:
                                          |
                                   AttractorConstants
                                          |
-                   HopfUnit::initialize(constants, schema, context)
+                  HopfModel::initialize(constants, schema, context)
                                          |
-                            HopfUnit { state, constants }
+                           HopfModel { state, constants }
                                          |
                     member(0) -> MemberView("hopf-attractor", &state, ...)
 ```
@@ -105,12 +112,22 @@ preflight instead of being silently ignored.
 Config expands the independent `mu` and `angular_frequency` `$sweep` markers
 into their deterministic three-by-two Cartesian product before decoding. Study
 deserializes each complete object once to validate its constants type and to
-call `HopfUnit::preflight` during preflight. Task deserializes a fresh,
+call `HopfModel::preflight` during preflight. This model-owned hook runs during
+effect-free `Study::load`, before Runtime creates output or executes anything.
+This model needs no additional domain check and therefore does not inspect the
+schema argument. Its observation builders validate stream names, field
+selections, and sampling intervals while producing the `ObservationPlan` that
+tells Workflow what to record and at what cadence. Workflow then binds that
+plan to the selected schema, which verifies that the named fields exist.
+Returning an error at either stage rejects the study. The hook must therefore
+remain side-effect free.
+
+Task deserializes a fresh,
 equivalent owned value from the retained immutable JSON when that execution unit task
 actually executes. This second decode lets the constants type remain local to
 the execution thread rather than requiring it to be shared between planning
-and Runtime. `HopfUnit::initialize` consumes that value and retains it directly
-beside the execution unit-owned `SystemState`. Workflow manages `HopfUnit` through the
+and Runtime. `HopfModel::initialize` consumes that value and retains it directly
+beside the model-owned `SystemState`. Workflow manages `HopfModel` through the
 same execution-unit lifecycle it uses for an ensemble; the difference is only
 that this example exposes one member rather than several. An ensemble would
 return one stable `MemberView` per internal member and perform its shared or

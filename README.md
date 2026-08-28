@@ -18,7 +18,7 @@ executable programs, and declarative JSON into validated, recorded studies.
 - To see a complete working project, open the
   [two-dimensional attractor example](examples/attractor_2d/README.md), its
   [study manifest](examples/attractor_2d/wf_configs/study.json), and its
-  [registered execution unit](examples/attractor_2d/src/hopf_unit.rs).
+  [Hopf model implementing the execution-unit contract](examples/attractor_2d/src/hopf_model.rs).
 - To understand subsystem boundaries and dependency direction, read the
   [architecture guide](docs/architecture.md).
 - To consume completed recordings from Python, use the verified

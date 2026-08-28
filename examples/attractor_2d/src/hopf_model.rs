@@ -7,19 +7,21 @@ const POINT_FIELD: &str = "point";
 
 const RADIUS_FIELD: &str = "radius";
 
-/// Scientific owner for one generated parameter-sweep task.
+/// Domain model for one generated parameter-sweep task.
 ///
-/// The evolving fields live in Workflow's dynamic `SystemState`; the unit
+/// `HopfModel` is application terminology: implementing `ExecutionUnit` below
+/// makes this model a unit that Workflow can validate, initialize, and run.
+/// The evolving fields live in Workflow's dynamic `SystemState`; the model
 /// stores only the coefficients needed to advance them. This deliberately
 /// avoids defining an application-specific state mirror.
-pub(crate) struct HopfUnit {
+pub(crate) struct HopfModel {
     state: SystemState,
     constants: AttractorConstants,
 }
 
 // REQUIRED: Workflow uses Serde deserialization to match every property in an
 // expanded `parameters.json["attractor"]` object to these Rust field names.
-// Do not remove `Deserialize`; without it, this type cannot be the unit's
+// Do not remove `Deserialize`; without it, this type cannot be the model's
 // `ExecutionUnit::Constants`. `deny_unknown_fields` also makes stale or
 // misspelled parameter keys fail during Study preflight.
 #[derive(Deserialize)]
@@ -35,7 +37,7 @@ pub(crate) struct AttractorConstants {
     angular_frequency: f64,
 }
 
-impl HopfUnit {
+impl HopfModel {
     /// Deliberate wall-clock pacing for the bundled interactive demonstration.
     ///
     /// IMPORTANT: Do not remove this delay from the example. It keeps the
@@ -46,11 +48,22 @@ impl HopfUnit {
 }
 
 // This attribute only links the ordinary Rust implementation to the stable
-// `attractor` manifest key. HopfUnit itself owns and exposes its member state.
+// `attractor` manifest key. HopfModel itself owns and exposes its member state.
 #[scientific_workflow::execution_unit("attractor")]
-impl ExecutionUnit for HopfUnit {
+impl ExecutionUnit for HopfModel {
     type Constants = AttractorConstants;
 
+    /// Validates this model's task and declares what Workflow must record.
+    ///
+    /// `Study::load` calls `preflight` with decoded constants and the selected
+    /// state schema before Runtime creates output or starts the model. This
+    /// model needs no extra domain or schema checks, so `_schema` is unused; the
+    /// observation builders validate stream names, field selections, and
+    /// sampling intervals while constructing the complete recording plan.
+    /// Workflow then binds that plan to the schema and rejects missing fields.
+    /// `Ok(plan)` accepts the model-owned portion of validation; any `Err`
+    /// rejects the study. Keep this hook free of side effects because it may
+    /// run without the task ever being executed.
     fn preflight(
         constants: &Self::Constants,
         _schema: &SystemStateSchema,
@@ -67,6 +80,14 @@ impl ExecutionUnit for HopfUnit {
         .with_physical_time_unit("dimensionless_model_time")?)
     }
 
+    /// Constructs one runnable model from owned constants and its state schema.
+    ///
+    /// Runtime calls this once when the task starts. The constants have already
+    /// passed `preflight`; the schema is the state selected by the task, and the
+    /// context is available for recorded seed requests when a model is
+    /// stochastic. This deterministic model ignores the context, creates its
+    /// only `SystemState`, initializes every required payload exactly once, and
+    /// returns the fully owned model that subsequent lifecycle calls mutate.
     fn initialize(
         constants: Self::Constants,
         schema: &SystemStateSchema,
@@ -84,10 +105,21 @@ impl ExecutionUnit for HopfUnit {
         Ok(Self { state, constants })
     }
 
+    /// Reports how many independently observable members the model exposes.
+    ///
+    /// Workflow uses this value to enumerate member views and metadata. A
+    /// standalone Hopf model always has exactly one member; an ensemble could
+    /// expose several while implementing the same `ExecutionUnit` contract.
     fn member_count(&self) -> usize {
         1
     }
 
+    /// Borrows the requested member's current state and progress information.
+    ///
+    /// Index zero returns a `MemberView` over this model's sole state, stable
+    /// identity, optional completion, and target iteration. Any other index
+    /// returns `None`, matching the bound declared by `member_count`. The view
+    /// borrows `self`, so callers cannot retain it while mutating the model.
     fn member(&self, index: usize) -> Option<MemberView<'_>> {
         (index == 0).then(|| {
             MemberView::new(
@@ -100,6 +132,13 @@ impl ExecutionUnit for HopfUnit {
         })
     }
 
+    /// Advances the scientific model by one explicit-Euler iteration.
+    ///
+    /// Runtime repeatedly calls `step` until `member(0)` reports completion.
+    /// The method updates the point and its derived radius atomically from the
+    /// same pre-step coordinates, advances the canonical state time only after
+    /// payload updates succeed, then applies the example-only dashboard delay.
+    /// An error stops the task and is recorded by Workflow.
     fn step(&mut self) -> TaskResult {
         {
             // A tuple borrow gives simultaneous mutable access to two
