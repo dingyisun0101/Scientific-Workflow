@@ -760,7 +760,28 @@ fn non_utf8_config_document_paths_are_rejected_without_lossy_snapshot_keys() {
     fs::write(project.path().join("wf_configs").join(name), "{}").unwrap();
     assert!(matches!(
         ProjectSpecification::load(project.path()),
-        Err(ConfigError::InvalidDocument { reason, .. }) if reason.contains("valid UTF-8")
+        Err(ConfigError::NonUtf8Path { context, .. }) if context == "configuration document"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_project_roots_are_rejected_before_json_provenance_is_built() {
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+    let mut project = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
+        &[],
+    );
+    let mut renamed = project.path().as_os_str().as_bytes().to_vec();
+    renamed.extend_from_slice(b"-\xff");
+    let renamed = PathBuf::from(std::ffi::OsString::from_vec(renamed));
+    fs::rename(project.path(), &renamed).unwrap();
+    project.0 = renamed;
+
+    assert!(matches!(
+        ProjectSpecification::load(project.path()),
+        Err(ConfigError::NonUtf8Path { context, .. }) if context == "project root"
     ));
 }
 

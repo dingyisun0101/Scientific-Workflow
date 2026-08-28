@@ -72,7 +72,10 @@ impl ModelRecordingProvenance {
             ),
             (
                 "parameter_source".to_owned(),
-                self.parameter_source.to_string_lossy().into_owned().into(),
+                self.parameter_source
+                    .to_str()
+                    .expect("Config preflight requires UTF-8 parameter paths")
+                    .into(),
             ),
             ("persistence".to_owned(), persistence),
         ]));
@@ -147,7 +150,12 @@ impl ProgramPersistenceSession {
             args: launch
                 .args
                 .iter()
-                .map(|argument| argument.to_string_lossy().into_owned())
+                .map(|argument| {
+                    argument
+                        .to_str()
+                        .expect("Config preflight requires UTF-8 program arguments")
+                        .to_owned()
+                })
                 .collect(),
             program_kind: launch.kind.into(),
             python_script: launch.python_script.map(Path::to_path_buf),

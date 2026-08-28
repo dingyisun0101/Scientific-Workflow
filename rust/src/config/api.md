@@ -122,6 +122,11 @@ Unknown properties are rejected at every Workflow-owned level.
   one-component command may resolve through `PATH`. The resolved target must
   be an executable regular file (including execute permission on Unix).
   Resolution occurs during loading, so Runtime never searches again.
+- the canonical project root, configuration documents, resolved executables,
+  Python scripts, and environment paths must be valid UTF-8 because their
+  exact values cross language-neutral JSON snapshot or provenance boundaries.
+  Config rejects them during preflight rather than applying lossy conversion
+  during execution.
 - Model keys remain opaque until Study matches them to linked `#[model]`
   registrations.
 - Model `state` keys are resolved during effect-free assembly. The selected
@@ -294,6 +299,9 @@ private implementation paths.
   selection violation with a JSON Pointer;
 - `PathOutsideConfig { path, config_root }` rejects unsafe discovered-document
   containment, including symlink escapes;
+- `NonUtf8Path { path, context }` rejects a canonical path that could not be
+  represented exactly in a later JSON snapshot, dependency document, or
+  recording provenance value;
 - `InvalidProgram { path, reason }` reports an unsafe, missing, non-executable
   program/manager or invalid Python script/environment declaration;
 - `UnknownDependency { phase, dependency }` reports a missing phase edge;

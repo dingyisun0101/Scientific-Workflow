@@ -42,7 +42,8 @@ public.
   defaults, positive limits, dependencies, generic model/program/Python task
   grammar, executable resolution, all supported Python environment lowering
   and executable preflight, contained/escaping JSON symlinks, authored
-  snapshot keys, non-UTF-8 path rejection, RFC 6901 diagnostic pointers,
+  snapshot keys, non-UTF-8 document and project-root rejection before JSON
+  provenance, RFC 6901 diagnostic pointers,
   deterministic `$sweep`/`$cases` expansion and malformed-marker rejection,
   private typed constants decoding, decimal-MB persistence-size conversion,
   overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
@@ -83,10 +84,11 @@ public.
   rows, per-phase task-panel replacement, progress, bounded message history,
   source-neutral cancellation, and phase/replicate/execution closure of
   pending rows as skipped. `ui/session.rs` verifies that recorded renderer
-  failure panics at the Runtime-facing health boundary. PTY validation
-  confirms alternate-screen Ratatui rendering, keyboard exit, cooperative
-  Runtime cancellation, and terminal restoration. Noninteractive tests receive
-  stable plain lifecycle diagnostics rather than terminal control sequences.
+  failure panics at the Runtime-facing health boundary. Before a release,
+  manual PTY validation should confirm alternate-screen Ratatui rendering,
+  keyboard exit, cooperative Runtime cancellation, and terminal restoration.
+  Noninteractive tests receive stable plain lifecycle diagnostics rather than
+  terminal control sequences.
 
 ## Persistence tests
 

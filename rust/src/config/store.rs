@@ -49,6 +49,7 @@ impl Config {
     /// `<project-root>/wf_configs` exactly once.
     pub(crate) fn load(project_root: &Path) -> Result<Self, ConfigError> {
         let project_root = canonicalize(project_root)?;
+        ensure_utf8(&project_root, "project root")?;
         let config_root = canonicalize(&project_root.join(WORKFLOW_CONFIG_DIRECTORY))?;
         let study_path = canonicalize(&config_root.join(STUDY_MANIFEST))?;
         ensure_contained(&config_root, &study_path)?;
@@ -62,6 +63,7 @@ impl Config {
         for path in paths {
             let canonical = canonicalize(&path)?;
             ensure_contained(&config_root, &canonical)?;
+            ensure_utf8(&canonical, "configuration document")?;
             if canonical == study_path {
                 continue;
             }
@@ -226,6 +228,18 @@ pub(crate) fn ensure_contained(root: &Path, path: &Path) -> Result<(), ConfigErr
         Err(ConfigError::PathOutsideConfig {
             path: path.to_path_buf(),
             config_root: root.to_path_buf(),
+        })
+    }
+}
+
+/// Requires exact UTF-8 for paths that will later be represented in JSON.
+pub(crate) fn ensure_utf8(path: &Path, context: &'static str) -> Result<(), ConfigError> {
+    if path.to_str().is_some() {
+        Ok(())
+    } else {
+        Err(ConfigError::NonUtf8Path {
+            path: path.to_path_buf(),
+            context,
         })
     }
 }

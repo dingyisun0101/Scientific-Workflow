@@ -226,6 +226,8 @@ The automatic write path is a named closed contract through
 - `ModelRecordingProvenance` owns semantic model facts supplied by Runtime. It
   does not accept an arbitrary metadata map; Persistence alone constructs the
   exact `model_constants`, `workflow`, backend, and effective-setting JSON.
+  Every retained path is exact UTF-8 already guaranteed by Config preflight;
+  Persistence never substitutes replacement characters in provenance.
 - `PersistenceSession` owns model-recording start, bounded observation
   submission, successful completion, and best-effort failure terminalization.
 - `ProgramLaunch` and `ProgramPersistenceSession` own external-program launcher

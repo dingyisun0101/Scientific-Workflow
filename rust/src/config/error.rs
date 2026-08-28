@@ -58,6 +58,15 @@ pub enum ConfigError {
         config_root: PathBuf,
     },
 
+    /// A path that must cross a language-neutral JSON boundary is not UTF-8.
+    #[error("{context} path `{path}` must be valid UTF-8")]
+    NonUtf8Path {
+        /// Rejected canonical filesystem path.
+        path: PathBuf,
+        /// Stable role the path would have served.
+        context: &'static str,
+    },
+
     /// A program or Python task did not resolve to a valid executable, script,
     /// or environment.
     #[error("invalid program task path `{path}`: {reason}")]

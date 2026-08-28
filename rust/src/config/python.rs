@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use super::error::ConfigError;
 use super::program::{ResolvedProgramTask, resolve_executable};
+use super::store::ensure_utf8;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -194,10 +195,13 @@ fn resolve_path(project_root: &Path, authored: &Path, kind: &str) -> Result<Path
     } else {
         project_root.join(authored)
     };
-    std::fs::canonicalize(&candidate).map_err(|source| ConfigError::InvalidProgram {
-        path: authored.to_path_buf(),
-        reason: format!("could not resolve {kind}: {source}"),
-    })
+    let resolved =
+        std::fs::canonicalize(&candidate).map_err(|source| ConfigError::InvalidProgram {
+            path: authored.to_path_buf(),
+            reason: format!("could not resolve {kind}: {source}"),
+        })?;
+    ensure_utf8(&resolved, "resolved Python task resource")?;
+    Ok(resolved)
 }
 
 fn validate_name(path: &Path, name: &str, kind: &str) -> Result<(), ConfigError> {

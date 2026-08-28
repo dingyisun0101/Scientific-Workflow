@@ -716,11 +716,14 @@ fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box
                             TaskRunKind::Program => "program",
                         },
                         "model": task.model(),
-                        "program": task.program().map(|path| path.to_string_lossy()),
+                        "program": task.program().map(|path| path.to_str()
+                            .expect("Config preflight requires UTF-8 program paths")),
                         "program_kind": task.program_kind(),
-                        "python_script": task.python_script().map(|path| path.to_string_lossy()),
+                        "python_script": task.python_script().map(|path| path.to_str()
+                            .expect("Config preflight requires UTF-8 Python script paths")),
                         "final_iteration": task.final_iteration(),
-                        "output_directory": task.output_directory().to_string_lossy()
+                        "output_directory": task.output_directory().to_str()
+                            .expect("UTF-8 project roots produce UTF-8 output paths")
                     })
                 }).collect::<Vec<_>>()
             })

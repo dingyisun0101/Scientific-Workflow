@@ -104,10 +104,11 @@ The fixture under `tests/fixtures/complete` is also opened by Workflow's Rust
 reader, making it a cross-language conformance contract.
 
 Workflow's Rust integration suite additionally runs a bidirectional test. Its
-public Rust writer produces a multi-chunk recording for this package to read;
-the test-only Python bridge re-encodes those records; and the public Rust reader
-validates the Python result, including exact sensitive-float bits and Unicode.
-The bridge is test infrastructure, not a supported Python writer API.
+internal automatic persistence path produces a multi-chunk recording for this
+package to read; the test-only Python bridge re-encodes those records; and the
+public Rust reader validates the Python result, including exact
+sensitive-float bits and Unicode. The Rust write session and Python bridge are
+test infrastructure, not supported writer APIs.
 
 ## Development
 

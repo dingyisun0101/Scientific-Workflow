@@ -3,7 +3,7 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven model or program execution, and durable outputs.
 
-> **Breaking 0.10 update:** Version 0.10.2 is the current patch release of the
+> **Breaking 0.10 update:** Version 0.10.3 is the current patch release of the
 > 0.10 API generation that intentionally removed the pre-0.10 orchestration,
 > configuration, storage/writer, and study surfaces. Applications using 0.9.x
 > or earlier must adopt registered `ScientificModel`
@@ -115,14 +115,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.10.2"
+scientific-workflow = "0.10.3"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.10.2
+cargo add scientific-workflow@0.10.3
 cargo add serde --features derive
 ```
 

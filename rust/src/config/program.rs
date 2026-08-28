@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::error::ConfigError;
-use super::store::canonicalize;
+use super::store::{canonicalize, ensure_utf8};
 
 /// One validated external program invocation, including a lowered Python task.
 #[derive(Clone)]
@@ -163,6 +163,7 @@ pub(crate) fn resolve_executable(
     })?;
 
     let resolved = canonicalize(&candidate)?;
+    ensure_utf8(&resolved, "resolved executable")?;
     if !is_executable(&resolved) {
         return Err(ConfigError::InvalidProgram {
             path: authored.to_path_buf(),

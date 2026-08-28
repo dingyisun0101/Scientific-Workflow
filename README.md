@@ -3,7 +3,7 @@
 Scientific Workflow turns registered Rust scientific models, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking 0.10 update:** Version 0.10.2 is the current patch release of the
+> **Breaking 0.10 update:** Version 0.10.3 is the current patch release of the
 > 0.10 API generation that intentionally replaced the pre-0.10 orchestration,
 > configuration, storage/writer, and study APIs. Projects using 0.9.x or
 > earlier must migrate to the model registration plus `wf_configs/study.json`
@@ -22,20 +22,20 @@ executable programs, and declarative JSON into validated, recorded studies.
   [registered model](examples/attractor_2d/src/hopf_model.rs).
 - To understand subsystem boundaries and dependency direction, read the
   [architecture guide](docs/architecture.md).
+- To consume completed recordings from Python, use the verified
+  [Scientific Workflow Reader](python/README.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
-- Before contributing changes, read the repository [agent and edit
-  instructions](AGENTS.md).
 
 ## Repository map
 
 ```text
 workflow/
 +-- rust/                   Rust crate, crate guide, sources, and Rust tests
++-- macros/                 model-registration procedural macro package
 +-- python/                 verified recording reader and Python tests
 +-- examples/attractor_2d/ complete Rust-model + Python-analysis project
 +-- docs/                   architecture and test responsibility maps
-+-- AGENTS.md               repository editing and documentation rules
 `-- README.md               repository navigation
 ```
 

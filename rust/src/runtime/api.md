@@ -292,3 +292,5 @@ facts through Study's peer view rather than opening Task descriptors.
 The program execution port likewise supplies Task's semantic
 `ProgramTaskInvocation`; Runtime does not import Config's resolved-program
 representation.
+Paths written to program dependency snapshots are exact UTF-8 values validated
+during Config preflight; Runtime performs no lossy path rendering.

@@ -196,7 +196,6 @@ fully preflighted Study and its retained Config.
 
 ```text
 workflow/
-├── AGENTS.md                         local/private working rules (gitignored)
 ├── README.md                         repository entry and user outcome
 ├── docs/
 │   ├── architecture.md               this complete ownership/tree guide
@@ -307,6 +306,19 @@ workflow/
 │       ├── observation_workflow.rs    public observation declaration tests
 │       ├── task_workflow.rs           downstream ScientificModel API tests
 │       └── fixtures/*.json            canonical state-schema fixtures
+├── python/
+│   ├── pyproject.toml                 reader package metadata and build policy
+│   ├── README.md / LICENSE            Python reader guide and license
+│   ├── src/scientific_workflow_reader/
+│   │   ├── __init__.py                supported reader exports
+│   │   ├── errors.py                  typed verification/read failures
+│   │   ├── model.py                   read-only field/record/series containers
+│   │   ├── reader.py                  format-v7 validation and reconstruction
+│   │   └── py.typed                   typing marker
+│   └── tests/
+│       ├── test_reader.py             reader/integrity behavior
+│       ├── roundtrip_bridge.py        Rust/Python conformance helper
+│       └── fixtures/                  shared valid/invalid format fixtures
 └── examples/attractor_2d/
     ├── Cargo.toml / Cargo.lock         standalone example package
     ├── src/main.rs                     one run(&Path) call
@@ -541,6 +553,10 @@ owns behavior or creates an alternative canonical implementation path.
     `pub(crate)` exports in each owning Advanced scope; peers do not import
     another subsystem's private modules or depend on inference-only return
     types.
+20. Config preflight rejects non-UTF-8 canonical project, configuration,
+    executable, script, and environment paths before any exact path must cross
+    a language-neutral JSON snapshot or provenance boundary; Runtime and
+    Persistence never apply lossy path conversion.
 
 ## Replacement boundaries
 
