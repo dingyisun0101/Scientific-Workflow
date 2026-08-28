@@ -241,7 +241,7 @@ workflow/
 │   │   ├── task/execution.rs         host port and execution unit invariant enforcement
 │   │   └── task/tests/task_workflow.rs private catalog/execution contract tests
 │   │   │
-│   │   ├── config.rs                 config root; empty Basic, error-only Advanced
+│   │   ├── config.rs                 config root; public ConfigError + peer exports
 │   │   ├── config/api.md             complete project grammar/error contract
 │   │   ├── config/error.rs           owned contextual ConfigError
 │   │   ├── config/document.rs        strict JSON and duplicate-key parser
@@ -254,14 +254,14 @@ workflow/
 │   │   ├── config/specification.rs   one-root loading transaction
 │   │   └── config/tests/config_workflow.rs internal compiler/grammar tests
 │   │   │
-│   │   ├── study.rs                  study root; empty Basic, Study/Error Advanced
+│   │   ├── study.rs                  public Study/StudyError root + peer exports
 │   │   ├── study/api.md              exhaustive Study API and example
 │   │   ├── study/error.rs            binding/preflight StudyError
 │   │   ├── study/compilation.rs      project-to-Study composition
 │   │   ├── study/plan.rs             public Study + private phases/tasks/policies
 │   │   └── study/tests/study_workflow.rs internal binding/runtime tests
 │   │   │
-│   │   ├── runtime.rs                runtime root; empty Basic, execute Advanced
+│   │   ├── runtime.rs                public execution/summary/error root
 │   │   ├── runtime/api.md            execute/summary/error contract
 │   │   ├── runtime/error.rs          active execution RuntimeError
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
@@ -279,7 +279,7 @@ workflow/
 │   │   ├── ui/session.rs             renderer thread and cancellation bridge
 │   │   └── ui/terminal.rs            Ratatui dashboard + plain noninteractive mode
 │   │   │
-│   │   ├── persistence.rs            persistence root; empty Basic, read Advanced
+│   │   ├── persistence.rs            public completed-recording read root
 │   │   ├── persistence/api.md        complete settings/read/error contract
 │   │   ├── persistence/plan.rs       private effective operational settings
 │   │   ├── persistence/session.rs    member recording/program workspace lifecycle
@@ -336,8 +336,8 @@ reread named state documents. Persistence reconstructs schemas directly from
 decoded ordered field metadata rather than serializing and reparsing JSON.
 Observation borrows serializable payloads through a crate-visible State port,
 not slot internals. `SystemState` owns fixed heterogeneous slots and
-`StateTime`; application execution units mutate payloads and advance time. Advanced
-inspection exposes field metadata and schema identity. The old generic
+`StateTime`; application execution units mutate payloads and advance time.
+Specialized module-root inspection exposes field metadata and schema identity. The old generic
 schema-source adapter was removed with the persistence builder that needed it.
 
 ### Observation
@@ -402,7 +402,7 @@ managers once, and creates a deterministic language-neutral snapshot for
 external tasks. Reserved Workflow documents and arbitrary application
 documents use the same lookup graph. Runtime retains only a clone-cheap
 `ConfigSnapshot` byte handle for an active task, not Config's typed lookup and
-parsing interface. The downstream-public Advanced API is only `ConfigError`;
+parsing interface. The downstream-public Rust API is only `ConfigError`;
 closed peer types are explicitly named through the same owning scope.
 
 ### Study
@@ -459,7 +459,7 @@ persistence-size field is byte-addressed. Config alone checks and converts
 both values to internal byte counts, and effective provenance records those
 exact byte values.
 
-Advanced users can only open completed recordings with a decoder registry.
+Specialized users can only open completed recordings with a decoder registry.
 Readers verify metadata, sizes, hashes, framing, ordering, schema, decoding,
 and StateSeries invariants before publishing owned results. A future local or
 remote adapter belongs behind the private `PersistenceSession`, not in execution unit

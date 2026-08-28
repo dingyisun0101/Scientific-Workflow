@@ -56,7 +56,7 @@ constants.
 
 There is no public manual-catalog loader, phase accessor, task accessor, state
 schema map/accessor, replicate-policy accessor, persistence-plan accessor, source
-document view, UI-plan accessor, or mutable Study operation. Advanced consumers that need to run
+document view, UI-plan accessor, or mutable Study operation. Embedding consumers that need to run
 a preloaded Study pass it to `runtime::execute`; successful runtime
 summaries provide output paths and task results.
 

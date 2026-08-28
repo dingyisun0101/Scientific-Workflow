@@ -228,8 +228,8 @@ manifest grammar or execution unit-key preflight failure; those remain `StudyErr
 
 ## Example
 
-The complete ordinary workflow uses the crate facade rather than a Runtime
-Basic API:
+The complete ordinary workflow uses the crate facade rather than the embedding
+Runtime API:
 
 ```rust,no_run
 use std::path::Path;

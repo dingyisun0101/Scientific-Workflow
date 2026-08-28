@@ -3,6 +3,12 @@
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
+> **Breaking update — 0.11.1:** this release supersedes the 0.11.0 public API
+> generation. It replaces Basic/Advanced namespace tiers with one ordinary
+> prelude and module-root specialized APIs, uses data-bearing runtime workload
+> summaries, and makes state inspection/maintenance inherent. No compatibility
+> aliases are provided.
+
 ## Start here
 
 - To use the library, follow the complete [Rust crate guide](rust/README.md).
@@ -52,8 +58,8 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   program environments, and summaries.
 - [UI](rust/src/ui/api.md): automatic terminal presentation and exit handling.
 - [Error](rust/src/error/api.md): complete-workflow error composition.
-- [Prelude](rust/src/prelude/api.md): canonical Basic and Advanced API
-  aggregation.
+- [Prelude](rust/src/prelude/api.md): the ordinary execution-unit authoring
+  imports.
 
 > This crate is pre-1.0 test software. Public API behavior may change through
 > coordinated refactor releases.
