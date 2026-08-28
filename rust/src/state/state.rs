@@ -11,7 +11,7 @@
 //! specification. A slot may be empty, but fields cannot be added, removed, or
 //! reordered after template loading. The first successful initialization binds a
 //! slot to that payload's concrete Rust type. Taking or clearing the payload
-//! retains this type contract, and [`StateMaintenance::clone_structure_without_payloads`] carries all contracts
+//! retains this type contract, and [`SystemState::clone_structure_without_payloads`] carries all contracts
 //! into the derived blank state without cloning payloads.
 //!
 //! # Ownership and cloning
@@ -36,8 +36,8 @@
 //! coordinated access to distinct heterogeneous fields through type and name
 //! tuples, allowing one validated borrow to surround an entire scientific
 //! kernel. It can advance time transactionally through
-//! [`SystemState::advance_time`]; advanced lifecycle code can replace a complete
-//! coordinate through [`StateMaintenance::replace_time`].
+//! [`SystemState::advance_time`]; specialized lifecycle code can replace a complete
+//! coordinate through [`SystemState::replace_time`].
 //!
 //! # Type safety
 //!
@@ -59,7 +59,7 @@ use std::fmt;
 use serde::Serialize;
 
 use super::error::{PayloadInsertError, StateError};
-use super::schema::{StateSchemaAccess, SystemStateSchema};
+use super::schema::SystemStateSchema;
 use super::time::StateTime;
 use super::value::StateValue;
 
@@ -246,7 +246,7 @@ impl SystemState {
     /// caller that does not need that owner should discard it explicitly:
     ///
     /// ```no_run
-    /// # use scientific_workflow::state::basic::{SystemStateSchema, StateTime};
+    /// # use scientific_workflow::state::{SystemStateSchema, StateTime};
     /// # fn example(spec: &SystemStateSchema) -> Result<(), Box<dyn std::error::Error>> {
     /// let mut state = spec.create_empty_state(StateTime::from_iteration(0));
     /// drop(state.insert_payload("population", vec![1_u64, 2, 3])?);
@@ -521,29 +521,9 @@ impl StateObservationAccess for SystemState {
     }
 }
 
-/// Advanced structural and lifecycle operations for an assembled state.
-pub trait StateMaintenance {
+impl SystemState {
     /// Creates an empty state sharing schema and retained payload type contracts.
-    fn clone_structure_without_payloads(&self, time: StateTime) -> SystemState;
-
-    /// Replaces the complete temporal coordinate and returns the previous one.
-    fn replace_time(&mut self, time: StateTime) -> StateTime;
-
-    /// Returns the number of fields that currently contain payloads.
-    fn populated_field_count(&self) -> usize;
-
-    /// Reports whether a populated field contains exactly `T`.
-    fn payload_has_type<T: Any>(&self, key: &str) -> Result<bool, StateError>;
-
-    /// Drops one payload while retaining its field type contract.
-    fn clear_payload(&mut self, key: &str) -> Result<bool, StateError>;
-
-    /// Drops all payloads while retaining schema, time, and type contracts.
-    fn clear_all_payloads(&mut self);
-}
-
-impl StateMaintenance for SystemState {
-    fn clone_structure_without_payloads(&self, time: StateTime) -> SystemState {
+    pub fn clone_structure_without_payloads(&self, time: StateTime) -> SystemState {
         SystemState {
             spec: self.spec.clone(),
             time,
@@ -551,18 +531,21 @@ impl StateMaintenance for SystemState {
         }
     }
 
-    fn replace_time(&mut self, time: StateTime) -> StateTime {
+    /// Replaces the complete temporal coordinate and returns the previous one.
+    pub fn replace_time(&mut self, time: StateTime) -> StateTime {
         std::mem::replace(&mut self.time, time)
     }
 
-    fn populated_field_count(&self) -> usize {
+    /// Returns the number of fields that currently contain payloads.
+    pub fn populated_field_count(&self) -> usize {
         self.slots
             .iter()
             .filter(|slot| slot.value.is_some())
             .count()
     }
 
-    fn payload_has_type<T: Any>(&self, key: &str) -> Result<bool, StateError> {
+    /// Reports whether a populated field contains exactly `T`.
+    pub fn payload_has_type<T: Any>(&self, key: &str) -> Result<bool, StateError> {
         let index = self.spec.index_of(key)?;
         Ok(self.slots[index]
             .value
@@ -570,12 +553,14 @@ impl StateMaintenance for SystemState {
             .is_some_and(StateValue::is::<T>))
     }
 
-    fn clear_payload(&mut self, key: &str) -> Result<bool, StateError> {
+    /// Drops one payload while retaining its field type contract.
+    pub fn clear_payload(&mut self, key: &str) -> Result<bool, StateError> {
         let index = self.spec.index_of(key)?;
         Ok(self.slots[index].value.take().is_some())
     }
 
-    fn clear_all_payloads(&mut self) {
+    /// Drops all payloads while retaining schema, time, and type contracts.
+    pub fn clear_all_payloads(&mut self) {
         self.slots.iter_mut().for_each(|slot| slot.value = None);
     }
 }

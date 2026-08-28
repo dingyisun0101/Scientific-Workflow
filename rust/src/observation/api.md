@@ -3,10 +3,9 @@
 The `observation` subsystem owns application-defined scientific observation: which
 state fields belong to which logical stream, how often iteration-based streams
 are sampled, the optional units attached to inferred time axes, and canonical
-encoding of a borrowed observation. Its canonical scopes are
-`scientific_workflow::observation::basic` and
-`scientific_workflow::observation::advanced`. The central preludes re-export these
-same symbols without wrapping them.
+encoding of a borrowed observation. Its canonical scope is the
+`scientific_workflow::observation` module root. The ordinary prelude re-exports
+the downstream-facing declarations without wrapping them.
 
 Observation is intentionally independent of persistence. It contains no output
 path, task or replicate identity, chunk size, queue size, filename, checksum,
@@ -22,9 +21,9 @@ binds the returned plan to the validated
 state schema, and stores that exact bound plan in the compiled task. Runtime
 never calls the execution unit method again.
 
-## Basic API
+## Public API
 
-### `observation::basic::ObservationPlan`
+### `observation::ObservationPlan`
 
 `ObservationPlan` is an immutable, owned definition of the scientific observation requested
 by an application. It is `Clone + Debug + Eq`; cloning copies only small
@@ -60,7 +59,7 @@ already follow from `StateTime`.
 exposes no getters. Application code declares intent; Study owns schema binding
 and retains the private bound representation.
 
-### `observation::basic::ObservationStream`
+### `observation::ObservationStream`
 
 `ObservationStream` is one owned scientific stream definition. A stream name is retained
 because it distinguishes scientifically meaningful outputs; a filesystem
@@ -86,10 +85,10 @@ possible, but Observation does not classify or label a stream as a checkpoint.
 The final state is a session concern and is offered once even when its
 iteration does not align with a stream cadence.
 
-### `observation::basic::ObservationError`
+### `observation::ObservationError`
 
 `ObservationError` is the non-exhaustive error for definition, binding,
-observation, and encoding. Basic users usually propagate it; advanced users
+observation, and encoding. Ordinary users usually propagate it; specialized users
 may inspect contextual variants. Every owned stream/field name remains valid
 after temporary inputs and observations are dropped. Errors contain no
 scientific payload.
@@ -128,11 +127,9 @@ is not produced; a failed bind yields no descriptor; a failed session
 observation advances no stream's accepted-iteration marker and submits no
 encoded observation.
 
-## Advanced API
+## Crate-visible peer API
 
-`observation::advanced` is the strict public superset of Basic and currently
-adds no downstream-public symbols. Workflow peers use the following explicitly
-named crate-visible contracts from this same scope:
+Workflow peers use these crate-visible contracts:
 
 - `BoundObservationPlan` is the one-time, schema-checked plan retained by
   Study. Its stream and axis accessors supply immutable scientific descriptors.
@@ -162,8 +159,8 @@ scientific observation intent:
 ```rust,no_run
 use std::path::Path;
 
-use scientific_workflow::state::basic::{StateTime, SystemStateSchema};
-use scientific_workflow::observation::basic::{
+use scientific_workflow::state::{StateTime, SystemStateSchema};
+use scientific_workflow::observation::{
     ObservationError, ObservationPlan, ObservationStream,
 };
 

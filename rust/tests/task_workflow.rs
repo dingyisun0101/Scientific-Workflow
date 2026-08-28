@@ -1,4 +1,4 @@
-use scientific_workflow::prelude::basic::*;
+use scientific_workflow::prelude::*;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -53,7 +53,7 @@ impl ExecutionUnit for Unit {
 }
 
 #[test]
-fn basic_prelude_contains_the_execution_unit_contract() {
+fn ordinary_prelude_contains_the_execution_unit_contract() {
     fn accepts_unit<M: ExecutionUnit>() {}
     accepts_unit::<Unit>();
 }

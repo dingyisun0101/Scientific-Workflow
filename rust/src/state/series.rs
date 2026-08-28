@@ -41,7 +41,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::error::StateSeriesError;
-use super::schema::{StateSchemaAccess, SystemStateSchema};
+use super::schema::SystemStateSchema;
 use super::state::SystemState;
 
 /// A growable homogeneous array of owned, time-ordered system states.

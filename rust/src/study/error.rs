@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::config::advanced::ConfigError;
-use crate::state::advanced::StateError;
-use crate::task::advanced::ExecutionUnitCatalogError;
+use crate::config::ConfigError;
+use crate::state::StateError;
+use crate::task::ExecutionUnitCatalogError;
 
 /// A failure while compiling complete declared intent into an immutable study.
 #[derive(Debug, Error)]

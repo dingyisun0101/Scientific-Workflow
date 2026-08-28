@@ -1,8 +1,8 @@
 //! Application-defined scientific observation.
 //!
-//! [`basic`] lets an application declare which state fields are observed and
-//! at what iteration cadence. [`advanced`] retains that same supported public
-//! surface; schema-bound descriptors and encoding handoffs remain crate-private. Paths, buffering, chunking,
+//! Applications declare which state fields are observed and at what iteration
+//! cadence through the module root; schema-bound descriptors and encoding
+//! handoffs remain crate-private. Paths, buffering, chunking,
 //! provenance, and durable lifecycle do not belong to this subsystem.
 
 mod encoding;
@@ -17,19 +17,10 @@ mod stream;
 #[path = "observation/tests/observation_workflow.rs"]
 mod observation_workflow_tests;
 
-/// Ordinary application-facing observation definitions.
-pub mod basic {
-    pub use super::error::ObservationError;
-    pub use super::plan::ObservationPlan;
-    pub use super::stream::ObservationStream;
-}
-
-/// Supported observation API for advanced users and Workflow peer subsystems.
-pub mod advanced {
-    #[allow(unused_imports)]
-    pub use super::basic::*;
-    pub(crate) use super::encoding::EncodedObservation;
-    pub(crate) use super::plan::BoundObservationPlan;
-    pub(crate) use super::session::ObservationSession;
-    pub(crate) use super::stream::BoundObservationStream;
-}
+pub(crate) use encoding::EncodedObservation;
+pub use error::ObservationError;
+pub(crate) use plan::BoundObservationPlan;
+pub use plan::ObservationPlan;
+pub(crate) use session::ObservationSession;
+pub(crate) use stream::BoundObservationStream;
+pub use stream::ObservationStream;

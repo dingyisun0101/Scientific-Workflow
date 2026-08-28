@@ -4,7 +4,7 @@
 //! the retained central Config snapshot, compiled execution unit registrations,
 //! already-resolved program/Python tasks, state semantics, deterministic
 //! identities, phase organization, inferred operational plans, and complete
-//! preflight. Runtime consumes a finished [`advanced::Study`] and never
+//! preflight. Runtime consumes a finished [`Study`] and never
 //! reinterprets project JSON.
 
 mod compilation;
@@ -15,18 +15,6 @@ mod plan;
 #[path = "study/tests/study_workflow.rs"]
 mod study_workflow_tests;
 
-/// Ordinary application-facing study API.
-///
-/// This scope is intentionally empty: ordinary applications write
-/// `wf_configs/study.json`
-/// and call the crate-level `run(&Path)` entry point.
-pub mod basic {}
-
-/// Supported study API for inspection, embedding, and Workflow peer modules.
-pub mod advanced {
-    #[allow(unused_imports)]
-    pub use super::basic::*;
-    pub use super::error::StudyError;
-    pub use super::plan::Study;
-    pub(crate) use super::plan::{StudyPhase, StudyTask};
-}
+pub use error::StudyError;
+pub use plan::Study;
+pub(crate) use plan::{StudyPhase, StudyTask};

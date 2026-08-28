@@ -2,18 +2,17 @@
 
 The `state` subsystem owns validated field layouts, heterogeneous in-memory
 payloads, scientific time, and ordered in-memory state series. Its canonical
-public scopes are `scientific_workflow::state::basic` and
-`scientific_workflow::state::advanced`. `prelude::basic` and
-`prelude::advanced` re-export the same symbols for convenience; they do not own
-or wrap them.
+public scope is the `scientific_workflow::state` module root. Ordinary state
+types are also re-exported by `scientific_workflow::prelude`; metadata
+inspection remains a direct module import.
 
 State performs filesystem I/O only while loading a JSON schema. It does not
 schedule tasks, infer recording paths, choose sampling policy, persist state,
 or render progress. Payloads remain application-owned concrete Rust values.
 
-## Basic API
+## Public API
 
-### `state::basic::StateTime`
+### `state::StateTime`
 
 `StateTime` is a small `Copy` value describing one scientific coordinate. Its
 mandatory `u64` iteration is the ordering authority; its physical coordinate
@@ -33,7 +32,7 @@ is optional. Physical time is unrelated to operational UTC timestamps.
 `InvalidPhysicalAdvance`. It has no side effects and performs no allocation,
 I/O, blocking, persistence, or cancellation work.
 
-### `state::basic::SystemStateSchema`
+### `state::SystemStateSchema`
 
 `SystemStateSchema` is a cheap cloneable handle to one immutable schema
 allocation. A schema fixes field names and deterministic field order, but it
@@ -52,10 +51,10 @@ Loading may return `TemplateRead`, `TemplateParse`, `EmptyFieldName`, or
 schema is an atomic reference-count increment and does not clone field names or
 lookup tables. Immutable schema handles can be shared across threads.
 
-Metadata inspection is deliberately advanced. Basic application code needs no
-field-index API to construct or use a state.
+Metadata inspection stays at the state module root but outside the ordinary
+prelude. Unit code needs no field-index API to construct or use a state.
 
-### `state::basic::SystemState`
+### `state::SystemState`
 
 `SystemState` owns one fixed set of heterogeneous payload slots plus a
 `StateTime`. Its only public construction path is
@@ -72,7 +71,7 @@ therefore requires synchronization such as `Arc<Mutex<SystemState>>`. Explicit
 state cloning invokes every populated payload's `Clone`; ordinary insertion,
 borrowing, mutation, extraction, and series movement do not clone payloads.
 
-The basic methods are:
+The primary methods are:
 
 - `time()` returns the current `StateTime` by value.
 - `advance_time(increment)` validates a complete next `StateTime`, assigns it
@@ -110,7 +109,7 @@ Typed access may return `UnknownField`, `MissingPayload`, `TypeMismatch`, or
 no internal locks, background work, persistence, blocking calls, or
 cancellation behavior.
 
-### `state::basic::StateSeries`
+### `state::StateSeries`
 
 `StateSeries` owns complete `SystemState` snapshots for in-memory analysis. A
 series retains one canonical schema handle even when empty. Every accepted
@@ -142,7 +141,7 @@ operations perform no I/O or background work.
 
 ### Basic error types
 
-`state::basic::StateError` is the non-exhaustive state/schema/time error enum.
+`state::StateError` is the non-exhaustive state/schema/time error enum.
 Callers should match variants of interest and retain a fallback arm.
 
 - `TemplateRead { path, source }`: filesystem read failed.
@@ -162,13 +161,13 @@ Callers should match variants of interest and retain a fallback arm.
   an established physical coordinate.
 - `InvalidPhysicalAdvance { current, delta }`: the delta or sum is non-finite.
 
-`state::basic::PayloadInsertError<T>` owns a payload rejected by
+`state::PayloadInsertError<T>` owns a payload rejected by
 `initialize_payload` or `insert_payload` and its `StateError`. `error()` and
 `payload()` borrow the two components;
 `into_parts()` returns `(StateError, T)` without cloning. `Display` delegates to
 the state error, while `Debug` intentionally omits payload contents.
 
-`state::basic::StateSeriesError` is non-exhaustive:
+`state::StateSeriesError` is non-exhaustive:
 
 - `SchemaMismatch { iteration }` rejects a state from a different schema
   allocation.
@@ -179,22 +178,15 @@ the state error, while `Debug` intentionally omits payload contents.
 - `PayloadAccess { position, source }` wraps the originating `StateError` from
   indexed typed access.
 
-`state::basic::StateSeriesPushError` owns an unchanged rejected `SystemState`
+`state::StateSeriesPushError` owns an unchanged rejected `SystemState`
 and the `StateSeriesError`. `error()` and `state()` borrow them; `into_parts()`
 moves out `(StateSeriesError, SystemState)`. Formatting never traverses payload
 values.
 
-## Advanced API
-
-`state::advanced` re-exports every Basic API symbol above. It adds the
-following stable contracts for advanced users, Workflow internals, and peer
-subsystems. These are extension and inspection seams, not access to private
-storage representation.
-
-### `state::advanced::StateFieldSchema`
+### `state::StateFieldSchema`
 
 `StateFieldSchema` is immutable metadata for one validated declaration.
-Applications acquire it through `StateSchemaAccess`; it has no public
+Applications acquire it through `SystemStateSchema`; it has no public
 constructor.
 
 - `position()` returns deterministic zero-based template order. It is metadata,
@@ -205,9 +197,9 @@ constructor.
 The type is `Clone + Debug + Eq + Serialize`. Serialization writes the field
 name and optional description, not its private compact position.
 
-### `state::advanced::StateSchemaAccess`
+### `SystemStateSchema` inspection methods
 
-This extension trait is implemented for `SystemStateSchema`. Importing it adds:
+These inherent methods require no extension-trait import:
 
 - `shares_schema_instance(other)` for allocation identity rather than
   structural equality;
@@ -224,14 +216,11 @@ identical JSON returns `false`. Observation, task, and series integrations use t
 to establish one field-order authority without publishing compact indices.
 
 Inspection does not mutate or allocate except `to_json_template`, which
-allocates its returned `String` and may return `serde_json::Error`. The trait is
-the supported metadata boundary for observation and persistence implementations; they
-must not import `state/schema.rs` internals.
+allocates its returned `String` and may return `serde_json::Error`.
 
-### `state::advanced::StateMaintenance`
+### `SystemState` maintenance methods
 
-This extension trait is implemented for `SystemState` and makes explicit the
-operations needed by specialized state lifecycle and analysis code:
+These inherent operations support specialized lifecycle and analysis code:
 
 - `clone_structure_without_payloads(time)` creates a new empty state sharing
   the schema and copying retained type contracts without cloning payloads.
@@ -249,7 +238,7 @@ operations needed by specialized state lifecycle and analysis code:
 Dropping or clearing invokes ordinary payload destructors but performs no I/O.
 Name-validation failures leave state unchanged.
 
-### `state::advanced::PayloadTuple`
+### `state::PayloadTuple`
 
 `PayloadTuple` is a documentation-hidden, sealed trait exported because it is
 the generic bound of the basic tuple-borrow methods. Workflow provides
@@ -265,8 +254,7 @@ implementation.
 
 ### Crate-visible peer API
 
-State's non-public peer contracts are explicitly named through
-`state::advanced`:
+State's non-public peer contracts are crate-private:
 
 - `schema_from_json_value(source_path, document)` validates Config's
   already-parsed schema value. It performs no disk IO and applies the same
@@ -302,7 +290,7 @@ state once, performs typed work, advances time, and collects a snapshot:
 ```rust
 use std::path::Path;
 
-use scientific_workflow::state::basic::{StateSeries, StateTime, SystemStateSchema};
+use scientific_workflow::state::{StateSeries, StateTime, SystemStateSchema};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let schema =
@@ -337,11 +325,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-An integration that needs field metadata imports the advanced trait without
-changing the owning types:
+An integration that needs field metadata imports the owning types directly:
 
 ```rust,no_run
-use scientific_workflow::state::advanced::{StateSchemaAccess, SystemStateSchema};
+use scientific_workflow::state::SystemStateSchema;
 
 fn field_names(schema: &SystemStateSchema) -> Vec<&str> {
     schema.field_schemas().iter().map(|field| field.name()).collect()
@@ -357,7 +344,7 @@ subsystem replacement:
   implementation;
 - `StateSlot`, retained `ValueType`, compact field indices, lookup maps, and
   schema `Arc` layout;
-- JSON deserialization-only template structs and the standalone basic loader's
+- JSON deserialization-only template structs and the standalone loader's
   byte parser;
 - the schema `Arc` and pointer-comparison implementation behind the supported
   `shares_schema_instance` result;
@@ -370,5 +357,4 @@ There is no public raw erased payload, unchecked field-index accessor, mutable
 schema, state-series mutable-state accessor, `StateSeriesView`, stringly typed
 path loader, persistence codec, task context, or scheduler hook in this
 subsystem. Replacement implementations may change internal allocation and
-erasure strategies while preserving the documented basic and advanced
-contracts.
+erasure strategies while preserving the documented public contracts.

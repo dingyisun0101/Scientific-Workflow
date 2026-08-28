@@ -7,12 +7,10 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::runtime::advanced::{RuntimeError, TaskRunSummary, execute};
-use crate::state::advanced::{StateTime, SystemState, SystemStateSchema};
-use crate::study::advanced::Study;
-use crate::task::basic::{
-    ExecutionUnit, InitializationContext, MemberCompletion, MemberView, TaskResult,
-};
+use crate::runtime::{RuntimeError, TaskRunKind, TaskRunSummary, execute};
+use crate::state::{StateTime, SystemState, SystemStateSchema};
+use crate::study::Study;
+use crate::task::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView, TaskResult};
 
 use super::execution::task_exceeded_timeout;
 
@@ -264,15 +262,17 @@ fn an_ensemble_task_persists_and_summarizes_each_member_independently() {
 
     let summary = execute(Study::load(project.path()).unwrap()).unwrap();
     let task = &summary.replicates()[0].phases()[0].tasks()[0];
-    assert_eq!(task.final_iteration(), Some(2));
+    let TaskRunKind::ExecutionUnit { members, .. } = task.kind() else {
+        panic!("expected execution-unit summary");
+    };
     assert_eq!(
-        task.members()
+        members
             .iter()
             .map(|unit| (unit.identity(), unit.final_iteration()))
             .collect::<Vec<_>>(),
         [("first", 1), ("second", 2)]
     );
-    for (index, unit) in task.members().iter().enumerate() {
+    for (index, unit) in members.iter().enumerate() {
         assert!(
             unit.output_directory()
                 .ends_with(format!("members/member-{index:06}"))

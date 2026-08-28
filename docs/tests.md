@@ -8,19 +8,18 @@ public.
 ## Public integration tests
 
 - `rust/tests/integration_surface.rs` verifies the crate-level `run(&Path)`
-  facade, canonical error Basic/Advanced tiers, the complete supported Basic
-  and Advanced prelude inventories, and the Study-only signature of Runtime's
-  Advanced entry point. It also verifies `WorkflowError` stage conversions,
-  transparent display/source behavior, `Send + Sync`, and `TaskRunKind`
-  through `prelude::advanced`.
+  facade, root `WorkflowError`, the complete ordinary prelude inventory,
+  specialized module-root imports, and the Study-only signature of Runtime's
+  execution entry point. It also verifies `WorkflowError` stage conversions,
+  transparent display/source behavior, and `Send + Sync`.
 - `rust/tests/state_workflow.rs` exercises Path-based schema loading,
   heterogeneous payload ownership, tuple borrows, time advancement, schema
-  inspection, maintenance, and public Basic/Advanced tier behavior.
+  inspection, inherent maintenance, and module-root/prelude type identity.
 - `rust/tests/analysis_workflow.rs` exercises schema identity and ordered
   in-memory `StateSeries` analysis.
 - `rust/tests/observation_workflow.rs` exercises public plan/stream
-  declarations, cadence, units, validation, and the Advanced-as-public-superset
-  rule. Schema binding and encoding are private.
+  declarations, cadence, units, and validation. Schema binding and encoding
+  are private.
 - `rust/tests/task_workflow.rs` exercises the downstream
   `ExecutionUnit`/registration-attribute surface, including stable per-member
   states exposed by `MemberView` and coupled mutation through the public typed
@@ -81,7 +80,7 @@ public.
   two-member execution unit end to end and verifies independent recordings,
   member provenance, final iterations, and `MemberRunSummary` paths. Study execution tests
   retain topology and program/Python handoff coverage; successful program
-  summaries verify the public program-kind and Python-script accessors.
+  summaries verify the data-bearing program result variant.
 - `rust/src/ui/command.rs` verifies the former editor and exact lowercase
   `exit` contract. `ui/state.rs` verifies declaration-ordered event-reduced
   rows, per-phase task-panel replacement, progress, bounded message history,

@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::local::{
     JsonPayloadDecoderRegistry, StateStreamStorage, StoredStateSeriesReader, SystemStateWriter,
 };
-use crate::observation::advanced::BoundObservationPlan;
-use scientific_workflow::prelude::basic::{
+use crate::observation::BoundObservationPlan;
+use scientific_workflow::prelude::{
     ObservationPlan, ObservationStream, StateTime, SystemStateSchema,
 };
 use serde_json::{Map, Value};

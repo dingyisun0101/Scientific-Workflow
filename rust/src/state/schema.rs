@@ -202,70 +202,48 @@ pub(crate) fn schema_from_fields<'a>(
     SystemStateSchema::from_template(source_path.to_path_buf(), template)
 }
 
-/// Advanced inspection and tooling operations for a validated state schema.
-///
-/// Import this trait from [`crate::state::advanced`] when schema metadata is
-/// needed. Ordinary state construction requires only the inherent basic API.
-pub trait StateSchemaAccess {
+impl SystemStateSchema {
     /// Reports whether two schema handles share one immutable allocation.
     ///
     /// This is an identity comparison, not structural equality. Independently
     /// loaded but textually identical schemas do not share an instance.
-    fn shares_schema_instance(&self, other: &SystemStateSchema) -> bool;
-
-    /// Returns the path from which this schema was loaded.
-    fn template_path(&self) -> &Path;
-
-    /// Returns field descriptions in deterministic template order.
-    fn field_schemas(&self) -> &[StateFieldSchema];
-
-    /// Looks up one field description by normalized name.
-    fn field_schema(&self, name: &str) -> Option<&StateFieldSchema>;
-
-    /// Reports whether the schema declares `name`.
-    fn contains_field(&self, name: &str) -> bool;
-
-    /// Returns the number of declared fields.
-    fn len(&self) -> usize;
-
-    /// Reports whether the schema declares no fields.
-    fn is_empty(&self) -> bool;
-
-    /// Converts this schema to the strict, pretty-printed JSON template format.
-    fn to_json_template(&self) -> Result<String, serde_json::Error>;
-}
-
-impl StateSchemaAccess for SystemStateSchema {
-    fn shares_schema_instance(&self, other: &SystemStateSchema) -> bool {
+    pub fn shares_schema_instance(&self, other: &SystemStateSchema) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    fn template_path(&self) -> &Path {
+    /// Returns the path from which this schema was loaded.
+    pub fn template_path(&self) -> &Path {
         &self.inner.source
     }
 
-    fn field_schemas(&self) -> &[StateFieldSchema] {
+    /// Returns field descriptions in deterministic template order.
+    pub fn field_schemas(&self) -> &[StateFieldSchema] {
         &self.inner.fields
     }
 
-    fn field_schema(&self, name: &str) -> Option<&StateFieldSchema> {
+    /// Looks up one field description by normalized name.
+    pub fn field_schema(&self, name: &str) -> Option<&StateFieldSchema> {
         let index = self.inner.by_name.get(name)?;
         self.inner.fields.get(*index)
     }
 
-    fn contains_field(&self, name: &str) -> bool {
+    /// Reports whether the schema declares `name`.
+    pub fn contains_field(&self, name: &str) -> bool {
         self.inner.by_name.contains_key(name)
     }
 
-    fn len(&self) -> usize {
+    /// Returns the number of declared fields.
+    pub fn len(&self) -> usize {
         self.inner.fields.len()
     }
 
-    fn is_empty(&self) -> bool {
+    /// Reports whether the schema declares no fields.
+    pub fn is_empty(&self) -> bool {
         self.inner.fields.is_empty()
     }
 
-    fn to_json_template(&self) -> Result<String, serde_json::Error> {
+    /// Converts this schema to the strict, pretty-printed JSON template format.
+    pub fn to_json_template(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&StateTemplateRef {
             fields: self.field_schemas(),
         })

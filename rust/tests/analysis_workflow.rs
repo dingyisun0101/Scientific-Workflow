@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use scientific_workflow::state::advanced::StateSchemaAccess;
-use scientific_workflow::state::basic::{
+use scientific_workflow::state::{
     StateError, StateSeries, StateSeriesError, StateTime, SystemStateSchema,
 };
 use serde::Serialize;
@@ -38,7 +37,7 @@ fn sample_state(
     index: u64,
     values: Vec<u64>,
     clones: &Arc<AtomicUsize>,
-) -> scientific_workflow::state::advanced::SystemState {
+) -> scientific_workflow::state::SystemState {
     let mut state = spec.create_empty_state(StateTime::from_iteration(index));
     assert!(
         state

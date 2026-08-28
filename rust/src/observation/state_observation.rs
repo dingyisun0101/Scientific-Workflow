@@ -1,6 +1,6 @@
 //! Checked borrowed observations of live scientific state.
 
-use crate::state::advanced::{StateSchemaAccess, StateTime, SystemState};
+use crate::state::{StateTime, SystemState};
 
 use super::encoding::{EncodedObservation, encode};
 use super::error::ObservationError;

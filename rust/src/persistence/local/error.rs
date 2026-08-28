@@ -37,8 +37,8 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::observation::advanced::ObservationError;
-use crate::state::advanced::StateSeriesError;
+use crate::observation::ObservationError;
+use crate::state::StateSeriesError;
 
 /// A failure encountered while encoding, writing, reading, or decoding a run.
 ///

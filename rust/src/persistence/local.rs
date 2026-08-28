@@ -37,7 +37,7 @@
 //! [`StoredStateSeriesReader`] accepts a completed output directory and a [`JsonPayloadDecoderRegistry`]
 //! registry. The reader validates metadata, chunks, checksums, record order,
 //! and decoder coverage before reconstructing typed
-//! [`StateSeries`](crate::state::advanced::StateSeries) values. Decoder
+//! [`StateSeries`](crate::state::StateSeries) values. Decoder
 //! implementations remain per payload type and registrations remain per exact
 //! state key. Latest-state reads verify and decode only the newest chunk.
 //!
@@ -62,10 +62,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
-use crate::observation::advanced::{
+use crate::observation::{
     BoundObservationPlan, BoundObservationStream, EncodedObservation, ObservationSession,
 };
-use crate::state::advanced::SystemState;
+use crate::state::SystemState;
 
 mod error;
 mod json_payload_decoder;
@@ -74,9 +74,7 @@ mod queued_state_writer;
 mod stored_state_series_reader;
 
 pub use error::PersistenceError;
-pub use json_payload_decoder::{
-    JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder,
-};
+pub use json_payload_decoder::{JsonPayloadDecoder, JsonPayloadDecoderRegistry};
 pub use stored_state_series_reader::StoredStateSeriesReader;
 
 use jsonl_format::{
@@ -101,7 +99,6 @@ pub struct RecordingTiming {
     created_at_utc: String,
     finalized_at_utc: String,
     active_duration_ns: u64,
-    continuation_count: u64,
 }
 
 impl RecordingTiming {
@@ -122,7 +119,6 @@ impl RecordingTiming {
             created_at_utc: timing.created_at_utc.clone(),
             finalized_at_utc,
             active_duration_ns: timing.active_duration_ns,
-            continuation_count: timing.continuation_count,
         })
     }
 
@@ -136,22 +132,9 @@ impl RecordingTiming {
         &self.finalized_at_utc
     }
 
-    /// Returns the accumulated active writer duration as exact nanoseconds.
-    pub fn active_duration_ns(&self) -> u64 {
-        self.active_duration_ns
-    }
-
     /// Returns the accumulated active writer duration as a standard duration.
     pub fn active_duration(&self) -> Duration {
         Duration::from_nanos(self.active_duration_ns)
-    }
-
-    /// Returns the stored continuation count.
-    ///
-    /// Recordings created by this crate always report zero because no
-    /// continuation or resume path is supported.
-    pub fn continuation_count(&self) -> u64 {
-        self.continuation_count
     }
 }
 

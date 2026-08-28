@@ -11,12 +11,11 @@ Runtime does not parse JSON, discover execution units, decode constants for plan
 or let application code construct phases/tasks. It never reparses the central
 Config retained by Study.
 
-## Basic API
+## Automatic runtime behavior
 
-`runtime::basic` intentionally exports no symbols. Ordinary applications call
-the crate-level `scientific_workflow::run(&Path)` facade, which loads a Study
-before handing it to Runtime. This keeps project discovery and compilation out
-of the active-execution subsystem.
+Ordinary applications call the crate-level `scientific_workflow::run(&Path)`
+facade, which loads a Study before handing it to Runtime. This keeps project
+discovery and compilation out of the active-execution subsystem.
 
 After successful preflight, Runtime creates a unique execution directory
 beneath the inferred `<project-root>/output`, creates one isolated directory
@@ -56,14 +55,11 @@ Failure does not overwrite prior output. Execution that fails after output creat
 retains its unique directory and any failed/running recording evidence for
 diagnosis. The crate-level facade wraps an active `RuntimeError` in
 `WorkflowError::Runtime`; the complete-workflow composition is documented by
-`error::basic`.
+`WorkflowError`.
 
-## Advanced API
+## Public API
 
-The Advanced scope adds the immutable execution input, summaries, and active
-error vocabulary to the empty Basic scope.
-
-### `runtime::advanced::execute`
+### `runtime::execute`
 
 `execute(study: Study) -> Result<RunSummary, RuntimeError>` consumes one
 clone-cheap immutable Study. It is Runtime's sole execution entry and cannot
@@ -102,7 +98,7 @@ An interactive exit request stops further admission across the execution,
 cancels active execution unit/program workers, waits for their cleanup, restores the
 terminal, and returns `RuntimeError::ExecutionCancelled`.
 
-### `runtime::advanced::RunSummary`
+### `runtime::RunSummary`
 
 Returned only after complete success. It is cloneable and owns paths/summaries.
 
@@ -111,7 +107,7 @@ Returned only after complete success. It is cloneable and owns paths/summaries.
 
 The summary performs no IO and does not keep recording files open.
 
-### `runtime::advanced::ReplicateRunSummary`
+### `runtime::ReplicateRunSummary`
 
 - `index() -> u64`: zero-based replicate index;
 - `output_directory() -> &Path`: isolated replicate directory; and
@@ -121,46 +117,35 @@ The summary performs no IO and does not keep recording files open.
 Parallel worker completion order is never exposed; summaries are sorted by
 index.
 
-### `runtime::advanced::PhaseRunSummary`
+### `runtime::PhaseRunSummary`
 
 - `name() -> &str`: stable manifest phase key;
 - `tasks() -> &[TaskRunSummary]`: successful tasks restored to deterministic
   Study plan order, independent of concurrent completion order.
 
-### `runtime::advanced::TaskRunKind`
+### `runtime::TaskRunKind`
 
-`TaskRunKind` is a non-exhaustive `Copy + Eq` enum distinguishing `ExecutionUnit` and
-`Program`. Callers matching it must retain a fallback for future workload
-kinds.
+`TaskRunKind` is a non-exhaustive data-bearing enum. `ExecutionUnit` contains
+the registration key and stable `Box<[MemberRunSummary]>`; `Program` contains
+the resolved launcher executable and optional canonical Python script. Callers
+matching it must retain a fallback for future workload kinds.
 
-### `runtime::advanced::TaskRunSummary`
+### `runtime::TaskRunSummary`
 
 - `identity() -> &str`: Study-inferred task identity;
-- `kind() -> TaskRunKind`: generic workload kind;
-- `execution_unit() -> Option<&str>`: registered key for execution unit tasks only;
-- `program() -> Option<&Path>`: resolved launcher executable for program tasks
-  only. For a Python declaration this is its interpreter or environment
-  manager;
-- `program_kind() -> Option<&str>`: `program` or `python` for program tasks,
-  and `None` for execution unit tasks;
-- `python_script() -> Option<&Path>`: canonical script path for nested Python
-  tasks only;
-- `final_iteration() -> Option<u64>`: maximum final member iteration for
-  scientific tasks and `None` for programs;
-- `members() -> &[MemberRunSummary]`: stable member order, containing one result
-  for a standalone unit, several for an ensemble, and none for a program; and
+- `kind() -> &TaskRunKind`: borrows the variant-specific result; and
 - `output_directory() -> &Path`: task output root or program workspace. For a
-  single-member unit this is also the recording directory; multi-member
-  recordings are exposed through `members()`.
+  single-member unit this is also the recording directory; every recording
+  path is available from the execution-unit variant's `members`.
 
-Summary paths are owned `PathBuf` internally and borrowed as `&Path`. The
-execution unit/program option pair and optional iteration agree with `kind`.
-`program_kind` is populated exactly for program tasks, and `python_script` is
-populated exactly when that program kind is `python`. Summary values do not
-authorize append/resume and carry no live task, process, execution unit, or state.
+Summary paths are owned. The enum prevents irrelevant or contradictory fields.
+A task-level final iteration is intentionally absent because members can finish
+at different iterations; callers can compute a maximum when meaningful.
+Summary values do not authorize append/resume and carry no live task, process,
+execution unit, or state.
 Summaries and `RuntimeError` are `Send + Sync`.
 
-### `runtime::advanced::MemberRunSummary`
+### `runtime::MemberRunSummary`
 
 One immutable per-member result owned by its task summary:
 
@@ -200,12 +185,12 @@ Persistence does not relocate or publish those Python-owned files. A Study uses
 its captured snapshot: editing JSON after `Study::load` cannot alter these
 files.
 On completion Runtime writes terminal `program.json`; nonzero exit status is a
-task failure. Dependency JSON is deterministic and contains each dependency
-phase, task identity/kind, optional execution unit/program/final iteration, per-member
-identity/iteration/recording summaries, and output directory. Program entries additionally carry `program_kind` (`program` or
-`python`) and the optional canonical `python_script`; the same facts are
-available through the successful Rust task summary. Dependency JSON remains a
-data handoff, not a shell command protocol.
+task failure. Dependency JSON is deterministic. Each task contains `identity`,
+`output_directory`, and one `workload` object. An execution-unit workload
+contains its kind, registration key, and member identity/iteration/recording
+summaries. A program workload contains `kind` (`program` or `python`), its
+launcher executable, and the optional canonical Python script. Dependency JSON
+remains a data handoff, not a shell command protocol.
 
 A nested Python task follows this exact runtime contract after Config lowers
 its environment to one invocation. Runtime has no Python-specific scheduler,
@@ -216,7 +201,7 @@ Its `.py` file need not be executable. The selected
 manager/interpreter, manager arguments, canonical script, and script arguments
 are fixed before output creation.
 
-### `runtime::advanced::RuntimeError`
+### `runtime::RuntimeError`
 
 This non-exhaustive enum reports failures after a valid Study is available:
 
@@ -254,12 +239,12 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 }
 ```
 
-An advanced integration can retain completion paths:
+An embedding integration can retain completion paths:
 
 ```rust,no_run
 use std::path::Path;
-use scientific_workflow::runtime::advanced::{execute, TaskRunKind};
-use scientific_workflow::study::advanced::Study;
+use scientific_workflow::runtime::{execute, TaskRunKind};
+use scientific_workflow::study::Study;
 
 # fn run() -> Result<(), Box<dyn std::error::Error>> {
 let study = Study::load(Path::new("."))?;
@@ -269,13 +254,15 @@ for replicate in summary.replicates() {
     for phase in replicate.phases() {
         for task in phase.tasks() {
             match task.kind() {
-                TaskRunKind::ExecutionUnit => {
-                    println!("unit {}", task.execution_unit().unwrap());
-                    for member in task.members() {
+                TaskRunKind::ExecutionUnit { execution_unit, members } => {
+                    println!("unit {execution_unit}");
+                    for member in members {
                         println!("  member {} at {}", member.identity(), member.final_iteration());
                     }
                 }
-                TaskRunKind::Program => println!("program {}", task.program().unwrap().display()),
+                TaskRunKind::Program { executable, .. } => {
+                    println!("program {}", executable.display())
+                }
                 _ => println!("another task kind"),
             }
         }

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use scientific_workflow::prelude::basic::*;
+use scientific_workflow::prelude::*;
 use serde::Deserialize;
 
 const POINT_FIELD: &str = "point";

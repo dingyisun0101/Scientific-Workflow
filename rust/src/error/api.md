@@ -4,15 +4,12 @@ The `error` module owns the single error returned by the crate-level complete
 workflow facade. It composes failures from Study and Runtime without taking
 ownership of either subsystem's detailed error vocabulary.
 
-## Basic API
-
-### `error::basic::WorkflowError`
+### `WorkflowError`
 
 `WorkflowError` is a public non-exhaustive enum and the error type returned by
 `scientific_workflow::run(&Path)`. Its canonical module path is
-`scientific_workflow::error::basic::WorkflowError`; the same type is
-re-exported as `scientific_workflow::WorkflowError` and through
-`prelude::basic`.
+`scientific_workflow::WorkflowError`; the same type is
+also re-exported through `scientific_workflow::prelude`.
 
 It has two variants:
 
@@ -30,7 +27,7 @@ an additional facade message. Matching the public variant retrieves the owned
 subsystem error. Applications normally propagate the value with `?`. Because
 the enum is non-exhaustive, downstream matching requires a wildcard arm;
 applications that want the precise stage-specific result type can instead use
-the advanced split workflow.
+the split `Study::load` and `runtime::execute` workflow.
 
 The error performs no IO, starts no work, and has no cancellation behavior.
 Formatting it is side-effect free. It borrows nothing from the project or
@@ -42,15 +39,8 @@ Fatal UI renderer failures deliberately panic and therefore do not produce a
 Runtime failures returned by the facade, not failure of the required
 presentation interface.
 
-## Advanced API
-
-`error::advanced` is a strict superset of Basic and currently adds no symbols.
-It deliberately does not re-export `StudyError` or `RuntimeError`: those remain
-canonically owned by `study::advanced` and `runtime::advanced` and are already
-aggregated by `prelude::advanced`.
-
-Advanced callers that need phase separation load `Study` and call
-`runtime::advanced::execute`. Those calls return their precise owning error
+Callers that need phase separation load `Study` and call
+`runtime::execute`. Those calls return their precise owning error
 types directly; `WorkflowError` is reserved for the complete crate facade.
 
 ## Example
@@ -70,7 +60,7 @@ subsystem error variant:
 
 ```rust,no_run
 use std::path::Path;
-use scientific_workflow::error::basic::WorkflowError;
+use scientific_workflow::WorkflowError;
 
 match scientific_workflow::run(Path::new(".")) {
     Ok(()) => {}

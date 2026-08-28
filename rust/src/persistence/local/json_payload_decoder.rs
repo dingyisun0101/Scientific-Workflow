@@ -28,17 +28,9 @@ use std::marker::PhantomData;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::state::advanced::{StateError, SystemState};
+use crate::state::{StateError, SystemState};
 
 use super::error::PersistenceError;
-
-#[path = "json_payload_decoder/string.rs"]
-mod string;
-#[path = "json_payload_decoder/vec_f64.rs"]
-mod vec_f64;
-
-pub use string::JsonStringDecoder;
-pub use vec_f64::JsonVecF64Decoder;
 
 /// Object-safe error boundary for application-defined payload conversion.
 type BoxError = Box<dyn Error + Send + Sync + 'static>;

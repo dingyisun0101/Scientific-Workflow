@@ -2,10 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::advanced::{Study, StudyError};
-use scientific_workflow::prelude::basic::*;
-use scientific_workflow::runtime::advanced::TaskRunKind;
-use scientific_workflow::runtime::advanced::execute;
+use super::{Study, StudyError};
+use scientific_workflow::prelude::*;
+use scientific_workflow::runtime::TaskRunKind;
+use scientific_workflow::runtime::execute;
 use serde::Deserialize;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -326,10 +326,17 @@ fn one_study_binds_each_execution_unit_task_to_its_selected_named_state() {
     let summary = execute(Study::load(project.path()).unwrap()).unwrap();
     let tasks = summary.replicates()[0].phases()[0].tasks();
     assert_eq!(tasks.len(), 2);
-    assert_eq!(tasks[0].execution_unit(), Some("counter"));
-    assert_eq!(tasks[0].final_iteration(), Some(1));
-    assert_eq!(tasks[1].execution_unit(), Some("energy"));
-    assert_eq!(tasks[1].final_iteration(), Some(1));
+    for (task, expected) in tasks.iter().zip(["counter", "energy"]) {
+        let TaskRunKind::ExecutionUnit {
+            execution_unit,
+            members,
+        } = task.kind()
+        else {
+            panic!("expected execution-unit summary");
+        };
+        assert_eq!(execution_unit.as_ref(), expected);
+        assert_eq!(members[0].final_iteration(), 1);
+    }
 }
 
 #[test]
@@ -442,7 +449,7 @@ output = Path(os.environ["WORKFLOW_TASK_OUTPUT"])
 result = {
     "title": config["config"]["parameters.json"]["plot"]["title"],
     "phase": dependencies[0]["phase"],
-    "dependency_kind": dependencies[0]["tasks"][0]["kind"],
+    "dependency_kind": dependencies[0]["tasks"][0]["workload"]["kind"],
     "dependency_exists": Path(dependencies[0]["tasks"][0]["output_directory"]).is_dir(),
 }
 (output / "plot-result.json").write_text(json.dumps(result))
@@ -465,12 +472,15 @@ result = {
     assert_eq!(replicate.phases()[0].name(), "simulate");
     assert_eq!(replicate.phases()[1].name(), "plot");
     let program_summary = &replicate.phases()[1].tasks()[0];
-    assert_eq!(program_summary.kind(), TaskRunKind::Program);
-    assert_eq!(program_summary.execution_unit(), None);
-    assert_eq!(program_summary.program(), Some(program.as_path()));
-    assert_eq!(program_summary.program_kind(), Some("program"));
-    assert_eq!(program_summary.python_script(), None);
-    assert_eq!(program_summary.final_iteration(), None);
+    let TaskRunKind::Program {
+        executable,
+        python_script,
+    } = program_summary.kind()
+    else {
+        panic!("expected program summary");
+    };
+    assert_eq!(executable, &program);
+    assert_eq!(python_script, &None);
 
     let result: serde_json::Value = serde_json::from_slice(
         &fs::read(
@@ -550,11 +560,15 @@ output = Path(os.environ["WORKFLOW_TASK_OUTPUT"])
     let summary = execute(Study::load(project.path()).unwrap()).unwrap();
     let task = &summary.replicates()[0].phases()[0].tasks()[0];
     assert_eq!(task.identity(), "analyze/000000/python-analyze.py");
-    assert_eq!(task.kind(), TaskRunKind::Program);
-    assert_eq!(task.program_kind(), Some("python"));
-    assert_eq!(task.python_script(), Some(script.as_path()));
-    assert_eq!(task.final_iteration(), None);
-    assert!(task.program().unwrap().is_absolute());
+    let TaskRunKind::Program {
+        executable,
+        python_script,
+    } = task.kind()
+    else {
+        panic!("expected program summary");
+    };
+    assert_eq!(python_script.as_deref(), Some(script.as_path()));
+    assert!(executable.is_absolute());
     let result: serde_json::Value = serde_json::from_slice(
         &fs::read(task.output_directory().join("artifacts/analysis.json")).unwrap(),
     )

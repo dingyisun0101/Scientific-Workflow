@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use super::advanced::*;
-use scientific_workflow::state::advanced::{StateSchemaAccess, schema_from_json_value};
+use super::*;
+use scientific_workflow::state::schema_from_json_value;
 use serde::Deserialize;
 
 static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);

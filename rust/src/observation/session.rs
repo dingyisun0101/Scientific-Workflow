@@ -22,21 +22,21 @@ impl ObservationSession {
 
     pub(crate) fn observe(
         &mut self,
-        state: &crate::state::advanced::SystemState,
+        state: &crate::state::SystemState,
     ) -> Result<Vec<EncodedObservation>, ObservationError> {
         self.encode_selected(state, false)
     }
 
     pub(crate) fn observe_final(
         &mut self,
-        state: &crate::state::advanced::SystemState,
+        state: &crate::state::SystemState,
     ) -> Result<Vec<EncodedObservation>, ObservationError> {
         self.encode_selected(state, true)
     }
 
     fn encode_selected(
         &mut self,
-        state: &crate::state::advanced::SystemState,
+        state: &crate::state::SystemState,
         terminal: bool,
     ) -> Result<Vec<EncodedObservation>, ObservationError> {
         let iteration = state.time().iteration();

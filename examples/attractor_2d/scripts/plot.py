@@ -103,9 +103,17 @@ def _recordings() -> list[Path]:
             raise ValueError("dependency phase tasks must be an array")
         for task in tasks:
             task = _object(task, "dependency task")
-            if task.get("kind") != "execution_unit":
+            workload = _object(task.get("workload"), "dependency workload")
+            if workload.get("kind") != "execution_unit":
                 continue
-            recordings.append(Path(_string(task.get("output_directory"), "task output")))
+            members = workload.get("members")
+            if not isinstance(members, list):
+                raise ValueError("execution-unit members must be an array")
+            for member in members:
+                member = _object(member, "execution-unit member")
+                recordings.append(
+                    Path(_string(member.get("output_directory"), "member output"))
+                )
     if not recordings:
         raise ValueError("plot phase received no simulation recordings")
     return recordings

@@ -6,7 +6,7 @@ use std::fmt;
 use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 
-use crate::state::advanced::{StateObservationAccess, StateTime};
+use crate::state::{StateObservationAccess, StateTime};
 
 use super::error::ObservationError;
 use super::state_observation::StateObservation;
@@ -96,7 +96,7 @@ struct RecordRef<'a> {
 }
 
 struct ValuesRef<'a> {
-    fields: &'a [crate::state::advanced::StateFieldSchema],
+    fields: &'a [crate::state::StateFieldSchema],
     payloads: &'a [&'a dyn erased_serde::Serialize],
     active_field: &'a Cell<Option<usize>>,
 }

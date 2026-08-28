@@ -13,19 +13,17 @@ binding.
 Study creates no output, starts no worker, initializes no execution unit, and writes no
 recording. Runtime alone owns active effects.
 
-## Basic API
+## Ordinary use
 
-`scientific_workflow::study::basic` intentionally exports no Rust symbols.
 Ordinary users express Study intent in `wf_configs/study.json` and call
 `scientific_workflow::run(project_root: &Path)`. They do not construct phases,
 tasks, identities, persistence plans, registries, or Study builders.
 
-## Advanced API
+## Public Rust API
 
-`study::advanced` is the strict superset of Basic and exposes exactly
-`Study` and `StudyError`.
+The module root exposes exactly `Study` and `StudyError`.
 
-### `study::advanced::Study`
+### `study::Study`
 
 `Study` is an immutable, clone-cheap plan backed by `Arc`. It owns the shared
 central Config, task-bound state schemas, internal phases/tasks, resolved constants,
@@ -59,12 +57,12 @@ constants.
 There is no public manual-catalog loader, phase accessor, task accessor, state
 schema map/accessor, replicate-policy accessor, persistence-plan accessor, source
 document view, UI-plan accessor, or mutable Study operation. Advanced consumers that need to run
-a preloaded Study pass it to `runtime::advanced::execute`; successful runtime
+a preloaded Study pass it to `runtime::execute`; successful runtime
 summaries provide output paths and task results.
 
 ### Crate-visible Runtime view
 
-Runtime consumes a deliberately narrow peer API through `study::advanced`:
+Runtime consumes a deliberately narrow crate-private peer API:
 
 - `Study` supplies replicate/phase policy, persistence and UI plans, and a
   clone-cheap `ConfigSnapshot`. Runtime receives frozen program bytes without
@@ -79,7 +77,7 @@ This view is crate-visible, not downstream-public. Its explicit names and
 semantics form the replacement contract between effect-free assembly and active
 execution.
 
-### `study::advanced::StudyError`
+### `study::StudyError`
 
 `StudyError` is a non-exhaustive owned error enum:
 
@@ -123,8 +121,8 @@ stable roots:
 
 ```rust,no_run
 use std::path::Path;
-use scientific_workflow::runtime::advanced::execute;
-use scientific_workflow::study::advanced::Study;
+use scientific_workflow::runtime::execute;
+use scientific_workflow::study::Study;
 
 # fn host() -> Result<(), Box<dyn std::error::Error>> {
 let study = Study::load(Path::new("."))?;

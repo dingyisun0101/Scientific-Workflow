@@ -36,9 +36,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
-use crate::state::advanced::{
-    StateSeries, StateTime, SystemState, SystemStateSchema, schema_from_fields,
-};
+use crate::state::{StateSeries, StateTime, SystemState, SystemStateSchema, schema_from_fields};
 
 use super::RecordingTiming;
 use super::error::PersistenceError;
@@ -674,7 +672,7 @@ fn decode_values(
     path: &Path,
     line: u64,
     values: BorrowedValues<'_>,
-    state: &mut crate::state::advanced::SystemState,
+    state: &mut crate::state::SystemState,
 ) -> Result<(), PersistenceError> {
     if values.entries.len() != stream.fields.len() {
         return Err(invalid_record(

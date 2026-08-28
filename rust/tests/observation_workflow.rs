@@ -1,9 +1,9 @@
 //! Public observation declaration contract.
 
-use scientific_workflow::prelude::advanced::*;
+use scientific_workflow::prelude::*;
 
 #[test]
-fn basic_declarations_infer_the_common_case() {
+fn ordinary_declarations_infer_the_common_case() {
     let _all_fields = ObservationPlan::all_fields();
     let _selected = ObservationPlan::fields(["position", "velocity"]).unwrap();
     let _multi_stream = ObservationPlan::streams([
@@ -50,7 +50,7 @@ fn declaration_errors_are_reported_before_study_binding() {
 }
 
 #[test]
-fn advanced_is_a_strict_scope_superset_without_exposing_binding_plumbing() {
+fn module_root_exposes_declarations_without_binding_plumbing() {
     fn accepts_plan(_: ObservationPlan) {}
     fn accepts_stream(_: ObservationStream) {}
     fn accepts_error(_: Option<ObservationError>) {}

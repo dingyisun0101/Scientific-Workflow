@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::observation::advanced::BoundObservationPlan;
-use crate::state::advanced::SystemState;
+use crate::observation::BoundObservationPlan;
+use crate::state::SystemState;
 
 use super::local::{PersistenceError, StateStreamStorage, SystemStateWriter};
 use super::plan::PersistencePlan;

@@ -14,11 +14,11 @@ retain independent identities, completion predicates, targets, observations,
 recordings, and final results. Every member in one unit uses the task's selected
 schema, but each owns a distinct state instance.
 
-## Basic API
+## Public API
 
-### `task::basic::ExecutionUnit`
+### `ExecutionUnit`
 
-Canonical path: `scientific_workflow::task::basic::ExecutionUnit`. This public
+Canonical path: `scientific_workflow::ExecutionUnit`. This public
 `Send + Sized + 'static` trait is implemented by application scientific
 workloads. A normal member implements it with `member_count() == 1`; an ensemble
 implements it directly and keeps its shared inputs, batching, synchronization,
@@ -63,9 +63,9 @@ Workflow checks cancellation between calls to `step`; implementations should
 return in bounded time if responsive cancellation matters. Internal worker
 parallelism must join before `step` returns so every exposed state is coherent.
 
-### `task::basic::InitializationContext`
+### `InitializationContext`
 
-Canonical path: `scientific_workflow::task::basic::InitializationContext`.
+Canonical path: `scientific_workflow::InitializationContext`.
 Workflow creates one context per execution-unit initialization; application
 code borrows it and cannot construct or customize it. It is `Send + Sync` but
 not `Clone`; initialization may share the borrow with scoped worker threads,
@@ -93,9 +93,9 @@ shared requests plus only the requests for its own identity under
 seed. A member-scoped request whose identity is not exposed after initialization
 fails the execution-unit contract instead of disappearing from provenance.
 
-### `task::basic::SeedError`
+### `SeedError`
 
-Canonical path: `scientific_workflow::task::basic::SeedError`. This
+Canonical path: `scientific_workflow::SeedError`. This
 non-exhaustive error reports a request made without `study.json.seed`, an
 invalid purpose/member identity, or a member identity not exposed by the
 initialized unit. It implements `Error + Send + Sync`, so `?` converts it into
@@ -108,9 +108,9 @@ initialized unit. It implements `Error + Send + Sync`, so `?` converts it into
 - `UnknownMemberIdentity { identity }` is raised after initialization when a
   member-scoped request cannot be associated with any exposed `MemberView`.
 
-### `task::basic::MemberView<'a>`
+### `MemberView<'a>`
 
-Canonical path: `scientific_workflow::task::basic::MemberView`. This public,
+Canonical path: `scientific_workflow::MemberView`. This public,
 copyable borrowed descriptor exposes one member owned by an `ExecutionUnit`.
 It owns nothing and cannot outlive the unit borrow.
 
@@ -133,9 +133,9 @@ The implementing unit must directly or transitively own every exposed state.
 Moving a state after initial inspection, replacing its schema, returning a
 temporary, duplicating identities, or reordering members is a contract error.
 
-### `task::basic::MemberCompletion<'a>`
+### `MemberCompletion<'a>`
 
-Canonical path: `scientific_workflow::task::basic::MemberCompletion`. This
+Canonical path: `scientific_workflow::MemberCompletion`. This
 copyable borrowed descriptor represents the two completed states without
 requiring a second execution-unit callback.
 
@@ -148,9 +148,9 @@ Workflow clones a supplied object exactly once at the first completion
 boundary and stores it under `terminal_metadata.completion_reason`. A
 reasonless completion leaves terminal metadata empty.
 
-### `task::basic::TaskResult<T = ()>`
+### `TaskResult<T = ()>`
 
-Canonical path: `scientific_workflow::task::basic::TaskResult`. It aliases
+Canonical path: `scientific_workflow::TaskResult`. It aliases
 `Result<T, Box<dyn Error + Send + Sync + 'static>>` and is the error boundary for
 preflight, initialization, and scientific steps. Errors cross worker threads;
 constants and the execution unit itself do not need to be `Sync`.
@@ -167,14 +167,9 @@ key and the same top-level key in `wf_configs/parameters.json`. The field name i
 retained as the scientific workload key even when the implementation is an
 ensemble; upstream compilation and Runtime remain cardinality-agnostic.
 
-## Advanced API
-
-Task adds no supported Advanced-only application symbols. `task::advanced::*`
-is a strict superset re-exporting `ExecutionUnit`, `InitializationContext`,
-`MemberCompletion`, `MemberView`, `SeedError`, and `TaskResult`.
-The documentation-hidden `ExecutionUnitRegistration` is public solely because
-procedural-macro expansion occurs in downstream crates. Constructing it
-directly is unsupported.
+The documentation-hidden `ExecutionUnitRegistration` is public solely through
+the macro-support namespace because procedural-macro expansion occurs in
+downstream crates. Constructing it directly is unsupported.
 
 Resolved executable and Python tasks share Task's private erased execution
 port but expose no user-implemented Rust trait. They are declared in
@@ -228,7 +223,7 @@ handles to application units.
 
 ```rust
 use serde::Deserialize;
-use scientific_workflow::prelude::basic::*;
+use scientific_workflow::prelude::*;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

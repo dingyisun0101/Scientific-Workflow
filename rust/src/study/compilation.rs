@@ -2,11 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::config::advanced::{
-    PhaseSpecification, ProjectSpecification, ResolvedTask, StateSchemaDocument,
-};
-use crate::state::advanced::schema_from_json_value;
-use crate::task::advanced::{ExecutionUnitCatalog, Task};
+use crate::config::{PhaseSpecification, ProjectSpecification, ResolvedTask, StateSchemaDocument};
+use crate::state::schema_from_json_value;
+use crate::task::{ExecutionUnitCatalog, Task};
 
 use super::error::StudyError;
 use super::plan::{Study, StudyPhase, StudyTask};

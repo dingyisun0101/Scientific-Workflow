@@ -10,17 +10,17 @@ use std::time::Duration;
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::config::advanced::ConfigSnapshot;
-use crate::persistence::advanced::{
+use crate::config::ConfigSnapshot;
+use crate::persistence::{
     MemberRecordingProvenance, PersistencePlan, PersistenceSession, ProgramLaunch,
     ProgramPersistenceSession,
 };
-use crate::state::advanced::SystemState;
-use crate::task::advanced::{
+use crate::state::SystemState;
+use crate::task::{
     InitializationContext, MemberInitialization, ProgramTaskInvocation, TaskExecutionHost,
     TaskResult,
 };
-use crate::ui::advanced::TaskUi;
+use crate::ui::TaskUi;
 
 use super::summary::MemberRunSummary;
 
@@ -35,7 +35,6 @@ pub(crate) struct RuntimeTaskHost {
     member_targets: Vec<Option<u64>>,
     member_identities: Vec<Option<Box<str>>>,
     member_directories: Vec<Option<PathBuf>>,
-    final_iteration: Option<u64>,
     task_ui: TaskUi,
     environment: RuntimeTaskEnvironment,
 }
@@ -84,7 +83,6 @@ impl RuntimeTaskHost {
             member_targets: Vec::new(),
             member_identities: Vec::new(),
             member_directories: Vec::new(),
-            final_iteration: None,
             task_ui,
             environment,
         }
@@ -92,10 +90,6 @@ impl RuntimeTaskHost {
 
     pub(crate) fn output_directory(&self) -> &Path {
         &self.output_directory
-    }
-
-    pub(crate) fn final_iteration(&self) -> Option<u64> {
-        self.final_iteration
     }
 
     pub(crate) fn member_summaries(&self) -> Box<[MemberRunSummary]> {
@@ -263,7 +257,6 @@ impl TaskExecutionHost for RuntimeTaskHost {
         self.member_targets[index] = target_iteration;
         self.member_identities[index] = Some(identity.into());
         self.member_directories[index] = Some(directory);
-        self.final_iteration = self.member_iterations.iter().copied().max();
         self.persistence[index] = Some(persistence);
         self.publish_progress();
         Ok(())
@@ -284,7 +277,6 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .observe(state)?;
         self.member_iterations[index] = state.time().iteration();
         self.member_targets[index] = target_iteration;
-        self.final_iteration = self.member_iterations.iter().copied().max();
         self.publish_progress();
         Ok(())
     }
@@ -306,7 +298,6 @@ impl TaskExecutionHost for RuntimeTaskHost {
         self.persistence[index] = None;
         self.member_iterations[index] = state.time().iteration();
         self.member_targets[index] = target_iteration;
-        self.final_iteration = self.member_iterations.iter().copied().max();
         self.publish_progress();
         Ok(())
     }

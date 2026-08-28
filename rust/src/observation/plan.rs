@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::state::advanced::SystemStateSchema;
+use crate::state::SystemStateSchema;
 
 use super::error::ObservationError;
 use super::stream::{BoundObservationStream, ObservationStream};

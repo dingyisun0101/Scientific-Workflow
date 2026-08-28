@@ -14,10 +14,9 @@ Config never discovers execution unit types, initializes an execution unit, crea
 schedules work, or persists state. Study owns cross-domain binding; Runtime
 owns effects.
 
-## Basic API
+## Project declaration API
 
-`scientific_workflow::config::basic` intentionally exports no Rust symbols.
-Its ordinary user-facing API is this project layout:
+The ordinary user-facing API is this project layout:
 
 ```text
 <project-root>/
@@ -285,15 +284,14 @@ failure-atomic with respect to output: no directory, execution unit, task thread
 persistence session exists yet. Later edits on disk do not affect the retained
 Study or an execution made from it.
 
-## Advanced API
+## Public Rust API
 
-`config::advanced` is the strict public superset of the empty Basic scope. It
-exports only `ConfigError` to downstream crates. The same module is also the
-named crate-visible peer boundary used by Study and Runtime; peer types are
-listed below so a Config replacement does not depend on type inference or
-private implementation paths.
+The module root exports only `ConfigError` to downstream crates. The same
+module is the named crate-visible peer boundary used by Study and Runtime;
+peer types are listed below so a Config replacement does not depend on type
+inference or private implementation paths.
 
-### `config::advanced::ConfigError`
+### `config::ConfigError`
 
 `ConfigError` is a non-exhaustive owned error enum:
 
@@ -324,7 +322,7 @@ their source chains. The enum exposes no partial project graph.
 
 ### Crate-visible peer API
 
-These `pub(crate)` contracts are available only through `config::advanced`:
+These contracts are crate-private:
 
 - `ProjectSpecification` is Config's completed loading result. It provides the
   canonical roots, retained `Config`, parsed manifest, named state documents,

@@ -19,9 +19,8 @@ use super::plan::PersistencePlan;
 use super::session::{
     MemberRecordingProvenance, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
 };
-use crate::observation::advanced::BoundObservationPlan;
-use scientific_workflow::prelude::basic::*;
-use scientific_workflow::state::advanced::StateMaintenance;
+use crate::observation::BoundObservationPlan;
+use scientific_workflow::prelude::*;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -121,14 +120,11 @@ fn populated_state(spec: &SystemStateSchema, index: u64) -> SystemState {
 }
 
 fn decoders() -> JsonPayloadDecoderRegistry {
-    let mut decoders = JsonPayloadDecoderRegistry::with_capacity(2);
-    decoders
-        .register_for_field("population", JsonVecF64Decoder)
-        .unwrap();
-    decoders
-        .register_for_field("activity", JsonStringDecoder)
-        .unwrap();
-    decoders
+    JsonPayloadDecoderRegistry::with_capacity(2)
+        .with_json_field::<Vec<f64>>("population")
+        .unwrap()
+        .with_json_field::<String>("activity")
+        .unwrap()
 }
 
 /// Produces a completed public run with two strictly ordered records.
@@ -481,14 +477,16 @@ fn storage_failures_are_detected_with_context_and_without_partial_success() {
     ));
     let mut registry = JsonPayloadDecoderRegistry::new();
     assert!(matches!(
-        registry.register_for_field::<String, _>("", JsonStringDecoder),
+        registry.register_for_field::<String, _>("", |text: &str| serde_json::from_str(text)),
         Err(PersistenceError::InvalidConfiguration { .. })
     ));
     registry
-        .register_for_field("activity", JsonStringDecoder)
+        .register_for_field("activity", |text: &str| {
+            serde_json::from_str::<String>(text)
+        })
         .unwrap();
     assert!(matches!(
-        registry.register_for_field::<String, _>("activity", JsonStringDecoder),
+        registry.register_for_field::<String, _>("activity", |text: &str| serde_json::from_str(text)),
         Err(PersistenceError::DuplicateDecoder { field }) if field == "activity"
     ));
 

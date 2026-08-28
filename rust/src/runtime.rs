@@ -16,21 +16,8 @@ mod summary;
 #[path = "runtime/tests/runtime_workflow.rs"]
 mod runtime_workflow_tests;
 
-/// Ordinary application-facing runtime API.
-///
-/// This scope is intentionally empty. Ordinary applications call the
-/// crate-level `run(&Path)` facade; Runtime itself accepts only a completed
-/// Study through its Advanced API.
-pub mod basic {}
-
-/// Supported runtime API for inspection, embedding, and Workflow peer modules.
-pub mod advanced {
-    #[allow(unused_imports)]
-    pub use super::basic::*;
-    pub use super::error::RuntimeError;
-    pub use super::execution::execute;
-    pub use super::summary::{
-        MemberRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind,
-        TaskRunSummary,
-    };
-}
+pub use error::RuntimeError;
+pub use execution::execute;
+pub use summary::{
+    MemberRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
+};

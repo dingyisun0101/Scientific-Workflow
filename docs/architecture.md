@@ -79,7 +79,7 @@ The current first-level library modules are:
 - `runtime`: sole coordinator of active execution and output creation;
 - `persistence`: automatic durable recordings and verified reconstruction;
 - `ui`: automatic terminal presentation of Runtime-owned progress facts;
-- `prelude`: central aggregation of module-owned API tiers; and
+- `prelude`: the ordinary execution-unit authoring imports; and
 - `error`: the complete-workflow error boundary.
 
 Legacy `writer`, `storage`, `execution`, `artifact`, and `rng_record`
@@ -139,27 +139,20 @@ Study never creates output or initializes an execution unit. Study and Runtime n
 reparse the captured documents. Persistence never decides scientific
 observation meaning.
 
-## API tiers and dependency direction
+## Public API and dependency direction
 
-Each first-level subsystem root defines inline `basic` and `advanced`
-scope-management modules. There are no `mod.rs`, `basic.rs`, or
-`advanced.rs` files.
-
-- `module::basic` is the ordinary application surface.
-- `module::advanced` publicly re-exports Basic and adds only deliberate
-  advanced-user contracts.
-- The same Advanced scope may carry `pub(crate)` exports for peer modules;
-  crate-visible internals do not become public. Every type or trait appearing
-  in a peer signature is explicitly re-exported by its owning Advanced scope,
-  so subsystem coupling is nameable and auditable rather than hidden behind
-  inference or private-module reach-through.
-- `prelude::basic` and `prelude::advanced` aggregate these canonical module
-  exports but own no behavior.
+Each public subsystem exposes one API at its module root. The single `prelude`
+contains only ordinary execution-unit authoring types and crate conveniences;
+inspection, embedding, and completed-recording APIs remain at their owning
+module roots. Crate-visible peer contracts do not become public. Every type or
+trait appearing in a peer signature is explicitly re-exported by its owning
+module root, so subsystem coupling is nameable and auditable rather than hidden
+behind inference or private-module reach-through.
 
 Current public surface:
 
 ```text
-basic
+ordinary crate root and prelude
 ├── state construction and manipulation
 ├── ObservationPlan / ObservationStream
 ├── ExecutionUnit / InitializationContext / MemberView / SeedError / TaskResult
@@ -167,7 +160,7 @@ basic
 ├── crate-facade run(&Path)
 └── WorkflowError
 
-advanced additions
+owning module roots
 ├── state schema inspection and deliberate maintenance
 ├── ConfigError
 ├── Study / StudyError
@@ -186,11 +179,11 @@ runtime     ──► config + persistence + state + study + task + ui events
 error       ──► StudyError + RuntimeError
 crate facade──► study + runtime + error
 
-prelude aggregates supported tiers
+prelude aggregates ordinary authoring contracts
 ```
 
-Peers import another subsystem through its `advanced` boundary. Config does
-not depend on task: it treats execution unit keys as opaque. Study owns the cross-domain
+Peers import another subsystem through its module root. Config does not depend
+on task: it treats execution unit keys as opaque. Study owns the cross-domain
 match. Task asks config-owned resolved execution unit parameters for one complete typed
 constants value or delegates one resolved program. Runtime receives only a
 fully preflighted Study and its retained Config.
@@ -212,13 +205,13 @@ workflow/
 │   ├── src/
 │   │   ├── lib.rs                    module declarations; run/macro/error exports
 │   │   ├── clock.rs                  private UTC formatting and duration conversion
-│   │   ├── error.rs                  error root and inline API tiers
+│   │   ├── error.rs                  private facade-error implementation
 │   │   ├── error/api.md              complete facade-error contract
 │   │   ├── error/workflow.rs         WorkflowError composition
-│   │   ├── prelude.rs                inline Basic/Advanced central aggregation
+│   │   ├── prelude.rs                ordinary authoring aggregation
 │   │   ├── prelude/api.md            exhaustive prelude export contract
 │   │   │
-│   │   ├── state.rs                  state module root and inline API tiers
+│   │   ├── state.rs                  state public root and peer exports
 │   │   ├── state/api.md              exhaustive state API and examples
 │   │   ├── state/error.rs            schema/state/time/series error enums
 │   │   ├── state/field.rs            immutable field metadata
@@ -228,7 +221,7 @@ workflow/
 │   │   ├── state/series.rs           ordered in-memory SystemState collection
 │   │   └── state/value.rs            private erased payload/type/Serde adapter
 │   │   │
-│   │   ├── observation.rs            observation root and inline API tiers
+│   │   ├── observation.rs            observation public root and peer exports
 │   │   ├── observation/api.md        exhaustive declaration API and example
 │   │   ├── observation/error.rs      declaration/binding/encoding errors
 │   │   ├── observation/plan.rs       public plan + private schema-bound plan
@@ -239,7 +232,7 @@ workflow/
 │   │   ├── observation/session.rs    cadence state and final-state deduplication
 │   │   └── observation/tests/observation_workflow.rs internal binding/session tests
 │   │   │
-│   │   ├── task.rs                   task root and inline API tiers
+│   │   ├── task.rs                   private task internals and root re-exports
 │   │   ├── task/api.md               exhaustive execution-unit contract and example
 │   │   ├── task/unit.rs              ExecutionUnit and borrowed MemberView contract
 │   │   ├── task/result.rs            boxed application error alias
@@ -277,7 +270,7 @@ workflow/
 │   │   ├── runtime/summary.rs        successful immutable RunSummary tree
 │   │   └── runtime/tests/runtime_workflow.rs private scheduler/lifecycle tests
 │   │   │
-│   │   ├── ui.rs                     UI root; empty public Basic/Advanced tiers
+│   │   ├── ui.rs                     private UI root
 │   │   ├── ui/api.md                 automatic presentation contract
 │   │   ├── ui/plan.rs                private Study-owned inferred UI policy
 │   │   ├── ui/event.rs               borrowed Runtime-to-UI fact vocabulary
@@ -428,7 +421,7 @@ provenance facts without exposing Config or Task descriptors.
 ### Runtime
 
 The crate-level `run(&Path)` loads a Study and passes it to
-`runtime::advanced::execute(Study)`. Runtime has no project-root or loading
+`runtime::execute(Study)`. Runtime has no project-root or loading
 entry point: it consumes only complete immutable intent. Runtime alone creates
 `output/execution-<pid>-<sequence>`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
@@ -516,24 +509,22 @@ appear once in the panel title; rows contain only task-specific information.
 Exact lowercase `exit` or Ctrl+C requests cooperative Runtime cancellation,
 stops further admission, and waits for active execution unit/program cleanup before
 terminal restoration. One private refresh thread retains presentation facts
-but never scientific payloads. Its public Basic and Advanced tiers remain
-empty. Early phase, replicate, or execution termination closes affected
+but never scientific payloads. It exposes no downstream API. Early phase,
+replicate, or execution termination closes affected
 unadmitted task rows as skipped; cancellation text does not invent whether its
 source was user input, failure policy, or a deadline.
 
 ### Error and prelude integration
 
-`error::basic::WorkflowError` composes the effect-free `StudyError` and active
+`WorkflowError` composes the effect-free `StudyError` and active
 `RuntimeError` stages without absorbing either subsystem's detailed
 vocabulary. The crate root re-exports that type and owns the sole ordinary
 `run(&Path)` facade. Its transparent variants forward subsystem display and
 source chains, retain `Send + Sync`, and do not absorb fatal UI renderer panics.
-`error::advanced` is currently the same supported set.
 
-Prelude Basic aggregates all subsystem Basic scopes plus the crate-owned
-`run`, `execution_unit`, and `WorkflowError` conveniences. Prelude Advanced is its
-strict superset and aggregates every subsystem Advanced scope. Neither prelude
-owns behavior or creates an alternative canonical implementation path.
+The single prelude aggregates ordinary state, observation, and execution-unit
+contracts plus the crate-owned `run`, `execution_unit`, and `WorkflowError`
+conveniences. It owns no behavior or alternative implementation path.
 
 ## Core invariants
 
@@ -574,7 +565,7 @@ owns behavior or creates an alternative canonical implementation path.
 18. Persistence is the only owner of Workflow recording IO and format
     interpretation; Runtime owns only scope orchestration around that boundary.
 19. Closed subsystem coupling is expressed through explicitly named
-    `pub(crate)` exports in each owning Advanced scope; peers do not import
+    `pub(crate)` exports at each owning module root; peers do not import
     another subsystem's private modules or depend on inference-only return
     types.
 20. Config preflight rejects non-UTF-8 canonical project, configuration,

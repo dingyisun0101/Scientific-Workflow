@@ -14,11 +14,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::local::*;
-use crate::observation::advanced::BoundObservationPlan;
+use crate::observation::BoundObservationPlan;
 use physics_in_parallel::prelude::advanced::{AttrsCore, AttrsMeta, Dense, PhysObjAdvanced};
 use physics_in_parallel::prelude::basic::Tensor;
 use physics_in_parallel::prelude::models::PhysObj;
-use scientific_workflow::prelude::basic::*;
+use scientific_workflow::prelude::*;
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -323,40 +323,25 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     );
 
     assert_eq!(
-        JsonVecF64Decoder
-            .decode_json_payload("[1.25,-2.5]")
-            .unwrap(),
+        serde_json::from_str::<Vec<f64>>("[1.25,-2.5]").unwrap(),
         [1.25, -2.5]
     );
-    assert!(
-        JsonVecF64Decoder
-            .decode_json_payload("[]")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(serde_json::from_str::<Vec<f64>>("[]").unwrap().is_empty());
     // This value exposed a one-ULP discrepancy before the crate enabled
     // serde_json's `float_roundtrip` parser. Preserve it as an exact-bit
     // integration regression because scientific checkpoints may depend on
     // reproducible finite floating-point payloads.
     let sensitive_float = f64::from_bits(0xbfc1_5855_07ca_40c8);
     let encoded_sensitive_float = serde_json::to_string(&[sensitive_float]).unwrap();
-    let decoded_sensitive_float = JsonVecF64Decoder
-        .decode_json_payload(&encoded_sensitive_float)
-        .unwrap()[0];
+    let decoded_sensitive_float =
+        serde_json::from_str::<Vec<f64>>(&encoded_sensitive_float).unwrap()[0];
     assert_eq!(decoded_sensitive_float.to_bits(), sensitive_float.to_bits());
     println!("[float-round-trip] encoded={encoded_sensitive_float} exact_bits=true");
     assert_eq!(
-        JsonStringDecoder
-            .decode_json_payload(r#""hello 世界""#)
-            .unwrap(),
+        serde_json::from_str::<String>(r#""hello 世界""#).unwrap(),
         "hello 世界"
     );
-    assert!(
-        JsonStringDecoder
-            .decode_json_payload(r#""""#)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(serde_json::from_str::<String>(r#""""#).unwrap().is_empty());
     let decoders = JsonPayloadDecoderRegistry::with_capacity(3);
     assert!(decoders.is_empty());
     let decoders = decoders
@@ -387,7 +372,6 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     );
     assert!(reader.recording_timing().created_at_utc().ends_with('Z'));
     assert!(reader.recording_timing().finalized_at_utc().ends_with('Z'));
-    assert_eq!(reader.recording_timing().continuation_count(), 0);
     assert_eq!(reader.stream_record_count("signal").unwrap(), 4);
     assert!(reader.stream_encoded_bytes("signal").unwrap() > 0);
     let latest_signal = reader.read_latest_state_from_stream("signal").unwrap();

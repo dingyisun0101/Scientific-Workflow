@@ -65,14 +65,24 @@ impl PhaseRunSummary {
     }
 }
 
-/// Kind of workload completed by a task.
+/// Successful result of the workload completed by a task.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum TaskRunKind {
-    /// A registered scientific execution-unit invocation.
-    ExecutionUnit,
-    /// An external executable program invocation.
-    Program,
+    /// A registered scientific execution-unit invocation and its members.
+    ExecutionUnit {
+        /// Registration key used to select the execution unit.
+        execution_unit: Box<str>,
+        /// Independently recorded member results in stable unit order.
+        members: Box<[MemberRunSummary]>,
+    },
+    /// An external executable or Python program invocation.
+    Program {
+        /// Resolved launcher executable.
+        executable: PathBuf,
+        /// Canonical script path when this was a nested Python task.
+        python_script: Option<PathBuf>,
+    },
 }
 
 /// Successful completion facts for one member inside an execution unit.
@@ -105,12 +115,6 @@ impl MemberRunSummary {
 pub struct TaskRunSummary {
     pub(crate) identity: Box<str>,
     pub(crate) kind: TaskRunKind,
-    pub(crate) execution_unit: Option<Box<str>>,
-    pub(crate) program: Option<PathBuf>,
-    pub(crate) program_kind: Option<Box<str>>,
-    pub(crate) python_script: Option<PathBuf>,
-    pub(crate) final_iteration: Option<u64>,
-    pub(crate) members: Box<[MemberRunSummary]>,
     pub(crate) output_directory: PathBuf,
 }
 
@@ -120,52 +124,25 @@ impl TaskRunSummary {
         &self.identity
     }
 
-    /// Returns whether this task executed an execution unit or a program.
-    pub const fn kind(&self) -> TaskRunKind {
-        self.kind
-    }
-
-    /// Returns the registration key for an execution-unit task.
-    pub fn execution_unit(&self) -> Option<&str> {
-        self.execution_unit.as_deref()
-    }
-
-    /// Returns the resolved launcher executable for a program task.
-    ///
-    /// For a nested Python declaration this is its interpreter or environment
-    /// manager; durable `program.json` retains the canonical script path.
-    pub fn program(&self) -> Option<&Path> {
-        self.program.as_deref()
-    }
-
-    /// Returns the resolved program workload kind (`program` or `python`).
-    pub fn program_kind(&self) -> Option<&str> {
-        self.program_kind.as_deref()
-    }
-
-    /// Returns the canonical script path for a nested Python task.
-    pub fn python_script(&self) -> Option<&Path> {
-        self.python_script.as_deref()
-    }
-
-    /// Returns the maximum final member iteration for an execution-unit task.
-    pub const fn final_iteration(&self) -> Option<u64> {
-        self.final_iteration
-    }
-
-    /// Returns independently recorded member results in stable unit order.
-    ///
-    /// A standalone member produces one entry, an ensemble produces one entry
-    /// per member, and a program task produces none.
-    pub fn members(&self) -> &[MemberRunSummary] {
-        &self.members
+    /// Returns the completed workload and its variant-specific result.
+    pub const fn kind(&self) -> &TaskRunKind {
+        &self.kind
     }
 
     /// Returns the task output root or program workspace directory.
     ///
     /// This is also the recording directory for a one-member execution unit.
-    /// Use [`Self::members`] for every per-member recording path.
+    /// Match [`Self::kind`] for every per-member recording path.
     pub fn output_directory(&self) -> &Path {
         &self.output_directory
+    }
+
+    pub(crate) fn final_iteration(&self) -> Option<u64> {
+        match &self.kind {
+            TaskRunKind::ExecutionUnit { members, .. } => {
+                members.iter().map(MemberRunSummary::final_iteration).max()
+            }
+            TaskRunKind::Program { .. } => None,
+        }
     }
 }

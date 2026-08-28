@@ -2,8 +2,8 @@
 
 use thiserror::Error;
 
-use crate::runtime::advanced::RuntimeError;
-use crate::study::advanced::StudyError;
+use crate::runtime::RuntimeError;
+use crate::study::StudyError;
 
 /// A failure while loading, preflighting, or executing one project.
 #[derive(Debug, Error)]

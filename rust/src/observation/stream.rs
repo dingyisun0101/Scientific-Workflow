@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::num::NonZeroU64;
 
-use crate::state::advanced::{StateFieldSchema, StateSchemaAccess, SystemStateSchema};
+use crate::state::{StateFieldSchema, SystemStateSchema};
 
 use super::error::ObservationError;
 use super::sampling::IterationSampling;

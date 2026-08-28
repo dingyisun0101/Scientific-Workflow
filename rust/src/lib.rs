@@ -1,6 +1,6 @@
 //! Configuration-driven scientific workflow execution.
 //!
-//! An ordinary application defines registered [`task::basic::ExecutionUnit`]
+//! An ordinary application defines a registered [`ExecutionUnit`]
 //! implementations, writes `wf_configs/study.json`, its declared named
 //! state-schema documents, and the central `wf_configs/parameters.json`, then
 //! calls [`run`] with the project root. Workflow infers task
@@ -21,7 +21,7 @@
 //!
 //! ```
 //! use serde::Deserialize;
-//! use scientific_workflow::prelude::basic::*;
+//! use scientific_workflow::prelude::*;
 //!
 //! #[derive(Deserialize)]
 //! struct Constants { initial: u64, steps: u64 }
@@ -77,18 +77,19 @@
 //! - [`study`] composes parsed declarations, state semantics, and compiled execution-unit
 //!   registrations into immutable, output-free intent.
 //! - [`runtime`] consumes a completed Study and owns active execution/output.
-//! - [`task`] owns the execution-unit contract and automatic observation boundaries.
+//! - The crate root owns the execution-unit contract and automatic observation boundaries.
 //! - [`state`] owns canonical scientific state and schema.
 //! - [`observation`] owns scientific observation meaning, not persistence mechanics.
 //! - [`persistence`] owns automatic durable output and verified reading.
-//! - [`ui`] owns automatic terminal presentation of Runtime facts.
-//! - [`error`] owns complete-workflow Study/Runtime error composition.
+//! - The private UI subsystem owns automatic terminal presentation of Runtime facts.
+//! - [`WorkflowError`] composes complete-workflow Study/Runtime failures.
 //!
 //! The crate-level [`run`] facade performs the sole ordinary transition from
 //! project root to Study to Runtime. `Study` is the ultimate coordinator of
 //! declared intent; runtime is the ultimate coordinator of active execution.
-//! Advanced integrations use each module's `advanced` scope. [`prelude`] only
-//! aggregates those module-owned APIs and crate conveniences.
+//! Inspection and embedding integrations import APIs directly from their
+//! owning module roots. [`prelude`] contains only ordinary unit-authoring APIs
+//! and crate conveniences.
 //!
 //! Persistence write construction and output allocation are internal and are
 //! not available to execution-unit authors.
@@ -100,7 +101,7 @@
 extern crate self as scientific_workflow;
 
 mod clock;
-pub mod error;
+mod error;
 
 pub mod config;
 pub mod observation;
@@ -109,11 +110,14 @@ pub mod prelude;
 pub mod runtime;
 pub mod state;
 pub mod study;
-pub mod task;
-pub mod ui;
+mod task;
+mod ui;
 
-pub use error::basic::WorkflowError;
+pub use error::WorkflowError;
 pub use scientific_workflow_macros::execution_unit;
+pub use task::{
+    ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError, TaskResult,
+};
 
 /// Loads, preflights, and executes the Workflow project rooted at
 /// `project_root`.
@@ -121,11 +125,12 @@ pub use scientific_workflow_macros::execution_unit;
 /// This is the sole ordinary application entry point. Project loading and
 /// Study compilation finish before Runtime receives the validated immutable
 /// Study. Successful completion returns `()`; advanced integrations can load
-/// a [`study::advanced::Study`] and call [`runtime::advanced::execute`] to
+/// an embedding integration can load a [`study::Study`] and call
+/// [`runtime::execute`] to
 /// retain a read-only run summary.
 pub fn run(project_root: &std::path::Path) -> Result<(), WorkflowError> {
-    let study = study::advanced::Study::load(project_root)?;
-    runtime::advanced::execute(study)?;
+    let study = study::Study::load(project_root)?;
+    runtime::execute(study)?;
     Ok(())
 }
 
@@ -135,6 +140,6 @@ pub fn run(project_root: &std::path::Path) -> Result<(), WorkflowError> {
 /// the application crate. It is not a supported application API.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::task::advanced::ExecutionUnitRegistration;
+    pub use crate::task::ExecutionUnitRegistration;
     pub use inventory;
 }

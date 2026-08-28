@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::advanced::{
+use crate::config::{
     Config, ConfigSnapshot, FailurePolicy, PersistenceSpecification, ProjectSpecification,
     ReplicatePolicy, StudyManifest,
 };
-use crate::persistence::advanced::PersistencePlan;
-use crate::task::advanced::{
+use crate::persistence::PersistencePlan;
+use crate::task::{
     ExecutionUnitCatalog, ExecutionUnitTaskProvenance, Task, TaskDefinition, TaskKind,
 };
-use crate::ui::advanced::UiPlan;
+use crate::ui::UiPlan;
 
 use super::compilation;
 use super::error::StudyError;
@@ -234,10 +234,6 @@ impl StudyTask {
 
     pub(crate) fn program_path(&self) -> Option<&Path> {
         self.task.program_path()
-    }
-
-    pub(crate) fn program_kind_name(&self) -> Option<&str> {
-        self.task.program_kind_name()
     }
 
     pub(crate) fn python_script(&self) -> Option<&Path> {

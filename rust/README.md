@@ -192,9 +192,9 @@ the release or a fork.
 
 ## Public API reference
 
-The canonical ordinary import is `scientific_workflow::prelude::basic::*`.
-Advanced readers and embedding hosts use
-`scientific_workflow::prelude::advanced::*`, which is a strict superset.
+The canonical ordinary import is `scientific_workflow::prelude::*`.
+Readers and embedding hosts import less-common APIs from their owning module
+roots.
 The tables below list every supported public symbol and callable operation.
 Documentation-hidden `__private`, `ExecutionUnitRegistration`, and `PayloadTuple`
 exports exist only for procedural-macro expansion or sealed tuple bounds and
@@ -202,17 +202,16 @@ are not supported application APIs.
 
 The complete supported symbol inventory is:
 
-- Basic: `run`, `execution_unit`, `WorkflowError`, `ExecutionUnit`,
+- Crate root and ordinary prelude: `run`, `execution_unit`, `WorkflowError`, `ExecutionUnit`,
   `InitializationContext`, `MemberCompletion`, `MemberView`, `SeedError`, `TaskResult`,
   `ObservationPlan`, `ObservationStream`, `ObservationError`, `StateTime`,
   `SystemStateSchema`, `SystemState`, `StateSeries`, `StateSeriesPushError`,
   `PayloadInsertError`, `StateError`, and `StateSeriesError`.
-- Advanced-only additions: `ConfigError`, `Study`, `StudyError`, `execute`,
+- Owning module roots: `ConfigError`, `Study`, `StudyError`, `execute`,
   `RunSummary`, `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunSummary`,
   `MemberRunSummary`,
-  `TaskRunKind`, `RuntimeError`, `StateFieldSchema`, `StateSchemaAccess`,
-  `StateMaintenance`, `JsonPayloadDecoder`, `JsonPayloadDecoderRegistry`,
-  `JsonStringDecoder`, `JsonVecF64Decoder`, `StoredStateSeriesReader`,
+  `TaskRunKind`, `RuntimeError`, `StateFieldSchema`, `JsonPayloadDecoder`,
+  `JsonPayloadDecoderRegistry`, `StoredStateSeriesReader`,
   `RecordingTiming`, and `PersistenceError`.
 
 ### Crate root, errors, and import scopes
@@ -222,21 +221,20 @@ The complete supported symbol inventory is:
 | `scientific_workflow::run(project_root)` | `project_root: &Path` | Loads and preflights a project, executes it, and returns `Result<(), WorkflowError>`. This is the ordinary entry point. |
 | `#[scientific_workflow::execution_unit("key")]` | One nonempty, whitespace-exact string literal on an `ExecutionUnit` impl | Registers the standalone execution unit or ensemble under the stable key selected by `wf_configs/study.json` and `wf_configs/parameters.json`. |
 | `WorkflowError` | Variants `Study(StudyError)` and `Runtime(RuntimeError)` | Distinguishes effect-free loading/preflight failure from active execution failure. |
-| `prelude::basic` | Glob import; no parameters | Re-exports `run`, registration attributes, ordinary state, observation, task, and workflow-error APIs. |
-| `prelude::advanced` | Glob import; no parameters | Re-exports Basic plus Study loading, Runtime execution/summaries, verified persistence reading, Config errors, and advanced State traits. |
+| `prelude` | Glob import; no parameters | Re-exports `run`, registration attributes, ordinary state, observation, unit, and workflow-error APIs. |
 
-`config::basic`, `study::basic`, `persistence::basic`, `runtime::basic`, and
-both UI tiers intentionally export no callable objects. Their ordinary behavior
-is declarative or automatic. `error::advanced`, `observation::advanced`, and
-`task::advanced` currently add no supported symbols beyond their Basic tiers.
+Config, Study, Persistence, Runtime, State, and Observation expose their
+specialized public APIs directly at their module roots. Task, UI, and the
+facade-error implementation remain private subsystems; unit authoring and
+`WorkflowError` are exposed at the crate root.
 
 ### Execution-unit and task API
 
-`task::basic::TaskResult<T = ()>` is
+`TaskResult<T = ()>` is
 `Result<T, Box<dyn Error + Send + Sync + 'static>>` and is the common execution unit
 error boundary.
 
-`task::basic::ExecutionUnit` is `Send + Sized + 'static` and has one
+`ExecutionUnit` is `Send + Sized + 'static` and has one
 associated type, `Constants: DeserializeOwned + 'static`. Constants themselves
 need not be `Send` or `Sync` because each preflight/runtime decode is created
 and consumed within its current thread:
@@ -256,7 +254,7 @@ Study and Runtime independently decode equivalent constants from the same
 immutable Config value; custom `Deserialize` implementations must therefore be
 deterministic and side-effect-free.
 
-`task::basic::InitializationContext` is a Workflow-created, immutable
+`InitializationContext` is a Workflow-created, immutable
 initialization service. `has_master_seed()` reports whether the study declared
 one. `shared_seed(purpose)` derives a seed for unit-wide coordination;
 `member_seed(member_identity, purpose)` derives one for a specific exposed member.
@@ -267,13 +265,13 @@ Every successful request and its actual seed is stored automatically with its
 associated member recording. Deterministic units do not need a study seed and
 simply ignore the context.
 
-`task::basic::SeedError` is the non-exhaustive error for a missing master seed,
+`SeedError` is the non-exhaustive error for a missing master seed,
 invalid request name, or member-scoped request that does not match an exposed
 `MemberView` identity. Its variants are `MissingMasterSeed`,
 `InvalidName { field, value }`, and `UnknownMemberIdentity { identity }`. It
 converts through `?` into `TaskResult`.
 
-`task::basic::MemberView<'a>` is a copyable borrow created with
+`MemberView<'a>` is a copyable borrow created with
 `MemberView::new(identity, state, completion, target_iteration)`. Its getters are
 `identity()`, `state()`, `completion()`, and `target_iteration()`. Identity,
 index order, state address, and schema allocation are stable for the execution;
@@ -301,7 +299,7 @@ and `Some(MemberCompletion)` when complete. Use
 Plans and streams are immutable, cloneable declarations. They perform no IO;
 Study binds them to the execution unit task's selected schema during preflight.
 
-### State Basic API
+### State API
 
 #### `StateTime`
 
@@ -366,29 +364,29 @@ currently exposes `TemplateRead`, `TemplateParse`, `EmptyFieldName`,
 non-exhaustive and exposes `SchemaMismatch`, `NonIncreasingIteration`,
 `PositionOutOfBounds`, and `PayloadAccess`.
 
-### State Advanced API
+### State inspection and maintenance API
 
-Import the extension traits from `state::advanced` or `prelude::advanced`:
+These are inherent methods; no extension-trait import is required:
 
 | Type or method | Parameters | Purpose |
 | --- | --- | --- |
 | `StateFieldSchema::position()` | `&self` | Returns declaration-order slot position. |
 | `StateFieldSchema::name()` | `&self` | Borrows the normalized field name. |
 | `StateFieldSchema::description()` | `&self` | Borrows the optional normalized description. |
-| `StateSchemaAccess::shares_schema_instance(other)` | `other: &SystemStateSchema` | Tests shared allocation identity, not structural equality. |
+| `SystemStateSchema::shares_schema_instance(other)` | `other: &SystemStateSchema` | Tests shared allocation identity, not structural equality. |
 | `template_path()` | `&self` | Borrows retained schema provenance path. |
 | `field_schemas()` | `&self` | Borrows fields in declaration order. |
 | `field_schema(name)` / `contains_field(name)` | `name: &str` | Looks up or tests a field. |
 | `len()` / `is_empty()` | `&self` | Inspects schema field count. |
 | `to_json_template()` | `&self` | Returns strict pretty JSON for the schema. |
-| `StateMaintenance::clone_structure_without_payloads(time)` | `time: StateTime` | Creates an empty related state retaining schema and field type contracts. |
+| `SystemState::clone_structure_without_payloads(time)` | `time: StateTime` | Creates an empty related state retaining schema and field type contracts. |
 | `replace_time(time)` | `&mut self`; `StateTime` | Replaces time and returns the previous value. |
 | `populated_field_count()` | `&self` | Counts populated slots. |
 | `payload_has_type::<T>(key)` | `key: &str`; `T: Any` | Tests the exact concrete type of a populated field. |
 | `clear_payload(key)` | `key: &str` | Drops one payload and returns whether one was present. |
 | `clear_all_payloads()` | `&mut self` | Drops every payload while retaining structure and type contracts. |
 
-### Config and Study Advanced API
+### Config and Study API
 
 | API | Parameters | Purpose |
 | --- | --- | --- |
@@ -402,11 +400,11 @@ Import the extension traits from `state::advanced` or `prelude::advanced`:
 tasks, selected schemas, resolved constants, and policies are intentionally not
 publicly mutable or inspectable.
 
-### Runtime Advanced API
+### Runtime API
 
 | API | Parameters | Purpose |
 | --- | --- | --- |
-| `runtime::advanced::execute(study)` | owned `Study` | Executes validated intent and returns `Result<RunSummary, RuntimeError>`. |
+| `runtime::execute(study)` | owned `Study` | Executes validated intent and returns `Result<RunSummary, RuntimeError>`. |
 | `RunSummary::output_directory()` | `&self` | Borrows the unique execution directory. |
 | `RunSummary::replicates()` | `&self` | Borrows successful replicate summaries in ascending index order. |
 | `ReplicateRunSummary::index()` | `&self` | Returns the zero-based replicate index. |
@@ -415,13 +413,7 @@ publicly mutable or inspectable.
 | `PhaseRunSummary::name()` | `&self` | Borrows the manifest phase key. |
 | `PhaseRunSummary::tasks()` | `&self` | Borrows task summaries in deterministic Study order. |
 | `TaskRunSummary::identity()` | `&self` | Borrows the Study-inferred identity. |
-| `TaskRunSummary::kind()` | `&self` | Returns non-exhaustive `TaskRunKind::ExecutionUnit` or `TaskRunKind::Program`. |
-| `TaskRunSummary::execution_unit()` | `&self` | Returns the registration key for execution-unit tasks. |
-| `TaskRunSummary::program()` | `&self` | Returns the resolved executable/interpreter/manager path for program tasks. |
-| `TaskRunSummary::program_kind()` | `&self` | Returns `program` or `python` for a program task. |
-| `TaskRunSummary::python_script()` | `&self` | Borrows the canonical script path for a nested Python task. |
-| `TaskRunSummary::final_iteration()` | `&self` | Returns the maximum final member iteration for execution-unit tasks. |
-| `TaskRunSummary::members()` | `&self` | Borrows stable per-member `MemberRunSummary` values; one for a standalone unit, multiple for an ensemble, none for a program. |
+| `TaskRunSummary::kind()` | `&self` | Borrows non-exhaustive `TaskRunKind`: `ExecutionUnit { execution_unit, members }` or `Program { executable, python_script }`. |
 | `TaskRunSummary::output_directory()` | `&self` | Borrows the task root or program-workspace directory. |
 | `MemberRunSummary::identity()` | `&self` | Borrows the member identity supplied by the execution unit. |
 | `MemberRunSummary::final_iteration()` | `&self` | Returns that member's terminal iteration. |
@@ -430,7 +422,7 @@ publicly mutable or inspectable.
 
 Summary objects are cloneable, read-only owned values and perform no IO.
 
-### Persistence Advanced read API
+### Persistence read API
 
 Persistence writing is automatic and has no public writer constructor. The
 public surface reconstructs completed member recordings:
@@ -445,8 +437,6 @@ public surface reconstructs completed member recordings:
 | `len()`, `is_empty()` | `&self` | Inspect registry size. |
 | `has_decoder_for_field(key)` | `key: &str` | Tests exact registration. |
 | `registered_field_names()` | `&self` | Iterates keys in unspecified hash-map order. |
-| `JsonStringDecoder` | Unit value; no parameters | Built-in decoder for `String`. |
-| `JsonVecF64Decoder` | Unit value; no parameters | Built-in decoder for `Vec<f64>`. |
 | `StoredStateSeriesReader::open_completed_recording(root, decoders)` | `root: &Path`; owned registry | Synchronously validates completed `metadata.json` and retains the decoder registry. |
 | `recording_directory()` | `&self` | Borrows the supplied recording root. |
 | `stream_names()` / `format_version()` | `&self` | Iterates stream names in metadata order or returns the format version. |
@@ -458,8 +448,7 @@ public surface reconstructs completed member recordings:
 | `read_all_streams_as_state_series()` | `&self` | Returns every stream as `Vec<(String, StateSeries)>`, with no partial success. |
 | `read_latest_state_from_stream(stream)` | `stream: &str` | Fully verifies every record and descriptor fact in the newest chunk, then reconstructs its final `SystemState`. |
 | `RecordingTiming::created_at_utc()` / `finalized_at_utc()` | `&self` | Borrows RFC 3339 UTC timestamps. |
-| `active_duration_ns()` / `active_duration()` | `&self` | Returns exact nanoseconds or `Duration`. |
-| `continuation_count()` | `&self` | Returns the persisted continuation count; new Workflow recordings use zero. |
+| `active_duration()` | `&self` | Returns the persisted active duration. |
 
 `PersistenceError` is non-exhaustive. Its current variants are
 `Observation`, `RecordingDirectoryExists`, `InvalidConfiguration`,
@@ -491,7 +480,7 @@ target; it is not a second progress counter.
 
 ```rust,no_run
 use serde::Deserialize;
-use scientific_workflow::prelude::basic::*;
+use scientific_workflow::prelude::*;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -746,12 +735,12 @@ succeeds.
 - `ui`: sole automatic terminal presentation of Runtime facts, with fatal
   renderer-health enforcement;
 - `error`: complete-workflow Study/Runtime error composition; and
-- `prelude`: central aggregation of module-owned Basic/Advanced tiers.
+- `prelude`: the ordinary execution-unit authoring imports.
 
 The crate-level `run(&Path)` facade loads a Study and then invokes Runtime.
 Study coordinates declared intent; runtime accepts that completed Study and
 coordinates active execution.
-Advanced consumers may use `Study::load` and `runtime::advanced::execute`, but
+Embedding consumers may use `Study::load` and `runtime::execute`, but
 ordinary projects should not.
 
 The repository's [`attractor_2d`](../examples/attractor_2d) project combines
@@ -759,10 +748,9 @@ these pieces end to end: six swept Rust execution unit tasks feed one directly d
 Python plotting phase that opens the verified recordings and emits an SVG in
 the configured `output/plots` directory.
 
-Each target subsystem publishes `module::basic` and `module::advanced`, with
-the latter a strict superset. `prelude::basic` contains the small execution unit-author
-surface. Persistence writing is automatic and private; only verified reading
-appears in the Advanced tier.
+Each public subsystem owns one module-root API. The single prelude contains the
+small execution-unit author surface. Persistence writing is automatic and
+private; only verified reading is public.
 
 See [`src/state/api.md`](src/state/api.md),
 [`src/observation/api.md`](src/observation/api.md),

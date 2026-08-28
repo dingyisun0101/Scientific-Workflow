@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use serde::{Deserialize, Deserializer};
 
-use crate::config::advanced::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
-use crate::observation::advanced::{BoundObservationPlan, ObservationPlan};
-use crate::state::advanced::{StateTime, SystemState, SystemStateSchema, schema_from_json_value};
+use crate::config::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
+use crate::observation::{BoundObservationPlan, ObservationPlan};
+use crate::state::{StateTime, SystemState, SystemStateSchema, schema_from_json_value};
 
 use super::catalog::{ExecutionUnitCatalog, ExecutionUnitCatalogError, ExecutionUnitRegistration};
 use super::execution::{

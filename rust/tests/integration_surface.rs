@@ -1,58 +1,55 @@
-//! Downstream checks for the crate facade and centrally aggregated API tiers.
+//! Downstream checks for the crate facade, one prelude, and module-owned APIs.
 
 use std::path::Path;
 
-use scientific_workflow::error::basic::WorkflowError;
-use scientific_workflow::runtime::advanced::RuntimeError;
-use scientific_workflow::study::advanced::StudyError;
+use scientific_workflow::WorkflowError;
+use scientific_workflow::runtime::RuntimeError;
+use scientific_workflow::study::StudyError;
 
 #[test]
-fn ordinary_facade_and_error_are_available_through_every_supported_scope() {
-    let _run: fn(&Path) -> Result<(), scientific_workflow::WorkflowError> =
-        scientific_workflow::run;
+fn ordinary_facade_and_error_are_available_from_root_and_prelude() {
+    let _run: fn(&Path) -> Result<(), WorkflowError> = scientific_workflow::run;
 
     fn accepts_root(_: Option<scientific_workflow::WorkflowError>) {}
-    fn accepts_module_basic(_: Option<scientific_workflow::error::basic::WorkflowError>) {}
-    fn accepts_module_advanced(_: Option<scientific_workflow::error::advanced::WorkflowError>) {}
-    fn accepts_prelude_basic(_: Option<scientific_workflow::prelude::basic::WorkflowError>) {}
-    fn accepts_prelude_advanced(_: Option<scientific_workflow::prelude::advanced::WorkflowError>) {}
+    fn accepts_prelude(_: Option<scientific_workflow::prelude::WorkflowError>) {}
 
     accepts_root(None);
-    accepts_module_basic(None);
-    accepts_module_advanced(None);
-    accepts_prelude_basic(None);
-    accepts_prelude_advanced(None);
+    accepts_prelude(None);
 }
 
 #[test]
-fn preludes_expose_the_complete_supported_inventories() {
+fn prelude_exposes_the_complete_ordinary_authoring_inventory() {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<scientific_workflow::task::basic::InitializationContext>();
-    assert_send_sync::<scientific_workflow::task::basic::SeedError>();
+    assert_send_sync::<scientific_workflow::InitializationContext>();
+    assert_send_sync::<scientific_workflow::SeedError>();
 
-    {
-        #[allow(unused_imports)]
-        use scientific_workflow::prelude::basic::{
-            ExecutionUnit, InitializationContext, MemberCompletion, MemberView, ObservationError,
-            ObservationPlan, ObservationStream, PayloadInsertError, SeedError, StateError,
-            StateSeries, StateSeriesError, StateSeriesPushError, StateTime, SystemState,
-            SystemStateSchema, TaskResult, WorkflowError, execution_unit, run,
-        };
-    }
+    #[allow(unused_imports)]
+    use scientific_workflow::prelude::{
+        ExecutionUnit, InitializationContext, MemberCompletion, MemberView, ObservationError,
+        ObservationPlan, ObservationStream, PayloadInsertError, SeedError, StateError, StateSeries,
+        StateSeriesError, StateSeriesPushError, StateTime, SystemState, SystemStateSchema,
+        TaskResult, WorkflowError, execution_unit, run,
+    };
+}
 
-    {
-        #[allow(unused_imports)]
-        use scientific_workflow::prelude::advanced::{
-            ConfigError, ExecutionUnit, InitializationContext, JsonPayloadDecoder,
-            JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder, MemberCompletion,
-            MemberView, ObservationError, ObservationPlan, ObservationStream, PayloadInsertError,
-            PersistenceError, PhaseRunSummary, RecordingTiming, ReplicateRunSummary, RunSummary,
-            RuntimeError, SeedError, StateError, StateFieldSchema, StateMaintenance,
-            StateSchemaAccess, StateSeries, StateSeriesError, StateSeriesPushError, StateTime,
-            StoredStateSeriesReader, Study, StudyError, SystemState, SystemStateSchema, TaskResult,
-            TaskRunKind, TaskRunSummary, WorkflowError, execute, execution_unit, run,
-        };
-    }
+#[test]
+fn specialized_capabilities_live_at_their_owning_module_roots() {
+    #[allow(unused_imports)]
+    use scientific_workflow::config::ConfigError;
+    #[allow(unused_imports)]
+    use scientific_workflow::persistence::{
+        JsonPayloadDecoder, JsonPayloadDecoderRegistry, PersistenceError, RecordingTiming,
+        StoredStateSeriesReader,
+    };
+    #[allow(unused_imports)]
+    use scientific_workflow::runtime::{
+        MemberRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, RuntimeError,
+        TaskRunKind, TaskRunSummary, execute,
+    };
+    #[allow(unused_imports)]
+    use scientific_workflow::state::StateFieldSchema;
+    #[allow(unused_imports)]
+    use scientific_workflow::study::{Study, StudyError};
 }
 
 #[test]
@@ -92,20 +89,11 @@ fn workflow_error_transparently_preserves_display_and_source_chain() {
 }
 
 #[test]
-fn runtime_advanced_accepts_only_a_completed_study() {
+fn runtime_accepts_only_a_completed_study() {
     let _execute: fn(
-        scientific_workflow::study::advanced::Study,
+        scientific_workflow::study::Study,
     ) -> Result<
-        scientific_workflow::runtime::advanced::RunSummary,
-        scientific_workflow::runtime::advanced::RuntimeError,
-    > = scientific_workflow::runtime::advanced::execute;
-
-    #[allow(unused_imports)]
-    use scientific_workflow::runtime::basic::*;
-
-    let kind = scientific_workflow::prelude::advanced::TaskRunKind::ExecutionUnit;
-    assert_eq!(
-        kind,
-        scientific_workflow::runtime::advanced::TaskRunKind::ExecutionUnit
-    );
+        scientific_workflow::runtime::RunSummary,
+        scientific_workflow::runtime::RuntimeError,
+    > = scientific_workflow::runtime::execute;
 }

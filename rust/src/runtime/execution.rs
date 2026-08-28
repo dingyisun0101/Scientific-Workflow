@@ -8,12 +8,12 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::config::advanced::{ConfigSnapshot, FailurePolicy, ReplicateScheduling};
-use crate::persistence::advanced::{MemberRecordingProvenance, PersistencePlan};
-use crate::study::advanced::{Study, StudyPhase, StudyTask};
-use crate::task::advanced::InitializationContext;
-use crate::task::advanced::TaskKind;
-use crate::ui::advanced::{UiEvent, UiSession};
+use crate::config::{ConfigSnapshot, FailurePolicy, ReplicateScheduling};
+use crate::persistence::{MemberRecordingProvenance, PersistencePlan};
+use crate::study::{Study, StudyPhase, StudyTask};
+use crate::task::InitializationContext;
+use crate::task::TaskKind;
+use crate::ui::{UiEvent, UiSession};
 
 use super::error::RuntimeError;
 use super::host::{RuntimeTaskEnvironment, RuntimeTaskHost};
@@ -658,39 +658,25 @@ fn run_task(
             task: task.identity().to_owned(),
         });
     }
-    let (kind, execution_unit, program, program_kind, python_script, final_iteration) =
-        match task.kind() {
-            TaskKind::ExecutionUnit => (
-                TaskRunKind::ExecutionUnit,
-                task.execution_unit().map(Into::into),
-                None,
-                None,
-                None,
-                host.final_iteration(),
-            ),
-            TaskKind::Program => {
-                let program = task
-                    .program_path()
-                    .expect("program task retains its resolved invocation");
-                (
-                    TaskRunKind::Program,
-                    None,
-                    Some(program.to_path_buf()),
-                    task.program_kind_name().map(Into::into),
-                    task.python_script().map(Path::to_path_buf),
-                    None,
-                )
-            }
-        };
+    let kind = match task.kind() {
+        TaskKind::ExecutionUnit => TaskRunKind::ExecutionUnit {
+            execution_unit: task
+                .execution_unit()
+                .expect("execution-unit task retains its registration key")
+                .into(),
+            members: host.member_summaries(),
+        },
+        TaskKind::Program => TaskRunKind::Program {
+            executable: task
+                .program_path()
+                .expect("program task retains its resolved invocation")
+                .to_path_buf(),
+            python_script: task.python_script().map(Path::to_path_buf),
+        },
+    };
     Ok(TaskRunSummary {
         identity: task.identity().into(),
         kind,
-        execution_unit,
-        program,
-        program_kind,
-        python_script,
-        final_iteration,
-        members: host.member_summaries(),
         output_directory: host.output_directory().to_path_buf(),
     })
 }
@@ -725,25 +711,7 @@ fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box
                 "tasks": summary.tasks().iter().map(|task| {
                     serde_json::json!({
                         "identity": task.identity(),
-                        "kind": match task.kind() {
-                            TaskRunKind::ExecutionUnit => "execution_unit",
-                            TaskRunKind::Program => "program",
-                        },
-                        "execution_unit": task.execution_unit(),
-                        "program": task.program().map(|path| path.to_str()
-                            .expect("Config preflight requires UTF-8 program paths")),
-                        "program_kind": task.program_kind(),
-                        "python_script": task.python_script().map(|path| path.to_str()
-                            .expect("Config preflight requires UTF-8 Python script paths")),
-                        "final_iteration": task.final_iteration(),
-                        "members": task.members().iter().map(|member| {
-                            serde_json::json!({
-                                "identity": member.identity(),
-                                "final_iteration": member.final_iteration(),
-                                "output_directory": member.output_directory().to_str()
-                                    .expect("UTF-8 project roots produce UTF-8 output paths")
-                            })
-                        }).collect::<Vec<_>>(),
+                        "workload": dependency_workload(task.kind()),
                         "output_directory": task.output_directory().to_str()
                             .expect("UTF-8 project roots produce UTF-8 output paths")
                     })
@@ -754,4 +722,34 @@ fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box
     serde_json::to_vec_pretty(&values)
         .expect("serializing runtime dependency summaries cannot fail")
         .into_boxed_slice()
+}
+
+fn dependency_workload(kind: &TaskRunKind) -> serde_json::Value {
+    match kind {
+        TaskRunKind::ExecutionUnit {
+            execution_unit,
+            members,
+        } => serde_json::json!({
+            "kind": "execution_unit",
+            "execution_unit": execution_unit,
+            "members": members.iter().map(|member| {
+                serde_json::json!({
+                    "identity": member.identity(),
+                    "final_iteration": member.final_iteration(),
+                    "output_directory": member.output_directory().to_str()
+                        .expect("UTF-8 project roots produce UTF-8 output paths")
+                })
+            }).collect::<Vec<_>>(),
+        }),
+        TaskRunKind::Program {
+            executable,
+            python_script,
+        } => serde_json::json!({
+            "kind": if python_script.is_some() { "python" } else { "program" },
+            "executable": executable.to_str()
+                .expect("Config preflight requires UTF-8 program paths"),
+            "python_script": python_script.as_deref().map(|path| path.to_str()
+                .expect("Config preflight requires UTF-8 Python script paths")),
+        }),
+    }
 }

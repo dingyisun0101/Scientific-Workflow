@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
-use crate::config::advanced::ResolvedExecutionUnitParameters;
-use crate::observation::advanced::BoundObservationPlan;
-use crate::state::advanced::SystemStateSchema;
+use crate::config::ResolvedExecutionUnitParameters;
+use crate::observation::BoundObservationPlan;
+use crate::state::SystemStateSchema;
 
 use super::definition::Task;
 use super::result::TaskResult;

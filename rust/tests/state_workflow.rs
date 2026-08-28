@@ -5,7 +5,7 @@
 //!
 //! The test connects every current production layer:
 //!
-//! - the public `state::basic` and `state::advanced` scopes;
+//! - the public `state` module root and ordinary prelude;
 //! - JSON template loading and semantic round-trip serialization;
 //! - fixed field metadata and shared specification ownership;
 //! - time-point and state construction;
@@ -31,8 +31,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use physics_in_parallel::prelude::advanced::Dense;
 use physics_in_parallel::prelude::basic::Tensor;
-use scientific_workflow::state::advanced::{StateFieldSchema, StateMaintenance, StateSchemaAccess};
-use scientific_workflow::state::basic::{StateError, StateTime, SystemState, SystemStateSchema};
+use scientific_workflow::state::StateFieldSchema;
+use scientific_workflow::state::{StateError, StateTime, SystemState, SystemStateSchema};
 use serde::Serialize;
 
 /// Serializable payload whose Clone implementation exposes expensive copying.
@@ -73,24 +73,17 @@ fn temporary_test_directory(label: &str) -> PathBuf {
 }
 
 #[test]
-fn state_and_prelude_advanced_scopes_are_strict_basic_supersets() {
-    let module_basic = scientific_workflow::state::basic::StateTime::from_iteration(1);
-    let module_advanced: scientific_workflow::state::advanced::StateTime = module_basic;
-    assert_eq!(module_advanced.iteration(), 1);
+fn state_module_and_prelude_share_the_ordinary_types() {
+    let module_time = scientific_workflow::state::StateTime::from_iteration(1);
+    let prelude_time: scientific_workflow::prelude::StateTime = module_time;
+    assert_eq!(prelude_time.iteration(), 1);
 
-    let prelude_basic = scientific_workflow::prelude::basic::StateTime::from_iteration(2);
-    let prelude_advanced: scientific_workflow::prelude::advanced::StateTime = prelude_basic;
-    assert_eq!(prelude_advanced.iteration(), 2);
-
-    fn inspect_with_advanced_trait(
-        schema: &scientific_workflow::prelude::advanced::SystemStateSchema,
-    ) -> usize {
-        use scientific_workflow::prelude::advanced::StateSchemaAccess;
+    fn inspect_schema(schema: &scientific_workflow::prelude::SystemStateSchema) -> usize {
         schema.len()
     }
 
     let schema = SystemStateSchema::load_json_template(Path::new(STATE_TEMPLATE)).unwrap();
-    assert_eq!(inspect_with_advanced_trait(&schema), 3);
+    assert_eq!(inspect_schema(&schema), 3);
 }
 
 #[test]

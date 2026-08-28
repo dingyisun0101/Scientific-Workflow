@@ -10,11 +10,11 @@ lifecycle, progress, path, and outcome facts. UI alone owns terminal detection,
 the Ratatui dashboard state, command editing, message history, refresh timing,
 and the internal exit request observed by Runtime.
 
-## Basic API
+## Automatic behavior
 
-`scientific_workflow::ui::basic` intentionally exports no Rust symbols. The UI
-starts automatically through `scientific_workflow::run(&Path)` or
-`runtime::advanced::execute(Study)`.
+The UI is private and starts automatically through
+`scientific_workflow::run(&Path)` or
+`runtime::execute(Study)`.
 
 When both standard input and standard error are terminals, UI enters a
 Crossterm alternate screen and renders a Ratatui dashboard containing:
@@ -58,10 +58,9 @@ input, draw the dashboard, or write plain output is fatal and panics. These
 failures are not reclassified as cooperative cancellation and are not wrapped
 in `WorkflowError` or `RuntimeError`.
 
-## Advanced API
+## Crate-visible peer API
 
-`scientific_workflow::ui::advanced` is the strict public superset of Basic and
-adds no public symbols. Runtime and Study use crate-visible boundaries:
+Runtime and Study use crate-visible boundaries:
 
 - `UiPlan` is the immutable inferred refresh policy;
 - `UiEvent` is the borrowed synchronous fact vocabulary;

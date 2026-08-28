@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::state::advanced::StateError;
+use crate::state::StateError;
 
 /// A failure while defining, binding, or applying a scientific observation plan.
 #[derive(Debug, Error)]

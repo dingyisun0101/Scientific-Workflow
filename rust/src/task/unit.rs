@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::observation::advanced::ObservationPlan;
-use crate::state::advanced::{SystemState, SystemStateSchema};
+use crate::observation::ObservationPlan;
+use crate::state::{SystemState, SystemStateSchema};
 
 use super::result::TaskResult;
 

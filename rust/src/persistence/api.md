@@ -16,10 +16,9 @@ only stores the resulting encoded observations, lifecycle metadata, and
 Workflow provenance. It does not parse project JSON, bind tasks, or schedule
 execution.
 
-## Basic API
+## Automatic persistence behavior
 
-`scientific_workflow::persistence::basic` intentionally exports no Rust
-symbols. Its user-facing surface is the optional root object in
+The ordinary user-facing surface is the optional root object in
 `wf_configs/study.json`:
 
 ```json
@@ -89,11 +88,11 @@ the same object contains `seed_derivation`: its versioned `algorithm`, authored
 Every recording contains shared requests plus only those belonging to that
 recording's member.
 
-## Advanced API
+## Public completed-recording API
 
-`persistence::advanced` is the strict superset of Basic. It exposes only
-completed-recording readers, payload decoder contracts, operational timing,
-and `PersistenceError`. It exposes no plan or write construction.
+The module root exposes only completed-recording readers, payload decoder
+contracts, operational timing, and `PersistenceError`. It exposes no plan or
+write construction.
 
 ### `StoredStateSeriesReader`
 
@@ -149,10 +148,7 @@ authoritative triggering error.
 from a verified reader:
 
 - `created_at_utc()` and `finalized_at_utc()` borrow RFC 3339 UTC strings;
-- `active_duration_ns()` returns exact accumulated nanoseconds;
-- `active_duration()` returns the same value as `Duration`; and
-- `continuation_count()` returns the persisted format field. New Workflow
-  recordings are single-lifecycle and therefore record zero.
+- `active_duration()` returns the persisted duration as `Duration`.
 
 Timing is host execution metadata, not scientific `StateTime`.
 
@@ -175,9 +171,9 @@ The reader adds stream, iteration, and field context around decoder failures.
 - `registered_field_names()` iterates keys in unspecified hash-map order.
 
 Field keys must be nonempty and unique. A selected stream requires decoders for
-all of its fields; unrelated extra registrations are allowed.
-`JsonStringDecoder` and `JsonVecF64Decoder` are zero-sized
-`Copy + Clone + Debug + Default` built-ins for `String` and `Vec<f64>`.
+all of its fields; unrelated extra registrations are allowed. Use
+`with_json_field::<T>` for ordinary Serde payloads, including `String` and
+`Vec<f64>`; named decoder types are needed only for custom conversion behavior.
 
 ### `PersistenceError`
 
@@ -221,7 +217,7 @@ An analysis process can reconstruct a completed stream:
 
 ```rust,no_run
 use std::path::Path;
-use scientific_workflow::persistence::advanced::{
+use scientific_workflow::persistence::{
     JsonPayloadDecoderRegistry, StoredStateSeriesReader,
 };
 
@@ -238,13 +234,13 @@ println!("{}", trajectory.len());
 # }
 ```
 
-The example path is discovered from `TaskRunSummary::members()` in production;
-it is not supplied to execution unit or Study code.
+The example path is discovered from the `TaskRunKind::ExecutionUnit` variant's
+`members` in production; it is not supplied to execution-unit or Study code.
 
 ### Crate-visible write peer API
 
 The automatic write path is a named closed contract through
-`persistence::advanced`:
+the persistence module root:
 
 - `PersistencePlan` carries the already-validated effective nonzero chunk and
   queue byte limits.

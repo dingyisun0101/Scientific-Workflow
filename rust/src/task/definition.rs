@@ -4,9 +4,9 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::advanced::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
-use crate::observation::advanced::BoundObservationPlan;
-use crate::state::advanced::SystemStateSchema;
+use crate::config::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
+use crate::observation::BoundObservationPlan;
+use crate::state::SystemStateSchema;
 
 use super::execution::{
     ExecutionUnitDefinition, ProgramDefinition, TaskDefinition, TaskExecutionHost,
@@ -135,10 +135,6 @@ impl Task {
 
     pub(crate) fn program_path(&self) -> Option<&Path> {
         self.program().map(ResolvedProgramTask::program)
-    }
-
-    pub(crate) fn program_kind_name(&self) -> Option<&str> {
-        self.program().map(ResolvedProgramTask::kind_name)
     }
 
     pub(crate) fn python_script(&self) -> Option<&Path> {
