@@ -4,13 +4,15 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::state::advanced::{StateMaintenance, StateTime, SystemState, SystemStateSchema};
+use crate::state::advanced::{
+    StateMaintenance, StateTime, SystemState, SystemStateSchema, schema_from_json_value,
+};
 
 use super::advanced::{BoundObservationPlan, ObservationSession};
 use super::basic::{ObservationError, ObservationPlan, ObservationStream};
 
 fn test_schema() -> SystemStateSchema {
-    SystemStateSchema::from_json_template_value(
+    schema_from_json_value(
         Path::new("observation-test-state.json"),
         &serde_json::json!({
             "fields": [

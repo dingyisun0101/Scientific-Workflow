@@ -31,10 +31,14 @@ pub mod basic {}
 pub mod advanced {
     #[allow(unused_imports)]
     pub use super::basic::*;
+    pub(crate) use super::document::StateSchemaDocument;
     pub use super::error::ConfigError;
-    pub(crate) use super::manifest::{FailurePolicy, ReplicatePolicy, ReplicateScheduling};
+    pub(crate) use super::manifest::{
+        FailurePolicy, PersistenceSpecification, PhaseSpecification, ReplicatePolicy,
+        ReplicateScheduling, StudyManifest,
+    };
     pub(crate) use super::parameters::{ResolvedModelParameters, ResolvedTask};
     pub(crate) use super::program::ResolvedProgramTask;
     pub(crate) use super::specification::ProjectSpecification;
-    pub(crate) use super::store::Config;
+    pub(crate) use super::store::{Config, ConfigSnapshot};
 }

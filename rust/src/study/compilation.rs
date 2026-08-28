@@ -2,8 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::config::advanced::{ProjectSpecification, ResolvedTask};
-use crate::state::advanced::SystemStateSchema;
+use crate::config::advanced::{
+    PhaseSpecification, ProjectSpecification, ResolvedTask, StateSchemaDocument,
+};
+use crate::state::advanced::schema_from_json_value;
 use crate::task::advanced::{ModelCatalog, Task};
 
 use super::error::StudyError;
@@ -15,15 +17,16 @@ pub(crate) fn compile(
 ) -> Result<Study, StudyError> {
     let mut schemas = BTreeMap::new();
     for (name, document) in project.state_schemas() {
-        let schema =
-            SystemStateSchema::from_json_template_value(document.path(), document.json_value())
-                .map_err(|source| StudyError::state_schema(name, document.path(), source))?;
+        let document: &StateSchemaDocument = document;
+        let schema = schema_from_json_value(document.path(), document.json_value())
+            .map_err(|source| StudyError::state_schema(name, document.path(), source))?;
         schemas.insert(name.as_ref(), schema);
     }
 
     let mut output_ordinal = 0_u64;
     let mut phases = Vec::with_capacity(project.phases().len());
     for phase in project.phases() {
+        let phase: &PhaseSpecification = phase;
         let mut tasks = Vec::with_capacity(phase.tasks().len());
         for resolved in phase.tasks() {
             let (identity_suffix, label, task) = match resolved {

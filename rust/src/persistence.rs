@@ -36,5 +36,7 @@ pub mod advanced {
         PersistenceError, RecordingTiming, StoredStateSeriesReader,
     };
     pub(crate) use super::plan::PersistencePlan;
-    pub(crate) use super::session::{PersistenceSession, ProgramLaunch, ProgramPersistenceSession};
+    pub(crate) use super::session::{
+        ModelRecordingProvenance, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
+    };
 }

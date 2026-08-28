@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::local::*;
 use super::plan::PersistencePlan;
-use super::session::{PersistenceSession, ProgramLaunch, ProgramPersistenceSession};
+use super::session::{
+    ModelRecordingProvenance, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
+};
 use crate::observation::advanced::BoundObservationPlan;
 use scientific_workflow::prelude::basic::*;
 use scientific_workflow::state::advanced::StateMaintenance;
@@ -177,6 +179,17 @@ fn bound_observation(schema: &SystemStateSchema) -> BoundObservationPlan {
     BoundObservationPlan::bind(observation_plan(1), schema).unwrap()
 }
 
+fn model_provenance() -> ModelRecordingProvenance {
+    ModelRecordingProvenance::new(
+        "test/000000/model-000000",
+        "model",
+        "state",
+        0,
+        Path::new("wf_configs/parameters.json"),
+        Value::Null,
+    )
+}
+
 #[test]
 fn private_model_sessions_terminalize_initial_and_final_observation_failures() {
     let schema = spec();
@@ -188,7 +201,7 @@ fn private_model_sessions_terminalize_initial_and_final_observation_failures() {
         initial.run(),
         bound_observation(&schema),
         effective_plan(64),
-        serde_json::Map::new(),
+        model_provenance(),
         &oversized_initial,
     ) {
         Ok(_) => panic!("oversized initial observation must fail"),
@@ -205,7 +218,7 @@ fn private_model_sessions_terminalize_initial_and_final_observation_failures() {
         final_observation.run(),
         bound_observation(&schema),
         effective_plan(512),
-        serde_json::Map::new(),
+        model_provenance(),
         &initial_state,
     )
     .unwrap();

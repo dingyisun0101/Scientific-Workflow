@@ -24,7 +24,19 @@ struct ConfigInner {
     study_path: PathBuf,
     study: Value,
     documents: BTreeMap<PathBuf, ConfigDocument>,
-    snapshot_json: Box<[u8]>,
+    snapshot_json: Arc<[u8]>,
+}
+
+/// Clone-cheap immutable language-neutral configuration snapshot for programs.
+#[derive(Clone)]
+pub(crate) struct ConfigSnapshot {
+    bytes: Arc<[u8]>,
+}
+
+impl ConfigSnapshot {
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 struct ConfigDocument {
@@ -74,7 +86,7 @@ impl Config {
             );
         }
 
-        let snapshot_json = snapshot_json(&study, &documents);
+        let snapshot_json = Arc::from(snapshot_json(&study, &documents));
         Ok(Self {
             inner: Arc::new(ConfigInner {
                 project_root,
@@ -132,10 +144,11 @@ impl Config {
             .map(|document| (document.path.as_path(), &document.value)))
     }
 
-    /// Returns the deterministic language-neutral snapshot supplied to
-    /// program tasks.
-    pub(crate) fn snapshot_json(&self) -> &[u8] {
-        &self.inner.snapshot_json
+    /// Returns a clone-cheap snapshot handle for active program execution.
+    pub(crate) fn snapshot(&self) -> ConfigSnapshot {
+        ConfigSnapshot {
+            bytes: Arc::clone(&self.inner.snapshot_json),
+        }
     }
 }
 

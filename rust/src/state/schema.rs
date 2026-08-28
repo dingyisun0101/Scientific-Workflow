@@ -38,10 +38,10 @@
 //! # Construction boundary
 //!
 //! Public callers load the first specification from a JSON template path using
-//! [`SystemStateSchema::load_json_template`]. A crate-private byte parser applies the identical
-//! validation path for persistence readers that recover an embedded template
-//! from the sole dataset metadata file. Keeping that parser crate-private
-//! preserves the public file-template initialization contract.
+//! [`SystemStateSchema::load_json_template`]. Crate-private peer functions apply
+//! the same semantic validation to Config's already-parsed JSON values and to
+//! Persistence's already-decoded ordered field metadata. Those peers never
+//! reread a project document or serialize metadata merely to parse it again.
 
 use std::collections::HashMap;
 use std::fs;
@@ -91,23 +91,15 @@ impl SystemStateSchema {
         Self::parse(source, &bytes)
     }
 
-    /// Parses and validates a specification from an in-memory JSON document.
-    ///
-    /// This is the internal reconstruction boundary used by persistence
-    /// readers. `source` identifies the containing metadata file for provenance
-    /// and errors; it need not be a standalone state-template path. Parsing
-    /// uses the same strict Serde representation and semantic validation as
-    /// [`SystemStateSchema::load_json_template`].
-    ///
-    /// The method is crate-private so application code cannot bypass the
-    /// required public initialization from a JSON template file.
+    /// Parses the standalone public template loaded from disk.
     ///
     /// # Errors
     ///
     /// Returns [`StateError::TemplateParse`] for invalid JSON structure or
     /// syntax and the same semantic template variants documented by
-    /// [`SystemStateSchema::load_json_template`]. The input bytes are borrowed only for this call.
-    pub(crate) fn parse(source: PathBuf, bytes: &[u8]) -> Result<Self, StateError> {
+    /// [`SystemStateSchema::load_json_template`]. The input bytes are borrowed
+    /// only for this call.
+    fn parse(source: PathBuf, bytes: &[u8]) -> Result<Self, StateError> {
         let template: StateTemplate =
             serde_json::from_slice(bytes).map_err(|error| StateError::TemplateParse {
                 path: source.clone(),
@@ -118,7 +110,7 @@ impl SystemStateSchema {
     }
 
     /// Validates a centrally parsed JSON value without a second file read.
-    pub(crate) fn from_json_template_value(
+    fn from_json_template_value(
         source_path: &Path,
         document: &serde_json::Value,
     ) -> Result<Self, StateError> {
@@ -183,6 +175,31 @@ impl SystemStateSchema {
             }),
         })
     }
+}
+
+/// Validates one centrally parsed state-schema value without reading a file.
+pub(crate) fn schema_from_json_value(
+    source_path: &Path,
+    document: &serde_json::Value,
+) -> Result<SystemStateSchema, StateError> {
+    SystemStateSchema::from_json_template_value(source_path, document)
+}
+
+/// Reconstructs a schema directly from already-decoded ordered field metadata.
+pub(crate) fn schema_from_fields<'a>(
+    source_path: &Path,
+    fields: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> Result<SystemStateSchema, StateError> {
+    let template = StateTemplate {
+        fields: fields
+            .into_iter()
+            .map(|(name, description)| FieldDeclaration {
+                name: name.to_owned(),
+                description: description.map(str::to_owned),
+            })
+            .collect(),
+    };
+    SystemStateSchema::from_template(source_path.to_path_buf(), template)
 }
 
 /// Advanced inspection and tooling operations for a validated state schema.

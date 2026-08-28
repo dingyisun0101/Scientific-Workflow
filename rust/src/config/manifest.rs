@@ -15,7 +15,7 @@ use super::python::PythonTaskDeclaration;
 
 /// Effective policy for isolated study replicates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReplicatePolicy {
+pub(crate) struct ReplicatePolicy {
     count: u64,
     scheduling: ReplicateScheduling,
     failure_policy: FailurePolicy,
@@ -23,24 +23,24 @@ pub struct ReplicatePolicy {
 
 impl ReplicatePolicy {
     /// Returns the positive number of replicate executions.
-    pub const fn count(self) -> u64 {
+    pub(crate) const fn count(self) -> u64 {
         self.count
     }
 
     /// Returns the effective replicate scheduling policy.
-    pub const fn scheduling(self) -> ReplicateScheduling {
+    pub(crate) const fn scheduling(self) -> ReplicateScheduling {
         self.scheduling
     }
 
     /// Returns the effective response to a failed replicate.
-    pub const fn failure_policy(self) -> FailurePolicy {
+    pub(crate) const fn failure_policy(self) -> FailurePolicy {
         self.failure_policy
     }
 }
 
 /// Effective scheduling mode for isolated replicates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReplicateScheduling {
+pub(crate) enum ReplicateScheduling {
     /// Complete one replicate before launching the next.
     Sequential,
     /// Launch eligible replicates concurrently.
@@ -49,7 +49,7 @@ pub enum ReplicateScheduling {
 
 /// Effective failure propagation policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FailurePolicy {
+pub(crate) enum FailurePolicy {
     /// Prevent further admission after the first failure.
     FailFast,
     /// Allow already-declared sibling work to finish.
@@ -58,45 +58,45 @@ pub enum FailurePolicy {
 
 /// The validated Workflow-owned portion of `wf_configs/study.json`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StudyManifest {
+pub(crate) struct StudyManifest {
     replicates: ReplicatePolicy,
     persistence: PersistenceSpecification,
 }
 
 impl StudyManifest {
     /// Returns the complete effective replicate policy.
-    pub const fn replicate_policy(self) -> ReplicatePolicy {
+    pub(crate) const fn replicate_policy(self) -> ReplicatePolicy {
         self.replicates
     }
 
     /// Returns the complete effective local-persistence settings.
-    pub const fn persistence(self) -> PersistenceSpecification {
+    pub(crate) const fn persistence(self) -> PersistenceSpecification {
         self.persistence
     }
 }
 
 /// Effective persistence settings parsed from the study manifest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PersistenceSpecification {
+pub(crate) struct PersistenceSpecification {
     chunk_target_bytes: NonZeroU64,
     queue_capacity_bytes: NonZeroU64,
 }
 
 impl PersistenceSpecification {
     /// Returns the positive approximate local chunk rollover target.
-    pub const fn chunk_target_bytes(self) -> NonZeroU64 {
+    pub(crate) const fn chunk_target_bytes(self) -> NonZeroU64 {
         self.chunk_target_bytes
     }
 
     /// Returns the positive per-stream backpressure capacity.
-    pub const fn queue_capacity_bytes(self) -> NonZeroU64 {
+    pub(crate) const fn queue_capacity_bytes(self) -> NonZeroU64 {
         self.queue_capacity_bytes
     }
 }
 
 /// One validated phase with resolved generic tasks and effective policy.
 #[derive(Clone, Debug)]
-pub struct PhaseSpecification {
+pub(crate) struct PhaseSpecification {
     pub(crate) name: Box<str>,
     pub(crate) dependencies: Box<[Box<str>]>,
     pub(crate) tasks: Box<[ResolvedTask]>,
@@ -108,37 +108,37 @@ pub struct PhaseSpecification {
 
 impl PhaseSpecification {
     /// Returns the manifest phase key.
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Iterates dependency phase keys in declaration order.
-    pub fn dependencies(&self) -> impl ExactSizeIterator<Item = &str> {
+    pub(crate) fn dependencies(&self) -> impl ExactSizeIterator<Item = &str> {
         self.dependencies.iter().map(Box::as_ref)
     }
 
     /// Returns resolved tasks in deterministic execution order.
-    pub fn tasks(&self) -> &[ResolvedTask] {
+    pub(crate) fn tasks(&self) -> &[ResolvedTask] {
         &self.tasks
     }
 
     /// Returns the positive effective maximum number of active tasks.
-    pub const fn max_concurrency(&self) -> usize {
+    pub(crate) const fn max_concurrency(&self) -> usize {
         self.max_concurrency
     }
 
     /// Returns the effective interval between task admissions.
-    pub const fn start_interval(&self) -> Duration {
+    pub(crate) const fn start_interval(&self) -> Duration {
         self.start_interval
     }
 
     /// Returns the optional effective phase timeout.
-    pub const fn timeout(&self) -> Option<Duration> {
+    pub(crate) const fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
 
     /// Returns the effective sibling-task failure policy.
-    pub const fn failure_policy(&self) -> FailurePolicy {
+    pub(crate) const fn failure_policy(&self) -> FailurePolicy {
         self.failure_policy
     }
 }

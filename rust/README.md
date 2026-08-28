@@ -52,9 +52,11 @@ Runtime consumes a completed Study but does not reinterpret it. Study retains
 Config and the assembled phase/task graph. Each model task retains its own
 selected, validated schema; the live model directly owns its `SystemState`.
 Persistence—not the model—owns recording lifecycle, writer threads, durable
-chunks, program workspaces, and reconstruction rules. External programs write
-their own domain artifacts, while UI only receives Runtime-owned lifecycle and
-progress facts.
+chunks, program workspaces, metadata representation, and reconstruction rules.
+Runtime passes semantic task provenance rather than authoring storage JSON, and
+active program tasks retain only Config's frozen byte snapshot. External
+programs write their own domain artifacts, while UI only receives Runtime-owned
+lifecycle and progress facts.
 
 ### General project procedure
 

@@ -1,6 +1,7 @@
 //! Private catalog and execution-contract coverage.
 
 use std::cell::Cell;
+use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -9,10 +10,12 @@ use serde::{Deserialize, Deserializer};
 
 use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
 use crate::observation::advanced::{BoundObservationPlan, ObservationPlan};
-use crate::state::advanced::{StateTime, SystemState, SystemStateSchema};
+use crate::state::advanced::{StateTime, SystemState, SystemStateSchema, schema_from_json_value};
 
 use super::catalog::{ModelCatalog, ModelCatalogError, ModelRegistration};
-use super::execution::{StatefulDefinition, TaskDefinition, TaskExecutionHost};
+use super::execution::{
+    ProgramDefinition, ProgramTaskInvocation, StatefulDefinition, TaskDefinition, TaskExecutionHost,
+};
 use super::model::ScientificModel;
 use super::result::TaskResult;
 
@@ -30,12 +33,64 @@ struct RecordingHost {
     events: Vec<Event>,
 }
 
+#[derive(Default)]
+struct ProgramInvocationHost {
+    executed: bool,
+}
+
+impl TaskExecutionHost for ProgramInvocationHost {
+    fn cancellation_requested(&self) -> bool {
+        false
+    }
+
+    fn execute_program(&mut self, program: ProgramTaskInvocation<'_>) -> TaskResult {
+        assert_eq!(program.executable(), Path::new("/resolved/python"));
+        assert_eq!(
+            program.args(),
+            [OsString::from("script.py"), OsString::from("--plot")]
+        );
+        assert_eq!(program.kind(), "python");
+        assert_eq!(
+            program.python_script(),
+            Some(Path::new("/project/script.py"))
+        );
+        assert_eq!(program.python_environment_manager(), Some("system"));
+        self.executed = true;
+        Ok(())
+    }
+
+    fn begin_model(
+        &mut self,
+        _plan: BoundObservationPlan,
+        _state: &SystemState,
+        _target_iteration: Option<u64>,
+    ) -> TaskResult {
+        panic!("program contract tests do not initialize models")
+    }
+
+    fn observe_model_step(
+        &mut self,
+        _state: &SystemState,
+        _target_iteration: Option<u64>,
+    ) -> TaskResult {
+        panic!("program contract tests do not observe models")
+    }
+
+    fn observe_model_final(
+        &mut self,
+        _state: &SystemState,
+        _target_iteration: Option<u64>,
+    ) -> TaskResult {
+        panic!("program contract tests do not observe models")
+    }
+}
+
 impl TaskExecutionHost for RecordingHost {
     fn cancellation_requested(&self) -> bool {
         self.cancelled.get()
     }
 
-    fn execute_program(&mut self, _program: &ResolvedProgramTask) -> TaskResult {
+    fn execute_program(&mut self, _program: ProgramTaskInvocation<'_>) -> TaskResult {
         panic!("model contract tests do not execute programs")
     }
 
@@ -75,7 +130,7 @@ impl TaskExecutionHost for RecordingHost {
 }
 
 fn schema(source: &str) -> SystemStateSchema {
-    SystemStateSchema::from_json_template_value(
+    schema_from_json_value(
         Path::new(source),
         &serde_json::json!({"fields":[{"name":"value"}]}),
     )
@@ -455,4 +510,20 @@ fn failed_steps_publish_no_successful_step_or_final_observation() {
 
     assert_eq!(result.unwrap_err().to_string(), "step failed");
     assert_eq!(host.events, [Event::Begin(0, None)]);
+}
+
+#[test]
+fn program_execution_uses_task_owned_semantic_invocation_view() {
+    let definition = ProgramDefinition::new(ResolvedProgramTask::for_python(
+        PathBuf::from("/resolved/python"),
+        [OsString::from("script.py"), OsString::from("--plot")].into(),
+        None,
+        PathBuf::from("/project/script.py"),
+        "system".into(),
+    ));
+    let mut host = ProgramInvocationHost::default();
+
+    definition.execute(&mut host).unwrap();
+
+    assert!(host.executed);
 }

@@ -147,7 +147,10 @@ scope-management modules. There are no `mod.rs`, `basic.rs`, or
 - `module::advanced` publicly re-exports Basic and adds only deliberate
   advanced-user contracts.
 - The same Advanced scope may carry `pub(crate)` exports for peer modules;
-  crate-visible internals do not become public.
+  crate-visible internals do not become public. Every type or trait appearing
+  in a peer signature is explicitly re-exported by its owning Advanced scope,
+  so subsystem coupling is nameable and auditable rather than hidden behind
+  inference or private-module reach-through.
 - `prelude::basic` and `prelude::advanced` aggregate these canonical module
   exports but own no behavior.
 
@@ -321,7 +324,10 @@ workflow/
 
 `SystemStateSchema::load_json_template(&Path)` is the public construction
 boundary. Config uses a crate-private in-memory equivalent so Study does not
-reread named state documents. `SystemState` owns fixed heterogeneous slots and
+reread named state documents. Persistence reconstructs schemas directly from
+decoded ordered field metadata rather than serializing and reparsing JSON.
+Observation borrows serializable payloads through a crate-visible State port,
+not slot internals. `SystemState` owns fixed heterogeneous slots and
 `StateTime`; application models mutate payloads and advance time. Advanced
 inspection exposes field metadata and schema identity. The old generic
 schema-source adapter was removed with the persistence builder that needed it.
@@ -331,8 +337,11 @@ schema-source adapter was removed with the persistence builder that needed it.
 A model's `observation_plan(&Constants)` defaults to all fields. Study calls
 it once during preflight and stores the exact schema-bound plan. Runtime does
 not call it again. Private sessions select due streams, borrow/encode selected
-payloads, and deduplicate the final iteration. Observation owns no paths,
-buffers, files, or lifecycle.
+payloads, and deduplicate the final iteration. The resulting canonical owned
+JSON record is the explicit handoff to Persistence: encoding occurs while the
+mutable, potentially non-`Sync` state is synchronously borrowed, then the bytes
+may cross to an asynchronous writer. Observation owns no paths, buffers,
+files, or lifecycle; Persistence owns no field-selection or cadence policy.
 
 ### Task
 
@@ -351,6 +360,9 @@ rejects bad or duplicate keys and ignores linker order.
 State definition and access remain macro-free: the model owns the concrete
 `SystemState`, exposes it with `state()`, and uses the state's typed single- or
 tuple-payload borrowing methods directly.
+Task passes a semantic borrowed `ProgramTaskInvocation` through its execution
+host port, so Runtime does not depend on Config's resolved-program
+representation.
 
 ### Config
 
@@ -365,8 +377,10 @@ same-name parameter section; no per-task parameter path exists. Config expands
 selections deterministically, resolves program paths and Python scripts/environment
 managers once, and creates a deterministic language-neutral snapshot for
 external tasks. Reserved Workflow documents and arbitrary application
-documents use the same lookup graph. The public Advanced API is only
-`ConfigError`.
+documents use the same lookup graph. Runtime retains only a clone-cheap
+`ConfigSnapshot` byte handle for an active task, not Config's typed lookup and
+parsing interface. The downstream-public Advanced API is only `ConfigError`;
+closed peer types are explicitly named through the same owning scope.
 
 ### Study
 
@@ -378,7 +392,8 @@ and Python tasks. It retains
 the central Config and infers stable identities, labels, the output root, and
 private operational policy. Public inspection is limited to project/output
 roots; phases, tasks, schema, resolved parameters, and policies exist only for
-Runtime.
+Runtime. Its crate-visible Runtime view exposes compiled execution and semantic
+provenance facts without exposing Config or Task descriptors.
 
 ### Runtime
 
@@ -400,15 +415,19 @@ observed when it returns prevents a successful final recording transition. An
 external child is killed and reaped on observed cancellation. A task panic is
 caught while its host is alive so any active model recording becomes durably
 failed before the existing `TaskPanicked { task }` error is returned.
+Runtime passes semantic model provenance into Persistence and does not author
+durable metadata JSON, backend names, or local format fields.
 
 ### Persistence
 
 Persistence is constructed and run only by Runtime. The model constructor
-accepts an inferred destination, the already-bound observation plan, provenance,
+accepts an inferred destination, the already-bound observation plan, semantic provenance,
 and one effective shared chunk/queue policy. A bounded worker owns all stream
 writes and commits immutable JSONL chunks plus one authoritative
 `metadata.json` lifecycle. There is no writer builder, per-stream storage
 override, public flush, resume/continuation path, or completion handle.
+Persistence alone converts model provenance and effective policy into exact
+durable metadata, including the current local-backend field.
 
 Users author every persistence size as a positive integer decimal MB, with one
 MB equal to 1,000,000 bytes. The `wf_configs/study.json` fields are
@@ -518,13 +537,19 @@ owns behavior or creates an alternative canonical implementation path.
     JSON; Runtime never reparses derived config values.
 18. Persistence is the only owner of Workflow recording IO and format
     interpretation; Runtime owns only scope orchestration around that boundary.
+19. Closed subsystem coupling is expressed through explicitly named
+    `pub(crate)` exports in each owning Advanced scope; peers do not import
+    another subsystem's private modules or depend on inference-only return
+    types.
 
 ## Replacement boundaries
 
 - A state replacement preserves typed ownership, schema identity, time
-  ordering, and serialization borrows.
+  ordering, direct reconstruction from parsed values/field metadata, and
+  serialization borrows.
 - An observation replacement preserves declaration meaning, one-time binding,
-  cadence, clone-free borrowing, and deterministic encoded order.
+  cadence, clone-free borrowing, deterministic encoded order, and the owned
+  canonical-record handoff to Persistence.
 - A task replacement preserves config-owned constants decode, direct state
   ownership checks, automatic observation boundaries, and generic program
   delegation without public adapters.
@@ -532,14 +557,16 @@ owns behavior or creates an alternative canonical implementation path.
   named-state lookup, explicit task selection, duplicate-key rejection,
   deterministic expansion, all-document immutable
   snapshots, direct-program and nested Python-environment resolution, and
-  centralized parsing.
+  centralized parsing, and the clone-cheap frozen snapshot handle.
 - A Study replacement remains effect-free and performs complete binding before
-  publishing immutable intent.
+  publishing immutable intent through its narrow Runtime view.
 - A Runtime replacement consumes only Study, preserves policy and summary
-  order, and owns all output/effects.
+  order, owns scope orchestration, and passes semantic rather than formatted
+  persistence provenance.
 - A persistence replacement remains behind the private session and preserves
   bounded model submission, program workspace isolation/snapshots/logs,
-  terminal evidence/provenance, and verified model reads.
+  ownership of durable metadata/format concerns, terminal evidence/provenance,
+  and verified model reads.
 - A UI replacement remains downstream of Runtime, requires no model/config
   participation, handles concurrent publishers, restores terminal state while
   unwinding, and treats renderer failure as fatal rather than cancellation.

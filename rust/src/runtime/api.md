@@ -259,12 +259,16 @@ for replicate in summary.replicates() {
 
 Scheduler polling, worker thread names, active task handles, atomic cancellation
 flags, completion channels/timestamps, bounded panic-payload formatting,
-metadata-map assembly, task output ordinals, `RuntimeTaskHost`,
+task output ordinals, `RuntimeTaskHost`,
 model/program task environments, child-process polling, `PersistenceSession`,
 UI events/session, backend ownership, and
 topological-position calculation are private.
 
-Recording metadata keeps complete resolved constants under `model_constants`
+Runtime passes `ModelRecordingProvenance` as semantic facts—task identity,
+model, selected state, parameter ordinal/source, and resolved constants—to
+Persistence. Runtime does not construct durable JSON namespaces and does not
+name the local backend or its format fields. Persistence authors recording
+metadata, which keeps complete resolved constants under `model_constants`
 and Workflow identity/source facts under a separate `workflow` object. The
 workflow object names the selected model, `parameter_ordinal`, and canonical
 `parameter_source`, plus the explicitly selected `state` key; the effective
@@ -280,3 +284,11 @@ implementation details. A future backend may change internal construction
 and wire mechanics while preserving the documented inferred root, isolation,
 summaries, failure atomicity, effective-plan provenance, and observation
 lifecycle.
+
+An active task retains Config's clone-cheap immutable byte snapshot, not the
+Config lookup/parser object. Program launch receives those bytes and dependency
+facts through Persistence. Runtime obtains task execution/provenance/summary
+facts through Study's peer view rather than opening Task descriptors.
+The program execution port likewise supplies Task's semantic
+`ProgramTaskInvocation`; Runtime does not import Config's resolved-program
+representation.

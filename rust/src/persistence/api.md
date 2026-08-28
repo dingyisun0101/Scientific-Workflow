@@ -216,11 +216,33 @@ println!("{}", trajectory.len());
 The example path is discovered programmatically from a successful
 `RunSummary` in production; it is not supplied to model or Study code.
 
+### Crate-visible write peer API
+
+The automatic write path is a named closed contract through
+`persistence::advanced`:
+
+- `PersistencePlan` carries the already-validated effective nonzero chunk and
+  queue byte limits.
+- `ModelRecordingProvenance` owns semantic model facts supplied by Runtime. It
+  does not accept an arbitrary metadata map; Persistence alone constructs the
+  exact `model_constants`, `workflow`, backend, and effective-setting JSON.
+- `PersistenceSession` owns model-recording start, bounded observation
+  submission, successful completion, and best-effort failure terminalization.
+- `ProgramLaunch` and `ProgramPersistenceSession` own external-program launcher
+  provenance, frozen config/dependency files, logs, artifacts, and terminal
+  status.
+
+Observation supplies canonical owned `EncodedObservation` JSON bytes because
+the mutable scientific state need not be `Sync` and cannot remain borrowed by
+the asynchronous writer. Persistence consumes those bytes and exclusively owns
+queueing, JSONL framing, chunks, checksums, filesystem publication, and durable
+lifecycle. When reading, it reconstructs State schemas directly from decoded
+ordered metadata through State's peer port; it does not serialize fields and
+reparse them as JSON.
+
 ## Not API
 
-The effective persistence plan, backend selection, failure-atomic model
-`PersistenceSession`,
-`ProgramPersistenceSession`, borrowed `ProgramLaunch`, `SystemStateWriter`,
+Backend selection, `SystemStateWriter`,
 stream storage/layout values, queue worker, chunk
 publisher, metadata mutation, directory synchronization, directory lease,
 filenames, and atomic temporary files are private. There is one internal
@@ -228,6 +250,11 @@ constructor consuming Study's
 already-bound observation plan, provenance, destination, and shared storage
 policy. There is no builder, resume/continuation API, per-stream storage
 override, explicit flush, or public completion result.
+
+`PersistencePlan`, `ModelRecordingProvenance`, `PersistenceSession`,
+`ProgramPersistenceSession`, and `ProgramLaunch` are crate-visible peer API;
+their backing layout and local mechanics remain replaceable. None is a
+downstream writer API.
 
 Future local or remote adapters belong behind the private session boundary; adding
 one must not broaden the model/task API. A replacement backend must preserve

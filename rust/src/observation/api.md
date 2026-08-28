@@ -130,11 +130,28 @@ encoded observation.
 ## Advanced API
 
 `observation::advanced` is the strict public superset of Basic and currently
-adds no public symbols. Workflow peers use crate-visible exports in this same
-scope for schema-bound plans, checked state observations, canonical encoding,
-and sampling sessions. Those mechanisms are intentionally unavailable to
-external integrations because persistence supplies no replaceable backend
-injection seam.
+adds no downstream-public symbols. Workflow peers use the following explicitly
+named crate-visible contracts from this same scope:
+
+- `BoundObservationPlan` is the one-time, schema-checked plan retained by
+  Study. Its stream and axis accessors supply immutable scientific descriptors.
+- `BoundObservationStream` exposes one normalized stream name, canonical field
+  order, cadence, and bound schema metadata to Persistence.
+- `ObservationSession` owns accepted-iteration markers. `new`, `observe`, and
+  `observe_final` select due streams, enforce order/schema identity, and return
+  canonical encoded records failure-atomically.
+- `EncodedObservation::into_parts()` returns
+  `(stream_name, StateTime, Vec<u8>)`: owned canonical JSON bytes that can cross
+  into an asynchronous writer without retaining a borrow of mutable state.
+
+The owned byte handoff is an intentional efficiency boundary. Scientific state
+payloads are not required to be `Sync`, Runtime mutates them between steps, and
+the persistence worker is asynchronous; Observation therefore encodes while it
+holds a valid synchronous borrow. Observation owns selection and deterministic
+scientific-record encoding. Persistence owns queueing, framing, chunk files,
+checksums, and durable lifecycle. A backend replacement consumes this same
+handoff unless it deliberately coordinates a new canonical encoding contract
+with Observation.
 
 ## Example
 
@@ -171,12 +188,13 @@ let plan = ObservationPlan::streams([
 
 ## Not API
 
-The following remain private and may change during an observation replacement:
+The following implementation details remain private and may change during an
+observation replacement:
 
-- `ObservationSession`, its accepted-iteration vector, due-stream selection, and
-  final-observation deduplication;
-- `BoundObservationPlan`, `BoundObservationStream`, `StateObservation`, and
-  `EncodedObservation`, including schema binding and the owned backend handoff;
+- accepted-iteration storage, due-stream algorithms, and final-observation
+  deduplication behind `ObservationSession`;
+- concrete storage behind `BoundObservationPlan`, `BoundObservationStream`,
+  `StateObservation`, and `EncodedObservation`;
 - `IterationSampling`, its `NonZeroU64` representation, and divisibility
   implementation;
 - the internal field-selection enum and descriptor constructors;
@@ -184,12 +202,12 @@ The following remain private and may change during an observation replacement:
   structs;
 - allocation choices such as `Box<str>`, boxed slices, and temporary vectors;
   and
-- the adapter from `EncodedObservation` to the private persistence JSONL
-  format.
+- the persistence adapter after the documented `EncodedObservation` handoff.
 
 There is no public session constructor, sampling type, time-axis metadata
 type, encoder implementation, directory field, persistence configuration, queue,
 chunk, checkpoint flag, path, metadata map, lifecycle guard, or backend worker
 in this subsystem. Replacement implementations may change internal sampling
 and encoding machinery while preserving the documented declaration and error
-contracts. Persistence owns backend construction and lifecycle.
+contracts plus the crate-visible peer API above. Persistence owns backend
+construction and lifecycle.

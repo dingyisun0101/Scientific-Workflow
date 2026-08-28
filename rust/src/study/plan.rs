@@ -4,9 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::advanced::{Config, FailurePolicy, ProjectSpecification, ReplicatePolicy};
+use crate::config::advanced::{
+    Config, ConfigSnapshot, FailurePolicy, PersistenceSpecification, ProjectSpecification,
+    ReplicatePolicy, StudyManifest,
+};
 use crate::persistence::advanced::PersistencePlan;
-use crate::task::advanced::{ModelCatalog, Task, TaskDefinition, TaskKind};
+use crate::task::advanced::{ModelCatalog, ModelTaskProvenance, Task, TaskDefinition, TaskKind};
 use crate::ui::advanced::UiPlan;
 
 use super::compilation;
@@ -33,8 +36,9 @@ impl Study {
         let project_root = project.project_root().to_path_buf();
         let config = project.config().clone();
         let output_root = project_root.join("output");
-        let replicate_policy = project.manifest().replicate_policy();
-        let persistence = project.manifest().persistence();
+        let manifest: StudyManifest = *project.manifest();
+        let replicate_policy = manifest.replicate_policy();
+        let persistence: PersistenceSpecification = manifest.persistence();
         let persistence_plan = PersistencePlan::local(
             persistence.chunk_target_bytes(),
             persistence.queue_capacity_bytes(),
@@ -63,9 +67,9 @@ impl Study {
         &self.inner.output_root
     }
 
-    /// Returns the immutable central configuration captured at Study load.
-    pub(crate) fn config(&self) -> &Config {
-        &self.inner.config
+    /// Returns the frozen language-neutral configuration supplied to programs.
+    pub(crate) fn config_snapshot(&self) -> ConfigSnapshot {
+        self.inner.config.snapshot()
     }
 
     /// Returns immutable phases in manifest declaration order.
@@ -96,7 +100,7 @@ impl std::fmt::Debug for Study {
             .debug_struct("Study")
             .field("project_root", &self.project_root())
             .field("output_root", &self.output_root())
-            .field("config", &self.config())
+            .field("config", &self.inner.config)
             .field("persistence", &self.persistence_plan())
             .field("ui", &self.ui_plan())
             .field("phases", &self.phases().len())
@@ -214,8 +218,20 @@ impl StudyTask {
         &self.task
     }
 
-    pub(crate) fn task(&self) -> &Task {
-        &self.task
+    pub(crate) fn model_provenance(&self) -> Option<ModelTaskProvenance<'_>> {
+        self.task.model_provenance()
+    }
+
+    pub(crate) fn program_path(&self) -> Option<&Path> {
+        self.task.program_path()
+    }
+
+    pub(crate) fn program_kind_name(&self) -> Option<&str> {
+        self.task.program_kind_name()
+    }
+
+    pub(crate) fn python_script(&self) -> Option<&Path> {
+        self.task.python_script()
     }
 }
 

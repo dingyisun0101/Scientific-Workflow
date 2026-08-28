@@ -1,6 +1,7 @@
 //! Opaque generic task definitions created from models or programs.
 
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
@@ -36,6 +37,34 @@ enum TaskDescriptor {
         state: Box<str>,
     },
     Program(ResolvedProgramTask),
+}
+
+/// Borrowed semantic provenance for one configured model invocation.
+pub(crate) struct ModelTaskProvenance<'a> {
+    parameters: &'a ResolvedModelParameters,
+    state: &'a str,
+}
+
+impl ModelTaskProvenance<'_> {
+    pub(crate) fn model(&self) -> &str {
+        self.parameters.model()
+    }
+
+    pub(crate) fn state(&self) -> &str {
+        self.state
+    }
+
+    pub(crate) fn parameter_ordinal(&self) -> u64 {
+        self.parameters.ordinal()
+    }
+
+    pub(crate) fn parameter_source(&self) -> &Path {
+        self.parameters.source_path()
+    }
+
+    pub(crate) fn constants(&self) -> &serde_json::Value {
+        self.parameters.resolved_value()
+    }
 }
 
 impl Task {
@@ -86,18 +115,32 @@ impl Task {
         }
     }
 
-    pub(crate) fn parameters(&self) -> Option<&ResolvedModelParameters> {
+    pub(crate) fn model_provenance(&self) -> Option<ModelTaskProvenance<'_>> {
         match &self.descriptor {
-            TaskDescriptor::Model { parameters, .. } => Some(parameters),
+            TaskDescriptor::Model { parameters, state } => {
+                Some(ModelTaskProvenance { parameters, state })
+            }
             TaskDescriptor::Program(_) => None,
         }
     }
 
-    pub(crate) fn program(&self) -> Option<&ResolvedProgramTask> {
+    fn program(&self) -> Option<&ResolvedProgramTask> {
         match &self.descriptor {
             TaskDescriptor::Model { .. } => None,
             TaskDescriptor::Program(program) => Some(program),
         }
+    }
+
+    pub(crate) fn program_path(&self) -> Option<&Path> {
+        self.program().map(ResolvedProgramTask::program)
+    }
+
+    pub(crate) fn program_kind_name(&self) -> Option<&str> {
+        self.program().map(ResolvedProgramTask::kind_name)
+    }
+
+    pub(crate) fn python_script(&self) -> Option<&Path> {
+        self.program().and_then(ResolvedProgramTask::python_script)
     }
 
     pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
@@ -111,13 +154,6 @@ impl Task {
         match &self.descriptor {
             TaskDescriptor::Model { parameters, .. } => parameters.model(),
             TaskDescriptor::Program(program) => program.subject(),
-        }
-    }
-
-    pub(crate) fn state(&self) -> Option<&str> {
-        match &self.descriptor {
-            TaskDescriptor::Model { state, .. } => Some(state),
-            TaskDescriptor::Program(_) => None,
         }
     }
 }

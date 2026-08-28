@@ -1,5 +1,8 @@
 //! Supported runtime port and private task execution implementations.
 
+use std::ffi::OsString;
+use std::path::Path;
+
 use thiserror::Error;
 
 use crate::config::advanced::{ResolvedModelParameters, ResolvedProgramTask};
@@ -21,7 +24,7 @@ pub(crate) trait TaskExecutionHost {
 
     /// Executes one validated external program in Runtime's standardized task
     /// workspace and configuration environment.
-    fn execute_program(&mut self, program: &ResolvedProgramTask) -> TaskResult;
+    fn execute_program(&mut self, program: ProgramTaskInvocation<'_>) -> TaskResult;
 
     /// Accepts the validated observation plan and emits the initial observation and
     /// automatic initialized snapshot for `state`.
@@ -47,6 +50,49 @@ pub(crate) trait TaskExecutionHost {
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult;
+}
+
+/// Borrowed semantic invocation facts passed from Task to Runtime.
+pub(crate) struct ProgramTaskInvocation<'a> {
+    executable: &'a Path,
+    args: &'a [OsString],
+    kind: &'a str,
+    python_script: Option<&'a Path>,
+    python_environment_manager: Option<&'a str>,
+}
+
+impl ProgramTaskInvocation<'_> {
+    pub(crate) fn executable(&self) -> &Path {
+        self.executable
+    }
+
+    pub(crate) fn args(&self) -> &[OsString] {
+        self.args
+    }
+
+    pub(crate) fn kind(&self) -> &str {
+        self.kind
+    }
+
+    pub(crate) fn python_script(&self) -> Option<&Path> {
+        self.python_script
+    }
+
+    pub(crate) fn python_environment_manager(&self) -> Option<&str> {
+        self.python_environment_manager
+    }
+}
+
+impl<'a> From<&'a ResolvedProgramTask> for ProgramTaskInvocation<'a> {
+    fn from(program: &'a ResolvedProgramTask) -> Self {
+        Self {
+            executable: program.program(),
+            args: program.args(),
+            kind: program.kind_name(),
+            python_script: program.python_script(),
+            python_environment_manager: program.python_environment_manager(),
+        }
+    }
 }
 
 /// Type-erased execution contract consumed by the Workflow runtime.
@@ -153,7 +199,7 @@ impl TaskDefinition for ProgramDefinition {
         if host.cancellation_requested() {
             return Ok(());
         }
-        host.execute_program(&self.program)
+        host.execute_program((&self.program).into())
     }
 }
 

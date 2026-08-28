@@ -22,7 +22,7 @@ pub(crate) enum ResolvedTask {
 
 /// One complete model-parameter combination after deterministic expansion.
 #[derive(Clone)]
-pub struct ResolvedModelParameters {
+pub(crate) struct ResolvedModelParameters {
     inner: Arc<ResolvedModelParametersInner>,
 }
 
@@ -46,22 +46,22 @@ impl ResolvedModelParameters {
     }
 
     /// Returns the stable manifest key selecting a compiled scientific model.
-    pub fn model(&self) -> &str {
+    pub(crate) fn model(&self) -> &str {
         &self.inner.model
     }
 
     /// Returns the canonical project parameters document path.
-    pub fn source_path(&self) -> &Path {
+    pub(crate) fn source_path(&self) -> &Path {
         &self.inner.source_path
     }
 
     /// Returns the zero-based deterministic combination ordinal.
-    pub fn ordinal(&self) -> u64 {
+    pub(crate) fn ordinal(&self) -> u64 {
         self.inner.ordinal
     }
 
     /// Returns the optional effective timeout for this task invocation.
-    pub fn timeout(&self) -> Option<std::time::Duration> {
+    pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
         self.inner.timeout
     }
 
@@ -70,7 +70,7 @@ impl ResolvedModelParameters {
     /// This is the sole supported constants-supply operation. It never rereads
     /// or reparses the source file and contextualizes type errors with the
     /// model key, source path, and combination ordinal.
-    pub fn decode<T>(&self) -> Result<T, ConfigError>
+    pub(crate) fn decode<T>(&self) -> Result<T, ConfigError>
     where
         T: DeserializeOwned,
     {

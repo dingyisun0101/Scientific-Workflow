@@ -143,6 +143,31 @@ captured central configuration and completed dependency facts through files
 and environment variables documented by `runtime::api`; task itself performs
 no filesystem or process operation.
 
+### Crate-visible peer API
+
+Task's closed Study/Runtime boundary is explicitly exported through
+`task::advanced`:
+
+- `ModelCatalog` and `ModelCatalogError` provide deterministic linked-model
+  discovery and validation to Study.
+- `Task` is the clone-cheap compiled workload. Study constructs it from fully
+  resolved Config facts and Runtime sees it only through Study's narrower view.
+- `ModelTaskProvenance` borrows the semantic model name, selected state key,
+  parameter ordinal/source, and resolved constants. It exposes no descriptor
+  enum or Config document representation.
+- `TaskDefinition` is the type-erased execution command and
+  `TaskExecutionHost` is its model/program lifecycle port. Their methods carry
+  only facts needed at execution boundaries.
+- `ProgramTaskInvocation` is the borrowed semantic launch view passed through
+  that host port. Runtime receives executable, arguments, kind, and optional
+  Python provenance without importing Config's `ResolvedProgramTask`.
+- program summary accessors expose resolved path, semantic program kind, and
+  optional Python script without returning a `ResolvedProgramTask` to Runtime.
+
+`ModelRegistration` remains publicly nameable only for procedural-macro
+expansion. Every other item above is `pub(crate)` and is a subsystem replacement
+contract, not an application extension point.
+
 ## Example
 
 This example shows the complete ordinary model surface. After it, the user
@@ -208,11 +233,12 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 
 ## Not API
 
-`ModelRegistration`, `ModelCatalog`, `ModelCatalogError`, `Task`,
-`TaskDefinition`, `TaskExecutionHost`, `StatefulDefinition`, registration
-lookup, function pointers, model-contract errors, state-address tracking,
-target-progress validation, `ProgramDefinition`, executable dispatch, and
-concrete execution loops are private. Hidden
+`StatefulDefinition`, registration lookup, function pointers, model-contract
+errors, state-address tracking, target-progress validation,
+`ProgramDefinition`, executable dispatch, descriptor storage, and concrete
+execution loops are private. `ModelCatalog`, `Task`, `ModelTaskProvenance`,
+`ProgramTaskInvocation`, `TaskDefinition`, and `TaskExecutionHost` are closed
+crate-visible peer API; their representation is not. Hidden
 crate `__private` re-exports exist solely for macro expansion and are not a
 supported API. `ModelRegistration::new` is publicly nameable only because a
 procedural macro expanded in a downstream crate must call it; it is not a

@@ -8,10 +8,8 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use serde_json::{Map, Value};
-
-use crate::config::advanced::{Config, FailurePolicy, ReplicateScheduling};
-use crate::persistence::advanced::PersistencePlan;
+use crate::config::advanced::{ConfigSnapshot, FailurePolicy, ReplicateScheduling};
+use crate::persistence::advanced::{ModelRecordingProvenance, PersistencePlan};
 use crate::study::advanced::{Study, StudyPhase, StudyTask};
 use crate::task::advanced::TaskKind;
 use crate::ui::advanced::{UiEvent, UiSession};
@@ -320,7 +318,7 @@ struct PhaseRuntime<'a> {
 
 struct TaskRuntime {
     persistence_plan: PersistencePlan,
-    config: Config,
+    config_snapshot: ConfigSnapshot,
     project_root: PathBuf,
     replicate_directory: PathBuf,
     dependencies_json: Box<[u8]>,
@@ -544,7 +542,7 @@ fn spawn_task(
         .join(format!("task-{:06}", worker_task.output_ordinal()));
     let runtime = TaskRuntime {
         persistence_plan: context.study.persistence_plan(),
-        config: context.study.config().clone(),
+        config_snapshot: context.study.config_snapshot(),
         project_root: context.study.project_root().to_path_buf(),
         replicate_directory: context.replicate_directory.to_path_buf(),
         dependencies_json: context.dependencies_json.clone(),
@@ -601,9 +599,18 @@ fn run_task(
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
-    let metadata = task_metadata(&task, runtime.persistence_plan);
+    let provenance = task.model_provenance().map(|provenance| {
+        ModelRecordingProvenance::new(
+            task.identity(),
+            provenance.model(),
+            provenance.state(),
+            provenance.parameter_ordinal(),
+            provenance.parameter_source(),
+            provenance.constants().clone(),
+        )
+    });
     let environment = RuntimeTaskEnvironment::new(
-        runtime.config,
+        runtime.config_snapshot,
         runtime.project_root,
         runtime.replicate_directory,
         runtime.dependencies_json,
@@ -612,7 +619,7 @@ fn run_task(
         runtime.persistence_plan,
         cancellation,
         output_directory,
-        metadata,
+        provenance,
         runtime.ui.task(runtime.replicate, task.identity()),
         environment,
     );
@@ -650,15 +657,14 @@ fn run_task(
         ),
         TaskKind::Program => {
             let program = task
-                .task()
-                .program()
+                .program_path()
                 .expect("program task retains its resolved invocation");
             (
                 TaskRunKind::Program,
                 None,
-                Some(program.program().to_path_buf()),
-                Some(program.kind_name().into()),
-                program.python_script().map(Path::to_path_buf),
+                Some(program.to_path_buf()),
+                task.program_kind_name().map(Into::into),
+                task.python_script().map(Path::to_path_buf),
                 None,
             )
         }
@@ -689,52 +695,6 @@ fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
         format!("{bounded}…")
     } else {
         bounded
-    }
-}
-
-fn task_metadata(task: &StudyTask, persistence_plan: PersistencePlan) -> Map<String, Value> {
-    let persistence = Value::Object(Map::from_iter([
-        ("backend".to_owned(), "local".into()),
-        (
-            "chunk_target_bytes".to_owned(),
-            persistence_plan.chunk_target().get().into(),
-        ),
-        (
-            "queue_capacity_bytes".to_owned(),
-            persistence_plan.queue_capacity().get().into(),
-        ),
-    ]));
-    match task.task().parameters() {
-        Some(parameters) => {
-            let constants = parameters.resolved_value().clone();
-            let workflow = Value::Object(Map::from_iter([
-                ("task_identity".to_owned(), task.identity().into()),
-                ("kind".to_owned(), "model".into()),
-                ("model".to_owned(), parameters.model().into()),
-                (
-                    "state".to_owned(),
-                    task.task()
-                        .state()
-                        .expect("model tasks retain their selected state")
-                        .into(),
-                ),
-                ("parameter_ordinal".to_owned(), parameters.ordinal().into()),
-                (
-                    "parameter_source".to_owned(),
-                    parameters
-                        .source_path()
-                        .to_string_lossy()
-                        .into_owned()
-                        .into(),
-                ),
-                ("persistence".to_owned(), persistence),
-            ]));
-            Map::from_iter([
-                ("model_constants".to_owned(), constants),
-                ("workflow".to_owned(), workflow),
-            ])
-        }
-        None => Map::new(),
     }
 }
 

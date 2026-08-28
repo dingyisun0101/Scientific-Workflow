@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::advanced::*;
-use scientific_workflow::state::advanced::{StateSchemaAccess, SystemStateSchema};
+use scientific_workflow::state::advanced::{StateSchemaAccess, schema_from_json_value};
 use serde::Deserialize;
 
 static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
@@ -260,9 +260,7 @@ fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() 
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
     let document = &specification.state_schemas()["default"];
-    let schema =
-        SystemStateSchema::from_json_template_value(document.path(), document.json_value())
-            .unwrap();
+    let schema = schema_from_json_value(document.path(), document.json_value()).unwrap();
 
     assert_eq!(schema.field_schemas().len(), 2);
     assert_eq!(schema.template_path(), document.path());
@@ -633,7 +631,7 @@ fn central_config_captures_all_project_parameters_in_one_namespace() {
 
     let specification = ProjectSpecification::load(project.path()).unwrap();
     let snapshot: serde_json::Value =
-        serde_json::from_slice(specification.config().snapshot_json()).unwrap();
+        serde_json::from_slice(specification.config().snapshot().bytes()).unwrap();
     assert_eq!(
         snapshot["study"]["phases"]["only"]["tasks"][0]["model"],
         "model"
@@ -722,7 +720,7 @@ fn json_file_symlinks_preserve_authored_keys_and_enforce_containment() {
     .unwrap();
     let specification = ProjectSpecification::load(contained.path()).unwrap();
     let snapshot: serde_json::Value =
-        serde_json::from_slice(specification.config().snapshot_json()).unwrap();
+        serde_json::from_slice(specification.config().snapshot().bytes()).unwrap();
     assert_eq!(
         snapshot["config"]["alias.json"],
         snapshot["config"]["states/default.json"]

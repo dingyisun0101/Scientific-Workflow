@@ -263,6 +263,26 @@ the public tuple-borrow call shape, supported arities, validation-before-borrow
 behavior, and exact-type semantics—not exposing the current sealing or macro
 implementation.
 
+### Crate-visible peer API
+
+State's non-public peer contracts are explicitly named through
+`state::advanced`:
+
+- `schema_from_json_value(source_path, document)` validates Config's
+  already-parsed schema value. It performs no disk IO and applies the same
+  semantic normalization and duplicate checks as the public loader.
+- `schema_from_fields(source_path, fields)` reconstructs a schema directly from
+  Persistence's decoded ordered `(name, description)` metadata. It deliberately
+  avoids serializing those fields to JSON and parsing them back.
+- `StateObservationAccess::serializable_payload(key)` borrows one populated
+  payload as erased Serde data for exactly as long as the state borrow. It
+  performs no clone, allocation, or encoding and preserves `StateError` for
+  missing or invalid access.
+
+Config, Observation, and Persistence must use these ports instead of importing
+private schema/slot modules. A State replacement may change parsing, lookup,
+allocation, and erasure internals while preserving these peer semantics.
+
 ## Example
 
 Given `wf_configs/states/state.json`:
@@ -342,7 +362,8 @@ subsystem replacement:
 - the schema `Arc` and pointer-comparison implementation behind the supported
   `shares_schema_instance` result;
 - tuple-sealing types, tuple-generation macros, and disjoint-slot algorithms;
-- the observation-only serializable payload accessor; and
+- the concrete erasure and downcast implementation behind the crate-visible
+  `StateObservationAccess` contract; and
 - constructors for field descriptors and ownership-preserving error wrappers.
 
 There is no public raw erased payload, unchecked field-index accessor, mutable

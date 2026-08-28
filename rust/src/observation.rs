@@ -28,6 +28,8 @@ pub mod basic {
 pub mod advanced {
     #[allow(unused_imports)]
     pub use super::basic::*;
+    pub(crate) use super::encoding::EncodedObservation;
     pub(crate) use super::plan::BoundObservationPlan;
     pub(crate) use super::session::ObservationSession;
+    pub(crate) use super::stream::BoundObservationStream;
 }

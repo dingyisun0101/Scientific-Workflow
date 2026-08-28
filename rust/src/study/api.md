@@ -61,6 +61,23 @@ document view, UI-plan accessor, or mutable Study operation. Advanced consumers 
 a preloaded Study pass it to `runtime::advanced::execute`; successful runtime
 summaries provide output paths and task results.
 
+### Crate-visible Runtime view
+
+Runtime consumes a deliberately narrow peer API through `study::advanced`:
+
+- `Study` supplies replicate/phase policy, persistence and UI plans, and a
+  clone-cheap `ConfigSnapshot`. Runtime receives frozen program bytes without
+  retaining Config's parsing or typed-lookup interface.
+- `StudyPhase` supplies only its semantic name, dependencies, admission policy,
+  and compiled task slice.
+- `StudyTask` supplies its stable identity/label, timeout, generic execution
+  definition, semantic model provenance, and program summary facts. Runtime no
+  longer reaches through it to Task descriptors or Config-resolved types.
+
+This view is crate-visible, not downstream-public. Its explicit names and
+semantics form the replacement contract between effect-free assembly and active
+execution.
+
 ### `study::advanced::StudyError`
 
 `StudyError` is a non-exhaustive owned error enum:
@@ -119,14 +136,14 @@ println!("actual execution: {}", summary.output_directory().display());
 
 ## Not API
 
-`ProjectSpecification`, explicit model catalogs, `StudyInner`,
-`StudyPhase`, `StudyTask`, central `Config`, resolved model parameters/programs and
-Python launchers,
+`ProjectSpecification`, explicit model catalogs, `StudyInner`, central
+`Config`, resolved model parameters/programs and Python launchers,
 type-erased task definitions,
 named and task-bound state schemas, bound observation plans,
 replicate/persistence policies, UI plan, global
 output ordinals, identity/label formats, and topological planning data are private.
-Runtime obtains them through crate-visible `study::advanced` exports.
+`StudyPhase` and `StudyTask` are the named crate-visible Runtime view described
+above; their backing representation remains private.
 
 A replacement Study must remain output-free, consume and retain Config exactly
 once, perform complete state/model/constants/observation binding over Config's

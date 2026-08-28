@@ -32,11 +32,13 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::de::{SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
-use crate::state::advanced::{StateSeries, StateTime, SystemState, SystemStateSchema};
+use crate::state::advanced::{
+    StateSeries, StateTime, SystemState, SystemStateSchema, schema_from_fields,
+};
 
 use super::RecordingTiming;
 use super::error::PersistenceError;
@@ -574,33 +576,24 @@ impl<'de: 'a, 'a> Visitor<'de> for BorrowedValuesVisitor<'a> {
     }
 }
 
-/// Serde representation accepted by the crate-private SystemStateSchema parser.
-#[derive(Serialize)]
-struct StreamTemplateRef<'a> {
-    fields: &'a [super::jsonl_format::StateFieldMetadata],
-}
-
 /// Reconstructs one stream's immutable key/description specification.
 fn stream_spec(
     metadata_path: &Path,
     stream: &StateStreamMetadata,
 ) -> Result<SystemStateSchema, PersistenceError> {
-    let bytes = serde_json::to_vec(&StreamTemplateRef {
-        fields: &stream.fields,
-    })
-    .map_err(|source| PersistenceError::Json {
-        operation: "serialize stream schema",
+    schema_from_fields(
+        metadata_path,
+        stream
+            .fields
+            .iter()
+            .map(|field| (field.name.as_str(), field.description.as_deref())),
+    )
+    .map_err(|source| PersistenceError::InvalidMetadata {
         path: metadata_path.to_path_buf(),
-        source,
-    })?;
-    SystemStateSchema::parse(metadata_path.to_path_buf(), &bytes).map_err(|source| {
-        PersistenceError::InvalidMetadata {
-            path: metadata_path.to_path_buf(),
-            reason: format!(
-                "stream `{}` has an invalid state schema: {source}",
-                stream.name
-            ),
-        }
+        reason: format!(
+            "stream `{}` has an invalid state schema: {source}",
+            stream.name
+        ),
     })
 }
 

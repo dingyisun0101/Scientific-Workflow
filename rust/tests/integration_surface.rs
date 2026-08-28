@@ -25,6 +25,32 @@ fn ordinary_facade_and_error_are_available_through_every_supported_scope() {
 }
 
 #[test]
+fn preludes_expose_the_complete_supported_inventories() {
+    {
+        #[allow(unused_imports)]
+        use scientific_workflow::prelude::basic::{
+            ObservationError, ObservationPlan, ObservationStream, PayloadInsertError,
+            ScientificModel, StateError, StateSeries, StateSeriesError, StateSeriesPushError,
+            StateTime, SystemState, SystemStateSchema, TaskResult, WorkflowError, model, run,
+        };
+    }
+
+    {
+        #[allow(unused_imports)]
+        use scientific_workflow::prelude::advanced::{
+            ConfigError, JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder,
+            JsonVecF64Decoder, ObservationError, ObservationPlan, ObservationStream,
+            PayloadInsertError, PersistenceError, PhaseRunSummary, RecordingTiming,
+            ReplicateRunSummary, RunSummary, RuntimeError, ScientificModel, StateError,
+            StateFieldSchema, StateMaintenance, StateSchemaAccess, StateSeries, StateSeriesError,
+            StateSeriesPushError, StateTime, StoredStateSeriesReader, Study, StudyError,
+            SystemState, SystemStateSchema, TaskResult, TaskRunKind, TaskRunSummary, WorkflowError,
+            execute, model, run,
+        };
+    }
+}
+
+#[test]
 fn workflow_error_preserves_stage_conversion_and_thread_safety() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<WorkflowError>();

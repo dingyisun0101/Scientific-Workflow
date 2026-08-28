@@ -278,9 +278,10 @@ Study or an execution made from it.
 ## Advanced API
 
 `config::advanced` is the strict public superset of the empty Basic scope. It
-exports only `ConfigError`. Project specifications, manifests, policies,
-resolved model parameters, source documents, and expansion machinery are
-crate-private because applications cannot use them without duplicating Study.
+exports only `ConfigError` to downstream crates. The same module is also the
+named crate-visible peer boundary used by Study and Runtime; peer types are
+listed below so a Config replacement does not depend on type inference or
+private implementation paths.
 
 ### `config::advanced::ConfigError`
 
@@ -307,6 +308,32 @@ crate-private because applications cannot use them without duplicating Study.
 Paths and explanatory strings are owned, so an error remains useful after the
 loading transaction ends. IO, JSON, and constants-decoding variants preserve
 their source chains. The enum exposes no partial project graph.
+
+### Crate-visible peer API
+
+These `pub(crate)` contracts are available only through `config::advanced`:
+
+- `ProjectSpecification` is Config's completed loading result. It provides the
+  canonical roots, retained `Config`, parsed manifest, named state documents,
+  and fully resolved task declarations consumed by Study.
+- `Config` is the immutable central graph. Its typed lookup/decode operations
+  supply already-parsed configuration to Study; it performs no later disk IO.
+- `ConfigSnapshot` is a clone-cheap `Arc<[u8]>` handle. `bytes()` borrows the
+  deterministic complete-project JSON supplied to external programs, allowing
+  each runtime task to retain the frozen bytes without retaining Config's
+  parsing and lookup interface.
+- `StateSchemaDocument` names one semantic state key and borrows its canonical
+  source path and already-parsed JSON value.
+- `StudyManifest`, `PhaseSpecification`, `PersistenceSpecification`,
+  `ReplicatePolicy`, `ReplicateScheduling`, and `FailurePolicy` are the strict
+  resolved procedural and operational views used during Study assembly.
+- `ResolvedTask`, `ResolvedModelParameters`, and `ResolvedProgramTask` carry
+  complete model constants/provenance or direct program/Python launch intent.
+  Their accessors expose semantic facts, not Config's document representation.
+
+These are closed subsystem-to-subsystem contracts, not a downstream builder
+API. Their concrete storage and parsing machinery may change, but their owning
+module, names, and semantics must remain synchronized with peer consumers.
 
 ## Example
 
@@ -347,13 +374,12 @@ Python task:
 
 ## Not API
 
-Strict-value parsing, `Config`, `ProjectSpecification`, `StudyManifest`, phase
-and replicate policies, persistence settings, `ResolvedModelParameters`,
-`ResolvedProgramTask`, Python declaration/environment types, manager command
-lowering, typed decoding, document caching, snapshot serialization, path
+Strict-value parsing, Python declaration/environment representation, manager
+command lowering, document caching, snapshot serialization, path
 canonicalization, and `$sweep`/`$cases` expansion are private compilation
-machinery. Peer subsystems reach the required crate-visible types through
-`config::advanced`; downstream applications cannot construct or inspect them.
+machinery. The named crate-visible types above are peer API rather than freely
+replaceable internals; downstream applications still cannot construct or
+inspect them.
 
 A replacement config implementation must preserve the required `wf_configs`
 project boundary, canonical manifest and parameters files, named state-path

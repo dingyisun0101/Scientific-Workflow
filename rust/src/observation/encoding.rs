@@ -6,7 +6,7 @@ use std::fmt;
 use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 
-use crate::state::advanced::StateTime;
+use crate::state::advanced::{StateObservationAccess, StateTime};
 
 use super::error::ObservationError;
 use super::state_observation::StateObservation;
@@ -48,7 +48,7 @@ pub(super) fn encode(
         .map(|field| {
             observation
                 .state()
-                .serializable(field.name())
+                .serializable_payload(field.name())
                 .map_err(|source| ObservationError::StateAccess {
                     stream: stream.name().to_owned(),
                     iteration: time.iteration(),

@@ -17,6 +17,72 @@ pub(crate) struct PersistenceSession {
     writer: Option<SystemStateWriter>,
 }
 
+/// Owned semantic provenance supplied when one model recording begins.
+pub(crate) struct ModelRecordingProvenance {
+    task_identity: Box<str>,
+    model: Box<str>,
+    state: Box<str>,
+    parameter_ordinal: u64,
+    parameter_source: PathBuf,
+    model_constants: Value,
+}
+
+impl ModelRecordingProvenance {
+    pub(crate) fn new(
+        task_identity: &str,
+        model: &str,
+        state: &str,
+        parameter_ordinal: u64,
+        parameter_source: &Path,
+        model_constants: Value,
+    ) -> Self {
+        Self {
+            task_identity: task_identity.into(),
+            model: model.into(),
+            state: state.into(),
+            parameter_ordinal,
+            parameter_source: parameter_source.to_path_buf(),
+            model_constants,
+        }
+    }
+
+    fn into_metadata(self, persistence_plan: PersistencePlan) -> Map<String, Value> {
+        let persistence = Value::Object(Map::from_iter([
+            ("backend".to_owned(), "local".into()),
+            (
+                "chunk_target_bytes".to_owned(),
+                persistence_plan.chunk_target().get().into(),
+            ),
+            (
+                "queue_capacity_bytes".to_owned(),
+                persistence_plan.queue_capacity().get().into(),
+            ),
+        ]));
+        let workflow = Value::Object(Map::from_iter([
+            (
+                "task_identity".to_owned(),
+                Value::String(self.task_identity.into()),
+            ),
+            ("kind".to_owned(), "model".into()),
+            ("model".to_owned(), Value::String(self.model.into())),
+            ("state".to_owned(), Value::String(self.state.into())),
+            (
+                "parameter_ordinal".to_owned(),
+                self.parameter_ordinal.into(),
+            ),
+            (
+                "parameter_source".to_owned(),
+                self.parameter_source.to_string_lossy().into_owned().into(),
+            ),
+            ("persistence".to_owned(), persistence),
+        ]));
+        Map::from_iter([
+            ("model_constants".to_owned(), self.model_constants),
+            ("workflow".to_owned(), workflow),
+        ])
+    }
+}
+
 /// Durable workspace prepared for one external-program or Python task.
 pub(crate) struct ProgramPersistenceSession {
     directory: PathBuf,
@@ -217,13 +283,14 @@ impl PersistenceSession {
         directory: PathBuf,
         observation_plan: BoundObservationPlan,
         persistence_plan: PersistencePlan,
-        metadata: Map<String, Value>,
+        provenance: ModelRecordingProvenance,
         initial_state: &SystemState,
     ) -> Result<Self, PersistenceError> {
         let storage = StateStreamStorage::chunked(
             persistence_plan.chunk_target(),
             persistence_plan.queue_capacity(),
         );
+        let metadata = provenance.into_metadata(persistence_plan);
         let mut writer = SystemStateWriter::create(directory, observation_plan, metadata, storage)?;
         if let Err(error) = writer.observe_state(initial_state) {
             let _ = writer.mark_recording_failed(error.to_string());

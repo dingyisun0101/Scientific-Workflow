@@ -8,10 +8,11 @@ public.
 ## Public integration tests
 
 - `rust/tests/integration_surface.rs` verifies the crate-level `run(&Path)`
-  facade, canonical error Basic/Advanced tiers, prelude aggregation, and the
-  Study-only signature of Runtime's Advanced entry point. It also verifies
-  `WorkflowError` stage conversions, transparent display/source behavior,
-  `Send + Sync`, and `TaskRunKind` through `prelude::advanced`.
+  facade, canonical error Basic/Advanced tiers, the complete supported Basic
+  and Advanced prelude inventories, and the Study-only signature of Runtime's
+  Advanced entry point. It also verifies `WorkflowError` stage conversions,
+  transparent display/source behavior, `Send + Sync`, and `TaskRunKind`
+  through `prelude::advanced`.
 - `rust/tests/state_workflow.rs` exercises Path-based schema loading,
   heterogeneous payload ownership, tuple borrows, time advancement, schema
   inspection, maintenance, and public Basic/Advanced tier behavior.
@@ -45,12 +46,15 @@ public.
   deterministic `$sweep`/`$cases` expansion and malformed-marker rejection,
   private typed constants decoding, decimal-MB persistence-size conversion,
   overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
-  and contextual errors. Even an unreferenced JSON document is strict-parsed.
+  clone-cheap frozen snapshot bytes, and contextual errors. Even an
+  unreferenced JSON document is strict-parsed.
 - `rust/src/task/tests/task_workflow.rs` covers invalid/duplicate registration
   keys, `!Send + !Sync` constants, cancellation before initialization and
   between steps, initial/step/final observation ordering, failure atomicity,
   state-owner/schema stability, strict iteration advancement, and target
-  progression invariants through a private fake host.
+  progression invariants through a private fake host. A direct program-port
+  test verifies Task's semantic invocation view, including Python provenance,
+  without exposing Config's resolved-program representation to Runtime.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
   effect-free loading, unknown models, typed
   constants and one-time observation preflight, contextual named-schema
@@ -59,7 +63,8 @@ public.
   composition, replicate/persistence policy, runtime
   scheduling, automatic task recordings, and crate-level `run(&Path)`. Its
   recording checks require canonical `parameter_ordinal`/`parameter_source`
-  provenance and reject legacy input-path fields. Its
+  provenance, exact Persistence-owned backend/effective-setting metadata, and
+  rejection of legacy input-path fields. Its
   Unix program-task test verifies the frozen central Config after source files
   change, dependency-summary handoff, direct executable invocation, artifacts,
   logs, metadata, and generic runtime summaries. A separate direct Python task
@@ -95,7 +100,9 @@ The write path is intentionally tested beneath
   observation, encoding, writer, lifecycle, decoder, malformed-record,
   missing-file, size, checksum, latest-chunk descriptor/order, and program
   status transitions and verifies failed-metadata and
-  no-partial-success behavior.
+  no-partial-success behavior. Reader construction exercises State's direct
+  ordered-field reconstruction boundary rather than a JSON serialization and
+  reparse round trip.
 - `python_reader_conformance.rs` verifies Rust/Python format-v7 compatibility
   and exact floating-point/unicode round trips.
 

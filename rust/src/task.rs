@@ -31,6 +31,6 @@ pub mod advanced {
     #[doc(hidden)]
     pub use super::catalog::ModelRegistration;
     pub(crate) use super::catalog::{ModelCatalog, ModelCatalogError};
-    pub(crate) use super::definition::{Task, TaskKind};
-    pub(crate) use super::execution::{TaskDefinition, TaskExecutionHost};
+    pub(crate) use super::definition::{ModelTaskProvenance, Task, TaskKind};
+    pub(crate) use super::execution::{ProgramTaskInvocation, TaskDefinition, TaskExecutionHost};
 }

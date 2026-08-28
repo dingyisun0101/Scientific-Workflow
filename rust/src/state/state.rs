@@ -507,20 +507,16 @@ impl SystemState {
         selected
             .map(|slot| slot.expect("one disjoint slot must be returned for every requested index"))
     }
+}
 
-    /// Borrows one populated payload through erased Serde serialization.
-    ///
-    /// This crate-private method is the complete format-agnostic boundary used
-    /// by the storage encoder. It performs the same declared-field and
-    /// populated-slot validation as [`SystemState::payload`], but it neither
-    /// downcasts nor exposes the private [`StateValue`] wrapper.
-    ///
-    /// The returned object refers directly to the stored concrete payload. No
-    /// clone, allocation, encoding, or ownership transfer occurs here.
-    pub(crate) fn serializable(
-        &self,
-        key: &str,
-    ) -> Result<&dyn erased_serde::Serialize, StateError> {
+/// Crate-visible observation port for borrowing populated payloads as Serde values.
+pub(crate) trait StateObservationAccess {
+    /// Borrows one populated payload without cloning, encoding, or exposing its wrapper.
+    fn serializable_payload(&self, key: &str) -> Result<&dyn erased_serde::Serialize, StateError>;
+}
+
+impl StateObservationAccess for SystemState {
+    fn serializable_payload(&self, key: &str) -> Result<&dyn erased_serde::Serialize, StateError> {
         Ok(self.value(key)?.serializable())
     }
 }

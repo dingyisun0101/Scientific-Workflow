@@ -62,7 +62,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
-use crate::observation::advanced::{BoundObservationPlan, ObservationSession};
+use crate::observation::advanced::{
+    BoundObservationPlan, BoundObservationStream, EncodedObservation, ObservationSession,
+};
 use crate::state::advanced::SystemState;
 
 mod error;
@@ -206,7 +208,7 @@ impl SamplingInterval {
 /// Filesystem layout for one logical state stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum StateStreamLayout {
+pub(crate) enum StateStreamLayout {
     /// Accumulate encoded records in memory until the rollover target is met.
     Chunked {
         /// Approximate encoded-byte threshold at which a chunk is sealed.
@@ -219,14 +221,14 @@ pub enum StateStreamLayout {
 /// Persistence and backpressure policy for one logical state stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct StateStreamStorage {
+pub(crate) struct StateStreamStorage {
     layout: StateStreamLayout,
     storage_queue_bytes: NonZeroU64,
 }
 
 impl StateStreamStorage {
     /// Creates an in-memory chunking policy with a strict queue-byte budget.
-    pub const fn chunked(target_bytes: NonZeroU64, storage_queue_bytes: NonZeroU64) -> Self {
+    pub(crate) const fn chunked(target_bytes: NonZeroU64, storage_queue_bytes: NonZeroU64) -> Self {
         Self {
             layout: StateStreamLayout::Chunked { target_bytes },
             storage_queue_bytes,
@@ -234,12 +236,12 @@ impl StateStreamStorage {
     }
 
     /// Returns the configured on-disk stream layout.
-    pub const fn layout(self) -> StateStreamLayout {
+    pub(crate) const fn layout(self) -> StateStreamLayout {
         self.layout
     }
 
     /// Returns the strict byte capacity shared by queued records.
-    pub const fn storage_queue_bytes(self) -> NonZeroU64 {
+    pub(crate) const fn storage_queue_bytes(self) -> NonZeroU64 {
         self.storage_queue_bytes
     }
 }
@@ -250,7 +252,7 @@ impl StateStreamStorage {
 /// the only legal transition from `running` metadata to a terminal status.
 /// It owns no [`SystemState`] and never extends a payload borrow beyond one
 /// synchronous [`SystemStateWriter::observe_state`] call.
-pub struct SystemStateWriter {
+pub(crate) struct SystemStateWriter {
     manifest: Arc<RecordingManifest>,
     session: ObservationSession,
     writer: Option<StateWriterWorker>,
@@ -297,7 +299,7 @@ impl SystemStateWriter {
     /// Returns state or payload serialization errors from a due stream,
     /// queue-limit and ordering errors, or the writer's authoritative terminal
     /// failure.
-    pub fn observe_state(&mut self, state: &SystemState) -> Result<(), PersistenceError> {
+    pub(crate) fn observe_state(&mut self, state: &SystemState) -> Result<(), PersistenceError> {
         let observations = self
             .session
             .observe(state)
@@ -306,11 +308,7 @@ impl SystemStateWriter {
             .writer
             .as_ref()
             .expect("an active recording owns its writer worker");
-        for observation in observations {
-            let (stream, time, bytes) = observation.into_parts();
-            let record = EncodedStateRecord::new(time, bytes);
-            writer.submit_record(stream, record)?;
-        }
+        submit_observations(writer, observations)?;
         Ok(())
     }
 
@@ -376,11 +374,7 @@ impl SystemStateWriter {
             .writer
             .as_ref()
             .expect("an active recording owns its writer worker");
-        for observation in observations {
-            let (stream, time, bytes) = observation.into_parts();
-            let record = EncodedStateRecord::new(time, bytes);
-            writer.submit_record(stream, record)?;
-        }
+        submit_observations(writer, observations)?;
         Ok(())
     }
 
@@ -505,6 +499,7 @@ impl PreparedRecording {
         let mut declarations = Vec::with_capacity(descriptor.streams().len());
 
         for (index, stream) in descriptor.streams().iter().enumerate() {
+            let stream: &BoundObservationStream = stream;
             let directory = format!("stream_{index:04}");
             let sampling_interval = SamplingInterval::iterations(stream.every_iterations())
                 .expect("bound observation streams contain positive sampling intervals");
@@ -547,6 +542,17 @@ impl PreparedRecording {
             streams,
         })
     }
+}
+
+fn submit_observations(
+    writer: &StateWriterWorker,
+    observations: Vec<EncodedObservation>,
+) -> Result<(), PersistenceError> {
+    for observation in observations {
+        let (stream, time, bytes) = observation.into_parts();
+        writer.submit_record(stream, EncodedStateRecord::new(time, bytes))?;
+    }
+    Ok(())
 }
 
 /// Serialized authority over the sole mutable metadata document.

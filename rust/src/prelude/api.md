@@ -53,8 +53,10 @@ re-exports the complete supported advanced tiers from:
   encoding machinery is crate-private;
 - `persistence::advanced`: `PersistenceError`, verified reader/timing types,
   and JSON payload decoder contracts;
-- `task::advanced`: the Basic model APIs; registration, catalog, task, and host
-  machinery is crate-private;
+- `task::advanced`: the Basic model APIs; its documentation-hidden
+  `ModelRegistration` is visible only because downstream attribute-macro
+  expansion must name registration metadata, while catalogs, tasks, and host
+  machinery remain crate-private;
 - `study::advanced`: only `Study` and `StudyError`; its phase/task graph is
   crate-private; and
 - `runtime::advanced`: `execute`, `RuntimeError`, `RunSummary`,
@@ -138,7 +140,11 @@ println!("{}", summary.output_directory().display());
 
 ## Not API
 
-Prelude ordering, individual `pub use` statements, hidden `PayloadTuple`, and
-the crate's macro-support `__private` namespace are not APIs. Consumers must
-not infer subsystem ownership from a prelude path; ownership is always the
-symbol's canonical `module::basic` or `module::advanced` path.
+Prelude ordering, individual `pub use` statements, hidden `PayloadTuple`,
+hidden `ModelRegistration`, and the crate's macro-support `__private` namespace
+are not APIs. `PayloadTuple` is reachable solely because it seals the public
+tuple-borrow bounds. `ModelRegistration` is pulled through the Task Advanced
+glob solely for attribute-macro expansion; applications register models with
+`#[model]` and must not construct it. Consumers must not infer subsystem
+ownership from a prelude path; ownership is always the symbol's canonical
+`module::basic` or `module::advanced` path.

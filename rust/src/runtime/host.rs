@@ -7,23 +7,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::config::advanced::{Config, ResolvedProgramTask};
+use crate::config::advanced::ConfigSnapshot;
 use crate::observation::advanced::BoundObservationPlan;
 use crate::persistence::advanced::{
-    PersistencePlan, PersistenceSession, ProgramLaunch, ProgramPersistenceSession,
+    ModelRecordingProvenance, PersistencePlan, PersistenceSession, ProgramLaunch,
+    ProgramPersistenceSession,
 };
 use crate::state::advanced::SystemState;
-use crate::task::advanced::{TaskExecutionHost, TaskResult};
+use crate::task::advanced::{ProgramTaskInvocation, TaskExecutionHost, TaskResult};
 use crate::ui::advanced::TaskUi;
 
 pub(crate) struct RuntimeTaskHost {
     persistence_plan: PersistencePlan,
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
-    metadata: Map<String, Value>,
+    provenance: Option<ModelRecordingProvenance>,
     persistence: Option<PersistenceSession>,
     final_iteration: Option<u64>,
     task_ui: TaskUi,
@@ -31,7 +31,7 @@ pub(crate) struct RuntimeTaskHost {
 }
 
 pub(crate) struct RuntimeTaskEnvironment {
-    config: Config,
+    config_snapshot: ConfigSnapshot,
     project_root: PathBuf,
     replicate_directory: PathBuf,
     dependencies_json: Box<[u8]>,
@@ -39,13 +39,13 @@ pub(crate) struct RuntimeTaskEnvironment {
 
 impl RuntimeTaskEnvironment {
     pub(crate) fn new(
-        config: Config,
+        config_snapshot: ConfigSnapshot,
         project_root: PathBuf,
         replicate_directory: PathBuf,
         dependencies_json: Box<[u8]>,
     ) -> Self {
         Self {
-            config,
+            config_snapshot,
             project_root,
             replicate_directory,
             dependencies_json,
@@ -58,7 +58,7 @@ impl RuntimeTaskHost {
         persistence_plan: PersistencePlan,
         cancellation: Arc<AtomicBool>,
         output_directory: PathBuf,
-        metadata: Map<String, Value>,
+        provenance: Option<ModelRecordingProvenance>,
         task_ui: TaskUi,
         environment: RuntimeTaskEnvironment,
     ) -> Self {
@@ -66,7 +66,7 @@ impl RuntimeTaskHost {
             persistence_plan,
             cancellation,
             output_directory,
-            metadata,
+            provenance,
             persistence: None,
             final_iteration: None,
             task_ui,
@@ -98,15 +98,15 @@ impl TaskExecutionHost for RuntimeTaskHost {
         self.cancellation_requested()
     }
 
-    fn execute_program(&mut self, program: &ResolvedProgramTask) -> TaskResult {
+    fn execute_program(&mut self, program: ProgramTaskInvocation<'_>) -> TaskResult {
         let mut persistence = ProgramPersistenceSession::start(
             self.output_directory.clone(),
-            self.environment.config.snapshot_json(),
+            self.environment.config_snapshot.bytes(),
             &self.environment.dependencies_json,
             ProgramLaunch {
-                executable: program.program(),
+                executable: program.executable(),
                 args: program.args(),
-                kind: program.kind_name(),
+                kind: program.kind(),
                 python_script: program.python_script(),
                 python_environment_manager: program.python_environment_manager(),
             },
@@ -116,7 +116,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .replicate_directory
             .parent()
             .unwrap_or(&self.environment.replicate_directory);
-        let mut command = Command::new(program.program());
+        let mut command = Command::new(program.executable());
         command
             .args(program.args())
             .current_dir(persistence.artifacts_directory())
@@ -139,7 +139,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
         let mut child = command.spawn().map_err(|source| {
             persistence.fail(None, &source.to_string());
             Box::new(ProgramExecutionError::Start {
-                program: program.program().to_path_buf(),
+                program: program.executable().to_path_buf(),
                 source,
             }) as Box<dyn std::error::Error + Send + Sync>
         })?;
@@ -160,7 +160,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
                     let reason = format!("program exited with status {status}");
                     persistence.fail(status.code(), &reason);
                     return Err(ProgramExecutionError::Exit {
-                        program: program.program().to_path_buf(),
+                        program: program.executable().to_path_buf(),
                         status: status.to_string(),
                     }
                     .into());
@@ -171,7 +171,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
                     let _ = child.wait();
                     persistence.fail(None, &source.to_string());
                     return Err(ProgramExecutionError::Wait {
-                        program: program.program().to_path_buf(),
+                        program: program.executable().to_path_buf(),
                         source,
                     }
                     .into());
@@ -186,11 +186,15 @@ impl TaskExecutionHost for RuntimeTaskHost {
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult {
+        let provenance = self
+            .provenance
+            .take()
+            .expect("a model task retains one recording provenance value");
         let persistence = PersistenceSession::start(
             self.output_directory.clone(),
             plan,
             self.persistence_plan,
-            self.metadata.clone(),
+            provenance,
             state,
         )?;
         self.final_iteration = Some(state.time().iteration());
