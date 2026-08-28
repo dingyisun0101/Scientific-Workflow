@@ -126,6 +126,15 @@ impl DashboardState {
             UiEvent::PhaseStarted {
                 replicate, name, ..
             } => self.active_phase = Some((*replicate, Box::from(*name))),
+            UiEvent::PhaseFailed {
+                replicate, name, ..
+            }
+            | UiEvent::PhaseCancelled { replicate, name } => {
+                self.skip_pending_in_phase(*replicate, name);
+            }
+            UiEvent::ReplicateFailed { index, .. } | UiEvent::ReplicateCancelled { index } => {
+                self.skip_pending_in_replicate(*index);
+            }
             UiEvent::TaskStarted {
                 replicate,
                 identity,
@@ -186,9 +195,10 @@ impl DashboardState {
                 if let Some(task) = self.task_mut(*replicate, identity) {
                     task.status = TaskStatus::Cancelled;
                     task.finished = Some(Instant::now());
-                    task.detail = "cancelled by user".to_owned();
+                    task.detail = "cancelled".to_owned();
                 }
             }
+            UiEvent::ExecutionFailed { .. } => self.skip_all_pending(),
             UiEvent::ExecutionCancelled => {
                 self.exit_requested = true;
                 for task in self.tasks.values_mut() {
@@ -248,6 +258,33 @@ impl DashboardState {
 
     fn task_mut(&mut self, replicate: u64, identity: &str) -> Option<&mut TaskSnapshot> {
         self.tasks.get_mut(&(replicate, identity.into()))
+    }
+
+    fn skip_pending_in_phase(&mut self, replicate: u64, phase: &str) {
+        for task in self.tasks.values_mut() {
+            if task.replicate == replicate
+                && task.phase == phase
+                && task.status == TaskStatus::Pending
+            {
+                task.status = TaskStatus::Skipped;
+            }
+        }
+    }
+
+    fn skip_pending_in_replicate(&mut self, replicate: u64) {
+        for task in self.tasks.values_mut() {
+            if task.replicate == replicate && task.status == TaskStatus::Pending {
+                task.status = TaskStatus::Skipped;
+            }
+        }
+    }
+
+    fn skip_all_pending(&mut self) {
+        for task in self.tasks.values_mut() {
+            if task.status == TaskStatus::Pending {
+                task.status = TaskStatus::Skipped;
+            }
+        }
     }
 }
 
@@ -499,5 +536,82 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("exit requested"))
         );
+    }
+
+    #[test]
+    fn early_terminal_events_close_pending_tasks_as_skipped() {
+        let mut state = DashboardState::new();
+        for (replicate, phase, identity) in [
+            (0, "first", "phase-pending"),
+            (0, "second", "replicate-pending"),
+            (1, "first", "execution-pending"),
+        ] {
+            state.apply(&UiEvent::TaskPlanned {
+                replicate,
+                phase,
+                identity,
+                label: identity,
+                kind: "program",
+                subject: identity,
+            });
+        }
+
+        state.apply(&UiEvent::PhaseFailed {
+            replicate: 0,
+            name: "first",
+            reason: "expected failure",
+        });
+        assert_eq!(
+            state.tasks[&(0, Box::from("phase-pending"))].status,
+            TaskStatus::Skipped
+        );
+        assert_eq!(
+            state.tasks[&(0, Box::from("replicate-pending"))].status,
+            TaskStatus::Pending
+        );
+
+        state.apply(&UiEvent::ReplicateFailed {
+            index: 0,
+            reason: "expected failure",
+        });
+        assert_eq!(
+            state.tasks[&(0, Box::from("replicate-pending"))].status,
+            TaskStatus::Skipped
+        );
+
+        state.apply(&UiEvent::ExecutionFailed {
+            reason: "expected failure",
+        });
+        assert_eq!(
+            state.tasks[&(1, Box::from("execution-pending"))].status,
+            TaskStatus::Skipped
+        );
+    }
+
+    #[test]
+    fn task_cancellation_detail_does_not_invent_its_source() {
+        let mut state = DashboardState::new();
+        state.apply(&UiEvent::TaskPlanned {
+            replicate: 0,
+            phase: "phase",
+            identity: "task",
+            label: "task",
+            kind: "model",
+            subject: "model",
+        });
+        state.apply(&UiEvent::TaskStarted {
+            replicate: 0,
+            phase: "phase",
+            identity: "task",
+            label: "task",
+            kind: "model",
+            subject: "model",
+        });
+        state.apply(&UiEvent::TaskCancelled {
+            replicate: 0,
+            identity: "task",
+        });
+
+        assert_eq!(state.tasks[&(0, Box::from("task"))].detail, "cancelled");
     }
 }

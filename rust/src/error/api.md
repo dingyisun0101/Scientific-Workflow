@@ -23,18 +23,24 @@ It has two variants:
   Study was available. The unique execution directory and diagnostic recording
   evidence may already exist.
 
-Both variants own their subsystem error, preserve its source chain, and are
-constructed automatically by `From<StudyError>` and `From<RuntimeError>`.
-Applications normally propagate the value with `?`. Because the enum is
-non-exhaustive, downstream matching requires a wildcard arm; applications
-that need detailed handling can inspect the source or match the owning
-subsystem error through an advanced split workflow.
+Both variants own their subsystem error and are constructed automatically by
+`From<StudyError>` and `From<RuntimeError>`. Their transparent error behavior
+forwards the subsystem error's display text and source chain without inserting
+an additional facade message. Matching the public variant retrieves the owned
+subsystem error. Applications normally propagate the value with `?`. Because
+the enum is non-exhaustive, downstream matching requires a wildcard arm;
+applications that want the precise stage-specific result type can instead use
+the advanced split workflow.
 
 The error performs no IO, starts no work, and has no cancellation behavior.
 Formatting it is side-effect free. It borrows nothing from the project or
-Runtime, so it can outlive the failed `run` call. Its thread-safety follows
-the owned Study or Runtime error source rather than an independent wrapper
-mechanism.
+Runtime, so it can outlive the failed `run` call. `WorkflowError` is `Send +
+Sync` because every retained subsystem source has that contract.
+
+Fatal UI renderer failures deliberately panic and therefore do not produce a
+`WorkflowError` variant. The error boundary represents expected Study and
+Runtime failures returned by the facade, not failure of the required
+presentation interface.
 
 ## Advanced API
 
@@ -78,7 +84,8 @@ match scientific_workflow::run(Path::new(".")) {
 
 The private storage file for `WorkflowError`, crate-facade sequencing, and
 `thiserror` derive expansion are implementation details. The module does not
-own project parsing, execution, recovery, logging, exit-code selection, or
-diagnostic rendering. New error variants require compatibility review because
-the enum is public, but its non-exhaustive contract permits Workflow to add a
-new complete-workflow stage without breaking exhaustive downstream matches.
+own project parsing, execution, recovery, logging, exit-code selection,
+diagnostic rendering, or panic recovery. New error variants require
+compatibility review because the enum is public, but its non-exhaustive
+contract permits Workflow to add a new complete-workflow stage without
+breaking exhaustive downstream matches.

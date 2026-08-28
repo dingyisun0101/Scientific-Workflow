@@ -423,6 +423,8 @@ result = {
     assert_eq!(program_summary.kind(), TaskRunKind::Program);
     assert_eq!(program_summary.model(), None);
     assert_eq!(program_summary.program(), Some(program.as_path()));
+    assert_eq!(program_summary.program_kind(), Some("program"));
+    assert_eq!(program_summary.python_script(), None);
     assert_eq!(program_summary.final_iteration(), None);
 
     let result: serde_json::Value = serde_json::from_slice(
@@ -504,8 +506,8 @@ output = Path(os.environ["WORKFLOW_TASK_OUTPUT"])
     let task = &summary.replicates()[0].phases()[0].tasks()[0];
     assert_eq!(task.identity(), "analyze/000000/python-analyze.py");
     assert_eq!(task.kind(), TaskRunKind::Program);
-    assert_eq!(task.program_kind.as_deref(), Some("python"));
-    assert_eq!(task.python_script.as_deref(), Some(script.as_path()));
+    assert_eq!(task.program_kind(), Some("python"));
+    assert_eq!(task.python_script(), Some(script.as_path()));
     assert_eq!(task.final_iteration(), None);
     assert!(task.program().unwrap().is_absolute());
     let result: serde_json::Value = serde_json::from_slice(

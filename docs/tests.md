@@ -9,8 +9,9 @@ public.
 
 - `rust/tests/integration_surface.rs` verifies the crate-level `run(&Path)`
   facade, canonical error Basic/Advanced tiers, prelude aggregation, and the
-  Study-only signature of Runtime's Advanced entry point, including
-  `TaskRunKind` through `prelude::advanced`.
+  Study-only signature of Runtime's Advanced entry point. It also verifies
+  `WorkflowError` stage conversions, transparent display/source behavior,
+  `Send + Sync`, and `TaskRunKind` through `prelude::advanced`.
 - `rust/tests/state_workflow.rs` exercises Path-based schema loading,
   heterogeneous payload ownership, tuple borrows, time advancement, schema
   inspection, maintenance, and public Basic/Advanced tier behavior.
@@ -45,8 +46,13 @@ public.
   private typed constants decoding, decimal-MB persistence-size conversion,
   overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
   and contextual errors. Even an unreferenced JSON document is strict-parsed.
+- `rust/src/task/tests/task_workflow.rs` covers invalid/duplicate registration
+  keys, `!Send + !Sync` constants, cancellation before initialization and
+  between steps, initial/step/final observation ordering, failure atomicity,
+  state-owner/schema stability, strict iteration advancement, and target
+  progression invariants through a private fake host.
 - `rust/src/study/tests/study_workflow.rs` covers linked model discovery,
-  invalid/duplicate registrations, effect-free loading, unknown models, typed
+  effect-free loading, unknown models, typed
   constants and one-time observation preflight, contextual named-schema
   validation errors, Study/error `Send + Sync`, deterministic internal
   identities, per-model binding of multiple named state schemas, phase
@@ -59,10 +65,20 @@ public.
   logs, metadata, and generic runtime summaries. A separate direct Python task
   verifies that a non-executable `.py` script runs through its nested `system`
   environment without any Rust wrapper and records Python launcher provenance.
+- `rust/src/runtime/tests/runtime_workflow.rs` covers summary/error
+  thread-safety, completion-time deadline classification, task and phase
+  timeout lifecycle, panic-to-failed-recording cleanup, parallel replicate
+  fail-fast cancellation, parallel finish-all completion, phase-level failure
+  policies, start-interval/concurrency admission, deterministic task order,
+  and distinct sequential/parallel replicate admission. Study execution tests
+  retain topology and program/Python handoff coverage; successful program
+  summaries verify the public program-kind and Python-script accessors.
 - `rust/src/ui/command.rs` verifies the former editor and exact lowercase
   `exit` contract. `ui/state.rs` verifies declaration-ordered event-reduced
   rows, per-phase task-panel replacement, progress, bounded message history,
-  and cancelled/skipped outcomes. PTY validation
+  source-neutral cancellation, and phase/replicate/execution closure of
+  pending rows as skipped. `ui/session.rs` verifies that recorded renderer
+  failure panics at the Runtime-facing health boundary. PTY validation
   confirms alternate-screen Ratatui rendering, keyboard exit, cooperative
   Runtime cancellation, and terminal restoration. Noninteractive tests receive
   stable plain lifecycle diagnostics rather than terminal control sequences.
@@ -75,9 +91,11 @@ The write path is intentionally tested beneath
 - `persistence_workflow.rs` covers automatic-plan-equivalent local writes,
   bounded chunking, metadata transitions, terminal state deduplication,
   clone-free encoding, typed verified readback, and generic payload types.
-- `persistence_resilience.rs` injects configuration, encoding, writer,
-  lifecycle, decoder, malformed-record, missing-file, size, and checksum
-  failures and verifies contextual/no-partial-success behavior.
+- `persistence_resilience.rs` injects configuration, initial/final session
+  observation, encoding, writer, lifecycle, decoder, malformed-record,
+  missing-file, size, checksum, latest-chunk descriptor/order, and program
+  status transitions and verifies failed-metadata and
+  no-partial-success behavior.
 - `python_reader_conformance.rs` verifies Rust/Python format-v7 compatibility
   and exact floating-point/unicode round trips.
 

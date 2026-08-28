@@ -237,11 +237,11 @@ impl StoredStateSeriesReader {
 
     /// Reconstructs only the latest state in one completed stream.
     ///
-    /// Earlier chunks are not opened. The newest chunk's length and checksum
-    /// are verified, then its final newline-terminated record is decoded into
-    /// the stream's partial schema. This is suitable for final-value analysis;
-    /// use checkpoint continuation when the state must cover a complete model
-    /// schema and remain appendable.
+    /// Earlier chunks are not opened. The newest chunk's length, checksum,
+    /// framing, record count, positional widths, iteration order, and declared
+    /// first/final iterations are verified before its final record is decoded
+    /// into the stream's partial schema. This is suitable for final-value
+    /// analysis; the returned partial state is not an append/resume handle.
     pub fn read_latest_state_from_stream(
         &self,
         stream: &str,
@@ -262,7 +262,8 @@ impl StoredStateSeriesReader {
             })?;
         let path = self.root.join(&declaration.directory).join(&chunk.file);
         let bytes = read_verified_chunk(&self.metadata_path, &path, chunk)?;
-        let record = final_jsonl_record(&path, &bytes)?;
+        let record =
+            verified_final_jsonl_record(&self.metadata_path, &path, declaration, chunk, &bytes)?;
         let spec = stream_spec(&self.metadata_path, declaration)?;
         let state =
             decode_state_record_with_decoders(record, &path, declaration, &spec, &self.decoders)?;
@@ -407,25 +408,80 @@ impl StoredStateSeriesReader {
     }
 }
 
-/// Borrows the final nonempty newline-terminated record from one chunk image.
-fn final_jsonl_record<'a>(path: &Path, bytes: &'a [u8]) -> Result<&'a [u8], PersistenceError> {
-    if !bytes.ends_with(b"\n") {
-        return Err(invalid_record(
-            path,
-            1,
-            "latest chunk is not terminated by a newline",
-        ));
+/// Verifies one complete latest chunk while retaining only its final record.
+fn verified_final_jsonl_record<'a>(
+    metadata_path: &Path,
+    path: &Path,
+    stream: &StateStreamMetadata,
+    chunk: &ChunkMetadata,
+    bytes: &'a [u8],
+) -> Result<&'a [u8], PersistenceError> {
+    let mut records = 0_u64;
+    let mut first_iteration = None;
+    let mut last_iteration = None;
+    let mut previous_iteration = None;
+    let mut final_record = None;
+
+    for framed in bytes.split_inclusive(|byte| *byte == b'\n') {
+        records = records
+            .checked_add(1)
+            .ok_or_else(|| PersistenceError::ByteCountOverflow {
+                stream: stream.name.clone(),
+            })?;
+        if !framed.ends_with(b"\n") {
+            return Err(invalid_record(
+                path,
+                records,
+                "record is not terminated by a newline",
+            ));
+        }
+        let record_bytes = &framed[..framed.len() - 1];
+        if record_bytes.is_empty() {
+            return Err(invalid_record(
+                path,
+                records,
+                "record line must not be empty",
+            ));
+        }
+        let record: BorrowedRecord<'_> =
+            serde_json::from_slice(record_bytes).map_err(|source| {
+                invalid_record(path, records, format!("invalid JSON record: {source}"))
+            })?;
+        if record.values.entries.len() != stream.fields.len() {
+            return Err(invalid_record(
+                path,
+                records,
+                format!(
+                    "record contains {} payload values but stream `{}` declares {} fields",
+                    record.values.entries.len(),
+                    stream.name,
+                    stream.fields.len()
+                ),
+            ));
+        }
+        if record.physical_time.is_some_and(|time| !time.is_finite()) {
+            return Err(invalid_record(
+                path,
+                records,
+                "physical time must be finite",
+            ));
+        }
+        validate_iteration(path, records, record.iteration, previous_iteration)?;
+        first_iteration.get_or_insert(record.iteration);
+        last_iteration = Some(record.iteration);
+        previous_iteration = Some(record.iteration);
+        final_record = Some(record_bytes);
     }
-    let without_final_newline = &bytes[..bytes.len() - 1];
-    let start = without_final_newline
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |position| position + 1);
-    let record = &without_final_newline[start..];
-    if record.is_empty() {
-        return Err(invalid_record(path, 1, "latest record must not be empty"));
-    }
-    Ok(record)
+
+    validate_chunk_facts(
+        metadata_path,
+        stream,
+        chunk,
+        records,
+        first_iteration,
+        last_iteration,
+    )?;
+    final_record.ok_or_else(|| invalid_record(path, 1, "latest chunk contains no record"))
 }
 
 impl fmt::Debug for StoredStateSeriesReader {

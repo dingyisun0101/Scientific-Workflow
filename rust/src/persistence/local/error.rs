@@ -65,8 +65,8 @@ pub enum PersistenceError {
     // ---------------------------------------------------------------------
     /// A new recording refused to replace an existing path.
     ///
-    /// Persistence never silently overwrites a previous recording. Existing
-    /// Running recordings are accepted only through continuation APIs.
+    /// Persistence never silently overwrites a previous recording. This crate
+    /// exposes no continuation or resume path for an existing directory.
     #[error("recording directory `{path}` already exists")]
     RecordingDirectoryExists {
         /// Existing path that prevented recording creation.

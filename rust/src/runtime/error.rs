@@ -34,7 +34,8 @@ pub enum RuntimeError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    /// A task invocation panicked in its runtime worker.
+    /// A task invocation panicked. Runtime fails any active model recording
+    /// before reporting this stable task identity.
     #[error("task `{task}` panicked")]
     TaskPanicked {
         /// Inferred task identity.
@@ -86,7 +87,7 @@ pub enum RuntimeError {
         index: u64,
     },
 
-    /// At least one replicate failed under a finish-all policy.
+    /// A replicate failed under either failure policy.
     #[error("replicate {index} failed: {source}")]
     Replicate {
         /// Zero-based failed replicate index.

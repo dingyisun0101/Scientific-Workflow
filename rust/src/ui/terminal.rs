@@ -1,4 +1,4 @@
-//! Ratatui dashboard and noninteractive line fallback.
+//! Ratatui dashboard and noninteractive line-rendering mode.
 
 use std::io::{self, IsTerminal, Write as _};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,10 +30,11 @@ pub(super) fn interactive() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
-pub(super) fn render_plain(event: &UiEvent<'_>) {
+pub(super) fn render_plain(event: &UiEvent<'_>) -> io::Result<()> {
     if let Some(message) = event_message(event) {
-        eprintln!("[{message}]");
+        writeln!(io::stderr().lock(), "[{message}]")?;
     }
+    Ok(())
 }
 
 pub(super) struct DashboardTerminal {

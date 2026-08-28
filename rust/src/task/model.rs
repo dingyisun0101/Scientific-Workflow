@@ -34,21 +34,28 @@ use super::result::TaskResult;
 /// observation plan themselves.
 pub trait ScientificModel: Send + Sized + 'static {
     /// One complete set of model constants supplied by config.
-    type Constants: DeserializeOwned + Send + Sync + 'static;
+    ///
+    /// Constants need not implement [`Send`] or [`Sync`]: Study and Runtime
+    /// independently decode and consume their equivalent owned instances on
+    /// the thread performing that operation. The model itself remains `Send`,
+    /// and [`TaskResult`] errors remain `Send + Sync` for worker handoff.
+    type Constants: DeserializeOwned + 'static;
 
     /// Defines the scientific observations recorded for this model.
     ///
     /// The default records every declared state field at every iteration.
     /// Implementations may derive stream selection and sampling cadence from
-    /// model constants. This function is called once during effect-free Study
-    /// preflight; Study binds and retains that exact plan for execution. It
-    /// must not perform external side effects.
+    /// model constants. This function is called once with Study's preflight
+    /// constants instance; Study binds and retains the resulting plan for
+    /// execution, then drops that instance. It must not perform external side
+    /// effects.
     fn observation_plan(_constants: &Self::Constants) -> TaskResult<ObservationPlan> {
         Ok(ObservationPlan::all_fields())
     }
 
-    /// Builds a fully initialized model from resolved constants and the
-    /// selected, centrally loaded state schema.
+    /// Builds a fully initialized model from a fresh decode of the same
+    /// resolved constants value and the selected, centrally loaded state
+    /// schema.
     ///
     /// The returned model must already contain a usable, fully populated state
     /// created from this exact `schema` allocation. No state observation occurs

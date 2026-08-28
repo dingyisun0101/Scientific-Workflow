@@ -1,9 +1,10 @@
 //! Runtime scheduling for a completed immutable Study.
 
 use std::collections::{HashMap, VecDeque};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -98,7 +99,8 @@ fn run_replicates_sequential(
     let mut summaries = Vec::with_capacity(scopes.len());
     let mut first_error = None;
     for (index, scope) in scopes {
-        match run_replicate(study, index, scope, ui) {
+        let cancellation = AtomicBool::new(false);
+        match run_replicate(study, index, scope, ui, &cancellation) {
             Ok(summary) => summaries.push(summary),
             Err(source) => {
                 first_error.get_or_insert(RuntimeError::Replicate {
@@ -122,17 +124,32 @@ fn run_replicates_parallel(
     scopes: Vec<(u64, PathBuf)>,
     ui: &UiSession,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
-    let mut workers: Vec<(u64, JoinHandle<Result<ReplicateRunSummary, RuntimeError>>)> =
-        Vec::with_capacity(scopes.len());
+    enum WorkerOutcome {
+        Finished(Result<ReplicateRunSummary, RuntimeError>),
+        Panicked,
+    }
+
+    let worker_count = scopes.len();
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let (outcomes, completed) = mpsc::channel();
+    let mut workers: Vec<(u64, JoinHandle<()>)> = Vec::with_capacity(worker_count);
     for (index, scope) in scopes {
         let study = study.clone();
         let ui = ui.clone();
+        let outcomes = outcomes.clone();
+        let worker_cancellation = Arc::clone(&cancellation);
         let worker = match thread::Builder::new()
             .name(format!("workflow-replicate-{index}"))
-            .spawn(move || run_replicate(&study, index, scope, &ui))
-        {
+            .spawn(move || {
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    run_replicate(&study, index, scope, &ui, &worker_cancellation)
+                }))
+                .map_or(WorkerOutcome::Panicked, WorkerOutcome::Finished);
+                let _ = outcomes.send((index, outcome));
+            }) {
             Ok(worker) => worker,
             Err(source) => {
+                cancellation.store(true, Ordering::Release);
                 for (_, worker) in workers {
                     let _ = worker.join();
                 }
@@ -144,20 +161,45 @@ fn run_replicates_parallel(
         };
         workers.push((index, worker));
     }
-    let mut summaries = Vec::with_capacity(workers.len());
+    drop(outcomes);
+
+    let fail_fast = study.replicate_policy().failure_policy() == FailurePolicy::FailFast;
+    let mut summaries = Vec::with_capacity(worker_count);
     let mut first_error = None;
+    for _ in 0..worker_count {
+        let (index, outcome) = completed
+            .recv()
+            .expect("replicate worker reports exactly one terminal outcome");
+        let error = match outcome {
+            WorkerOutcome::Finished(Ok(summary)) => {
+                summaries.push(summary);
+                None
+            }
+            WorkerOutcome::Finished(Err(RuntimeError::ExecutionCancelled))
+                if fail_fast && first_error.is_some() =>
+            {
+                None
+            }
+            WorkerOutcome::Finished(Err(source)) => Some(RuntimeError::Replicate {
+                index,
+                source: Box::new(source),
+            }),
+            WorkerOutcome::Panicked => Some(RuntimeError::ReplicatePanicked { index }),
+        };
+        if let Some(error) = error
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+            if fail_fast {
+                cancellation.store(true, Ordering::Release);
+            }
+        }
+    }
     for (index, worker) in workers {
-        match worker.join() {
-            Ok(Ok(summary)) => summaries.push(summary),
-            Ok(Err(source)) => {
-                first_error.get_or_insert(RuntimeError::Replicate {
-                    index,
-                    source: Box::new(source),
-                });
-            }
-            Err(_) => {
-                first_error.get_or_insert(RuntimeError::ReplicatePanicked { index });
-            }
+        if worker.join().is_err() && first_error.is_none() {
+            // The closure catches the replicate body. A panic here can only
+            // arise while tearing down worker-owned values after reporting.
+            first_error = Some(RuntimeError::ReplicatePanicked { index });
         }
     }
     summaries.sort_by_key(ReplicateRunSummary::index);
@@ -172,9 +214,10 @@ fn run_replicate(
     index: u64,
     scope: PathBuf,
     ui: &UiSession,
+    scheduler_cancellation: &AtomicBool,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     ui.publish(UiEvent::ReplicateStarted { index });
-    let result = run_replicate_inner(study, index, scope, ui);
+    let result = run_replicate_inner(study, index, scope, ui, scheduler_cancellation);
     match &result {
         Ok(_) => ui.publish(UiEvent::ReplicateCompleted { index }),
         Err(RuntimeError::ExecutionCancelled) => {
@@ -196,10 +239,14 @@ fn run_replicate_inner(
     index: u64,
     scope: PathBuf,
     ui: &UiSession,
+    scheduler_cancellation: &AtomicBool,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     let positions = topological_positions(study.phases());
     let mut phases = Vec::with_capacity(positions.len());
     for position in positions {
+        if scheduler_cancellation.load(Ordering::Acquire) {
+            return Err(RuntimeError::ExecutionCancelled);
+        }
         let phase = &study.phases()[position];
         let dependencies_json = dependency_snapshot(phase, &phases);
         let context = PhaseRuntime {
@@ -208,6 +255,7 @@ fn run_replicate_inner(
             dependencies_json,
             replicate: index,
             ui,
+            scheduler_cancellation,
         };
         phases.push(run_phase(phase, &context)?);
     }
@@ -253,8 +301,12 @@ struct ActiveTask {
     task: StudyTask,
     cancellation: Arc<AtomicBool>,
     started: Instant,
-    timed_out: bool,
-    worker: JoinHandle<Result<TaskRunSummary, RuntimeError>>,
+    worker: JoinHandle<TaskWorkerOutcome>,
+}
+
+struct TaskWorkerOutcome {
+    finished: Instant,
+    result: Result<TaskRunSummary, RuntimeError>,
 }
 
 struct PhaseRuntime<'a> {
@@ -263,6 +315,7 @@ struct PhaseRuntime<'a> {
     dependencies_json: Box<[u8]>,
     replicate: u64,
     ui: &'a UiSession,
+    scheduler_cancellation: &'a AtomicBool,
 }
 
 struct TaskRuntime {
@@ -322,7 +375,10 @@ fn run_phase_inner(
     let mut execution_cancelled = false;
 
     while !pending.is_empty() || !active.is_empty() {
-        if context.ui.cancellation_requested() && !execution_cancelled {
+        if (context.ui.cancellation_requested()
+            || context.scheduler_cancellation.load(Ordering::Acquire))
+            && !execution_cancelled
+        {
             execution_cancelled = true;
             pending.clear();
             for task in &active {
@@ -331,6 +387,7 @@ fn run_phase_inner(
         }
         if let Some(timeout) = phase.timeout()
             && phase_started.elapsed() >= timeout
+            && (!pending.is_empty() || active.iter().any(|task| !task.worker.is_finished()))
         {
             phase_timed_out = true;
             pending.clear();
@@ -365,8 +422,8 @@ fn run_phase_inner(
         for task in &mut active {
             if let Some(timeout) = task.task.timeout()
                 && task.started.elapsed() >= timeout
+                && !task.worker.is_finished()
             {
-                task.timed_out = true;
                 task.cancellation.store(true, Ordering::Release);
             }
         }
@@ -379,18 +436,25 @@ fn run_phase_inner(
             }
             let active_task = active.swap_remove(position);
             let identity = active_task.task.identity().to_owned();
-            let result = active_task.worker.join().unwrap_or_else(|_| {
-                Err(RuntimeError::TaskPanicked {
-                    task: identity.clone(),
-                })
+            let outcome = active_task
+                .worker
+                .join()
+                .unwrap_or_else(|_| TaskWorkerOutcome {
+                    finished: Instant::now(),
+                    result: Err(RuntimeError::TaskPanicked {
+                        task: identity.clone(),
+                    }),
+                });
+            let timed_out = active_task.task.timeout().is_some_and(|timeout| {
+                task_exceeded_timeout(active_task.started, outcome.finished, timeout)
             });
-            let result = if active_task.timed_out {
+            let result = if timed_out {
                 Err(RuntimeError::TaskTimedOut {
                     task: identity,
                     timeout: active_task.task.timeout().expect("timed task has timeout"),
                 })
             } else {
-                result
+                outcome.result
             };
             match result {
                 Ok(summary) => {
@@ -459,6 +523,14 @@ fn run_phase_inner(
     })
 }
 
+pub(super) fn task_exceeded_timeout(
+    started: Instant,
+    finished: Instant,
+    timeout: Duration,
+) -> bool {
+    finished.saturating_duration_since(started) >= timeout
+}
+
 fn spawn_task(
     task: StudyTask,
     phase: &str,
@@ -480,10 +552,18 @@ fn spawn_task(
         ui: context.ui.clone(),
     };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
-    let worker = match thread::Builder::new()
-        .name(thread_name)
-        .spawn(move || run_task(worker_task, runtime, worker_cancellation, output_directory))
-    {
+    let started = Instant::now();
+    let worker = match thread::Builder::new().name(thread_name).spawn(move || {
+        let identity = worker_task.identity().to_owned();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            run_task(worker_task, runtime, worker_cancellation, output_directory)
+        }))
+        .unwrap_or_else(|_| Err(RuntimeError::TaskPanicked { task: identity }));
+        TaskWorkerOutcome {
+            finished: Instant::now(),
+            result,
+        }
+    }) {
         Ok(worker) => worker,
         Err(source) => {
             let error = RuntimeError::StartWorker {
@@ -510,8 +590,7 @@ fn spawn_task(
     Ok(ActiveTask {
         task,
         cancellation,
-        started: Instant::now(),
-        timed_out: false,
+        started,
         worker,
     })
 }
@@ -537,12 +616,22 @@ fn run_task(
         runtime.ui.task(runtime.replicate, task.identity()),
         environment,
     );
-    if let Err(source) = task.definition().execute(&mut host) {
-        host.fail(&source.to_string());
-        return Err(RuntimeError::Task {
-            task: task.identity().to_owned(),
-            source,
-        });
+    match catch_unwind(AssertUnwindSafe(|| task.definition().execute(&mut host))) {
+        Ok(Ok(())) => {}
+        Ok(Err(source)) => {
+            host.fail(&source.to_string());
+            return Err(RuntimeError::Task {
+                task: task.identity().to_owned(),
+                source,
+            });
+        }
+        Err(payload) => {
+            let reason = panic_reason(payload.as_ref());
+            host.fail(&format!("task panicked: {reason}"));
+            return Err(RuntimeError::TaskPanicked {
+                task: task.identity().to_owned(),
+            });
+        }
     }
     if host.cancellation_requested() {
         host.fail("runtime cancellation requested");
@@ -584,6 +673,23 @@ fn run_task(
         final_iteration,
         output_directory: host.output_directory().to_path_buf(),
     })
+}
+
+fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
+    const MAX_CHARS: usize = 1_024;
+
+    let message = payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_owned());
+    let mut characters = message.chars();
+    let bounded = characters.by_ref().take(MAX_CHARS).collect::<String>();
+    if characters.next().is_some() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    }
 }
 
 fn task_metadata(task: &StudyTask, persistence_plan: PersistencePlan) -> Map<String, Value> {
@@ -651,8 +757,8 @@ fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box
                         },
                         "model": task.model(),
                         "program": task.program().map(|path| path.to_string_lossy()),
-                        "program_kind": task.program_kind.as_deref(),
-                        "python_script": task.python_script.as_deref().map(|path| path.to_string_lossy()),
+                        "program_kind": task.program_kind(),
+                        "python_script": task.python_script().map(|path| path.to_string_lossy()),
                         "final_iteration": task.final_iteration(),
                         "output_directory": task.output_directory().to_string_lossy()
                     })

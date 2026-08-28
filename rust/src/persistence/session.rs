@@ -68,6 +68,8 @@ impl ProgramPersistenceSession {
         let stdout = create_file(&stdout_path, "create program standard-output log")?;
         let stderr = create_file(&stderr_path, "create program standard-error log")?;
 
+        sync_directory(&directory, "synchronize prepared program workspace entries")?;
+
         let mut session = Self {
             directory,
             artifacts,
@@ -154,9 +156,10 @@ impl ProgramPersistenceSession {
         write_new(&temporary_path, &bytes, "write temporary program metadata")?;
         fs::rename(&temporary_path, &metadata_path).map_err(|source| PersistenceError::Io {
             operation: "commit program metadata",
-            path: metadata_path,
+            path: metadata_path.clone(),
             source,
-        })
+        })?;
+        sync_directory(&self.directory, "synchronize program metadata transition")
     }
 }
 
@@ -199,6 +202,16 @@ fn write_new(path: &Path, bytes: &[u8], operation: &'static str) -> Result<(), P
         })
 }
 
+fn sync_directory(path: &Path, operation: &'static str) -> Result<(), PersistenceError> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| PersistenceError::Io {
+            operation,
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
 impl PersistenceSession {
     pub(crate) fn start(
         directory: PathBuf,
@@ -212,7 +225,10 @@ impl PersistenceSession {
             persistence_plan.queue_capacity(),
         );
         let mut writer = SystemStateWriter::create(directory, observation_plan, metadata, storage)?;
-        writer.observe_state(initial_state)?;
+        if let Err(error) = writer.observe_state(initial_state) {
+            let _ = writer.mark_recording_failed(error.to_string());
+            return Err(error);
+        }
         Ok(Self {
             writer: Some(writer),
         })

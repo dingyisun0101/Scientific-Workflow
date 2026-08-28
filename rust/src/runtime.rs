@@ -12,6 +12,10 @@ mod host;
 mod output;
 mod summary;
 
+#[cfg(test)]
+#[path = "runtime/tests/runtime_workflow.rs"]
+mod runtime_workflow_tests;
+
 /// Ordinary application-facing runtime API.
 ///
 /// This scope is intentionally empty. Ordinary applications call the

@@ -144,7 +144,10 @@ impl RecordingTiming {
         Duration::from_nanos(self.active_duration_ns)
     }
 
-    /// Returns how many times this recording was reopened for continuation.
+    /// Returns the stored continuation count.
+    ///
+    /// Recordings created by this crate always report zero because no
+    /// continuation or resume path is supported.
     pub fn continuation_count(&self) -> u64 {
         self.continuation_count
     }
@@ -353,7 +356,10 @@ impl SystemStateWriter {
         mut self,
         state: &SystemState,
     ) -> Result<(), PersistenceError> {
-        self.record_final_state(state)?;
+        if let Err(error) = self.record_final_state(state) {
+            let _ = self.mark_recording_failed(error.to_string());
+            return Err(error);
+        }
         self.complete_recording()
     }
 

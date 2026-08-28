@@ -14,6 +14,10 @@ mod execution;
 mod model;
 mod result;
 
+#[cfg(test)]
+#[path = "task/tests/task_workflow.rs"]
+mod task_workflow_tests;
+
 /// Ordinary application-facing task API.
 pub mod basic {
     pub use super::model::ScientificModel;

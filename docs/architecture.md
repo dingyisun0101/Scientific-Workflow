@@ -240,7 +240,8 @@ workflow/
 │   │   ├── task/result.rs            boxed application error alias
 │   │   ├── task/catalog.rs           linked registrations and sorted validation
 │   │   ├── task/definition.rs        type-erased model/program execution definitions
-│   │   └── task/execution.rs         host port and model invariant enforcement
+│   │   ├── task/execution.rs         host port and model invariant enforcement
+│   │   └── task/tests/task_workflow.rs private catalog/execution contract tests
 │   │   │
 │   │   ├── config.rs                 config root; empty Basic, error-only Advanced
 │   │   ├── config/api.md             complete project grammar/error contract
@@ -268,7 +269,8 @@ workflow/
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
 │   │   ├── runtime/host.rs           model/program execution and persistence adapter
 │   │   ├── runtime/execution.rs      Study-only replicate/phase/task schedulers
-│   │   └── runtime/summary.rs        successful immutable RunSummary tree
+│   │   ├── runtime/summary.rs        successful immutable RunSummary tree
+│   │   └── runtime/tests/runtime_workflow.rs private scheduler/lifecycle tests
 │   │   │
 │   │   ├── ui.rs                     UI root; empty public Basic/Advanced tiers
 │   │   ├── ui/api.md                 automatic presentation contract
@@ -277,7 +279,7 @@ workflow/
 │   │   ├── ui/command.rs             former command editor and exact exit parser
 │   │   ├── ui/state.rs               event-reduced rows/messages/status snapshot
 │   │   ├── ui/session.rs             renderer thread and cancellation bridge
-│   │   └── ui/terminal.rs            Ratatui dashboard + plain fallback
+│   │   └── ui/terminal.rs            Ratatui dashboard + plain noninteractive mode
 │   │   │
 │   │   ├── persistence.rs            persistence root; empty Basic, read Advanced
 │   │   ├── persistence/api.md        complete settings/read/error contract
@@ -337,9 +339,11 @@ buffers, files, or lifecycle.
 `ScientificModel` is the irreducible user contract for stateful Rust science.
 Task itself is generic: Study may instead bind a resolved executable with
 direct arguments and no public Rust adapter. Config lowers a nested Python
-script/environment declaration to that same executable boundary. A model
-consumes typed constants, initializes from its task-bound selected schema, and directly owns
-the stable state returned by `state()`. It reports completion and performs one
+script/environment declaration to that same executable boundary. Study and
+Runtime decode equivalent constants instances independently from Config's same
+retained JSON value, so the constants type itself need not be `Send` or `Sync`.
+A model initializes from its task-bound selected schema and directly owns the
+stable state returned by `state()`. It reports completion and performs one
 iteration-advancing `step`. Task enforces what Rust can observe: state
 address/schema stability, strict iteration progress, and a monotonic optional
 target. The macro submits immutable registration metadata; the private catalog
@@ -386,9 +390,16 @@ entry point: it consumes only complete immutable intent. Runtime alone creates
 topologically schedules generic tasks, applies concurrency/start intervals and
 fail-fast/finish-all policy, checks cooperative cancellation between model
 steps, directly starts programs and resolved Python launchers without a shell,
-and returns deterministic successful summaries. A blocking user `step` cannot
-be forcibly killed safely; an external child is killed and reaped on observed
-cancellation.
+and returns deterministic successful summaries. Parallel replicate workers
+report completion as it occurs, allowing replicate-level fail-fast to cancel
+active siblings promptly without changing ascending successful-summary order.
+Worker completion timestamps, rather than scheduler harvest time, determine
+task deadline outcomes; phase timeouts apply only while work remains. A
+blocking user `step` cannot be forcibly killed safely, but cancellation
+observed when it returns prevents a successful final recording transition. An
+external child is killed and reaped on observed cancellation. A task panic is
+caught while its host is alive so any active model recording becomes durably
+failed before the existing `TaskPanicked { task }` error is returned.
 
 ### Persistence
 
@@ -413,7 +424,11 @@ remote adapter belongs behind the private `PersistenceSession`, not in model
 or task APIs. A separate private program session creates an isolated artifacts
 directory, freezes central config and dependency JSON, captures stdout/stderr,
 records generic-program or Python launcher provenance, and atomically publishes
-running/complete/failed metadata. The workspace remains the external task's
+and directory-synchronizes running/complete/failed metadata. Initial and final
+model-observation failures best-effort terminalize an active recording as
+failed before preserving the triggering error. Latest-state reconstruction
+validates every record and descriptor fact in the newest chunk, not only its
+last line. The workspace remains the external task's
 default working area, but Python or another external program owns its
 domain-specific IO and may write to a safe project-relative destination from
 `wf_configs/parameters.json`; the attractor plotter uses `output/plots`.
@@ -434,7 +449,13 @@ persistence. Programs publish generic lifecycle facts without invented
 iteration values, so neither workload supplies UI code or values.
 
 Interactive stdin and stderr select the Ratatui/Crossterm alternate-screen
-dashboard; noninteractive runs use stable plain lifecycle lines. The dashboard
+dashboard; noninteractive runs deliberately select UI's stable plain lifecycle
+renderer. UI is the sole presentation interface, so failure to start or
+initialize the selected renderer, poll terminal input, draw, or write plain
+output is a fatal panic rather than cancellation or fallback. Renderer health
+is checked from Runtime-facing publication, scheduler, and final-join
+boundaries, while the terminal lease restores process state during unwinding.
+The dashboard
 owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
 elapsed/ETA fields, a bounded message panel, and the former command editor.
 Every phase-start event replaces the visible task set. Replicate and phase
@@ -443,14 +464,18 @@ Exact lowercase `exit` or Ctrl+C requests cooperative Runtime cancellation,
 stops further admission, and waits for active model/program cleanup before
 terminal restoration. One private refresh thread retains presentation facts
 but never scientific payloads. Its public Basic and Advanced tiers remain
-empty.
+empty. Early phase, replicate, or execution termination closes affected
+unadmitted task rows as skipped; cancellation text does not invent whether its
+source was user input, failure policy, or a deadline.
 
 ### Error and prelude integration
 
 `error::basic::WorkflowError` composes the effect-free `StudyError` and active
 `RuntimeError` stages without absorbing either subsystem's detailed
 vocabulary. The crate root re-exports that type and owns the sole ordinary
-`run(&Path)` facade. `error::advanced` is currently the same supported set.
+`run(&Path)` facade. Its transparent variants forward subsystem display and
+source chains, retain `Send + Sync`, and do not absorb fatal UI renderer panics.
+`error::advanced` is currently the same supported set.
 
 Prelude Basic aggregates all subsystem Basic scopes plus the crate-owned
 `run`, `model`, and `WorkflowError` conveniences. Prelude Advanced is its
@@ -481,8 +506,8 @@ owns behavior or creates an alternative canonical implementation path.
     whenever one safe deterministic answer exists.
 13. Public APIs contain irreducible user intent or a deliberate read/embedding
     contract, not internal flexibility for hypothetical use.
-14. UI consumes only Runtime facts, activates automatically, and never turns a
-    presentation failure into scientific failure.
+14. UI consumes only Runtime facts, activates automatically as the sole
+    presentation interface, and panics on failure of its selected renderer.
 15. Model and external-program tasks share phase, dependency, timeout, failure,
     summary, persistence-workspace, and UI lifecycle semantics without forcing
     fake state or iteration onto programs.
@@ -516,4 +541,5 @@ owns behavior or creates an alternative canonical implementation path.
   bounded model submission, program workspace isolation/snapshots/logs,
   terminal evidence/provenance, and verified model reads.
 - A UI replacement remains downstream of Runtime, requires no model/config
-  participation, handles concurrent publishers, and stays best-effort.
+  participation, handles concurrent publishers, restores terminal state while
+  unwinding, and treats renderer failure as fatal rather than cancellation.

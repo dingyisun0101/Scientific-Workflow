@@ -2,6 +2,10 @@
 
 use std::path::Path;
 
+use scientific_workflow::error::basic::WorkflowError;
+use scientific_workflow::runtime::advanced::RuntimeError;
+use scientific_workflow::study::advanced::StudyError;
+
 #[test]
 fn ordinary_facade_and_error_are_available_through_every_supported_scope() {
     let _run: fn(&Path) -> Result<(), scientific_workflow::WorkflowError> =
@@ -18,6 +22,42 @@ fn ordinary_facade_and_error_are_available_through_every_supported_scope() {
     accepts_module_advanced(None);
     accepts_prelude_basic(None);
     accepts_prelude_advanced(None);
+}
+
+#[test]
+fn workflow_error_preserves_stage_conversion_and_thread_safety() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<WorkflowError>();
+
+    let study = WorkflowError::from(StudyError::TaskIdentityOverflow);
+    assert!(matches!(
+        study,
+        WorkflowError::Study(StudyError::TaskIdentityOverflow)
+    ));
+
+    let runtime = WorkflowError::from(RuntimeError::ExecutionCancelled);
+    assert!(matches!(
+        runtime,
+        WorkflowError::Runtime(RuntimeError::ExecutionCancelled)
+    ));
+}
+
+#[test]
+fn workflow_error_transparently_preserves_display_and_source_chain() {
+    use std::error::Error as _;
+
+    let runtime = RuntimeError::OutputScope {
+        path: Path::new("unavailable-output").to_path_buf(),
+        source: std::io::Error::other("storage unavailable"),
+    };
+    let expected_display = runtime.to_string();
+    let workflow = WorkflowError::from(runtime);
+
+    assert_eq!(workflow.to_string(), expected_display);
+    assert_eq!(
+        workflow.source().map(ToString::to_string).as_deref(),
+        Some("storage unavailable")
+    );
 }
 
 #[test]

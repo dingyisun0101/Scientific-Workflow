@@ -112,6 +112,16 @@ impl TaskRunSummary {
         self.program.as_deref()
     }
 
+    /// Returns the resolved program workload kind (`program` or `python`).
+    pub fn program_kind(&self) -> Option<&str> {
+        self.program_kind.as_deref()
+    }
+
+    /// Returns the canonical script path for a nested Python task.
+    pub fn python_script(&self) -> Option<&Path> {
+        self.python_script.as_deref()
+    }
+
     /// Returns the final scientific iteration for a model task.
     pub const fn final_iteration(&self) -> Option<u64> {
         self.final_iteration

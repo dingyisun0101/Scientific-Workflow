@@ -237,12 +237,14 @@ is declarative or automatic. `error::advanced`, `observation::advanced`, and
 error boundary.
 
 `task::basic::ScientificModel` is `Send + Sized + 'static` and has one
-associated type, `Constants: DeserializeOwned + Send + Sync + 'static`:
+associated type, `Constants: DeserializeOwned + 'static`. Constants themselves
+need not be `Send` or `Sync` because each preflight/runtime decode is created
+and consumed within its current thread:
 
 | Method | Parameters | Purpose |
 | --- | --- | --- |
-| `observation_plan(constants)` | `constants: &Self::Constants` | Optional side-effect-free declaration hook. The default returns `ObservationPlan::all_fields()`; overrides may select streams, fields, cadence, and units. |
-| `initialize(constants, schema)` | owned `Self::Constants`; `schema: &SystemStateSchema` | Required constructor. Returns a fully initialized model whose directly owned state was created from the supplied task-bound schema. |
+| `observation_plan(constants)` | `constants: &Self::Constants` | Optional side-effect-free declaration hook over Study's preflight decode. The default returns `ObservationPlan::all_fields()`; overrides may select streams, fields, cadence, and units. |
+| `initialize(constants, schema)` | fresh equivalent owned `Self::Constants`; `schema: &SystemStateSchema` | Required constructor during Runtime execution. Returns a fully initialized model whose directly owned state was created from the supplied task-bound schema. |
 | `state()` | `&self` | Required stable borrow of the model's directly owned `SystemState`. |
 | `is_complete()` | `&self` | Required side-effect-free completion predicate. |
 | `step()` | `&mut self` | Required single scientific transition returning `TaskResult`; every success must strictly advance state iteration. |
@@ -251,6 +253,9 @@ associated type, `Constants: DeserializeOwned + Send + Sync + 'static`:
 Models receive no paths, writers, persistence sessions, progress callbacks, or
 UI handles. Runtime checks cancellation between steps and automatically
 observes initial, successful-step, and final states.
+Study and Runtime independently decode equivalent constants from the same
+immutable Config value; custom `Deserialize` implementations must therefore be
+deterministic and side-effect-free.
 
 ### Observation API
 
@@ -386,6 +391,8 @@ publicly mutable or inspectable.
 | `TaskRunSummary::kind()` | `&self` | Returns non-exhaustive `TaskRunKind::Model` or `TaskRunKind::Program`. |
 | `TaskRunSummary::model()` | `&self` | Returns the model key for model tasks. |
 | `TaskRunSummary::program()` | `&self` | Returns the resolved executable/interpreter/manager path for program tasks. |
+| `TaskRunSummary::program_kind()` | `&self` | Returns `program` or `python` for a program task. |
+| `TaskRunSummary::python_script()` | `&self` | Borrows the canonical script path for a nested Python task. |
 | `TaskRunSummary::final_iteration()` | `&self` | Returns the final iteration for model tasks. |
 | `TaskRunSummary::output_directory()` | `&self` | Borrows the completed recording or program-workspace directory. |
 | `RuntimeError` | Non-exhaustive enum | Reports `ExecutionCancelled`, `OutputScope`, `Task`, `TaskPanicked`, `TaskTimedOut`, `TaskCancelled`, `PhaseTimedOut`, `StartWorker`, `ReplicatePanicked`, or contextual `Replicate` failure. |
@@ -418,7 +425,7 @@ public surface reconstructs completed model recordings:
 | `stream_encoded_bytes(stream)` | `stream: &str` | Returns checked declared encoded bytes. |
 | `read_stream_as_state_series(stream)` | `stream: &str` | Verifies and reconstructs one complete ordered `StateSeries`. |
 | `read_all_streams_as_state_series()` | `&self` | Returns every stream as `Vec<(String, StateSeries)>`, with no partial success. |
-| `read_latest_state_from_stream(stream)` | `stream: &str` | Verifies the newest chunk and reconstructs its final `SystemState`. |
+| `read_latest_state_from_stream(stream)` | `stream: &str` | Fully verifies every record and descriptor fact in the newest chunk, then reconstructs its final `SystemState`. |
 | `RecordingTiming::created_at_utc()` / `finalized_at_utc()` | `&self` | Borrows RFC 3339 UTC timestamps. |
 | `active_duration_ns()` / `active_duration()` | `&self` | Returns exact nanoseconds or `Duration`. |
 | `continuation_count()` | `&self` | Returns the persisted continuation count; new Workflow recordings use zero. |
@@ -620,7 +627,10 @@ UI is also automatic. No `ui` object or model display fields are required.
 Interactive stdin and stderr select the Ratatui dashboard with inferred task
 rows for only the current phase, progress, timing, lifecycle messages, and the
 `exit` command. The task-panel title carries the replicate and phase once.
-Redirected execution uses stable plain lifecycle lines.
+Redirected execution uses stable plain lifecycle lines. The dashboard and
+plain renderer are the only presentation modes. Failure of the selected mode
+is fatal and panics rather than silently degrading or being reported as
+cooperative workflow cancellation.
 
 Config alone reads `wf_configs/study.json`, every named state document, and the complete
 arbitrary `wf_configs/parameters.json` namespace once. `$sweep` creates independent Cartesian
@@ -670,7 +680,8 @@ succeeds.
 - `study`: effect-free binding and immutable declared intent;
 - `runtime`: active execution and output creation;
 - `persistence`: automatic durable lifecycle and verified reading;
-- `ui`: automatic best-effort terminal presentation of Runtime facts;
+- `ui`: sole automatic terminal presentation of Runtime facts, with fatal
+  renderer-health enforcement;
 - `error`: complete-workflow Study/Runtime error composition; and
 - `prelude`: central aggregation of module-owned Basic/Advanced tiers.
 

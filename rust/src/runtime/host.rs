@@ -204,6 +204,9 @@ impl TaskExecutionHost for RuntimeTaskHost {
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult {
+        if self.cancellation_requested() {
+            return Ok(());
+        }
         self.persistence
             .as_mut()
             .expect("begin_model precedes step observation")
@@ -218,6 +221,9 @@ impl TaskExecutionHost for RuntimeTaskHost {
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult {
+        if self.cancellation_requested() {
+            return Ok(());
+        }
         self.persistence
             .as_mut()
             .expect("begin_model precedes final observation")

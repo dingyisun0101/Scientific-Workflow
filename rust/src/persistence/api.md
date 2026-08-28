@@ -53,11 +53,15 @@ task-NNNNNN/
 
 `program.json` is atomically replaced from `running` to `complete` or `failed`
 and records `kind` (`program` or `python`), the resolved launcher executable,
-arguments, exit code/reason, format name, and fixed workspace filenames. For
-Python it additionally records the canonical `python_script` and declared
-`python_environment_manager`; those fields are null for a generic program.
-Runtime passes the other paths to the child. `artifacts/` is the default
-working directory and remains available for temporary or task-scoped results.
+arguments, exit code/reason, format name, and fixed workspace filenames. Each
+fixed file is synchronized before publication, and each program-status rename
+is followed by a workspace-directory synchronization. A failed-status update
+remains best effort when reporting an already-authoritative task/process
+failure. For Python, metadata additionally records the canonical
+`python_script` and declared `python_environment_manager`; those fields are
+null for a generic program. Runtime passes the other paths to the child.
+`artifacts/` is the default working directory and remains available for
+temporary or task-scoped results.
 An external program may instead read a project-relative destination from the
 frozen `wf_configs/parameters.json` snapshot and write there directly. The bundled Python
 plotter uses `output/plots`. Such files are program-owned: Persistence does not
@@ -98,14 +102,21 @@ Inspection and reconstruction methods:
   ordered `StateSeries`;
 - `read_all_streams_as_state_series()` reconstructs every stream in metadata
   order and returns no partial vector; and
-- `read_latest_state_from_stream(stream)` verifies the newest chunk and
-  reconstructs its final state.
+- `read_latest_state_from_stream(stream)` verifies the newest chunk's complete
+  framing, checksum, record count, positional widths, iteration order, and
+  descriptor boundaries before reconstructing its final state.
 
 Reads verify metadata invariants, declared file sizes, SHA-256 checksums, JSONL
 framing, record counts, iteration ordering, schema shape, decoder coverage,
 payload conversion, and StateSeries invariants. They perform synchronous
 filesystem IO and allocate owned payloads, but start no worker and never mutate
 the recording. Any failure returns no partial state/series.
+
+On the private write side, failure to encode or admit the initial or terminal
+model observation triggers a best-effort transition from `running` to `failed`
+before the original observation/persistence error is returned. Accepted data
+is drained first; an inability to publish failed metadata never replaces the
+authoritative triggering error.
 
 ### `RecordingTiming`
 
@@ -207,11 +218,13 @@ The example path is discovered programmatically from a successful
 
 ## Not API
 
-The effective persistence plan, backend selection, model `PersistenceSession`,
+The effective persistence plan, backend selection, failure-atomic model
+`PersistenceSession`,
 `ProgramPersistenceSession`, borrowed `ProgramLaunch`, `SystemStateWriter`,
 stream storage/layout values, queue worker, chunk
-publisher, metadata mutation, directory lease, filenames, and atomic temporary
-files are private. There is one internal constructor consuming Study's
+publisher, metadata mutation, directory synchronization, directory lease,
+filenames, and atomic temporary files are private. There is one internal
+constructor consuming Study's
 already-bound observation plan, provenance, destination, and shared storage
 policy. There is no builder, resume/continuation API, per-stream storage
 override, explicit flush, or public completion result.

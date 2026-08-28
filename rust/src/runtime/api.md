@@ -34,8 +34,9 @@ plan. It publishes execution, replicate, phase, task, iteration, target,
 outcome, and recording-path facts. Interactive stdin plus stderr selects the
 Ratatui dashboard; otherwise UI emits stable plain lifecycle lines. Typing
 `exit` or pressing Ctrl+C in the dashboard requests cooperative execution
-cancellation. Rendering is best-effort and cannot otherwise change the Runtime
-result.
+cancellation. UI is the sole presentation boundary: renderer startup,
+terminal initialization/input/drawing, and plain-output failures panic rather
+than becoming `RuntimeError` or silent fallback.
 
 An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. Model cancellation is cooperative
@@ -70,12 +71,24 @@ call when multiple independent runs are intended.
 
 Replicates run sequentially or concurrently according to `ReplicatePolicy`.
 Every replicate gets `replicate-XXXXXX` beneath the unique execution scope.
+Parallel fail-fast observes replicate completion as it occurs: the first
+reported failure requests cancellation of still-running sibling replicates,
+and Runtime waits for their cleanup before returning that originating error.
+Parallel finish-all never performs this policy cancellation and collects every
+terminal outcome before returning the first observed failure. Successful
+summary order remains independent of worker completion order.
+
 Phases run in stable topological order. Within a phase, runtime respects
 `max_concurrency`, the minimum `start_interval` between successive admissions,
 task timeout, phase timeout, and sibling failure policy. The first eligible
 task has no artificial pre-admission wait. Fail-fast stops further admission
 and requests cancellation of active siblings; finish-all continues admitting
 declared siblings and returns an error after they finish.
+
+Task deadline classification uses the worker's completion timestamp, rather
+than the later instant at which the polling scheduler joins it. A task that
+completed before its deadline is therefore not retroactively timed out. Phase
+deadlines likewise apply only while pending or unfinished work remains.
 
 An interactive exit request stops further admission across the execution,
 cancels active model/program workers, waits for their cleanup, restores the
@@ -119,16 +132,22 @@ kinds.
 - `model() -> Option<&str>`: registered key for model tasks only;
 - `program() -> Option<&Path>`: resolved launcher executable for program tasks
   only. For a Python declaration this is its interpreter or environment
-  manager, while `program.json` retains the resolved script;
+  manager;
+- `program_kind() -> Option<&str>`: `program` or `python` for program tasks,
+  and `None` for model tasks;
+- `python_script() -> Option<&Path>`: canonical script path for nested Python
+  tasks only;
 - `final_iteration() -> Option<u64>`: last scientific iteration for model
   tasks only; and
 - `output_directory() -> &Path`: completed model recording or program
   workspace.
 
 Summary paths are owned `PathBuf` internally and borrowed as `&Path`. The
-model/program option pair and optional iteration agree with `kind`. Summary
-values do not authorize append/resume and carry no live task, process, model,
-or state.
+model/program option pair and optional iteration agree with `kind`.
+`program_kind` is populated exactly for program tasks, and `python_script` is
+populated exactly when that program kind is `python`. Summary values do not
+authorize append/resume and carry no live task, process, model, or state.
+Summaries and `RuntimeError` are `Send + Sync`.
 
 ### External program and Python contract
 
@@ -158,10 +177,10 @@ files.
 On completion Runtime writes terminal `program.json`; nonzero exit status is a
 task failure. Dependency JSON is deterministic and contains each dependency
 phase, task identity/kind, optional model/program/final iteration, and output
-directory. Program entries additionally carry private-protocol
-`program_kind` (`program` or `python`) and the optional canonical
-`python_script`, without adding Rust summary accessors. It is a data handoff,
-not a shell command protocol.
+directory. Program entries additionally carry `program_kind` (`program` or
+`python`) and the optional canonical `python_script`; the same facts are
+available through the successful Rust task summary. Dependency JSON remains a
+data handoff, not a shell command protocol.
 
 A nested Python task follows this exact runtime contract after Config lowers
 its environment to one invocation. Runtime has no Python-specific scheduler,
@@ -182,7 +201,9 @@ This non-exhaustive enum reports failures after a valid Study is available:
   not be created;
 - `Task { task, source }`: model, program, state, observation, config decode,
   or persistence operation failed during invocation;
-- `TaskPanicked { task }`: task worker unwound unexpectedly;
+- `TaskPanicked { task }`: task execution unwound; Runtime marks any active
+  model recording failed with a bounded diagnostic before returning the stable
+  existing error shape;
 - `TaskTimedOut { task, timeout }`: a model observed its cooperative deadline
   or an external process was terminated after its deadline;
 - `TaskCancelled { task }`: runtime cancelled an active sibling;
@@ -237,7 +258,8 @@ for replicate in summary.replicates() {
 ## Not API
 
 Scheduler polling, worker thread names, active task handles, atomic cancellation
-flags, metadata-map assembly, task output ordinals, `RuntimeTaskHost`,
+flags, completion channels/timestamps, bounded panic-payload formatting,
+metadata-map assembly, task output ordinals, `RuntimeTaskHost`,
 model/program task environments, child-process polling, `PersistenceSession`,
 UI events/session, backend ownership, and
 topological-position calculation are private.

@@ -1,7 +1,7 @@
 //! Automatic dashboard activation, command handling, and event publication.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 
 use super::command::{CommandSubmission, UiCommand};
@@ -25,12 +25,29 @@ pub(crate) struct TaskUi {
 
 struct UiSessionInner {
     interactive: bool,
-    plain_fallback: AtomicBool,
     plan: UiPlan,
     state: Mutex<DashboardState>,
     cancellation_requested: AtomicBool,
     finished: AtomicBool,
     renderer: Mutex<Option<JoinHandle<()>>>,
+    render_health: RenderHealth,
+}
+
+#[derive(Default)]
+struct RenderHealth {
+    failure: Mutex<Option<String>>,
+}
+
+impl RenderHealth {
+    fn fail(&self, reason: String) {
+        lock(&self.failure).get_or_insert(reason);
+    }
+
+    fn assert_healthy(&self) {
+        if let Some(reason) = lock(&self.failure).clone() {
+            panic!("workflow UI failed: {reason}");
+        }
+    }
 }
 
 impl UiSession {
@@ -39,39 +56,47 @@ impl UiSession {
         let interactive = terminal::interactive();
         let inner = Arc::new(UiSessionInner {
             interactive,
-            plain_fallback: AtomicBool::new(false),
             plan,
             state: Mutex::new(DashboardState::new()),
             cancellation_requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             renderer: Mutex::new(None),
+            render_health: RenderHealth::default(),
         });
         if interactive {
             let renderer_inner = Arc::clone(&inner);
+            let (ready, readiness) = mpsc::sync_channel(0);
             let renderer = thread::Builder::new()
                 .name("scientific-workflow-ui".to_owned())
-                .spawn(move || render_loop(&renderer_inner));
-            match renderer {
-                Ok(renderer) => {
-                    *lock(&inner.renderer) = Some(renderer);
+                .spawn(move || render_loop(&renderer_inner, ready))
+                .unwrap_or_else(|source| {
+                    panic!("workflow UI failed to start its renderer thread: {source}")
+                });
+            match readiness.recv() {
+                Ok(Ok(())) => *lock(&inner.renderer) = Some(renderer),
+                Ok(Err(reason)) => {
+                    let _ = renderer.join();
+                    panic!("workflow UI failed: {reason}");
                 }
-                Err(source) => {
-                    inner.plain_fallback.store(true, Ordering::Release);
-                    lock(&inner.state).push_message(format!(
-                        "workflow: failed to start terminal renderer: {source}"
-                    ));
-                }
+                Err(_) => match renderer.join() {
+                    Ok(()) => panic!("workflow UI renderer stopped before initialization"),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                },
             }
         }
         Self { inner }
     }
 
-    /// Publishes one event without allowing presentation failure to fail science.
+    /// Publishes one event and enforces the selected UI as a healthy interface.
     pub(crate) fn publish(&self, event: UiEvent<'_>) {
+        self.inner.render_health.assert_healthy();
         lock(&self.inner.state).apply(&event);
-        if !self.inner.interactive || self.inner.plain_fallback.load(Ordering::Acquire) {
-            terminal::render_plain(&event);
+        if !self.inner.interactive
+            && let Err(source) = terminal::render_plain(&event)
+        {
+            panic!("workflow UI failed to render plain output: {source}");
         }
+        self.inner.render_health.assert_healthy();
     }
 
     pub(crate) fn task(&self, replicate: u64, identity: impl Into<Box<str>>) -> TaskUi {
@@ -83,17 +108,22 @@ impl UiSession {
     }
 
     pub(crate) fn cancellation_requested(&self) -> bool {
+        self.inner.render_health.assert_healthy();
         self.inner.cancellation_requested.load(Ordering::Acquire)
     }
 
     /// Stops the renderer after Runtime has published the terminal outcome.
     pub(crate) fn finish(&self) {
         if self.inner.finished.swap(true, Ordering::AcqRel) {
+            self.inner.render_health.assert_healthy();
             return;
         }
-        if let Some(renderer) = lock(&self.inner.renderer).take() {
-            let _ = renderer.join();
+        if let Some(renderer) = lock(&self.inner.renderer).take()
+            && let Err(payload) = renderer.join()
+        {
+            std::panic::resume_unwind(payload);
         }
+        self.inner.render_health.assert_healthy();
     }
 }
 
@@ -108,15 +138,16 @@ impl TaskUi {
     }
 }
 
-fn render_loop(inner: &Arc<UiSessionInner>) {
+fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), String>>) {
     let mut terminal = match DashboardTerminal::enter() {
-        Ok(terminal) => terminal,
+        Ok(terminal) => {
+            let _ = ready.send(Ok(()));
+            terminal
+        }
         Err(source) => {
-            inner.plain_fallback.store(true, Ordering::Release);
-            lock(&inner.state).push_message(format!(
-                "workflow: terminal dashboard unavailable: {source}"
-            ));
-            eprintln!("[workflow: terminal dashboard unavailable: {source}]");
+            let _ = ready.send(Err(format!(
+                "terminal dashboard initialization failed: {source}"
+            )));
             return;
         }
     };
@@ -133,15 +164,18 @@ fn render_loop(inner: &Arc<UiSessionInner>) {
             }
             Ok(Some(CommandSubmission::Empty)) | Ok(None) => {}
             Err(source) => {
-                inner.cancellation_requested.store(true, Ordering::Release);
-                lock(&inner.state).push_message(format!(
-                    "workflow: terminal input failed; cancellation requested: {source}"
-                ));
+                inner
+                    .render_health
+                    .fail(format!("terminal input failed: {source}"));
+                return;
             }
         }
         let snapshot = lock(&inner.state).snapshot();
-        if terminal.draw(&snapshot).is_err() {
-            break;
+        if let Err(source) = terminal.draw(&snapshot) {
+            inner
+                .render_health
+                .fail(format!("terminal drawing failed: {source}"));
+            return;
         }
         if inner.finished.load(Ordering::Acquire) {
             break;
@@ -154,4 +188,17 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RenderHealth;
+
+    #[test]
+    #[should_panic(expected = "workflow UI failed: terminal drawing failed")]
+    fn a_recorded_render_failure_is_fatal_to_the_runtime_facing_boundary() {
+        let health = RenderHealth::default();
+        health.fail("terminal drawing failed".to_owned());
+        health.assert_healthy();
+    }
 }

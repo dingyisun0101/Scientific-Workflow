@@ -205,7 +205,8 @@ pub(crate) struct RecordingTiming {
     pub(crate) finalized_at_utc: Option<String>,
     /// Sum of truthfully committed active writer-session durations.
     pub(crate) active_duration_ns: u64,
-    /// Number of times a running recording was reopened for continuation.
+    /// Reserved continuation count. This writer always records zero because
+    /// existing recordings cannot be resumed.
     pub(crate) continuation_count: u64,
 }
 

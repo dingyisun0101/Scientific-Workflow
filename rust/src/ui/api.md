@@ -1,9 +1,9 @@
 # UI API
 
-The `ui` subsystem owns automatic presentation of execution facts already
-known by Runtime. It does not inspect models, scientific payloads, project JSON,
-or persistence files. Models never define display fields, format messages,
-increment counters, or receive a UI handle.
+The `ui` subsystem is the sole presentation interface for execution facts
+already known by Runtime. It does not inspect models, scientific payloads,
+project JSON, or persistence files. Models never define display fields, format
+messages, increment counters, or receive a UI handle.
 
 Study owns a private inferred UI policy. Runtime publishes planned-task,
 lifecycle, progress, path, and outcome facts. UI alone owns terminal detection,
@@ -37,9 +37,10 @@ timing columns. Inferred task identities and phase prefixes remain available
 to lifecycle messages and durable summaries but are not repeated in each row.
 Runtime lifecycle lines are appended to the message panel instead of scrolling
 the interactive terminal. Scientific payloads are never rendered. When either
-standard stream is not interactive, the same lifecycle messages use the former
-stable line-oriented standard-error fallback, so redirected runs and CI retain
-diagnostics without terminal control sequences.
+standard stream is not interactive, UI deliberately selects its stable
+line-oriented standard-error renderer, so redirected runs and CI retain
+diagnostics without terminal control sequences. This is a complete UI mode,
+not recovery from a broken interactive renderer.
 
 The command editor supports character insertion, Left/Right, Home/End,
 Backspace/Delete, Escape to clear, and Enter to submit. Exact lowercase `exit`
@@ -49,10 +50,13 @@ stops admission, asks active models to stop between steps, terminates active
 external programs, waits for cleanup, publishes cancellation, and then UI
 restores the terminal.
 
-There is no `ui` object in `wf_configs/study.json`: no refresh rate, theme, field list,
-message callback, progress counter, renderer, or cancellation handle is
-user-defined. Terminal setup/drawing failure is best-effort and cannot turn
-valid scientific work into failure.
+There is no `ui` object in `wf_configs/study.json`: no refresh rate, theme,
+field list, message callback, progress counter, renderer, or cancellation
+handle is user-defined. Because UI is the required sole interface, failure to
+start its renderer thread, initialize the selected terminal, poll interactive
+input, draw the dashboard, or write plain output is fatal and panics. These
+failures are not reclassified as cooperative cancellation and are not wrapped
+in `WorkflowError` or `RuntimeError`.
 
 ## Advanced API
 
@@ -74,9 +78,23 @@ Concurrent Runtime workers share one clone-cheap session. A
 mutex protects only dashboard presentation state, and a single bounded-refresh
 thread owns interactive terminal input and drawing.
 
+Interactive initialization uses a renderer-thread handshake, so setup failure
+panics before a usable session is returned. Later terminal IO failures are
+retained in shared render health and re-panicked from the next Runtime-facing
+publication, scheduler cancellation check, or final join. Unexpected renderer
+thread panics are resumed when joined. The terminal lease still restores raw
+mode, alternate screen, cursor, and mouse state during unwinding.
+
+When fail-fast, timeout, or cancellation prevents admission, phase, replicate,
+and execution terminal events close affected `pending` rows as `skipped`.
+Task cancellation detail is deliberately source-neutral because the request
+may originate from the user, a sibling failure, a deadline, or replicate
+policy.
+
 `UiSession::finish` is called internally after the terminal execution event.
 It joins the renderer before Runtime returns, so alternate-screen, raw-mode,
-cursor, and mouse state are restored on success, failure, or cancellation.
+cursor, and mouse state are restored on success, workflow failure,
+cancellation, or UI panic.
 
 ## Example
 
@@ -105,5 +123,6 @@ and persistence metadata.
 
 A replacement UI must remain downstream of Runtime facts, require no model
 participation, tolerate concurrent publishers, preserve plain noninteractive
-diagnostics, support cooperative `exit`, restore terminal state, and never make
-presentation failure fail scientific execution.
+diagnostics, support cooperative `exit`, restore terminal state while
+unwinding, and treat failure of its selected presentation mode as a fatal
+panic rather than cancellation or silent degradation.

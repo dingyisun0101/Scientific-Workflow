@@ -1,4 +1,4 @@
-//! Deterministic compiled-model discovery and explicit catalog injection.
+//! Deterministic compiled-model discovery and validation.
 
 use std::collections::BTreeMap;
 
@@ -24,9 +24,9 @@ pub struct ModelRegistration {
 impl ModelRegistration {
     /// Creates a registration for `M` without initializing a model or reading files.
     ///
-    /// Ordinary applications acquire registrations through
-    /// `#[scientific_workflow::model("key")]`. This constructor supports
-    /// explicit advanced catalogs in tests and embedded runtimes.
+    /// This constructor is public only because the downstream expansion of
+    /// `#[scientific_workflow::model("key")]` must name it. Applications must
+    /// use that attribute rather than construct registration metadata directly.
     pub const fn new<M>(key: &'static str) -> Self
     where
         M: ScientificModel,
@@ -36,11 +36,6 @@ impl ModelRegistration {
             make_task: Task::for_model::<M>,
             preflight: preflight_model::<M>,
         }
-    }
-
-    /// Returns the stable key used in `wf_configs/study.json`.
-    pub const fn key(self) -> &'static str {
-        self.key
     }
 
     pub(crate) fn make_task(
@@ -76,7 +71,7 @@ impl ModelCatalog {
         Self::from_registrations(inventory::iter::<ModelRegistration>.into_iter().copied())
     }
 
-    /// Builds an explicit deterministic catalog for embedding and tests.
+    /// Applies the discovery validation path to one registration iterator.
     pub(crate) fn from_registrations(
         registrations: impl IntoIterator<Item = ModelRegistration>,
     ) -> Result<Self, ModelCatalogError> {

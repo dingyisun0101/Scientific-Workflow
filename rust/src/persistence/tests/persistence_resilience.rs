@@ -7,6 +7,7 @@
 //! ```
 
 use std::error::Error as _;
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
 use std::num::NonZeroU64;
@@ -14,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::local::*;
+use super::plan::PersistencePlan;
+use super::session::{PersistenceSession, ProgramLaunch, ProgramPersistenceSession};
 use crate::observation::advanced::BoundObservationPlan;
 use scientific_workflow::prelude::basic::*;
 use scientific_workflow::state::advanced::StateMaintenance;
@@ -161,6 +164,126 @@ fn replace_first_chunk(run: &Path, bytes: &[u8], records: u64, first: u64, last:
     descriptor["checksum"] = sha256_checksum(bytes).into();
     fs::write(first_chunk(run), bytes).unwrap();
     fs::write(metadata_file, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
+}
+
+fn effective_plan(queue_bytes: u64) -> PersistencePlan {
+    PersistencePlan::local(
+        NonZeroU64::new(128).unwrap(),
+        NonZeroU64::new(queue_bytes).unwrap(),
+    )
+}
+
+fn bound_observation(schema: &SystemStateSchema) -> BoundObservationPlan {
+    BoundObservationPlan::bind(observation_plan(1), schema).unwrap()
+}
+
+#[test]
+fn private_model_sessions_terminalize_initial_and_final_observation_failures() {
+    let schema = spec();
+
+    let initial = TempWorkspace::new("session-initial");
+    let mut oversized_initial = populated_state(&schema, 0);
+    *oversized_initial.payload_mut::<String>("activity").unwrap() = "x".repeat(512);
+    let error = match PersistenceSession::start(
+        initial.run(),
+        bound_observation(&schema),
+        effective_plan(64),
+        serde_json::Map::new(),
+        &oversized_initial,
+    ) {
+        Ok(_) => panic!("oversized initial observation must fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, PersistenceError::RecordTooLarge { .. }));
+    let initial_metadata: Value =
+        serde_json::from_slice(&fs::read(metadata_path(&initial.run())).unwrap()).unwrap();
+    assert_eq!(initial_metadata["status"]["state"], "failed");
+
+    let final_observation = TempWorkspace::new("session-final");
+    let initial_state = populated_state(&schema, 0);
+    let mut session = PersistenceSession::start(
+        final_observation.run(),
+        bound_observation(&schema),
+        effective_plan(512),
+        serde_json::Map::new(),
+        &initial_state,
+    )
+    .unwrap();
+    let mut oversized_final = populated_state(&schema, 1);
+    *oversized_final.payload_mut::<String>("activity").unwrap() = "x".repeat(4_096);
+    assert!(matches!(
+        session.complete(&oversized_final),
+        Err(PersistenceError::RecordTooLarge { .. })
+    ));
+    let final_metadata: Value =
+        serde_json::from_slice(&fs::read(metadata_path(&final_observation.run())).unwrap())
+            .unwrap();
+    assert_eq!(final_metadata["status"]["state"], "failed");
+}
+
+#[test]
+fn latest_state_read_verifies_every_record_and_descriptor_fact_in_the_newest_chunk() {
+    let ordering = TempWorkspace::new("latest-ordering");
+    write_valid_run(&ordering);
+    let repeated =
+        b"{\"iteration\":5,\"values\":[[2.0],\"a\"]}\n{\"iteration\":5,\"values\":[[3.0],\"b\"]}\n";
+    replace_first_chunk(&ordering.run(), repeated, 2, 5, 5);
+    assert!(matches!(
+        StoredStateSeriesReader::open_completed_recording(&ordering.run(), decoders())
+            .unwrap()
+            .read_latest_state_from_stream("signal"),
+        Err(PersistenceError::InvalidRecord { reason, .. }) if reason.contains("not greater")
+    ));
+
+    let count = TempWorkspace::new("latest-count");
+    write_valid_run(&count);
+    let metadata_file = metadata_path(&count.run());
+    let mut metadata: Value = serde_json::from_slice(&fs::read(&metadata_file).unwrap()).unwrap();
+    metadata["streams"][0]["chunks"][0]["records"] = 3.into();
+    fs::write(metadata_file, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
+    assert!(matches!(
+        StoredStateSeriesReader::open_completed_recording(&count.run(), decoders())
+            .unwrap()
+            .read_latest_state_from_stream("signal"),
+        Err(PersistenceError::InvalidMetadata { reason, .. }) if reason.contains("declares 3 records")
+    ));
+}
+
+#[test]
+fn program_status_transitions_leave_one_terminal_metadata_file() {
+    let completed = TempWorkspace::new("program-complete");
+    let args = [OsString::from("--version")];
+    let launch = ProgramLaunch {
+        executable: Path::new("program"),
+        args: &args,
+        kind: "program",
+        python_script: None,
+        python_environment_manager: None,
+    };
+    let mut session =
+        ProgramPersistenceSession::start(completed.run(), b"{}", b"[]", launch).unwrap();
+    session.complete(Some(0)).unwrap();
+    assert!(!completed.run().join(".program.json.tmp").exists());
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(completed.run().join("program.json")).unwrap()).unwrap();
+    assert_eq!(metadata["status"], "complete");
+    assert_eq!(metadata["exit_code"], 0);
+
+    let failed = TempWorkspace::new("program-failed");
+    let launch = ProgramLaunch {
+        executable: Path::new("program"),
+        args: &[],
+        kind: "program",
+        python_script: None,
+        python_environment_manager: None,
+    };
+    let mut session = ProgramPersistenceSession::start(failed.run(), b"{}", b"[]", launch).unwrap();
+    session.fail(Some(7), "expected program failure");
+    assert!(!failed.run().join(".program.json.tmp").exists());
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(failed.run().join("program.json")).unwrap()).unwrap();
+    assert_eq!(metadata["status"], "failed");
+    assert_eq!(metadata["reason"], "expected program failure");
 }
 
 #[test]

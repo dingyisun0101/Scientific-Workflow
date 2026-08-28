@@ -14,17 +14,20 @@ paths, scheduling, durable format, messages, UI, or lifecycle policy.
 
 Stateful execution is fixed:
 
-1. config-owned `ResolvedModelParameters` decodes one complete `M::Constants`
-   from `wf_configs/parameters.json[model-key]`;
-2. Study resolves the model task's explicit `state` key, calls
-   `M::observation_plan(&constants)`, and stores its result bound to that named schema;
-3. `M::initialize(constants, schema)` creates the canonical model at execution
-   from the same task-bound schema;
-4. task verifies stable state ownership/schema and target iteration;
-5. runtime observes the initial state automatically;
-6. task calls `step` until `is_complete` or cooperative cancellation;
-7. each successful step must strictly advance iteration and is observed;
-8. the final state is observed/completed exactly once.
+1. Config retains one complete resolved JSON value selected from
+   `wf_configs/parameters.json[model-key]`;
+2. Study decodes one `M::Constants` preflight instance, resolves the model
+   task's explicit `state` key, calls `M::observation_plan(&constants)`, binds
+   the result to that named schema, and drops the instance;
+3. during active execution, Task independently decodes an equivalent owned
+   `M::Constants` from the same immutable resolved JSON value;
+4. `M::initialize(constants, schema)` creates the canonical model from that
+   runtime instance and the same task-bound schema;
+5. Task verifies stable state ownership/schema and target iteration;
+6. Runtime observes the initial state automatically;
+7. Task calls `step` until `is_complete` or cooperative cancellation;
+8. each successful step must strictly advance iteration and is observed;
+9. the final state is observed/completed exactly once.
 
 ## Basic API
 
@@ -46,10 +49,14 @@ of a field-access macro.
 
 Associated type:
 
-- `Constants: DeserializeOwned + Send + Sync + 'static` is one complete typed
-  value supplied only by config. It should normally use
+- `Constants: DeserializeOwned + 'static` is one complete typed value supplied
+  only by Config. It need not be `Send` or `Sync`: each owned decode is created
+  and consumed on the thread performing preflight or execution and is never
+  transferred or shared. It should normally use
   `#[serde(deny_unknown_fields)]` so misspelled scientific settings fail during
-  Study preflight.
+  Study preflight. Custom deserialization must be deterministic and
+  side-effect-free because preflight and execution decode equivalent instances
+  independently from the same retained JSON value.
 
 Methods:
 
@@ -57,12 +64,12 @@ Methods:
   scientifically meaningful observation streams. Its default is
   `ObservationPlan::all_fields()`. Study invokes it once during effect-free
   preflight, binds it to the model task's selected named state schema, and
-  retains that exact result for
-  runtime. It must not perform external side effects or retain the constants
-  borrow.
-- `initialize(Constants, &SystemStateSchema) -> TaskResult<Self>` consumes the
-  exact typed constants and borrows the shared validated schema. It must return
-  a fully initialized model directly owning a state created from that schema.
+  retains that exact result for Runtime. It must not perform external side
+  effects or retain the preflight constants borrow.
+- `initialize(Constants, &SystemStateSchema) -> TaskResult<Self>` consumes a
+  fresh owned decode equivalent to the preflight constants and borrows the
+  shared validated schema. It must return a fully initialized model directly
+  owning a state created from that schema.
   It runs only during active execution, so model setup errors may occur after
   output scope creation but before the model's recording opens.
 - `state(&self) -> &SystemState` is side-effect-free and must always return the
@@ -207,7 +214,9 @@ lookup, function pointers, model-contract errors, state-address tracking,
 target-progress validation, `ProgramDefinition`, executable dispatch, and
 concrete execution loops are private. Hidden
 crate `__private` re-exports exist solely for macro expansion and are not a
-supported API.
+supported API. `ModelRegistration::new` is publicly nameable only because a
+procedural macro expanded in a downstream crate must call it; it is not a
+manual registration or catalog-construction seam.
 
 Replacement task implementations must preserve model-key parameter selection,
 config-owned decode, direct
