@@ -32,7 +32,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use physics_in_parallel::prelude::advanced::Dense;
 use physics_in_parallel::prelude::basic::Tensor;
 use scientific_workflow::state::StateFieldSchema;
-use scientific_workflow::state::{StateError, StateTime, SystemState, SystemStateSchema};
+use scientific_workflow::state::{
+    StateError, StateSchemaProvider, StateTime, SystemState, SystemStateSchema,
+};
 use serde::Serialize;
 
 /// Serializable payload whose Clone implementation exposes expensive copying.
@@ -84,6 +86,28 @@ fn state_module_and_prelude_share_the_ordinary_types() {
 
     let schema = SystemStateSchema::load_json_template(Path::new(STATE_TEMPLATE)).unwrap();
     assert_eq!(inspect_schema(&schema), 3);
+}
+
+#[test]
+fn static_provider_resolves_without_a_project_file() {
+    let provider = StateSchemaProvider::new(
+        "test.direct-state.v1",
+        br#"{"fields":[{"name":"population"},{"name":"space"}]}"#,
+    );
+    let schema = provider.resolve().unwrap();
+
+    assert_eq!(
+        schema.template_path(),
+        Path::new("<state-schema-provider:test.direct-state.v1>")
+    );
+    assert_eq!(
+        schema
+            .field_schemas()
+            .iter()
+            .map(StateFieldSchema::name)
+            .collect::<Vec<_>>(),
+        ["population", "space"]
+    );
 }
 
 #[test]

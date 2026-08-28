@@ -121,14 +121,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.5"
+scientific-workflow = "0.11.6"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.5
+cargo add scientific-workflow@0.11.6
 cargo add serde --features derive
 ```
 
@@ -329,6 +329,7 @@ Study binds them to the execution unit task's selected schema during preflight.
 | --- | --- | --- |
 | `StateSchemaProvider::new(id, document)` | `id: &'static str`; `document: &'static [u8]` | Creates a const static handoff for a code-owned standard JSON schema. Parsing remains a Study responsibility. |
 | `provider.id()` / `provider.document()` | `self` | Returns the stable provenance ID or borrowed static JSON bytes. This specialized type lives at `scientific_workflow::state`. |
+| `provider.resolve()` | `self` | Validates the embedded JSON and returns a new `SystemStateSchema` without filesystem IO for direct integrations. Study performs cached resolution automatically. |
 | `SystemStateSchema::load_json_template(path)` | `path: &Path` | Reads and strictly validates a standalone JSON state schema. Composed Workflow instead supplies Config's already parsed named documents internally. |
 | `schema.create_empty_state(time)` | `time: StateTime` | Creates an empty `SystemState` sharing the schema. |
 | `state.time()` | `&self` | Returns the current `StateTime` by value. |

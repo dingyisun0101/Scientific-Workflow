@@ -81,8 +81,9 @@ pub struct StateSchemaProvider {
 impl StateSchemaProvider {
     /// Declares one stable provider identity and its complete JSON template.
     ///
-    /// Validation is intentionally deferred to Study so this constructor can
-    /// remain `const` and providers can expose ordinary static descriptors.
+    /// Validation is intentionally deferred to Study or [`Self::resolve`] so
+    /// this constructor can remain `const` and providers can expose ordinary
+    /// static descriptors.
     pub const fn new(id: &'static str, document: &'static [u8]) -> Self {
         Self { id, document }
     }
@@ -95,6 +96,17 @@ impl StateSchemaProvider {
     /// Returns the borrowed static JSON schema document.
     pub const fn document(self) -> &'static [u8] {
         self.document
+    }
+
+    /// Validates this embedded document and returns its immutable state schema.
+    ///
+    /// This is the direct-integration counterpart to Study's automatic
+    /// provider resolution. It performs no filesystem IO. Each call creates a
+    /// new schema allocation; composed Workflow studies resolve and cache one
+    /// allocation per provider identity during preflight.
+    pub fn resolve(self) -> Result<SystemStateSchema, StateError> {
+        let source = PathBuf::from(format!("<state-schema-provider:{}>", self.id));
+        SystemStateSchema::parse(source, self.document)
     }
 }
 
@@ -216,14 +228,6 @@ pub(crate) fn schema_from_json_value(
     document: &serde_json::Value,
 ) -> Result<SystemStateSchema, StateError> {
     SystemStateSchema::from_json_template_value(source_path, document)
-}
-
-/// Validates one static provider document without reading a file.
-pub(crate) fn schema_from_json_bytes(
-    source_path: &Path,
-    document: &[u8],
-) -> Result<SystemStateSchema, StateError> {
-    SystemStateSchema::parse(source_path.to_path_buf(), document)
 }
 
 /// Reconstructs a schema directly from already-decoded ordered field metadata.

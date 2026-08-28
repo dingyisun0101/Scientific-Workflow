@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::config::{PhaseSpecification, ProjectSpecification, ResolvedTask, StateSchemaDocument};
-use crate::state::{SystemStateSchema, schema_from_json_bytes, schema_from_json_value};
+use crate::state::{SystemStateSchema, schema_from_json_value};
 use crate::task::{ExecutionUnitCatalog, Task};
 
 use super::error::StudyError;
@@ -69,13 +69,13 @@ pub(crate) fn compile(
                             }
                             schema.clone()
                         } else {
-                            let source =
-                                std::path::PathBuf::from(format!("<state-schema-provider:{id}>"));
-                            let schema = schema_from_json_bytes(&source, provider.document())
-                                .map_err(|source| StudyError::ProvidedState {
-                                    provider: id.to_owned(),
-                                    source,
-                                })?;
+                            let schema =
+                                provider
+                                    .resolve()
+                                    .map_err(|source| StudyError::ProvidedState {
+                                        provider: id.to_owned(),
+                                        source,
+                                    })?;
                             provided_schemas.insert(id, (provider.document(), schema.clone()));
                             schema
                         };

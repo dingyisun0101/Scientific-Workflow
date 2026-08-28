@@ -63,6 +63,10 @@ available from `scientific_workflow::state`, not the ordinary prelude.
 - `id()` returns the provider identity. Study records this value as the task's
   resolved state provenance when the project omits an explicit state.
 - `document()` returns the borrowed static JSON bytes.
+- `resolve()` validates the embedded document and returns a new
+  `SystemStateSchema` without filesystem IO. Direct model integrations use
+  this when no Study owns schema caching; each call creates a distinct schema
+  allocation.
 
 An upstream library normally embeds its sole canonical schema with
 `include_bytes!` and returns the descriptor from a public function. A receiving
@@ -280,8 +284,6 @@ State's non-public peer contracts are crate-private:
 - `schema_from_json_value(source_path, document)` validates Config's
   already-parsed schema value. It performs no disk IO and applies the same
   semantic normalization and duplicate checks as the public loader.
-- `schema_from_json_bytes(source_path, document)` validates one static provider
-  document without exposing a public raw-bytes parser.
 - `schema_from_fields(source_path, fields)` reconstructs a schema directly from
   Persistence's decoded ordered `(name, description)` metadata. It deliberately
   avoids serializing those fields to JSON and parsing them back.
