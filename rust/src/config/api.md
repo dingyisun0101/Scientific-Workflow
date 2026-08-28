@@ -127,7 +127,7 @@ Unknown properties are rejected at every Workflow-owned level.
   exact values cross language-neutral JSON snapshot or provenance boundaries.
   Config rejects them during preflight rather than applying lossy conversion
   during execution.
-- Model keys remain opaque until Study matches them to linked `#[model]`
+- Model keys remain opaque until Study matches them to linked `#[execution_unit]`
   registrations.
 - Model `state` keys are resolved during effect-free assembly. The selected
   parsed document is validated by State, bound to that exact model task, and
@@ -215,7 +215,7 @@ the stable key of its consumer:
 
 For `{"model":"population","state":"population"}`, Config selects only the
 `population` section, expands it, and decodes each result as one complete
-`ScientificModel::Constants`. Other sections remain arbitrary and are available
+`ExecutionUnit::Constants`. Other sections remain arbitrary and are available
 to external programs through the frozen central snapshot. Config owns two
 expansion markers inside a selected model section:
 

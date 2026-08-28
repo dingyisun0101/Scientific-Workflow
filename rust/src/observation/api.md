@@ -14,7 +14,7 @@ metadata lifecycle, recovery policy, or completed-recording handle. The
 runtime and persistence backend infer and own those concerns.
 
 An ordinary application returns its observation plan from
-`ScientificModel::observation_plan(&Constants)`. The trait supplies
+`ExecutionUnit::observation_plan(&Constants)`. The trait supplies
 `ObservationPlan::all_fields()` by default, so a model implements that method only when
 field selection, named streams, cadence, or units carry scientific meaning.
 Study calls it once during preflight, binds the returned plan to the validated
@@ -178,7 +178,7 @@ let plan = ObservationPlan::streams([
 ])?
 .with_physical_time_unit("s")?;
 
-// ScientificModel::observation_plan returns `plan`; Workflow infers paths,
+// ExecutionUnit::observation_plan returns `plan`; Workflow infers paths,
 // schema metadata, lifecycle, and persistence policy. The all-fields stream
 // retains every field needed for complete state reconstruction.
 # let _ = (state, plan);

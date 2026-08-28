@@ -3,13 +3,13 @@
 Scientific Workflow turns registered Rust scientific models, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking 0.10 update:** Version 0.10.3 is the current patch release of the
-> 0.10 API generation that intentionally replaced the pre-0.10 orchestration,
-> configuration, storage/writer, and study APIs. Projects using 0.9.x or
-> earlier must migrate to the model registration plus `wf_configs/study.json`
-> named-state map and `wf_configs/parameters.json` workflow. A root-level
-> `study.json` and the former `config/` directory are not compatibility aliases.
-> Legacy Rust entry points and legacy JSON fields are likewise not accepted.
+> **Breaking 0.11 update:** Version 0.11.0 replaces the 0.10
+> `ScientificModel` task boundary with cardinality-aware `ExecutionUnit` and
+> `ModelView` APIs. A unit may expose one standalone model or a coordinated
+> ensemble, while every model owns its own state and recording. There is no
+> `ScientificModel` compatibility trait; `#[model]` remains only as a spelling
+> alias for the preferred `#[execution_unit]` registration attribute. The
+> required `wf_configs/` project layout introduced in 0.10 is unchanged.
 
 ## Start here
 
@@ -32,7 +32,7 @@ executable programs, and declarative JSON into validated, recorded studies.
 ```text
 workflow/
 +-- rust/                   Rust crate, crate guide, sources, and Rust tests
-+-- macros/                 model-registration procedural macro package
++-- macros/                 execution-unit registration procedural macros
 +-- python/                 verified recording reader and Python tests
 +-- examples/attractor_2d/ complete Rust-model + Python-analysis project
 +-- docs/                   architecture and test responsibility maps
@@ -47,8 +47,8 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   in-memory series.
 - [Observation](rust/src/observation/api.md): stream declarations, binding,
   cadence, and encoding boundaries.
-- [Task](rust/src/task/api.md): `ScientificModel`, registration, model
-  contracts, and generic program tasks.
+- [Task](rust/src/task/api.md): `ExecutionUnit`, per-model `ModelView`,
+  ensemble contracts, registration, and generic program tasks.
 - [Config](rust/src/config/api.md): project JSON, named state paths, parameter
   expansion, and program/Python resolution.
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable

@@ -22,8 +22,8 @@ public.
   declarations, cadence, units, validation, and the Advanced-as-public-superset
   rule. Schema binding and encoding are private.
 - `rust/tests/task_workflow.rs` exercises the downstream
-  `ScientificModel`/model-attribute surface, including a model-owned stable
-  state exposed by `state()` and coupled mutation through the public typed
+  `ExecutionUnit`/registration-attribute surface, including stable per-model
+  states exposed by `ModelView` and coupled mutation through the public typed
   tuple-borrow API. Catalogs, type erasure, and host execution stay internal.
 
 ## Internal compiler and execution tests
@@ -52,7 +52,8 @@ public.
 - `rust/src/task/tests/task_workflow.rs` covers invalid/duplicate registration
   keys, `!Send + !Sync` constants, cancellation before initialization and
   between steps, initial/step/final observation ordering, failure atomicity,
-  state-owner/schema stability, strict iteration advancement, and target
+  state-owner/schema stability, stable positive member count/order/identity,
+  independent ensemble completion, strict unit advancement, and target
   progression invariants through a private fake host. A direct program-port
   test verifies Task's semantic invocation view, including Python provenance,
   without exposing Config's resolved-program representation to Runtime.
@@ -76,7 +77,9 @@ public.
   timeout lifecycle, panic-to-failed-recording cleanup, parallel replicate
   fail-fast cancellation, parallel finish-all completion, phase-level failure
   policies, start-interval/concurrency admission, deterministic task order,
-  and distinct sequential/parallel replicate admission. Study execution tests
+  and distinct sequential/parallel replicate admission. It also runs a
+  two-model execution unit end to end and verifies independent recordings,
+  member provenance, final iterations, and `ModelRunSummary` paths. Study execution tests
   retain topology and program/Python handoff coverage; successful program
   summaries verify the public program-kind and Python-script accessors.
 - `rust/src/ui/command.rs` verifies the former editor and exact lowercase

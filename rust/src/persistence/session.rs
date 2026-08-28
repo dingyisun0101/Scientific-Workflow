@@ -18,6 +18,7 @@ pub(crate) struct PersistenceSession {
 }
 
 /// Owned semantic provenance supplied when one model recording begins.
+#[derive(Clone)]
 pub(crate) struct ModelRecordingProvenance {
     task_identity: Box<str>,
     model: Box<str>,
@@ -25,6 +26,8 @@ pub(crate) struct ModelRecordingProvenance {
     parameter_ordinal: u64,
     parameter_source: PathBuf,
     model_constants: Value,
+    member_index: Option<usize>,
+    member_identity: Option<Box<str>>,
 }
 
 impl ModelRecordingProvenance {
@@ -43,7 +46,15 @@ impl ModelRecordingProvenance {
             parameter_ordinal,
             parameter_source: parameter_source.to_path_buf(),
             model_constants,
+            member_index: None,
+            member_identity: None,
         }
+    }
+
+    pub(crate) fn with_member(mut self, index: usize, identity: &str) -> Self {
+        self.member_index = Some(index);
+        self.member_identity = Some(identity.into());
+        self
     }
 
     fn into_metadata(self, persistence_plan: PersistencePlan) -> Map<String, Value> {
@@ -66,6 +77,15 @@ impl ModelRecordingProvenance {
             ("kind".to_owned(), "model".into()),
             ("model".to_owned(), Value::String(self.model.into())),
             ("state".to_owned(), Value::String(self.state.into())),
+            (
+                "member_index".to_owned(),
+                self.member_index.map_or(Value::Null, Value::from),
+            ),
+            (
+                "member_identity".to_owned(),
+                self.member_identity
+                    .map_or(Value::Null, |identity| Value::String(identity.into())),
+            ),
             (
                 "parameter_ordinal".to_owned(),
                 self.parameter_ordinal.into(),
@@ -294,6 +314,13 @@ impl PersistenceSession {
         provenance: ModelRecordingProvenance,
         initial_state: &SystemState,
     ) -> Result<Self, PersistenceError> {
+        if let Some(parent) = directory.parent() {
+            fs::create_dir_all(parent).map_err(|source| PersistenceError::Io {
+                operation: "create model recording parent directories",
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
         let storage = StateStreamStorage::chunked(
             persistence_plan.chunk_target(),
             persistence_plan.queue_capacity(),

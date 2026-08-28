@@ -4,9 +4,19 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{ItemImpl, LitStr, parse_macro_input};
 
-/// Registers one `ScientificModel` implementation under a stable manifest key.
+/// Registers one `ExecutionUnit` implementation under a stable manifest key.
 #[proc_macro_attribute]
 pub fn model(attribute: TokenStream, item: TokenStream) -> TokenStream {
+    expand_registration(attribute, item)
+}
+
+/// Registers one `ExecutionUnit` implementation under a stable manifest key.
+#[proc_macro_attribute]
+pub fn execution_unit(attribute: TokenStream, item: TokenStream) -> TokenStream {
+    expand_registration(attribute, item)
+}
+
+fn expand_registration(attribute: TokenStream, item: TokenStream) -> TokenStream {
     let key = parse_macro_input!(attribute as LitStr);
     let implementation = parse_macro_input!(item as ItemImpl);
     let model_type = &implementation.self_ty;

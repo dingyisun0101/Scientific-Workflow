@@ -14,7 +14,7 @@ struct Model {
 }
 
 #[scientific_workflow::model("downstream-contract-test")]
-impl ScientificModel for Model {
+impl ExecutionUnit for Model {
     type Constants = Constants;
 
     fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -24,12 +24,19 @@ impl ScientificModel for Model {
         Ok(Self { state })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        self.state.time().iteration() == 1
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| {
+            ModelView::new(
+                "model",
+                &self.state,
+                self.state.time().iteration() == 1,
+                Some(1),
+            )
+        })
     }
 
     fn step(&mut self) -> TaskResult {
@@ -44,9 +51,9 @@ impl ScientificModel for Model {
 }
 
 #[test]
-fn basic_prelude_contains_the_model_contract() {
-    fn accepts_model<M: ScientificModel>() {}
-    accepts_model::<Model>();
+fn basic_prelude_contains_the_execution_unit_contract() {
+    fn accepts_unit<M: ExecutionUnit>() {}
+    accepts_unit::<Model>();
 }
 
 #[test]
@@ -64,9 +71,11 @@ fn model_directly_exposes_and_mutates_its_typed_tuple_state() {
     )
     .unwrap();
 
-    assert!(std::ptr::eq(model.state(), &model.state));
+    assert!(std::ptr::eq(model.model(0).unwrap().state(), &model.state));
     assert_eq!(
         model
+            .model(0)
+            .unwrap()
             .state()
             .borrow_payloads::<(u64, bool)>(("population", "activity"))
             .map(|(population, active)| (*population, *active))
@@ -76,14 +85,16 @@ fn model_directly_exposes_and_mutates_its_typed_tuple_state() {
 
     model.step().unwrap();
 
-    assert!(std::ptr::eq(model.state(), &model.state));
+    assert!(std::ptr::eq(model.model(0).unwrap().state(), &model.state));
     assert_eq!(
         model
+            .model(0)
+            .unwrap()
             .state()
             .borrow_payloads::<(u64, bool)>(("population", "activity"))
             .map(|(population, active)| (*population, *active))
             .unwrap(),
         (42, true)
     );
-    assert!(model.is_complete());
+    assert!(model.model(0).unwrap().is_complete());
 }

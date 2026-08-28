@@ -677,6 +677,7 @@ fn run_task(
         program_kind,
         python_script,
         final_iteration,
+        models: host.model_summaries(),
         output_directory: host.output_directory().to_path_buf(),
     })
 }
@@ -722,6 +723,14 @@ fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box
                         "python_script": task.python_script().map(|path| path.to_str()
                             .expect("Config preflight requires UTF-8 Python script paths")),
                         "final_iteration": task.final_iteration(),
+                        "models": task.models().iter().map(|model| {
+                            serde_json::json!({
+                                "identity": model.identity(),
+                                "final_iteration": model.final_iteration(),
+                                "output_directory": model.output_directory().to_str()
+                                    .expect("UTF-8 project roots produce UTF-8 output paths")
+                            })
+                        }).collect::<Vec<_>>(),
                         "output_directory": task.output_directory().to_str()
                             .expect("UTF-8 project roots produce UTF-8 output paths")
                     })

@@ -29,23 +29,24 @@ fn preludes_expose_the_complete_supported_inventories() {
     {
         #[allow(unused_imports)]
         use scientific_workflow::prelude::basic::{
-            ObservationError, ObservationPlan, ObservationStream, PayloadInsertError,
-            ScientificModel, StateError, StateSeries, StateSeriesError, StateSeriesPushError,
-            StateTime, SystemState, SystemStateSchema, TaskResult, WorkflowError, model, run,
+            ExecutionUnit, ModelView, ObservationError, ObservationPlan, ObservationStream,
+            PayloadInsertError, StateError, StateSeries, StateSeriesError, StateSeriesPushError,
+            StateTime, SystemState, SystemStateSchema, TaskResult, WorkflowError, execution_unit,
+            model, run,
         };
     }
 
     {
         #[allow(unused_imports)]
         use scientific_workflow::prelude::advanced::{
-            ConfigError, JsonPayloadDecoder, JsonPayloadDecoderRegistry, JsonStringDecoder,
-            JsonVecF64Decoder, ObservationError, ObservationPlan, ObservationStream,
-            PayloadInsertError, PersistenceError, PhaseRunSummary, RecordingTiming,
-            ReplicateRunSummary, RunSummary, RuntimeError, ScientificModel, StateError,
+            ConfigError, ExecutionUnit, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
+            JsonStringDecoder, JsonVecF64Decoder, ModelView, ObservationError, ObservationPlan,
+            ObservationStream, PayloadInsertError, PersistenceError, PhaseRunSummary,
+            RecordingTiming, ReplicateRunSummary, RunSummary, RuntimeError, StateError,
             StateFieldSchema, StateMaintenance, StateSchemaAccess, StateSeries, StateSeriesError,
             StateSeriesPushError, StateTime, StoredStateSeriesReader, Study, StudyError,
             SystemState, SystemStateSchema, TaskResult, TaskRunKind, TaskRunSummary, WorkflowError,
-            execute, model, run,
+            execute, execution_unit, model, run,
         };
     }
 }

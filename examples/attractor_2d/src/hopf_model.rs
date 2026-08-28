@@ -20,7 +20,7 @@ pub(crate) struct HopfModel {
 // REQUIRED: Workflow uses Serde deserialization to match every property in an
 // expanded `parameters.json["attractor"]` object to these Rust field names.
 // Do not remove `Deserialize`; without it, this type cannot be the model's
-// `ScientificModel::Constants`. `deny_unknown_fields` also makes stale or
+// `ExecutionUnit::Constants`. `deny_unknown_fields` also makes stale or
 // misspelled parameter keys fail during Study preflight.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,8 +47,8 @@ impl HopfModel {
 
 // This attribute only links the ordinary Rust implementation to the stable
 // `attractor` manifest key. HopfModel itself owns and exposes all model state.
-#[scientific_workflow::model("attractor")]
-impl ScientificModel for HopfModel {
+#[scientific_workflow::execution_unit("attractor")]
+impl ExecutionUnit for HopfModel {
     type Constants = AttractorConstants;
 
     fn observation_plan(constants: &Self::Constants) -> TaskResult<ObservationPlan> {
@@ -77,16 +77,19 @@ impl ScientificModel for HopfModel {
         Ok(Self { state, constants })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        self.state.time().iteration() == self.constants.step_count
-    }
-
-    fn target_iteration(&self) -> Option<u64> {
-        Some(self.constants.step_count)
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| {
+            ModelView::new(
+                "hopf-attractor",
+                &self.state,
+                self.state.time().iteration() == self.constants.step_count,
+                Some(self.constants.step_count),
+            )
+        })
     }
 
     fn step(&mut self) -> TaskResult {

@@ -30,6 +30,7 @@ pub mod advanced {
     pub use super::error::RuntimeError;
     pub use super::execution::execute;
     pub use super::summary::{
-        PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
+        ModelRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind,
+        TaskRunSummary,
     };
 }

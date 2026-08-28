@@ -15,10 +15,10 @@ It re-exports:
   `SystemStateSchema`, `SystemState`, and `StateSeries`;
 - every `observation::basic` symbol: `ObservationPlan`, `ObservationStream`,
   and `ObservationError`;
-- every `task::basic` symbol: `ScientificModel` and `TaskResult`;
+- every `task::basic` symbol: `ExecutionUnit`, `ModelView`, and `TaskResult`;
 - every `error::basic` symbol: only `WorkflowError`;
 - the crate-level `run(&Path)` facade;
-- the crate-level `model` attribute; and
+- the crate-level `execution_unit` attribute and its `model` compatibility spelling; and
 - no symbols from the intentionally empty `runtime::basic` scope.
 
 `config::basic`, `study::basic`, `runtime::basic`, `persistence::basic`, and
@@ -33,7 +33,7 @@ schedulers, summaries, or runtime adapters. Those
 are not required to complete an ordinary project.
 
 Importing the prelude has no side effects. It does not trigger registration
-discovery, read files, or initialize runtime. The `#[model]` attribute itself
+discovery, read files, or initialize runtime. The `#[execution_unit]` attribute itself
 places an immutable registration in the final linked application; discovery
 occurs only when Study loads.
 
@@ -60,7 +60,7 @@ re-exports the complete supported advanced tiers from:
 - `study::advanced`: only `Study` and `StudyError`; its phase/task graph is
   crate-private; and
 - `runtime::advanced`: `execute`, `RuntimeError`, `RunSummary`,
-  `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunKind`, and
+  `ReplicateRunSummary`, `PhaseRunSummary`, `TaskRunKind`, `ModelRunSummary`, and
   `TaskRunSummary`; and
 - `ui::advanced`: no public additions; its plan, events, session, and renderer
   remain crate-private.
@@ -85,8 +85,8 @@ struct Constants { initial: u64, steps: u64 }
 
 struct Model { state: SystemState, target_iteration: u64 }
 
-#[scientific_workflow::model("example")]
-impl ScientificModel for Model {
+#[scientific_workflow::execution_unit("example")]
+impl ExecutionUnit for Model {
     type Constants = Constants;
     fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
@@ -97,11 +97,15 @@ impl ScientificModel for Model {
             target_iteration: constants.steps,
         })
     }
-    fn state(&self) -> &SystemState { &self.state }
-    fn is_complete(&self) -> bool {
-        self.state.time().iteration() >= self.target_iteration
+    fn model_count(&self) -> usize { 1 }
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| ModelView::new(
+            "example",
+            &self.state,
+            self.state.time().iteration() >= self.target_iteration,
+            Some(self.target_iteration),
+        ))
     }
-    fn target_iteration(&self) -> Option<u64> { Some(self.target_iteration) }
     fn step(&mut self) -> TaskResult {
         let (population, cumulative_births) = self
             .state
@@ -144,7 +148,7 @@ Prelude ordering, individual `pub use` statements, hidden `PayloadTuple`,
 hidden `ModelRegistration`, and the crate's macro-support `__private` namespace
 are not APIs. `PayloadTuple` is reachable solely because it seals the public
 tuple-borrow bounds. `ModelRegistration` is pulled through the Task Advanced
-glob solely for attribute-macro expansion; applications register models with
-`#[model]` and must not construct it. Consumers must not infer subsystem
+glob solely for attribute-macro expansion; applications register execution units with
+`#[execution_unit]` (or compatibility `#[model]`) and must not construct it. Consumers must not infer subsystem
 ownership from a prelude path; ownership is always the symbol's canonical
 `module::basic` or `module::advanced` path.

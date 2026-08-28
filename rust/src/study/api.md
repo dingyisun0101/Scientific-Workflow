@@ -42,7 +42,7 @@ moved or shared across host threads without mutable planning state.
   validates every named state document, decodes every concrete constants value,
   calls each model's side-effect-free `observation_plan` exactly once, and binds
   that plan to the schema explicitly selected by that model task. It does not
-  call `ScientificModel::initialize`. Loading is synchronous and may block on
+  call `ExecutionUnit::initialize`. Loading is synchronous and may block on
   ordinary configuration reads and executable metadata/resolution, but starts
   no worker thread and creates no output.
 - `project_root() -> &Path` returns config's retained canonical root.
@@ -88,7 +88,7 @@ execution.
   canonical source path of a rejected named schema while preserving its
   original `StateError`;
 - `InvalidModelRegistration { reason }` reports an invalid or duplicate
-  linked `#[model]` key without exposing the private catalog type;
+  linked `#[execution_unit]` key (or compatibility `#[model]`) without exposing the private catalog type;
 - `UnknownModel { phase, model }` reports a manifest key with no linked
   registration;
 - `ModelPreflight { phase, model, ordinal, source }` contextualizes constants

@@ -8,7 +8,6 @@ pub mod basic {
     #[allow(unused_imports)]
     pub use crate::config::basic::*;
     pub use crate::error::basic::*;
-    pub use crate::model;
     pub use crate::observation::basic::*;
     #[allow(unused_imports)]
     pub use crate::persistence::basic::*;
@@ -21,6 +20,7 @@ pub mod basic {
     pub use crate::task::basic::*;
     #[allow(unused_imports)]
     pub use crate::ui::basic::*;
+    pub use crate::{execution_unit, model};
 }
 
 /// Supported imports for advanced users and Workflow integrations.

@@ -32,7 +32,7 @@ struct EnergyModel {
 }
 
 #[scientific_workflow::model("energy")]
-impl ScientificModel for EnergyModel {
+impl ExecutionUnit for EnergyModel {
     type Constants = EnergyConstants;
 
     fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -41,12 +41,19 @@ impl ScientificModel for EnergyModel {
         Ok(Self { state })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        self.state.time().iteration() == 1
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| {
+            ModelView::new(
+                "energy",
+                &self.state,
+                self.state.time().iteration() == 1,
+                Some(1),
+            )
+        })
     }
 
     fn step(&mut self) -> TaskResult {
@@ -57,7 +64,7 @@ impl ScientificModel for EnergyModel {
 }
 
 #[scientific_workflow::model("counter")]
-impl ScientificModel for CounterModel {
+impl ExecutionUnit for CounterModel {
     type Constants = CounterConstants;
 
     fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -69,22 +76,25 @@ impl ScientificModel for CounterModel {
         })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        self.state.time().iteration() == self.steps
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| {
+            ModelView::new(
+                "counter",
+                &self.state,
+                self.state.time().iteration() == self.steps,
+                Some(self.steps),
+            )
+        })
     }
 
     fn step(&mut self) -> TaskResult {
         *self.state.payload_mut::<u64>("count")? += 1;
         self.state.advance_time(None)?;
         Ok(())
-    }
-
-    fn target_iteration(&self) -> Option<u64> {
-        Some(self.steps)
     }
 }
 

@@ -9,8 +9,8 @@ use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::SystemStateSchema;
 
 use super::execution::{ProgramDefinition, StatefulDefinition, TaskDefinition, TaskExecutionHost};
-use super::model::ScientificModel;
 use super::result::TaskResult;
+use super::unit::ExecutionUnit;
 
 /// A reusable type-erased workload definition.
 ///
@@ -75,7 +75,7 @@ impl Task {
         observation_plan: BoundObservationPlan,
     ) -> Self
     where
-        M: ScientificModel,
+        M: ExecutionUnit,
     {
         Self {
             definition: Arc::new(StatefulDefinition::<M>::new(

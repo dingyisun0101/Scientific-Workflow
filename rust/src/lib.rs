@@ -1,6 +1,6 @@
 //! Configuration-driven scientific workflow execution.
 //!
-//! An ordinary application defines registered [`task::basic::ScientificModel`]
+//! An ordinary application defines registered [`task::basic::ExecutionUnit`]
 //! implementations, writes `wf_configs/study.json`, its declared named
 //! state-schema documents, and the central `wf_configs/parameters.json`, then
 //! calls [`run`] with the project root. Workflow infers task
@@ -28,8 +28,8 @@
 //!
 //! struct Model { state: SystemState, target_iteration: u64 }
 //!
-//! #[scientific_workflow::model("example")]
-//! impl ScientificModel for Model {
+//! #[scientific_workflow::execution_unit("example")]
+//! impl ExecutionUnit for Model {
 //!     type Constants = Constants;
 //!
 //!     fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -42,11 +42,15 @@
 //!         })
 //!     }
 //!
-//!     fn state(&self) -> &SystemState { &self.state }
-//!     fn is_complete(&self) -> bool {
-//!         self.state.time().iteration() >= self.target_iteration
+//!     fn model_count(&self) -> usize { 1 }
+//!     fn model(&self, index: usize) -> Option<ModelView<'_>> {
+//!         (index == 0).then(|| ModelView::new(
+//!             "example",
+//!             &self.state,
+//!             self.state.time().iteration() >= self.target_iteration,
+//!             Some(self.target_iteration),
+//!         ))
 //!     }
-//!     fn target_iteration(&self) -> Option<u64> { Some(self.target_iteration) }
 //!     fn step(&mut self) -> TaskResult {
 //!         let (population, cumulative_births) = self
 //!             .state
@@ -104,7 +108,7 @@ pub mod task;
 pub mod ui;
 
 pub use error::basic::WorkflowError;
-pub use scientific_workflow_macros::model;
+pub use scientific_workflow_macros::{execution_unit, model};
 
 /// Loads, preflights, and executes the Workflow project rooted at
 /// `project_root`.

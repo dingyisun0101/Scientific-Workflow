@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::runtime::advanced::{RuntimeError, TaskRunSummary, execute};
 use crate::state::advanced::{StateTime, SystemState, SystemStateSchema};
 use crate::study::advanced::Study;
-use crate::task::basic::{ScientificModel, TaskResult};
+use crate::task::basic::{ExecutionUnit, ModelView, TaskResult};
 
 use super::execution::task_exceeded_timeout;
 
@@ -83,7 +83,7 @@ struct PanicAfterBeginModel {
 }
 
 #[scientific_workflow::model("runtime-panic-after-begin")]
-impl ScientificModel for PanicAfterBeginModel {
+impl ExecutionUnit for PanicAfterBeginModel {
     type Constants = PanicConstants;
 
     fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -92,12 +92,12 @@ impl ScientificModel for PanicAfterBeginModel {
         Ok(Self { state })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        false
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| ModelView::new("panic", &self.state, false, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -117,7 +117,7 @@ struct SlowModel {
 }
 
 #[scientific_workflow::model("runtime-slow")]
-impl ScientificModel for SlowModel {
+impl ExecutionUnit for SlowModel {
     type Constants = SlowConstants;
 
     fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -129,18 +129,68 @@ impl ScientificModel for SlowModel {
         })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        self.state.time().iteration() == 1
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| {
+            ModelView::new(
+                "slow",
+                &self.state,
+                self.state.time().iteration() == 1,
+                Some(1),
+            )
+        })
     }
 
     fn step(&mut self) -> TaskResult {
         std::thread::sleep(self.sleep);
         *self.state.payload_mut::<u64>("value")? += 1;
         self.state.advance_time(None)?;
+        Ok(())
+    }
+}
+
+struct RuntimeEnsemble {
+    states: Vec<SystemState>,
+}
+
+#[scientific_workflow::execution_unit("runtime-ensemble")]
+impl ExecutionUnit for RuntimeEnsemble {
+    type Constants = PanicConstants;
+
+    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+        let mut states = Vec::with_capacity(2);
+        for initial in [10_u64, 20] {
+            let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+            state.initialize_payload("value", initial)?;
+            states.push(state);
+        }
+        Ok(Self { states })
+    }
+
+    fn model_count(&self) -> usize {
+        self.states.len()
+    }
+
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        let state = self.states.get(index)?;
+        Some(ModelView::new(
+            ["first", "second"][index],
+            state,
+            state.time().iteration() >= (index as u64 + 1),
+            Some(index as u64 + 1),
+        ))
+    }
+
+    fn step(&mut self) -> TaskResult {
+        for (index, state) in self.states.iter_mut().enumerate() {
+            if state.time().iteration() < index as u64 + 1 {
+                *state.payload_mut::<u64>("value")? += 1;
+                state.advance_time(None)?;
+            }
+        }
         Ok(())
     }
 }
@@ -186,6 +236,42 @@ fn runtime_public_results_are_send_and_sync() {
 
     assert_send_sync::<RuntimeError>();
     assert_send_sync::<TaskRunSummary>();
+}
+
+#[test]
+fn an_ensemble_task_persists_and_summarizes_each_model_independently() {
+    let project = Project::new(
+        model_study("runtime-ensemble", None),
+        serde_json::json!({"runtime-ensemble": {}}),
+    );
+
+    let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+    let task = &summary.replicates()[0].phases()[0].tasks()[0];
+    assert_eq!(task.final_iteration(), Some(2));
+    assert_eq!(
+        task.models()
+            .iter()
+            .map(|model| (model.identity(), model.final_iteration()))
+            .collect::<Vec<_>>(),
+        [("first", 1), ("second", 2)]
+    );
+    for (index, model) in task.models().iter().enumerate() {
+        assert!(
+            model
+                .output_directory()
+                .ends_with(format!("models/model-{index:06}"))
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &fs::read(model.output_directory().join("metadata.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata["status"]["state"], "complete");
+        assert_eq!(metadata["user_metadata"]["workflow"]["member_index"], index);
+        assert_eq!(
+            metadata["user_metadata"]["workflow"]["member_identity"],
+            model.identity()
+        );
+    }
 }
 
 #[test]

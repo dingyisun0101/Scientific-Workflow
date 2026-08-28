@@ -69,10 +69,35 @@ impl PhaseRunSummary {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskRunKind {
-    /// A registered `ScientificModel` invocation.
+    /// A registered scientific execution-unit invocation.
     Model,
     /// An external executable program invocation.
     Program,
+}
+
+/// Successful completion facts for one model inside an execution unit.
+#[derive(Clone, Debug)]
+pub struct ModelRunSummary {
+    pub(crate) identity: Box<str>,
+    pub(crate) final_iteration: u64,
+    pub(crate) output_directory: PathBuf,
+}
+
+impl ModelRunSummary {
+    /// Returns the stable model identity supplied by the execution unit.
+    pub fn identity(&self) -> &str {
+        &self.identity
+    }
+
+    /// Returns this model's final scientific iteration.
+    pub const fn final_iteration(&self) -> u64 {
+        self.final_iteration
+    }
+
+    /// Returns this model's completed recording directory.
+    pub fn output_directory(&self) -> &Path {
+        &self.output_directory
+    }
 }
 
 /// Successful completion facts for one generic task invocation.
@@ -85,6 +110,7 @@ pub struct TaskRunSummary {
     pub(crate) program_kind: Option<Box<str>>,
     pub(crate) python_script: Option<PathBuf>,
     pub(crate) final_iteration: Option<u64>,
+    pub(crate) models: Box<[ModelRunSummary]>,
     pub(crate) output_directory: PathBuf,
 }
 
@@ -122,12 +148,23 @@ impl TaskRunSummary {
         self.python_script.as_deref()
     }
 
-    /// Returns the final scientific iteration for a model task.
+    /// Returns the maximum final model iteration for a scientific task.
     pub const fn final_iteration(&self) -> Option<u64> {
         self.final_iteration
     }
 
-    /// Returns the completed model recording or program workspace directory.
+    /// Returns independently recorded model results in stable unit order.
+    ///
+    /// A standalone model produces one entry, an ensemble produces one entry
+    /// per model, and a program task produces none.
+    pub fn models(&self) -> &[ModelRunSummary] {
+        &self.models
+    }
+
+    /// Returns the task output root or program workspace directory.
+    ///
+    /// This is also the recording directory for a one-model execution unit.
+    /// Use [`Self::models`] for every per-model recording path.
     pub fn output_directory(&self) -> &Path {
         &self.output_directory
     }

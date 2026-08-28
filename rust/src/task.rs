@@ -1,7 +1,8 @@
 //! Generic application workloads behind one uniform runtime definition.
 //!
-//! Application authors import [`basic`], implement [`basic::ScientificModel`],
-//! and register the implementation with `#[scientific_workflow::model("key")]`.
+//! Application authors import [`basic`], implement [`basic::ExecutionUnit`],
+//! and register the implementation with
+//! `#[scientific_workflow::execution_unit("key")]`.
 //! Study creates model tasks from registered models plus resolved constants and
 //! creates program tasks directly from declarative executable paths. Python
 //! declarations are lowered by Config to the same program boundary. All use
@@ -11,8 +12,8 @@
 mod catalog;
 mod definition;
 mod execution;
-mod model;
 mod result;
+mod unit;
 
 #[cfg(test)]
 #[path = "task/tests/task_workflow.rs"]
@@ -20,8 +21,8 @@ mod task_workflow_tests;
 
 /// Ordinary application-facing task API.
 pub mod basic {
-    pub use super::model::ScientificModel;
     pub use super::result::TaskResult;
+    pub use super::unit::{ExecutionUnit, ModelView};
 }
 
 /// Supported task API for advanced users and Workflow peer subsystems.

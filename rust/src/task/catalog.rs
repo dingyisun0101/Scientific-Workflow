@@ -9,8 +9,8 @@ use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::SystemStateSchema;
 
 use super::definition::Task;
-use super::model::ScientificModel;
 use super::result::TaskResult;
+use super::unit::ExecutionUnit;
 
 /// One immutable association between a manifest model key and compiled Rust behavior.
 #[derive(Clone, Copy)]
@@ -25,11 +25,12 @@ impl ModelRegistration {
     /// Creates a registration for `M` without initializing a model or reading files.
     ///
     /// This constructor is public only because the downstream expansion of
-    /// `#[scientific_workflow::model("key")]` must name it. Applications must
-    /// use that attribute rather than construct registration metadata directly.
+    /// `#[scientific_workflow::execution_unit("key")]` must name it.
+    /// Applications must use that attribute (or its `model` compatibility
+    /// spelling) rather than construct registration metadata directly.
     pub const fn new<M>(key: &'static str) -> Self
     where
-        M: ScientificModel,
+        M: ExecutionUnit,
     {
         Self {
             key,
@@ -138,7 +139,7 @@ fn preflight_model<M>(
     schema: &SystemStateSchema,
 ) -> TaskResult<BoundObservationPlan>
 where
-    M: ScientificModel,
+    M: ExecutionUnit,
 {
     let constants: M::Constants = parameters.decode()?;
     let plan = M::observation_plan(&constants)?;

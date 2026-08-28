@@ -13,7 +13,7 @@ programs plus project JSON:
 <project-root>/
 ├── src/
 │   ├── main.rs                 calls scientific_workflow::run(&Path)
-│   └── <models>.rs             registered ScientificModel implementations
+│   └── <units>.rs              registered ExecutionUnit implementations
 ├── scripts/                     optional executable and `.py` task programs
 └── wf_configs/                 required Workflow configuration root
     ├── study.json              phases, tasks, replicates, operational policy
@@ -30,20 +30,21 @@ schema may use any path beneath `wf_configs/`, but its project-root-relative
 path must be registered explicitly in `study.json.paths.states`. State paths
 outside the canonical `wf_configs/` boundary are rejected.
 
-Each model directly owns its canonical `SystemState` and is linked by a stable
-semantic key:
+Each registered unit exposes one or more independently stateful models and is
+linked by a stable semantic key:
 
 ```rust,ignore
-#[scientific_workflow::model("population")]
-impl ScientificModel for PopulationModel {
-    // Constants, initialization, canonical state, completion, and one step.
+#[scientific_workflow::execution_unit("population")]
+impl ExecutionUnit for PopulationModel {
+    // Constants, initialization, model views, and one coordinated step.
 }
 ```
 
 The attribute only submits registration metadata. It does not create the
-model, generate state fields, wrap the model's state, or change field access.
-The implementation owns an ordinary `SystemState` field, returns `&self.state`
-from `state()`, and accesses coupled payloads through typed tuple borrowing such
+unit, generate state fields, wrap model state, or change field access.
+A standalone implementation owns an ordinary `SystemState` field and returns
+one `ModelView`; an ensemble owns multiple models and returns one stable view
+per model. Implementations access coupled payloads through typed tuple borrowing such
 as `borrow_payloads_mut::<(Position, Velocity)>(("position", "velocity"))`.
 
 The executable needs no registry or orchestration builder:
@@ -68,8 +69,8 @@ The current first-level library modules are:
   series;
 - `observation`: application-authored scientific selection, cadence, units,
   and private encoding;
-- `task`: generic model/program workload abstraction (including Python
-  lowering), `ScientificModel` contract, linked model registration, and
+- `task`: generic scientific/program workload abstraction (including Python
+  lowering), `ExecutionUnit`/`ModelView` contract, linked registration, and
   uniform private execution;
 - `config`: sole reader/parser of all project JSON, immutable central snapshot,
   executable/Python-environment resolution, and sole typed model-constants
@@ -108,9 +109,9 @@ study
         ▼
 runtime::execute
   execution directory + replicates + scheduling + cancellation
-  + model initialization/stepping or direct program/Python invocation
-        ├──── model observation boundaries ────────► persistence
-        │                                             private bounded writer
+  + execution-unit initialization/stepping or direct program/Python invocation
+        ├──── per-model observation boundaries ────► persistence
+        │                                             one private bounded writer per model
         │                                             + atomic metadata/chunks
         │                                             + verified reads
         ├──── program snapshot/log/status/artifacts ─► persistence
@@ -160,7 +161,7 @@ Current public surface:
 basic
 ├── state construction and manipulation
 ├── ObservationPlan / ObservationStream
-├── ScientificModel / TaskResult / #[model]
+├── ExecutionUnit / ModelView / TaskResult / #[execution_unit]
 ├── crate-facade run(&Path)
 └── WorkflowError
 
@@ -202,7 +203,7 @@ workflow/
 │   └── tests.md                      validation responsibilities and commands
 ├── macros/
 │   ├── Cargo.toml                    proc-macro package declaration
-│   └── src/lib.rs                    #[model] validation and registration expansion
+│   └── src/lib.rs                    registration attribute expansion
 ├── rust/
 │   ├── Cargo.toml                    primary library package/dependencies
 │   ├── README.md                     complete Rust user procedure
@@ -237,8 +238,8 @@ workflow/
 │   │   └── observation/tests/observation_workflow.rs internal binding/session tests
 │   │   │
 │   │   ├── task.rs                   task root and inline API tiers
-│   │   ├── task/api.md               exhaustive model contract and example
-│   │   ├── task/model.rs             ScientificModel and direct-state requirements
+│   │   ├── task/api.md               exhaustive execution-unit contract and example
+│   │   ├── task/unit.rs              ExecutionUnit and borrowed ModelView contract
 │   │   ├── task/result.rs            boxed application error alias
 │   │   ├── task/catalog.rs           linked registrations and sorted validation
 │   │   ├── task/definition.rs        type-erased model/program execution definitions
@@ -304,7 +305,7 @@ workflow/
 │       ├── state_workflow.rs          downstream state API/ownership tests
 │       ├── analysis_workflow.rs       in-memory series analysis tests
 │       ├── observation_workflow.rs    public observation declaration tests
-│       ├── task_workflow.rs           downstream ScientificModel API tests
+│       ├── task_workflow.rs           downstream ExecutionUnit API tests
 │       └── fixtures/*.json            canonical state-schema fixtures
 ├── python/
 │   ├── pyproject.toml                 reader package metadata and build policy
@@ -346,7 +347,7 @@ schema-source adapter was removed with the persistence builder that needed it.
 
 ### Observation
 
-A model's `observation_plan(&Constants)` defaults to all fields. Study calls
+An execution unit's `observation_plan(&Constants)` defaults to all fields. Study calls
 it once during preflight and stores the exact schema-bound plan. Runtime does
 not call it again. Private sessions select due streams, borrow/encode selected
 payloads, and deduplicate the final iteration. The resulting canonical owned
@@ -357,20 +358,23 @@ files, or lifecycle; Persistence owns no field-selection or cadence policy.
 
 ### Task
 
-`ScientificModel` is the irreducible user contract for stateful Rust science.
-Task itself is generic: Study may instead bind a resolved executable with
+`ExecutionUnit` is the irreducible user contract for stateful Rust science.
+It generalizes the former top-level model contract from exactly one model to a
+positive, stable collection. Task itself is generic: Study may instead bind a resolved executable with
 direct arguments and no public Rust adapter. Config lowers a nested Python
 script/environment declaration to that same executable boundary. Study and
 Runtime decode equivalent constants instances independently from Config's same
 retained JSON value, so the constants type itself need not be `Send` or `Sync`.
-A model initializes from its task-bound selected schema and directly owns the
-stable state returned by `state()`. It reports completion and performs one
-iteration-advancing `step`. Task enforces what Rust can observe: state
-address/schema stability, strict iteration progress, and a monotonic optional
-target. The macro submits immutable registration metadata; the private catalog
+The unit initializes from its task-bound selected schema and exposes stable
+`ModelView`s. Each view names one independently complete model and directly
+borrows that model's state. The unit performs one coordinated `step`; a normal
+model is the one-view case, while an ensemble may synchronize or parallelize
+members internally. Task enforces stable count/order/identity/state/schema,
+monotonic completion and targets, and progress by at least one incomplete model.
+The macro submits immutable registration metadata; the private catalog
 rejects bad or duplicate keys and ignores linker order.
-State definition and access remain macro-free: the model owns the concrete
-`SystemState`, exposes it with `state()`, and uses the state's typed single- or
+State definition and access remain macro-free: each model owns the concrete
+`SystemState`, exposes it through its unit's view, and uses the state's typed single- or
 tuple-payload borrowing methods directly.
 Task passes a semantic borrowed `ProgramTaskInvocation` through its execution
 host port, so Runtime does not depend on Config's resolved-program
@@ -509,7 +513,7 @@ source chains, retain `Send + Sync`, and do not absorb fatal UI renderer panics.
 `error::advanced` is currently the same supported set.
 
 Prelude Basic aggregates all subsystem Basic scopes plus the crate-owned
-`run`, `model`, and `WorkflowError` conveniences. Prelude Advanced is its
+`run`, `execution_unit`, compatibility `model`, and `WorkflowError` conveniences. Prelude Advanced is its
 strict superset and aggregates every subsystem Advanced scope. Neither prelude
 owns behavior or creates an alternative canonical implementation path.
 
@@ -519,12 +523,14 @@ owns behavior or creates an alternative canonical implementation path.
    path parameters.
 2. Config is the sole project JSON reader/parser, central immutable snapshot,
    executable/Python-environment resolver, and typed constants supplier.
-3. Study completes all model/constants/observation and program/Python binding
+3. Study completes all execution-unit/constants/observation and program/Python binding
    before output and retains the exact Config snapshot.
 4. Model registration keys are authored stable semantics, never Rust type names.
-5. Models are initialized only during active Runtime execution.
-6. A model directly owns one stable canonical `SystemState`.
-7. Every successful `step` strictly advances scientific iteration.
+5. Execution units are initialized only during active Runtime execution.
+6. An execution unit exposes a stable positive set of model identities, and
+   each model directly owns one stable canonical `SystemState`.
+7. Every successful unit `step` strictly advances at least one incomplete
+   model and cannot advance a completed model.
 8. Observation plans are deterministic, side-effect-free, evaluated once, and
    stored bound to each model task's explicitly selected named schema.
 9. The crate facade alone turns a project root into a Study and then invokes
@@ -539,7 +545,7 @@ owns behavior or creates an alternative canonical implementation path.
     contract, not internal flexibility for hypothetical use.
 14. UI consumes only Runtime facts, activates automatically as the sole
     presentation interface, and panics on failure of its selected renderer.
-15. Model and external-program tasks share phase, dependency, timeout, failure,
+15. Scientific execution-unit and external-program tasks share phase, dependency, timeout, failure,
     summary, persistence-workspace, and UI lifecycle semantics without forcing
     fake state or iteration onto programs.
 16. A Python environment is declared inside its task's `python` object and is
@@ -566,8 +572,9 @@ owns behavior or creates an alternative canonical implementation path.
 - An observation replacement preserves declaration meaning, one-time binding,
   cadence, clone-free borrowing, deterministic encoded order, and the owned
   canonical-record handoff to Persistence.
-- A task replacement preserves config-owned constants decode, direct state
-  ownership checks, automatic observation boundaries, and generic program
+- A task replacement preserves config-owned constants decode, stable
+  execution-unit/model/state boundaries, independent model observation and
+  completion, and generic program
   delegation without public adapters.
 - A config replacement preserves the grammar, typed-path containment,
   named-state lookup, explicit task selection, duplicate-key rejection,

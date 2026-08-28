@@ -24,7 +24,7 @@ Crossterm alternate screen and renders a Ratatui dashboard containing:
 - replicate and phase shown once in the task-panel title rather than repeated
   in every task row;
 - pending, running, completed, failed, cancelled, and skipped counts;
-- model iteration gauges when `ScientificModel::target_iteration` is known;
+- aggregate execution-unit iteration gauges when every `ModelView` target is known;
 - model spinners when the target is unknown;
 - one-shot spinners while generic programs and Python tasks are running;
 - elapsed time and inferred ETA where enough progress exists;

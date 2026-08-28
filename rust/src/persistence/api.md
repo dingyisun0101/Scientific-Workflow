@@ -3,7 +3,8 @@
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified model-state reconstruction. Config parses optional operational sizing,
 Study retains the effective private plan, and Runtime constructs and drives one
-private session for every task. A model session records observed state; a
+private session for every exposed model. A standalone execution unit produces
+one session; an ensemble produces one per member. A model session records observed state; a
 program session—including a Config-lowered Python invocation—prepares one
 isolated bookkeeping workspace, snapshots inputs, captures logs, and commits
 status. Models never receive a writer, destination, queue, flush operation, or
@@ -67,6 +68,22 @@ frozen `wf_configs/parameters.json` snapshot and write there directly. The bundl
 plotter uses `output/plots`. Such files are program-owned: Persistence does not
 move, publish, validate, or reconstruct them.
 
+Scientific task layout depends only on model cardinality:
+
+```text
+task-NNNNNN/                         one-model execution unit recording
+
+task-NNNNNN/                         multi-model execution unit root
+└── models/
+    ├── model-000000/                first model recording
+    └── model-000001/                second model recording
+```
+
+Stable numeric indices—not application identities—form paths. Each recording's
+`user_metadata.workflow` object retains `member_index` and `member_identity`
+alongside the registered key, named state, parameter provenance, and effective
+persistence plan.
+
 ## Advanced API
 
 `persistence::advanced` is the strict superset of Basic. It exposes only
@@ -93,7 +110,7 @@ Inspection and reconstruction methods:
 - `stream_names()` iterates logical streams in metadata order;
 - `format_version()` returns the validated wire-format version;
 - `user_metadata()` borrows creation-time model constants and Workflow
-  provenance;
+  provenance, including stable execution-unit member identity and index;
 - `terminal_metadata()` borrows completion-time metadata;
 - `recording_timing() -> &RecordingTiming` returns verified host timing;
 - `stream_record_count(stream)` and `stream_encoded_bytes(stream)` compute
@@ -213,8 +230,8 @@ println!("{}", trajectory.len());
 # }
 ```
 
-The example path is discovered programmatically from a successful
-`RunSummary` in production; it is not supplied to model or Study code.
+The example path is discovered from `TaskRunSummary::models()` in production;
+it is not supplied to model or Study code.
 
 ### Crate-visible write peer API
 
@@ -226,7 +243,8 @@ The automatic write path is a named closed contract through
 - `ModelRecordingProvenance` owns semantic model facts supplied by Runtime. It
   does not accept an arbitrary metadata map; Persistence alone constructs the
   exact `model_constants`, `workflow`, backend, and effective-setting JSON.
-  Every retained path is exact UTF-8 already guaranteed by Config preflight;
+  Runtime derives one member-specific value with a stable index and identity
+  before opening each recording. Every retained path is exact UTF-8 already guaranteed by Config preflight;
   Persistence never substitutes replacement characters in provenance.
 - `PersistenceSession` owns model-recording start, bounded observation
   submission, successful completion, and best-effort failure terminalization.

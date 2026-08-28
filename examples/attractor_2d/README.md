@@ -10,7 +10,7 @@ attractor_2d/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                 one scientific_workflow::run(&Path) call
-│   └── hopf_model.rs           registered state-owning scientific model
+│   └── hopf_model.rs           registered one-model execution unit
 ├── wf_configs/                 required Workflow configuration root
 │   ├── study.json              simulate phase followed by plot phase
 │   ├── parameters.json         every model and plotting parameter
@@ -29,10 +29,13 @@ Initial assembly uses `initialize_payload`, so an accidental second
 initialization fails instead of silently becoming replacement.
 The model retains its decoded `AttractorConstants` directly rather than
 duplicating the same immutable values across runtime fields.
-Its `state()` method exposes a direct immutable borrow to Workflow. Inside the
+Its `model(0)` method exposes a `ModelView` containing a direct immutable state
+borrow, completion, target iteration, and the stable `hopf-attractor` member
+identity. `model_count()` is one, so this is the standalone-model form of the
+same API an ensemble uses. Inside the
 model, `step` obtains `point` and `radius` together with the typed tuple call
 `borrow_payloads_mut::<(Vec<f64>, f64)>(("point", "radius"))`; model fields are
-not generated or accessed by a macro. The `#[model("attractor")]` attribute is
+not generated or accessed by a macro. The `#[execution_unit("attractor")]` attribute is
 only the automatic registration link to `wf_configs/study.json`.
 For presentation only, `HopfModel::DEMONSTRATION_STEP_DELAY` sleeps for one
 millisecond after every successful step so the automatic dashboard remains
@@ -63,7 +66,7 @@ normal run takes roughly 16 seconds, subject to machine and IO overhead.
 Parameter wiring uses two distinct kinds of key matching:
 
 ```text
-#[model("attractor")]
+#[execution_unit("attractor")]
           |
           +-- study.json task: {"model":"attractor","state":"attractor"}
           |
@@ -80,9 +83,11 @@ Parameter wiring uses two distinct kinds of key matching:
                        HopfModel::initialize(constants, schema)
                                          |
                             HopfModel { state, constants }
+                                         |
+                    model(0) -> ModelView("hopf-attractor", &state, ...)
 ```
 
-The stable model key comes from `#[model("attractor")]`. The model task's
+The stable model key comes from `#[execution_unit("attractor")]`. The model task's
 `"model": "attractor"` selects that linked Rust implementation, and Config
 uses the same key to select the top-level `attractor` section of
 `wf_configs/parameters.json`. No parameter filename or Rust type name is
@@ -105,7 +110,11 @@ equivalent owned value from the retained immutable JSON when that model task
 actually executes. This second decode lets the constants type remain local to
 the execution thread rather than requiring it to be shared between planning
 and Runtime. `HopfModel::initialize` consumes that value and retains it directly
-beside the model-owned `SystemState`.
+beside the model-owned `SystemState`. Workflow manages `HopfModel` through the
+same execution-unit lifecycle it uses for an ensemble; the difference is only
+that this example exposes one model rather than several. An ensemble would
+return one stable `ModelView` per internal model and perform its shared or
+parallel advancement inside the same `step()` method.
 
 ## Python plot phase
 

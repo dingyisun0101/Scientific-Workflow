@@ -20,12 +20,13 @@ of the active-execution subsystem.
 
 After successful preflight, Runtime creates a unique execution directory
 beneath the inferred `<project-root>/output`, creates one isolated directory
-per replicate, executes all phases and tasks, and completes their model
-recordings or program workspaces.
+per replicate, executes all phases and tasks, and completes each model's
+recording or each program workspace.
 
-For each task, Runtime derives the destination and constructs its private
-persistence session. Model tasks submit initial/step/final observations with
-bounded backpressure. Program tasks receive frozen configuration snapshots, logs, and
+For each task, Runtime derives the destination and constructs private
+persistence sessions. A standalone unit opens one model recording; an ensemble
+opens one recording per model. Model views submit independent initial/step/final
+observations with bounded backpressure. Program tasks receive frozen configuration snapshots, logs, and
 an artifacts workspace. Runtime commits terminal status and shuts the session
 down; application/model code performs none of this coordination.
 
@@ -137,10 +138,13 @@ kinds.
   and `None` for model tasks;
 - `python_script() -> Option<&Path>`: canonical script path for nested Python
   tasks only;
-- `final_iteration() -> Option<u64>`: last scientific iteration for model
-  tasks only; and
-- `output_directory() -> &Path`: completed model recording or program
-  workspace.
+- `final_iteration() -> Option<u64>`: maximum final model iteration for
+  scientific tasks and `None` for programs;
+- `models() -> &[ModelRunSummary]`: stable model order, containing one result
+  for a standalone model, several for an ensemble, and none for a program; and
+- `output_directory() -> &Path`: task output root or program workspace. For a
+  single-model unit this is also the recording directory; multi-model
+  recordings are exposed through `models()`.
 
 Summary paths are owned `PathBuf` internally and borrowed as `&Path`. The
 model/program option pair and optional iteration agree with `kind`.
@@ -148,6 +152,20 @@ model/program option pair and optional iteration agree with `kind`.
 populated exactly when that program kind is `python`. Summary values do not
 authorize append/resume and carry no live task, process, model, or state.
 Summaries and `RuntimeError` are `Send + Sync`.
+
+### `runtime::advanced::ModelRunSummary`
+
+One immutable per-model result owned by its task summary:
+
+- `identity() -> &str` returns the stable identity supplied through
+  `ModelView`;
+- `final_iteration() -> u64` returns that model's terminal iteration; and
+- `output_directory() -> &Path` returns that model's completed recording.
+
+For a multi-model unit, directories are
+`<task-output>/models/model-<index>` in stable model order. The identity is
+metadata, not a filesystem fragment, so application identities cannot redirect
+persistence. Summary borrows are tied to the owning summary and perform no IO.
 
 ### External program and Python contract
 
@@ -157,7 +175,7 @@ error are captured as `stdout.log` and `stderr.log`. Runtime supplies absolute
 paths through:
 
 - `WORKFLOW_CONFIG_PATH`: immutable `workflow-config.json`, containing the
-  captured `study` value and all `config/` JSON documents;
+  captured `study` value and all `wf_configs/` JSON documents;
 - `WORKFLOW_DEPENDENCIES_PATH`: immutable `workflow-dependencies.json`, with
   completed task summaries from declared dependency phases;
 - `WORKFLOW_PROJECT_ROOT`: canonical project root;
@@ -176,8 +194,8 @@ its captured snapshot: editing JSON after `Study::load` cannot alter these
 files.
 On completion Runtime writes terminal `program.json`; nonzero exit status is a
 task failure. Dependency JSON is deterministic and contains each dependency
-phase, task identity/kind, optional model/program/final iteration, and output
-directory. Program entries additionally carry `program_kind` (`program` or
+phase, task identity/kind, optional model/program/final iteration, per-model
+identity/iteration/recording summaries, and output directory. Program entries additionally carry `program_kind` (`program` or
 `python`) and the optional canonical `python_script`; the same facts are
 available through the successful Rust task summary. Dependency JSON remains a
 data handoff, not a shell command protocol.
@@ -244,7 +262,12 @@ for replicate in summary.replicates() {
     for phase in replicate.phases() {
         for task in phase.tasks() {
             match task.kind() {
-                TaskRunKind::Model => println!("model {}", task.model().unwrap()),
+                TaskRunKind::Model => {
+                    println!("unit {}", task.model().unwrap());
+                    for model in task.models() {
+                        println!("  model {} at {}", model.identity(), model.final_iteration());
+                    }
+                }
                 TaskRunKind::Program => println!("program {}", task.program().unwrap().display()),
                 _ => println!("another task kind"),
             }
@@ -265,13 +288,14 @@ UI events/session, backend ownership, and
 topological-position calculation are private.
 
 Runtime passes `ModelRecordingProvenance` as semantic facts—task identity,
-model, selected state, parameter ordinal/source, and resolved constants—to
+registered unit key, selected state, parameter ordinal/source, and resolved constants—to
 Persistence. Runtime does not construct durable JSON namespaces and does not
 name the local backend or its format fields. Persistence authors recording
 metadata, which keeps complete resolved constants under `model_constants`
 and Workflow identity/source facts under a separate `workflow` object. The
-workflow object names the selected model, `parameter_ordinal`, and canonical
+workflow object names the selected registration, `parameter_ordinal`, and canonical
 `parameter_source`, plus the explicitly selected `state` key; the effective
+object also records `member_index` and `member_identity` for every model;
 backend and byte settings are recorded under
 `workflow.persistence`. The user-authored `chunk_target_mb` and
 `queue_capacity_mb` have already been converted, so provenance deliberately

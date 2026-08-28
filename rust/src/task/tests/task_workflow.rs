@@ -16,8 +16,8 @@ use super::catalog::{ModelCatalog, ModelCatalogError, ModelRegistration};
 use super::execution::{
     ProgramDefinition, ProgramTaskInvocation, StatefulDefinition, TaskDefinition, TaskExecutionHost,
 };
-use super::model::ScientificModel;
 use super::result::TaskResult;
+use super::unit::{ExecutionUnit, ModelView};
 
 #[derive(Debug, Eq, PartialEq)]
 enum Event {
@@ -30,7 +30,8 @@ enum Event {
 struct RecordingHost {
     cancelled: Cell<bool>,
     cancel_after_step: bool,
-    events: Vec<Event>,
+    events: Vec<(usize, Event)>,
+    identities: Vec<Box<str>>,
 }
 
 #[derive(Default)]
@@ -61,6 +62,9 @@ impl TaskExecutionHost for ProgramInvocationHost {
 
     fn begin_model(
         &mut self,
+        _index: usize,
+        _model_count: usize,
+        _identity: &str,
         _plan: BoundObservationPlan,
         _state: &SystemState,
         _target_iteration: Option<u64>,
@@ -70,6 +74,7 @@ impl TaskExecutionHost for ProgramInvocationHost {
 
     fn observe_model_step(
         &mut self,
+        _index: usize,
         _state: &SystemState,
         _target_iteration: Option<u64>,
     ) -> TaskResult {
@@ -78,6 +83,7 @@ impl TaskExecutionHost for ProgramInvocationHost {
 
     fn observe_model_final(
         &mut self,
+        _index: usize,
         _state: &SystemState,
         _target_iteration: Option<u64>,
     ) -> TaskResult {
@@ -96,22 +102,31 @@ impl TaskExecutionHost for RecordingHost {
 
     fn begin_model(
         &mut self,
+        _index: usize,
+        _model_count: usize,
+        identity: &str,
         _plan: BoundObservationPlan,
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult {
-        self.events
-            .push(Event::Begin(state.time().iteration(), target_iteration));
+        self.identities.push(identity.into());
+        self.events.push((
+            _index,
+            Event::Begin(state.time().iteration(), target_iteration),
+        ));
         Ok(())
     }
 
     fn observe_model_step(
         &mut self,
+        _index: usize,
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult {
-        self.events
-            .push(Event::Step(state.time().iteration(), target_iteration));
+        self.events.push((
+            _index,
+            Event::Step(state.time().iteration(), target_iteration),
+        ));
         if self.cancel_after_step {
             self.cancelled.set(true);
         }
@@ -120,11 +135,14 @@ impl TaskExecutionHost for RecordingHost {
 
     fn observe_model_final(
         &mut self,
+        _index: usize,
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult {
-        self.events
-            .push(Event::Final(state.time().iteration(), target_iteration));
+        self.events.push((
+            _index,
+            Event::Final(state.time().iteration(), target_iteration),
+        ));
         Ok(())
     }
 }
@@ -139,7 +157,7 @@ fn schema(source: &str) -> SystemStateSchema {
 
 fn definition<M>(value: serde_json::Value) -> StatefulDefinition<M>
 where
-    M: ScientificModel,
+    M: ExecutionUnit,
 {
     let schema = schema("wf_configs/states/value.json");
     let plan = BoundObservationPlan::bind(ObservationPlan::all_fields(), &schema).unwrap();
@@ -181,7 +199,7 @@ struct CountingModel {
     steps: u64,
 }
 
-impl ScientificModel for CountingModel {
+impl ExecutionUnit for CountingModel {
     type Constants = LocalConstants;
 
     fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -193,12 +211,19 @@ impl ScientificModel for CountingModel {
         })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        self.state.time().iteration() >= self.steps
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| {
+            ModelView::new(
+                "counting",
+                &self.state,
+                self.state.time().iteration() >= self.steps,
+                Some(self.steps),
+            )
+        })
     }
 
     fn step(&mut self) -> TaskResult {
@@ -206,26 +231,22 @@ impl ScientificModel for CountingModel {
         self.state.advance_time(None)?;
         Ok(())
     }
-
-    fn target_iteration(&self) -> Option<u64> {
-        Some(self.steps)
-    }
 }
 
 struct PanicOnInitialize;
 
-impl ScientificModel for PanicOnInitialize {
+impl ExecutionUnit for PanicOnInitialize {
     type Constants = ();
 
     fn initialize(_constants: Self::Constants, _schema: &SystemStateSchema) -> TaskResult<Self> {
         panic!("initialization must not run after pre-execution cancellation")
     }
 
-    fn state(&self) -> &SystemState {
+    fn model_count(&self) -> usize {
         unreachable!()
     }
 
-    fn is_complete(&self) -> bool {
+    fn model(&self, _index: usize) -> Option<ModelView<'_>> {
         unreachable!()
     }
 
@@ -238,7 +259,7 @@ struct NonAdvancingModel {
     state: SystemState,
 }
 
-impl ScientificModel for NonAdvancingModel {
+impl ExecutionUnit for NonAdvancingModel {
     type Constants = ();
 
     fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -247,12 +268,12 @@ impl ScientificModel for NonAdvancingModel {
         Ok(Self { state })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        false
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| ModelView::new("nonadvancing", &self.state, false, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -266,7 +287,7 @@ struct OwnerSwitchModel {
     use_second: bool,
 }
 
-impl ScientificModel for OwnerSwitchModel {
+impl ExecutionUnit for OwnerSwitchModel {
     type Constants = ();
 
     fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -281,16 +302,19 @@ impl ScientificModel for OwnerSwitchModel {
         })
     }
 
-    fn state(&self) -> &SystemState {
-        if self.use_second {
-            &self.second
-        } else {
-            &self.first
-        }
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        false
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| {
+            let state = if self.use_second {
+                &self.second
+            } else {
+                &self.first
+            };
+            ModelView::new("owner-switch", state, false, None)
+        })
     }
 
     fn step(&mut self) -> TaskResult {
@@ -304,7 +328,7 @@ struct SchemaSwitchModel {
     state: SystemState,
 }
 
-impl ScientificModel for SchemaSwitchModel {
+impl ExecutionUnit for SchemaSwitchModel {
     type Constants = ();
 
     fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -313,12 +337,12 @@ impl ScientificModel for SchemaSwitchModel {
         Ok(Self { state })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        false
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| ModelView::new("schema-switch", &self.state, false, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -341,7 +365,7 @@ struct InvalidTargetModel {
     mode: String,
 }
 
-impl ScientificModel for InvalidTargetModel {
+impl ExecutionUnit for InvalidTargetModel {
     type Constants = TargetConstants;
 
     fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -361,12 +385,12 @@ impl ScientificModel for InvalidTargetModel {
         })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        false
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| ModelView::new("invalid-target", &self.state, false, self.target))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -378,17 +402,60 @@ impl ScientificModel for InvalidTargetModel {
         };
         Ok(())
     }
-
-    fn target_iteration(&self) -> Option<u64> {
-        self.target
-    }
 }
 
 struct FailingStepModel {
     state: SystemState,
 }
 
-impl ScientificModel for FailingStepModel {
+struct PairedUnit {
+    states: Vec<SystemState>,
+    targets: [u64; 2],
+}
+
+impl ExecutionUnit for PairedUnit {
+    type Constants = ();
+
+    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+        let mut states = Vec::with_capacity(2);
+        for _ in 0..2 {
+            let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+            state.initialize_payload("value", 0_u64)?;
+            states.push(state);
+        }
+        Ok(Self {
+            states,
+            targets: [1, 2],
+        })
+    }
+
+    fn model_count(&self) -> usize {
+        self.states.len()
+    }
+
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        let state = self.states.get(index)?;
+        let target = self.targets[index];
+        Some(ModelView::new(
+            ["short", "long"][index],
+            state,
+            state.time().iteration() >= target,
+            Some(target),
+        ))
+    }
+
+    fn step(&mut self) -> TaskResult {
+        for (state, target) in self.states.iter_mut().zip(self.targets) {
+            if state.time().iteration() < target {
+                *state.payload_mut::<u64>("value")? += 1;
+                state.advance_time(None)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ExecutionUnit for FailingStepModel {
     type Constants = ();
 
     fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
@@ -397,12 +464,12 @@ impl ScientificModel for FailingStepModel {
         Ok(Self { state })
     }
 
-    fn state(&self) -> &SystemState {
-        &self.state
+    fn model_count(&self) -> usize {
+        1
     }
 
-    fn is_complete(&self) -> bool {
-        false
+    fn model(&self, index: usize) -> Option<ModelView<'_>> {
+        (index == 0).then(|| ModelView::new("failing", &self.state, false, None))
     }
 
     fn step(&mut self) -> TaskResult {
@@ -437,10 +504,10 @@ fn execution_observes_initial_steps_and_final_state_in_order() {
     assert_eq!(
         host.events,
         [
-            Event::Begin(0, Some(2)),
-            Event::Step(1, Some(2)),
-            Event::Step(2, Some(2)),
-            Event::Final(2, Some(2)),
+            (0, Event::Begin(0, Some(2))),
+            (0, Event::Step(1, Some(2))),
+            (0, Event::Step(2, Some(2))),
+            (0, Event::Final(2, Some(2))),
         ]
     );
 }
@@ -463,7 +530,7 @@ fn cancellation_prevents_initialization_and_stops_between_steps() {
         .unwrap();
     assert_eq!(
         between.events,
-        [Event::Begin(0, Some(3)), Event::Step(1, Some(3))]
+        [(0, Event::Begin(0, Some(3))), (0, Event::Step(1, Some(3)))]
     );
 }
 
@@ -483,7 +550,7 @@ fn execution_rejects_changed_state_owner_schema_and_nonadvancing_steps() {
         (
             definition::<NonAdvancingModel>(serde_json::Value::Null)
                 .execute(&mut RecordingHost::default()),
-            "did not advance iteration",
+            "did not advance any incomplete model",
         ),
     ] {
         assert!(result.unwrap_err().to_string().contains(expected));
@@ -509,7 +576,32 @@ fn failed_steps_publish_no_successful_step_or_final_observation() {
     let result = definition::<FailingStepModel>(serde_json::Value::Null).execute(&mut host);
 
     assert_eq!(result.unwrap_err().to_string(), "step failed");
-    assert_eq!(host.events, [Event::Begin(0, None)]);
+    assert_eq!(host.events, [(0, Event::Begin(0, None))]);
+}
+
+#[test]
+fn execution_manages_an_ensemble_as_one_unit_with_independent_model_lifecycles() {
+    let mut host = RecordingHost::default();
+    definition::<PairedUnit>(serde_json::Value::Null)
+        .execute(&mut host)
+        .unwrap();
+
+    assert_eq!(
+        host.identities.iter().map(Box::as_ref).collect::<Vec<_>>(),
+        ["short", "long"]
+    );
+    assert_eq!(
+        host.events,
+        [
+            (0, Event::Begin(0, Some(1))),
+            (1, Event::Begin(0, Some(2))),
+            (0, Event::Step(1, Some(1))),
+            (0, Event::Final(1, Some(1))),
+            (1, Event::Step(1, Some(2))),
+            (1, Event::Step(2, Some(2))),
+            (1, Event::Final(2, Some(2))),
+        ]
+    );
 }
 
 #[test]
