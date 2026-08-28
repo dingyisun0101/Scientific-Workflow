@@ -112,7 +112,7 @@ impl UiSession {
         self.inner.cancellation_requested.load(Ordering::Acquire)
     }
 
-    /// Stops the renderer after Runtime has published the terminal outcome.
+    /// Marks execution finished and waits for an interactive user to type `exit`.
     pub(crate) fn finish(&self) {
         if self.inner.finished.swap(true, Ordering::AcqRel) {
             self.inner.render_health.assert_healthy();
@@ -151,12 +151,26 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
             return;
         }
     };
+    let mut close_requested = false;
     loop {
         match terminal.poll_command() {
             Ok(Some(CommandSubmission::Parsed(UiCommand::Exit))) => {
-                inner.cancellation_requested.store(true, Ordering::Release);
-                let mut state = lock(&inner.state);
-                state.request_exit();
+                close_requested = true;
+                if !inner.finished.load(Ordering::Acquire) {
+                    inner.cancellation_requested.store(true, Ordering::Release);
+                    lock(&inner.state).request_exit();
+                }
+                terminal.clear_command();
+            }
+            Ok(Some(CommandSubmission::Parsed(UiCommand::Interrupt))) => {
+                if inner.finished.load(Ordering::Acquire) {
+                    lock(&inner.state).push_message(
+                        "workflow: finished; type exit then Enter to close".to_owned(),
+                    );
+                } else {
+                    inner.cancellation_requested.store(true, Ordering::Release);
+                    lock(&inner.state).request_interrupt();
+                }
                 terminal.clear_command();
             }
             Ok(Some(CommandSubmission::Unknown(command))) => {
@@ -177,11 +191,15 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
                 .fail(format!("terminal drawing failed: {source}"));
             return;
         }
-        if inner.finished.load(Ordering::Acquire) {
+        if renderer_should_close(inner.finished.load(Ordering::Acquire), close_requested) {
             break;
         }
         thread::sleep(inner.plan.refresh_interval());
     }
+}
+
+const fn renderer_should_close(execution_finished: bool, exit_submitted: bool) -> bool {
+    execution_finished && exit_submitted
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -192,7 +210,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::RenderHealth;
+    use super::{RenderHealth, renderer_should_close};
 
     #[test]
     #[should_panic(expected = "workflow UI failed: terminal drawing failed")]
@@ -200,5 +218,13 @@ mod tests {
         let health = RenderHealth::default();
         health.fail("terminal drawing failed".to_owned());
         health.assert_healthy();
+    }
+
+    #[test]
+    fn interactive_renderer_requires_both_completion_and_explicit_exit() {
+        assert!(!renderer_should_close(false, false));
+        assert!(!renderer_should_close(true, false));
+        assert!(!renderer_should_close(false, true));
+        assert!(renderer_should_close(true, true));
     }
 }

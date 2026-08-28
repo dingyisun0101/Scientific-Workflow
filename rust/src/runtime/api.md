@@ -40,8 +40,11 @@ Runtime also creates one automatic UI session from Study's private inferred UI
 plan. It publishes execution, replicate, phase, task, iteration, target,
 outcome, and recording-path facts. Interactive stdin plus stderr selects the
 Ratatui dashboard; otherwise UI emits stable plain lifecycle lines. Typing
-`exit` or pressing Ctrl+C in the dashboard requests cooperative execution
-cancellation. UI is the sole presentation boundary: renderer startup,
+`exit` while work is active or pressing Ctrl+C requests cooperative execution
+cancellation. After any terminal outcome the dashboard remains visible until the
+user explicitly types `exit`; Ctrl+C alone never closes it. Consequently an
+interactive `execute` call returns only after execution has ended and that final
+`exit` is submitted. Noninteractive execution never waits for input. UI is the sole presentation boundary: renderer startup,
 terminal initialization/input/drawing, and plain-output failures panic rather
 than becoming `RuntimeError` or silent fallback.
 
@@ -94,9 +97,12 @@ than the later instant at which the polling scheduler joins it. A task that
 completed before its deadline is therefore not retroactively timed out. Phase
 deadlines likewise apply only while pending or unfinished work remains.
 
-An interactive exit request stops further admission across the execution,
+An interactive `exit` submitted during execution stops further admission,
 cancels active execution unit/program workers, waits for their cleanup, restores the
-terminal, and returns `RuntimeError::ExecutionCancelled`.
+terminal, and returns `RuntimeError::ExecutionCancelled`. Ctrl+C performs the
+cancellation but leaves the completed dashboard open until the required `exit`
+command. If execution has already reached a successful or failed terminal outcome,
+`exit` only closes the interface and does not change that outcome.
 
 ### `runtime::RunSummary`
 

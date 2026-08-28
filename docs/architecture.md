@@ -506,9 +506,14 @@ owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
 elapsed/ETA fields, a bounded message panel, and the former command editor.
 Every phase-start event replaces the visible task set. Replicate and phase
 appear once in the panel title; rows contain only task-specific information.
-Exact lowercase `exit` or Ctrl+C requests cooperative Runtime cancellation,
-stops further admission, and waits for active execution unit/program cleanup before
-terminal restoration. One private refresh thread retains presentation facts
+Exact lowercase `exit` is the interactive dashboard's sole normal close command.
+When entered during active work it also requests cooperative Runtime cancellation,
+stops further admission, and waits for active execution unit/program cleanup. Ctrl+C
+requests cancellation without closing the interface. After every successful,
+failed, or cancelled terminal outcome, the dashboard and command editor remain on
+screen until the user types `exit`; only then does Runtime join the renderer,
+restore the terminal, and return. Noninteractive rendering has no input wait. One
+private refresh thread retains presentation facts
 but never scientific payloads. It exposes no downstream API. Early phase,
 replicate, or execution termination closes affected
 unadmitted task rows as skipped; cancellation text does not invent whether its

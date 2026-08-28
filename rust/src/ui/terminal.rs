@@ -93,7 +93,7 @@ impl DashboardTerminal {
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
-                        return Ok(Some(CommandSubmission::Parsed(UiCommand::Exit)));
+                        return Ok(Some(CommandSubmission::Parsed(UiCommand::Interrupt)));
                     }
                     if let Some(action) = edit_action(key.code, key.modifiers)
                         && let Some(submission) = self.command.edit(action)
@@ -134,6 +134,7 @@ impl DashboardTerminal {
                 &command,
                 command_cursor,
                 snapshot.exit_requested,
+                snapshot.execution_finished,
             );
         })?;
         Ok(())
@@ -385,27 +386,27 @@ fn render_command(
     command: &str,
     cursor: usize,
     exit_requested: bool,
+    execution_finished: bool,
 ) {
-    let title = if exit_requested {
-        " Command · exit requested "
+    let title = if execution_finished {
+        " Command · finished · type exit then Enter "
+    } else if exit_requested {
+        " Command · cancelling · type exit to close after cleanup "
     } else {
-        " Command · type exit then Enter "
+        " Command · type exit then Enter · Ctrl+C cancels "
     };
-    let value = if exit_requested { "" } else { command };
     frame.render_widget(
-        Paragraph::new(value)
+        Paragraph::new(command)
             .style(Style::default().fg(Color::Yellow))
             .block(Block::default().borders(Borders::ALL).title(title)),
         area,
     );
-    if !exit_requested {
-        let x = area.x.saturating_add(1).saturating_add(
-            u16::try_from(cursor)
-                .unwrap_or(u16::MAX)
-                .min(area.width.saturating_sub(2)),
-        );
-        frame.set_cursor_position(Position::new(x, area.y.saturating_add(1)));
-    }
+    let x = area.x.saturating_add(1).saturating_add(
+        u16::try_from(cursor)
+            .unwrap_or(u16::MAX)
+            .min(area.width.saturating_sub(2)),
+    );
+    frame.set_cursor_position(Position::new(x, area.y.saturating_add(1)));
 }
 
 #[derive(Default)]

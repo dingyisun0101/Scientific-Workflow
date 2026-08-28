@@ -3,6 +3,7 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum UiCommand {
     Exit,
+    Interrupt,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

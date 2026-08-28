@@ -82,13 +82,16 @@ public.
   retain topology and program/Python handoff coverage; successful program
   summaries verify the data-bearing program result variant.
 - `rust/src/ui/command.rs` verifies the former editor and exact lowercase
-  `exit` contract. `ui/state.rs` verifies declaration-ordered event-reduced
+  `exit` contract. `ui/session.rs` verifies that the interactive renderer closes
+  only after both a terminal execution outcome and explicit `exit` submission.
+  `ui/state.rs` verifies declaration-ordered event-reduced
   rows, per-phase task-panel replacement, progress, bounded message history,
   source-neutral cancellation, and phase/replicate/execution closure of
   pending rows as skipped. `ui/session.rs` verifies that recorded renderer
   failure panics at the Runtime-facing health boundary. Before a release,
   manual PTY validation should confirm alternate-screen Ratatui rendering,
-  keyboard exit, cooperative Runtime cancellation, and terminal restoration.
+  completion retention, explicit keyboard exit, Ctrl+C cancellation without
+  closure, cooperative Runtime cancellation, and terminal restoration.
   Noninteractive tests receive stable plain lifecycle diagnostics rather than
   terminal control sequences.
 

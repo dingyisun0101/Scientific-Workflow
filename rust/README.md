@@ -689,6 +689,11 @@ UI is also automatic. No `ui` object or execution unit display fields are requir
 Interactive stdin and stderr select the Ratatui dashboard with inferred task
 rows for only the current phase, progress, timing, lifecycle messages, and the
 `exit` command. The task-panel title carries the replicate and phase once.
+After success, failure, or cancellation, the interactive dashboard stays open
+so the terminal outcome can be inspected; type exact lowercase `exit` and press
+Enter to close it. `exit` during active work also requests cooperative
+cancellation. Ctrl+C cancels active work but does not close the dashboard, so a
+final `exit` is still required. Noninteractive runs never wait for input.
 Redirected execution uses stable plain lifecycle lines. The dashboard and
 plain renderer are the only presentation modes. Failure of the selected mode
 is fatal and panics rather than silently degrading or being reported as

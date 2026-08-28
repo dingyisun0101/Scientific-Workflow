@@ -44,11 +44,19 @@ not recovery from a broken interactive renderer.
 
 The command editor supports character insertion, Left/Right, Home/End,
 Backspace/Delete, Escape to clear, and Enter to submit. Exact lowercase `exit`
-(surrounding whitespace allowed) and Ctrl+C request cooperative cancellation.
-Unknown commands appear in the message panel. Once exit is requested, Runtime
-stops admission, asks active execution units to stop between steps, terminates active
-external programs, waits for cleanup, publishes cancellation, and then UI
-restores the terminal.
+(surrounding whitespace allowed) is the only normal way to close the interactive
+dashboard. If submitted while work is active, it also requests cooperative
+cancellation: Runtime stops admission, asks active execution units to stop between
+steps, terminates active external programs, and waits for cleanup before closing.
+Ctrl+C requests the same cooperative cancellation while work is active, but does
+not close the dashboard; after cleanup the user must still type `exit`. Unknown
+commands appear in the message panel.
+
+After Runtime publishes successful, failed, or cancelled execution completion,
+the interactive dashboard remains on screen with its command editor active.
+`UiSession::finish` waits for an explicit `exit` submission before restoring the
+terminal and allowing `runtime::execute` to return. Noninteractive plain rendering
+does not wait for input and returns immediately after its terminal lifecycle line.
 
 There is no `ui` object in `wf_configs/study.json`: no refresh rate, theme,
 field list, message callback, progress counter, renderer, or cancellation
@@ -91,9 +99,11 @@ may originate from the user, a sibling failure, a deadline, or replicate
 policy.
 
 `UiSession::finish` is called internally after the terminal execution event.
-It joins the renderer before Runtime returns, so alternate-screen, raw-mode,
-cursor, and mouse state are restored on success, workflow failure,
-cancellation, or UI panic.
+For an interactive dashboard it marks execution finished, waits for the renderer
+to receive `exit`, and then joins it before Runtime returns. Alternate-screen,
+raw-mode, cursor, and mouse state are restored on success, workflow failure,
+cancellation, or UI panic. With plain rendering there is no renderer to join and
+no interactive wait.
 
 ## Example
 
@@ -108,8 +118,10 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 ```
 
 Running it in a terminal shows the dashboard. Typing `exit` and pressing Enter
-requests cancellation. Redirecting standard error selects plain lifecycle
-lines automatically. No execution unit or JSON change is involved.
+cancels active work or closes an already finished dashboard. Successful completion
+otherwise remains visible until that command is submitted. Redirecting standard
+error selects plain lifecycle lines automatically and does not wait for input. No
+execution unit or JSON change is involved.
 
 ## Not API
 

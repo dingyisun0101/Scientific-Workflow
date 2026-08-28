@@ -55,6 +55,7 @@ pub(super) struct DashboardSnapshot {
     pub(super) tasks: Vec<TaskSnapshot>,
     pub(super) messages: Vec<String>,
     pub(super) exit_requested: bool,
+    pub(super) execution_finished: bool,
     pub(super) started: Instant,
 }
 
@@ -66,6 +67,7 @@ pub(super) struct DashboardState {
     task_order: Vec<(u64, Box<str>)>,
     messages: VecDeque<String>,
     exit_requested: bool,
+    execution_finished: bool,
     started: Instant,
 }
 
@@ -79,6 +81,7 @@ impl DashboardState {
             task_order: Vec::new(),
             messages: VecDeque::with_capacity(MESSAGE_HISTORY),
             exit_requested: false,
+            execution_finished: false,
             started: Instant::now(),
         }
     }
@@ -198,9 +201,14 @@ impl DashboardState {
                     task.detail = "cancelled".to_owned();
                 }
             }
-            UiEvent::ExecutionFailed { .. } => self.skip_all_pending(),
+            UiEvent::ExecutionCompleted { .. } => self.execution_finished = true,
+            UiEvent::ExecutionFailed { .. } => {
+                self.skip_all_pending();
+                self.execution_finished = true;
+            }
             UiEvent::ExecutionCancelled => {
                 self.exit_requested = true;
+                self.execution_finished = true;
                 for task in self.tasks.values_mut() {
                     match task.status {
                         TaskStatus::Pending => task.status = TaskStatus::Skipped,
@@ -220,6 +228,15 @@ impl DashboardState {
         if !self.exit_requested {
             self.exit_requested = true;
             self.push_message("workflow: exit requested; waiting for active tasks".to_owned());
+        }
+    }
+
+    pub(super) fn request_interrupt(&mut self) {
+        if !self.exit_requested {
+            self.exit_requested = true;
+            self.push_message(
+                "workflow: cancellation requested; waiting for active tasks".to_owned(),
+            );
         }
     }
 
@@ -252,6 +269,7 @@ impl DashboardState {
                 .collect(),
             messages: self.messages.iter().cloned().collect(),
             exit_requested: self.exit_requested,
+            execution_finished: self.execution_finished,
             started: self.started,
         }
     }
@@ -530,12 +548,28 @@ mod tests {
         assert_eq!(snapshot.tasks[0].status, TaskStatus::Cancelled);
         assert_eq!(snapshot.tasks[1].status, TaskStatus::Skipped);
         assert!(snapshot.exit_requested);
+        assert!(snapshot.execution_finished);
         assert!(
             snapshot
                 .messages
                 .iter()
                 .any(|line| line.contains("exit requested"))
         );
+    }
+
+    #[test]
+    fn terminal_execution_events_mark_the_dashboard_finished() {
+        for event in [
+            UiEvent::ExecutionCompleted {
+                output_directory: Path::new("output/execution-0"),
+            },
+            UiEvent::ExecutionFailed { reason: "failure" },
+            UiEvent::ExecutionCancelled,
+        ] {
+            let mut state = DashboardState::new();
+            state.apply(&event);
+            assert!(state.snapshot().execution_finished);
+        }
     }
 
     #[test]
