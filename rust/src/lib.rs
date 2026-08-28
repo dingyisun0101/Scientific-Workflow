@@ -36,7 +36,7 @@
 //!         constants: Constants,
 //!         schema: &SystemStateSchema,
 //!         _context: &InitializationContext,
-//!     ) -> TaskResult<Self> {
+//!     ) -> UnitResult<Self> {
 //!         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
 //!         state.initialize_payload("population", constants.initial)?;
 //!         state.initialize_payload("cumulative_births", 0_u64)?;
@@ -56,7 +56,7 @@
 //!             Some(self.target_iteration),
 //!         ))
 //!     }
-//!     fn step(&mut self) -> TaskResult {
+//!     fn step(&mut self) -> UnitResult {
 //!         let (population, cumulative_births) = self
 //!             .state
 //!             .borrow_payloads_mut::<(u64, u64)>(
@@ -116,7 +116,7 @@ mod ui;
 pub use error::WorkflowError;
 pub use scientific_workflow_macros::execution_unit;
 pub use task::{
-    ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError, TaskResult,
+    ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError, UnitResult,
 };
 
 /// Loads, preflights, and executes the Workflow project rooted at

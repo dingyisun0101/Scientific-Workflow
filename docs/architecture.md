@@ -155,7 +155,7 @@ Current public surface:
 ordinary crate root and prelude
 ├── state construction and manipulation
 ├── ObservationPlan / ObservationStream
-├── ExecutionUnit / InitializationContext / MemberView / SeedError / TaskResult
+├── ExecutionUnit / InitializationContext / MemberView / SeedError / UnitResult
 │   / #[execution_unit]
 ├── crate-facade run(&Path)
 └── WorkflowError

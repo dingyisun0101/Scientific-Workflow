@@ -8,7 +8,7 @@ It re-exports exactly:
 
 - crate entry and registration: `run`, `execution_unit`, and `WorkflowError`;
 - unit contracts: `ExecutionUnit`, `InitializationContext`,
-  `MemberCompletion`, `MemberView`, `SeedError`, and `TaskResult`;
+  `MemberCompletion`, `MemberView`, `SeedError`, and `UnitResult`;
 - state contracts: `StateError`, `StateSeriesError`, `PayloadInsertError`,
   `StateSeriesPushError`, `StateTime`, `SystemStateSchema`, `SystemState`, and
   `StateSeries`; and
@@ -48,7 +48,7 @@ impl ExecutionUnit for ExampleUnit {
         constants: Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial)?;
         Ok(Self { state, target: constants.steps })
@@ -66,7 +66,7 @@ impl ExecutionUnit for ExampleUnit {
         ))
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         *self.state.payload_mut::<u64>("population")? += 1;
         self.state.advance_time(None)?;
         Ok(())

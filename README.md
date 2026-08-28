@@ -3,12 +3,14 @@
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking update — 0.11.2:** this release supersedes the 0.11.0 public API
+> **Breaking update — 0.11.3:** this release supersedes the 0.11.0 public API
 > generation. It replaces Basic/Advanced namespace tiers with one ordinary
 > prelude and module-root specialized APIs, uses data-bearing runtime workload
-> summaries, and makes state inspection/maintenance inherent. No compatibility
-> aliases are provided. Do not use 0.11.1: its published macro dependency can
-> expand to the removed registration API; 0.11.2 requires the corrected macro.
+> summaries, makes state inspection/maintenance inherent, and names the public
+> execution-unit error boundary `UnitResult` instead of the scheduler-oriented
+> `TaskResult`. No compatibility aliases are provided. Do not use 0.11.1: its
+> published macro dependency can expand to the removed registration API;
+> 0.11.3 requires the corrected macro.
 
 ## Start here
 

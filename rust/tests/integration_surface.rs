@@ -28,7 +28,7 @@ fn prelude_exposes_the_complete_ordinary_authoring_inventory() {
         ExecutionUnit, InitializationContext, MemberCompletion, MemberView, ObservationError,
         ObservationPlan, ObservationStream, PayloadInsertError, SeedError, StateError, StateSeries,
         StateSeriesError, StateSeriesPushError, StateTime, SystemState, SystemStateSchema,
-        TaskResult, WorkflowError, execution_unit, run,
+        UnitResult, WorkflowError, execution_unit, run,
     };
 }
 

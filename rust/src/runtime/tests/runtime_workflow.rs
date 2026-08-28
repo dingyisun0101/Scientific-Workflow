@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::runtime::{RuntimeError, TaskRunKind, TaskRunSummary, execute};
 use crate::state::{StateTime, SystemState, SystemStateSchema};
 use crate::study::Study;
-use crate::task::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView, TaskResult};
+use crate::task::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView, UnitResult};
 
 use super::execution::task_exceeded_timeout;
 
@@ -90,7 +90,7 @@ impl ExecutionUnit for PanicAfterBeginUnit {
         _constants: Self::Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self { state })
@@ -104,7 +104,7 @@ impl ExecutionUnit for PanicAfterBeginUnit {
         (index == 0).then(|| MemberView::new("panic", &self.state, None, None))
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         panic!("runtime panic sentinel")
     }
 }
@@ -128,7 +128,7 @@ impl ExecutionUnit for SlowUnit {
         constants: Self::Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self {
@@ -152,7 +152,7 @@ impl ExecutionUnit for SlowUnit {
         })
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         std::thread::sleep(self.sleep);
         *self.state.payload_mut::<u64>("value")? += 1;
         self.state.advance_time(None)?;
@@ -172,7 +172,7 @@ impl ExecutionUnit for RuntimeEnsemble {
         _constants: Self::Constants,
         schema: &SystemStateSchema,
         context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let _ = context.shared_seed("coordination")?;
         let _ = context.member_seed("first", "initialization")?;
         let _ = context.member_seed("second", "initialization")?;
@@ -200,7 +200,7 @@ impl ExecutionUnit for RuntimeEnsemble {
         ))
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         for (index, state) in self.states.iter_mut().enumerate() {
             if state.time().iteration() < index as u64 + 1 {
                 *state.payload_mut::<u64>("value")? += 1;

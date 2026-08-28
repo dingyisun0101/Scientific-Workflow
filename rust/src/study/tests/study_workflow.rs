@@ -39,7 +39,7 @@ impl ExecutionUnit for EnergyUnit {
         constants: Self::Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("energy", constants.initial)?;
         Ok(Self { state })
@@ -60,7 +60,7 @@ impl ExecutionUnit for EnergyUnit {
         })
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         *self.state.payload_mut::<f64>("energy")? *= 0.5;
         self.state.advance_time(None)?;
         Ok(())
@@ -74,7 +74,7 @@ impl ExecutionUnit for CounterUnit {
     fn preflight(
         constants: &Self::Constants,
         _schema: &SystemStateSchema,
-    ) -> TaskResult<ObservationPlan> {
+    ) -> UnitResult<ObservationPlan> {
         if constants.initial == u64::MAX {
             return Err("counter initial value is reserved".into());
         }
@@ -85,7 +85,7 @@ impl ExecutionUnit for CounterUnit {
         constants: Self::Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("count", constants.initial)?;
         Ok(Self {
@@ -110,7 +110,7 @@ impl ExecutionUnit for CounterUnit {
         })
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         *self.state.payload_mut::<u64>("count")? += 1;
         self.state.advance_time(None)?;
         Ok(())

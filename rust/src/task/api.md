@@ -35,13 +35,13 @@ Associated type:
 Methods:
 
 - `preflight(constants: &Self::Constants, schema: &SystemStateSchema)
-  -> TaskResult<ObservationPlan>` is the optional, effect-free preflight hook.
+  -> UnitResult<ObservationPlan>` is the optional, effect-free preflight hook.
   The unit owns its domain validation and Study trusts a successful result. The
   default records every schema field each iteration. Study binds the returned
   plan to the task's named schema once; the common bound plan is applied
   independently to every member recording.
 - `initialize(constants: Self::Constants, schema: &SystemStateSchema,
-  context: &InitializationContext) -> TaskResult<Self>` consumes Runtime's
+  context: &InitializationContext) -> UnitResult<Self>` consumes Runtime's
   fresh constants decode, borrows the exact schema allocation retained by
   Study, and receives immutable initialization facts. It must return a fully
   initialized, positive-cardinality unit. It may allocate memory and initialize
@@ -53,7 +53,7 @@ Methods:
   borrowed view for each `index < member_count()` and `None` for all other
   indices. Index order, identity, state address, and schema allocation must stay
   stable throughout execution.
-- `step(&mut self) -> TaskResult` performs one complete coordinated transition.
+- `step(&mut self) -> UnitResult` performs one complete coordinated transition.
   At least one incomplete member must strictly advance its state iteration on
   success. Other incomplete members may wait, supporting synchronized ensembles
   whose members begin at different iterations. A completed member cannot advance
@@ -99,7 +99,7 @@ Canonical path: `scientific_workflow::SeedError`. This
 non-exhaustive error reports a request made without `study.json.seed`, an
 invalid purpose/member identity, or a member identity not exposed by the
 initialized unit. It implements `Error + Send + Sync`, so `?` converts it into
-`TaskResult`.
+`UnitResult`.
 
 - `MissingMasterSeed` means a seed was requested from a deterministic context
   whose study omitted the top-level seed.
@@ -148,9 +148,9 @@ Workflow clones a supplied object exactly once at the first completion
 boundary and stores it under `terminal_metadata.completion_reason`. A
 reasonless completion leaves terminal metadata empty.
 
-### `TaskResult<T = ()>`
+### `UnitResult<T = ()>`
 
-Canonical path: `scientific_workflow::TaskResult`. It aliases
+Canonical path: `scientific_workflow::UnitResult`. It aliases
 `Result<T, Box<dyn Error + Send + Sync + 'static>>` and is the error boundary for
 preflight, initialization, and scientific steps. Errors cross worker threads;
 constants and the execution unit itself do not need to be `Sync`.
@@ -242,7 +242,7 @@ impl ExecutionUnit for Counter {
         constants: Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("count", constants.initial)?;
         Ok(Self { state, target: constants.steps })
@@ -260,7 +260,7 @@ impl ExecutionUnit for Counter {
         ))
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         *self.state.payload_mut::<u64>("count")? += 1;
         self.state.advance_time(None)?;
         Ok(())

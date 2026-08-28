@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::observation::ObservationPlan;
 use crate::state::{SystemState, SystemStateSchema};
 
-use super::result::TaskResult;
+use super::result::UnitResult;
 
 const SEED_DERIVATION_ALGORITHM: &str = "scientific-workflow.seed.v1";
 
@@ -323,7 +323,7 @@ pub trait ExecutionUnit: Send + Sized + 'static {
     fn preflight(
         _constants: &Self::Constants,
         _schema: &SystemStateSchema,
-    ) -> TaskResult<ObservationPlan> {
+    ) -> UnitResult<ObservationPlan> {
         Ok(ObservationPlan::all_fields())
     }
 
@@ -335,7 +335,7 @@ pub trait ExecutionUnit: Send + Sized + 'static {
         constants: Self::Constants,
         schema: &SystemStateSchema,
         context: &InitializationContext,
-    ) -> TaskResult<Self>;
+    ) -> UnitResult<Self>;
 
     /// Returns the stable positive number of independently stateful members.
     fn member_count(&self) -> usize;
@@ -352,7 +352,7 @@ pub trait ExecutionUnit: Send + Sized + 'static {
     /// A standalone unit advances itself. An ensemble may advance members in
     /// parallel or share generated inputs, but it must return only after the
     /// complete logical step is visible through [`Self::member`].
-    fn step(&mut self) -> TaskResult;
+    fn step(&mut self) -> UnitResult;
 }
 
 #[cfg(test)]

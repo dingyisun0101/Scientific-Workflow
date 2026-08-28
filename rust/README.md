@@ -3,13 +3,15 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 
-> **Breaking update — 0.11.2:** this release supersedes the 0.11.0 public API
+> **Breaking update — 0.11.3:** this release supersedes the 0.11.0 public API
 > generation. Import ordinary unit-authoring APIs from
 > `scientific_workflow::prelude::*` and specialized APIs from their owning
 > module roots. Runtime workload summaries are now data-bearing variants, and
-> state inspection/maintenance methods are inherent. No compatibility aliases
-> are provided. Do not use 0.11.1: its published macro dependency can expand to
-> the removed registration API; 0.11.2 requires the corrected macro.
+> state inspection/maintenance methods are inherent. The public unit lifecycle
+> now returns `UnitResult`; scheduler-oriented `TaskResult` is private. No
+> compatibility aliases are provided. Do not use 0.11.1: its published macro
+> dependency can expand to the removed registration API; 0.11.3 requires the
+> corrected macro.
 
 ## Workflow at a glance
 
@@ -119,14 +121,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.2"
+scientific-workflow = "0.11.3"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.2
+cargo add scientific-workflow@0.11.3
 cargo add serde --features derive
 ```
 
@@ -211,7 +213,7 @@ are not supported application APIs.
 The complete supported symbol inventory is:
 
 - Crate root and ordinary prelude: `run`, `execution_unit`, `WorkflowError`, `ExecutionUnit`,
-  `InitializationContext`, `MemberCompletion`, `MemberView`, `SeedError`, `TaskResult`,
+  `InitializationContext`, `MemberCompletion`, `MemberView`, `SeedError`, `UnitResult`,
   `ObservationPlan`, `ObservationStream`, `ObservationError`, `StateTime`,
   `SystemStateSchema`, `SystemState`, `StateSeries`, `StateSeriesPushError`,
   `PayloadInsertError`, `StateError`, and `StateSeriesError`.
@@ -236,9 +238,9 @@ specialized public APIs directly at their module roots. Task, UI, and the
 facade-error implementation remain private subsystems; unit authoring and
 `WorkflowError` are exposed at the crate root.
 
-### Execution-unit and task API
+### Execution-unit API
 
-`TaskResult<T = ()>` is
+`UnitResult<T = ()>` is
 `Result<T, Box<dyn Error + Send + Sync + 'static>>` and is the common execution unit
 error boundary.
 
@@ -277,7 +279,7 @@ simply ignore the context.
 invalid request name, or member-scoped request that does not match an exposed
 `MemberView` identity. Its variants are `MissingMasterSeed`,
 `InvalidName { field, value }`, and `UnknownMemberIdentity { identity }`. It
-converts through `?` into `TaskResult`.
+converts through `?` into `UnitResult`.
 
 `MemberView<'a>` is a copyable borrow created with
 `MemberView::new(identity, state, completion, target_iteration)`. Its getters are
@@ -510,7 +512,7 @@ impl ExecutionUnit for PopulationUnit {
         constants: Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial_population)?;
         state.initialize_payload("cumulative_births", 0_u64)?;
@@ -532,7 +534,7 @@ impl ExecutionUnit for PopulationUnit {
         ))
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         let (population, cumulative_births) = self
             .state
             .borrow_payloads_mut::<(u64, u64)>(

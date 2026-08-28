@@ -67,7 +67,7 @@ impl ExecutionUnit for HopfModel {
     fn preflight(
         constants: &Self::Constants,
         _schema: &SystemStateSchema,
-    ) -> TaskResult<ObservationPlan> {
+    ) -> UnitResult<ObservationPlan> {
         Ok(ObservationPlan::streams([
             ObservationStream::fields("trajectory", [POINT_FIELD])?
                 .every_iterations(constants.trajectory_sampling_interval)?,
@@ -92,7 +92,7 @@ impl ExecutionUnit for HopfModel {
         constants: Self::Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         // Derived values are inserted alongside primary values so every stream
         // can select fields by schema name without knowing this Rust type.
         let radius = constants.initial_point[0].hypot(constants.initial_point[1]);
@@ -132,14 +132,14 @@ impl ExecutionUnit for HopfModel {
         })
     }
 
-    /// Advances the scientific model by one explicit-Euler iteration.
+    /// Advances the scientific model by one iteration.
     ///
     /// Runtime repeatedly calls `step` until `member(0)` reports completion.
     /// The method updates the point and its derived radius atomically from the
     /// same pre-step coordinates, advances the canonical state time only after
     /// payload updates succeed, then applies the example-only dashboard delay.
     /// An error stops the task and is recorded by Workflow.
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         {
             // A tuple borrow gives simultaneous mutable access to two
             // distinct slots while preserving SystemState's aliasing rules.

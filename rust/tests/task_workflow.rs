@@ -19,7 +19,7 @@ impl ExecutionUnit for Unit {
         constants: Constants,
         schema: &SystemStateSchema,
         _context: &InitializationContext,
-    ) -> TaskResult<Self> {
+    ) -> UnitResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.population)?;
         state.initialize_payload("activity", constants.active)?;
@@ -41,7 +41,7 @@ impl ExecutionUnit for Unit {
         })
     }
 
-    fn step(&mut self) -> TaskResult {
+    fn step(&mut self) -> UnitResult {
         let (population, active) = self
             .state
             .borrow_payloads_mut::<(u64, bool)>(("population", "activity"))?;

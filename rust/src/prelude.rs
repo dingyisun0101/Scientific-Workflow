@@ -9,6 +9,6 @@ pub use crate::state::{
     SystemState, SystemStateSchema,
 };
 pub use crate::{
-    ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError, TaskResult,
+    ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError, UnitResult,
     WorkflowError, execution_unit, run,
 };

@@ -25,5 +25,6 @@ pub(crate) use definition::{ExecutionUnitTaskProvenance, Task, TaskKind};
 pub(crate) use execution::{
     MemberInitialization, ProgramTaskInvocation, TaskDefinition, TaskExecutionHost,
 };
-pub use result::TaskResult;
+pub(crate) use result::TaskResult;
+pub use result::UnitResult;
 pub use unit::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError};
