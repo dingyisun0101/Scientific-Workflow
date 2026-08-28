@@ -38,6 +38,7 @@ impl Study {
         let output_root = project_root.join("output");
         let manifest: StudyManifest = *project.manifest();
         let replicate_policy = manifest.replicate_policy();
+        let master_seed = manifest.master_seed();
         let persistence: PersistenceSpecification = manifest.persistence();
         let persistence_plan = PersistencePlan::local(
             persistence.chunk_target_bytes(),
@@ -50,6 +51,7 @@ impl Study {
                 config,
                 phases,
                 output_root,
+                master_seed,
                 replicate_policy,
                 persistence_plan,
                 ui_plan,
@@ -80,6 +82,11 @@ impl Study {
     /// Returns the effective replicate policy parsed from `wf_configs/study.json`.
     pub(crate) fn replicate_policy(&self) -> ReplicatePolicy {
         self.inner.replicate_policy
+    }
+
+    /// Returns the study-wide optional deterministic seed.
+    pub(crate) fn master_seed(&self) -> Option<u64> {
+        self.inner.master_seed
     }
 
     /// Returns the immutable effective persistence plan compiled from
@@ -113,6 +120,7 @@ struct StudyInner {
     config: Config,
     phases: Box<[StudyPhase]>,
     output_root: PathBuf,
+    master_seed: Option<u64>,
     replicate_policy: ReplicatePolicy,
     persistence_plan: PersistencePlan,
     ui_plan: UiPlan,

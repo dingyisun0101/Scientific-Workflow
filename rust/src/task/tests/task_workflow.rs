@@ -14,10 +14,16 @@ use crate::state::advanced::{StateTime, SystemState, SystemStateSchema, schema_f
 
 use super::catalog::{ModelCatalog, ModelCatalogError, ModelRegistration};
 use super::execution::{
-    ProgramDefinition, ProgramTaskInvocation, StatefulDefinition, TaskDefinition, TaskExecutionHost,
+    ModelInitialization, ProgramDefinition, ProgramTaskInvocation, StatefulDefinition,
+    TaskDefinition, TaskExecutionHost,
 };
 use super::result::TaskResult;
-use super::unit::{ExecutionUnit, ModelView};
+use super::unit::{ExecutionUnit, InitializationContext, ModelView};
+
+fn test_initialization_context() -> &'static InitializationContext {
+    static CONTEXT: std::sync::OnceLock<InitializationContext> = std::sync::OnceLock::new();
+    CONTEXT.get_or_init(|| InitializationContext::new(Some(7), 1, "test-task", "test-unit"))
+}
 
 #[derive(Debug, Eq, PartialEq)]
 enum Event {
@@ -44,6 +50,10 @@ impl TaskExecutionHost for ProgramInvocationHost {
         false
     }
 
+    fn initialization_context(&self) -> Option<&InitializationContext> {
+        None
+    }
+
     fn execute_program(&mut self, program: ProgramTaskInvocation<'_>) -> TaskResult {
         assert_eq!(program.executable(), Path::new("/resolved/python"));
         assert_eq!(
@@ -60,15 +70,7 @@ impl TaskExecutionHost for ProgramInvocationHost {
         Ok(())
     }
 
-    fn begin_model(
-        &mut self,
-        _index: usize,
-        _model_count: usize,
-        _identity: &str,
-        _plan: BoundObservationPlan,
-        _state: &SystemState,
-        _target_iteration: Option<u64>,
-    ) -> TaskResult {
+    fn begin_model(&mut self, _model: ModelInitialization<'_>) -> TaskResult {
         panic!("program contract tests do not initialize models")
     }
 
@@ -96,23 +98,19 @@ impl TaskExecutionHost for RecordingHost {
         self.cancelled.get()
     }
 
+    fn initialization_context(&self) -> Option<&InitializationContext> {
+        Some(test_initialization_context())
+    }
+
     fn execute_program(&mut self, _program: ProgramTaskInvocation<'_>) -> TaskResult {
         panic!("model contract tests do not execute programs")
     }
 
-    fn begin_model(
-        &mut self,
-        _index: usize,
-        _model_count: usize,
-        identity: &str,
-        _plan: BoundObservationPlan,
-        state: &SystemState,
-        target_iteration: Option<u64>,
-    ) -> TaskResult {
-        self.identities.push(identity.into());
+    fn begin_model(&mut self, model: ModelInitialization<'_>) -> TaskResult {
+        self.identities.push(model.identity.into());
         self.events.push((
-            _index,
-            Event::Begin(state.time().iteration(), target_iteration),
+            model.index,
+            Event::Begin(model.state.time().iteration(), model.target_iteration),
         ));
         Ok(())
     }
@@ -202,7 +200,11 @@ struct CountingModel {
 impl ExecutionUnit for CountingModel {
     type Constants = LocalConstants;
 
-    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self {
@@ -238,7 +240,11 @@ struct PanicOnInitialize;
 impl ExecutionUnit for PanicOnInitialize {
     type Constants = ();
 
-    fn initialize(_constants: Self::Constants, _schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        _schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         panic!("initialization must not run after pre-execution cancellation")
     }
 
@@ -262,7 +268,11 @@ struct NonAdvancingModel {
 impl ExecutionUnit for NonAdvancingModel {
     type Constants = ();
 
-    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self { state })
@@ -290,7 +300,11 @@ struct OwnerSwitchModel {
 impl ExecutionUnit for OwnerSwitchModel {
     type Constants = ();
 
-    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut first = schema.create_empty_state(StateTime::from_iteration(0));
         first.initialize_payload("value", 0_u64)?;
         let mut second = schema.create_empty_state(StateTime::from_iteration(0));
@@ -331,7 +345,11 @@ struct SchemaSwitchModel {
 impl ExecutionUnit for SchemaSwitchModel {
     type Constants = ();
 
-    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self { state })
@@ -368,7 +386,11 @@ struct InvalidTargetModel {
 impl ExecutionUnit for InvalidTargetModel {
     type Constants = TargetConstants;
 
-    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let iteration = u64::from(constants.mode == "before");
         let mut state = schema.create_empty_state(StateTime::from_iteration(iteration));
         state.initialize_payload("value", 0_u64)?;
@@ -416,7 +438,11 @@ struct PairedUnit {
 impl ExecutionUnit for PairedUnit {
     type Constants = ();
 
-    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut states = Vec::with_capacity(2);
         for _ in 0..2 {
             let mut state = schema.create_empty_state(StateTime::from_iteration(0));
@@ -458,7 +484,11 @@ impl ExecutionUnit for PairedUnit {
 impl ExecutionUnit for FailingStepModel {
     type Constants = ();
 
-    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self { state })

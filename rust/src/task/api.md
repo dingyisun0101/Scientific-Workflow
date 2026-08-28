@@ -38,11 +38,13 @@ Methods:
   is the optional, effect-free preflight hook. The default records every schema
   field each iteration. Study binds the returned plan to the task's named schema
   once; the common bound plan is applied independently to every model recording.
-- `initialize(constants: Self::Constants, schema: &SystemStateSchema)
-  -> TaskResult<Self>` consumes Runtime's fresh constants decode and borrows the
-  exact schema allocation retained by Study. It must return a fully initialized,
-  positive-cardinality unit. It may allocate memory and initialize domain
-  resources, but it receives no paths, writers, UI, or scheduling handles.
+- `initialize(constants: Self::Constants, schema: &SystemStateSchema,
+  context: &InitializationContext) -> TaskResult<Self>` consumes Runtime's
+  fresh constants decode, borrows the exact schema allocation retained by
+  Study, and receives immutable initialization facts. It must return a fully
+  initialized, positive-cardinality unit. It may allocate memory and initialize
+  domain resources, but it receives no paths, writers, UI, or scheduling
+  handles. Deterministic units simply ignore `context`.
 - `model_count(&self) -> usize` returns the stable positive member count.
   The count cannot change after initialization.
 - `model(&self, index: usize) -> Option<ModelView<'_>>` returns a side-effect-free
@@ -58,6 +60,51 @@ Methods:
 Workflow checks cancellation between calls to `step`; implementations should
 return in bounded time if responsive cancellation matters. Internal worker
 parallelism must join before `step` returns so every exposed state is coherent.
+
+### `task::basic::InitializationContext`
+
+Canonical path: `scientific_workflow::task::basic::InitializationContext`.
+Workflow creates one context per execution-unit initialization; application
+code borrows it and cannot construct or customize it. It is `Send + Sync` but
+not `Clone`; initialization may share the borrow with scoped worker threads,
+and the unit cannot retain it after `initialize` returns.
+
+- `has_master_seed(&self) -> bool` reports whether the optional top-level
+  `study.json.seed` exists. Merely inspecting this value records nothing.
+- `shared_seed(&self, purpose: &str) -> Result<u64, SeedError>` derives a seed
+  for coordinated behavior shared by every model in the unit.
+- `model_seed(&self, model_identity: &str, purpose: &str) -> Result<u64,
+  SeedError>` derives a seed scoped to one eventual `ModelView` identity.
+
+Purposes and model identities must be stable, nonempty, and have no surrounding
+whitespace. Derivation includes the master seed, replicate ordinal, task
+identity, registered execution-unit key, scope, optional model identity, and
+purpose. It uses a versioned SHA-256 derivation and has no mutable counter, so
+request order, thread scheduling, and unrelated new requests cannot perturb an
+existing seed. Text domains are UTF-8 and unsigned-64-length-prefixed, numeric
+domains use little-endian `u64`, and the first eight digest bytes become a
+little-endian `u64`. Repeated identical requests return the same value.
+
+Only successful requests are recorded. Every model recording receives all
+shared requests plus only the requests for its own identity under
+`user_metadata.workflow.seed_derivation`; each entry includes the actual `u64`
+seed. A model-scoped request whose identity is not exposed after initialization
+fails the execution-unit contract instead of disappearing from provenance.
+
+### `task::basic::SeedError`
+
+Canonical path: `scientific_workflow::task::basic::SeedError`. This
+non-exhaustive error reports a request made without `study.json.seed`, an
+invalid purpose/model identity, or a model identity not exposed by the
+initialized unit. It implements `Error + Send + Sync`, so `?` converts it into
+`TaskResult`.
+
+- `MissingMasterSeed` means a seed was requested from a deterministic context
+  whose study omitted the top-level seed.
+- `InvalidName { field, value }` preserves whether the rejected name was the
+  purpose or model identity and the invalid owned value.
+- `UnknownModelIdentity { identity }` is raised after initialization when a
+  model-scoped request cannot be associated with any exposed `ModelView`.
 
 ### `task::basic::ModelView<'a>`
 
@@ -105,7 +152,8 @@ ensemble; upstream compilation and Runtime remain cardinality-agnostic.
 ## Advanced API
 
 Task adds no supported Advanced-only application symbols. `task::advanced::*`
-is a strict superset re-exporting `ExecutionUnit`, `ModelView`, and `TaskResult`.
+is a strict superset re-exporting `ExecutionUnit`, `InitializationContext`,
+`ModelView`, `SeedError`, and `TaskResult`.
 The documentation-hidden `ModelRegistration` is public solely because
 procedural-macro expansion occurs in downstream crates. Constructing it
 directly is unsupported.
@@ -177,7 +225,11 @@ struct Counter {
 impl ExecutionUnit for Counter {
     type Constants = Constants;
 
-    fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("count", constants.initial)?;
         Ok(Self { state, target: constants.steps })

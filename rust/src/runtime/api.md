@@ -30,6 +30,13 @@ observations with bounded backpressure. Program tasks receive frozen configurati
 an artifacts workspace. Runtime commits terminal status and shuts the session
 down; application/model code performs none of this coordination.
 
+For each model task, Runtime also constructs one immutable
+`InitializationContext` from Study's optional master seed, replicate ordinal,
+task identity, and registered execution-unit key. The unit may request
+purpose-named shared or model-scoped seeds. Runtime validates model identities
+after initialization and passes each model's applicable actual requests into
+Persistence before that model's recording begins. Programs receive no context.
+
 Runtime also creates one automatic UI session from Study's private inferred UI
 plan. It publishes execution, replicate, phase, task, iteration, target,
 outcome, and recording-path facts. Interactive stdin plus stderr selects the

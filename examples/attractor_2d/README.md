@@ -80,7 +80,7 @@ Parameter wiring uses two distinct kinds of key matching:
                                          |
                                   AttractorConstants
                                          |
-                       HopfModel::initialize(constants, schema)
+                   HopfModel::initialize(constants, schema, context)
                                          |
                             HopfModel { state, constants }
                                          |
@@ -115,6 +115,12 @@ same execution-unit lifecycle it uses for an ensemble; the difference is only
 that this example exposes one model rather than several. An ensemble would
 return one stable `ModelView` per internal model and perform its shared or
 parallel advancement inside the same `step()` method.
+
+Runtime also passes an `InitializationContext`. This attractor is deterministic,
+so it names that argument `_context` and does not require a top-level study
+seed. A stochastic unit would call `shared_seed(purpose)` for unit-wide random
+work or `model_seed(identity, purpose)` for one model. Workflow would then
+record each actual derived seed with the corresponding model metadata.
 
 ## Python plot phase
 

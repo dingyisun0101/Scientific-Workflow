@@ -32,7 +32,11 @@
 //! impl ExecutionUnit for Model {
 //!     type Constants = Constants;
 //!
-//!     fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+//!     fn initialize(
+//!         constants: Constants,
+//!         schema: &SystemStateSchema,
+//!         _context: &InitializationContext,
+//!     ) -> TaskResult<Self> {
 //!         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
 //!         state.initialize_payload("population", constants.initial)?;
 //!         state.initialize_payload("cumulative_births", 0_u64)?;

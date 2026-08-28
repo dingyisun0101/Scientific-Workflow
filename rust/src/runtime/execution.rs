@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::config::advanced::{ConfigSnapshot, FailurePolicy, ReplicateScheduling};
 use crate::persistence::advanced::{ModelRecordingProvenance, PersistencePlan};
 use crate::study::advanced::{Study, StudyPhase, StudyTask};
+use crate::task::advanced::InitializationContext;
 use crate::task::advanced::TaskKind;
 use crate::ui::advanced::{UiEvent, UiSession};
 
@@ -323,6 +324,7 @@ struct TaskRuntime {
     replicate_directory: PathBuf,
     dependencies_json: Box<[u8]>,
     replicate: u64,
+    master_seed: Option<u64>,
     ui: UiSession,
 }
 
@@ -547,6 +549,7 @@ fn spawn_task(
         replicate_directory: context.replicate_directory.to_path_buf(),
         dependencies_json: context.dependencies_json.clone(),
         replicate: context.replicate,
+        master_seed: context.study.master_seed(),
         ui: context.ui.clone(),
     };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
@@ -599,6 +602,14 @@ fn run_task(
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
+    let initialization_context = task.model().map(|execution_unit_key| {
+        InitializationContext::new(
+            runtime.master_seed,
+            runtime.replicate,
+            task.identity(),
+            execution_unit_key,
+        )
+    });
     let provenance = task.model_provenance().map(|provenance| {
         ModelRecordingProvenance::new(
             task.identity(),
@@ -620,6 +631,7 @@ fn run_task(
         cancellation,
         output_directory,
         provenance,
+        initialization_context,
         runtime.ui.task(runtime.replicate, task.identity()),
         environment,
     );

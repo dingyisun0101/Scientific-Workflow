@@ -47,8 +47,9 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   in-memory series.
 - [Observation](rust/src/observation/api.md): stream declarations, binding,
   cadence, and encoding boundaries.
-- [Task](rust/src/task/api.md): `ExecutionUnit`, per-model `ModelView`,
-  ensemble contracts, registration, and generic program tasks.
+- [Task](rust/src/task/api.md): `ExecutionUnit`, immutable initialization/seed
+  context, per-model `ModelView`, ensemble contracts, registration, and generic
+  program tasks.
 - [Config](rust/src/config/api.md): project JSON, named state paths, parameter
   expansion, and program/Python resolution.
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable

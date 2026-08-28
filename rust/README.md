@@ -28,7 +28,7 @@ Runtime (owns active execution, scheduling, cancellation, and coordination)
 |           |   +-- retains: resolved parameters
 |           |   +-- retains: selected validated schema
 |           |   +-- retains: bound observation plan
-|           |   `-- creates: ExecutionUnit
+|           |   `-- creates: ExecutionUnit with immutable InitializationContext
 |           |       +-- standalone model -> SystemState
 |           |       `-- ensemble
 |           |           +-- model -> SystemState
@@ -40,6 +40,7 @@ Runtime (owns active execution, scheduling, cancellation, and coordination)
 +-- creates and coordinates: Persistence sessions
 |   +-- one recording per exposed model
 |   |   +-- borrows that model's SystemState at automatic boundaries
+|   |   +-- records applicable requested seed derivations
 |   |   `-- owns bounded stream writers
 |   |       `-- commit metadata + immutable chunks
 |   |
@@ -67,6 +68,7 @@ lifecycle and progress facts.
                               v
 [2. Author wf_configs/study.json, named state schemas,
     and wf_configs/parameters.json]
+    - add one top-level seed when stochastic units request derived seeds
                               |
                               v
 [3. Call scientific_workflow::run(project_root)]
@@ -88,7 +90,7 @@ lifecycle and progress facts.
               |                               |
               v                               v
  [Scientific task]                  [Program/Python task]
- initialize execution unit          launch resolved invocation
+ initialize unit with context        launch resolved invocation
  observe each initial state         capture config/dependencies
  coordinated step + observe         capture logs/status/workspace
  finalize each model                           |
@@ -208,7 +210,7 @@ are not supported application APIs.
 The complete supported symbol inventory is:
 
 - Basic: `run`, `execution_unit`, compatibility `model`, `WorkflowError`,
-  `ExecutionUnit`, `ModelView`, `TaskResult`,
+  `ExecutionUnit`, `InitializationContext`, `ModelView`, `SeedError`, `TaskResult`,
   `ObservationPlan`, `ObservationStream`, `ObservationError`, `StateTime`,
   `SystemStateSchema`, `SystemState`, `StateSeries`, `StateSeriesPushError`,
   `PayloadInsertError`, `StateError`, and `StateSeriesError`.
@@ -250,7 +252,7 @@ and consumed within its current thread:
 | Method | Parameters | Purpose |
 | --- | --- | --- |
 | `observation_plan(constants)` | `constants: &Self::Constants` | Optional side-effect-free declaration hook over Study's preflight decode. The default returns `ObservationPlan::all_fields()`; overrides may select streams, fields, cadence, and units. |
-| `initialize(constants, schema)` | fresh equivalent owned `Self::Constants`; `schema: &SystemStateSchema` | Required Runtime constructor for a standalone model or ensemble. Every exposed state uses this schema allocation. |
+| `initialize(constants, schema, context)` | fresh equivalent owned `Self::Constants`; `schema: &SystemStateSchema`; `context: &InitializationContext` | Required Runtime constructor for a standalone model or ensemble. Every exposed state uses this schema allocation. Deterministic units may ignore the context; stochastic units request named seeds from it. |
 | `model_count()` | `&self` | Returns the stable positive number of independently stateful models. |
 | `model(index)` | `&self`; zero-based `usize` | Returns `Some(ModelView)` for every declared index and `None` outside the count. |
 | `step()` | `&mut self` | Required coordinated transition. Every success advances at least one incomplete model; completed members cannot advance. |
@@ -261,6 +263,23 @@ observes initial, successful-step, and final states for each model.
 Study and Runtime independently decode equivalent constants from the same
 immutable Config value; custom `Deserialize` implementations must therefore be
 deterministic and side-effect-free.
+
+`task::basic::InitializationContext` is a Workflow-created, immutable
+initialization service. `has_master_seed()` reports whether the study declared
+one. `shared_seed(purpose)` derives a seed for unit-wide coordination;
+`model_seed(model_identity, purpose)` derives one for a specific exposed model.
+Both return `Result<u64, SeedError>`. Names must be stable, nonempty, and free
+of surrounding whitespace. Derivation is versioned, includes study/runtime
+identity facts, and is independent of request order and thread scheduling.
+Every successful request and its actual seed is stored automatically with its
+associated model recording. Deterministic units do not need a study seed and
+simply ignore the context.
+
+`task::basic::SeedError` is the non-exhaustive error for a missing master seed,
+invalid request name, or model-scoped request that does not match an exposed
+`ModelView` identity. Its variants are `MissingMasterSeed`,
+`InvalidName { field, value }`, and `UnknownModelIdentity { identity }`. It
+converts through `?` into `TaskResult`.
 
 `task::basic::ModelView<'a>` is a copyable borrow created with
 `ModelView::new(identity, state, complete, target_iteration)`. Its getters are
@@ -495,7 +514,11 @@ struct PopulationModel {
 impl ExecutionUnit for PopulationModel {
     type Constants = Constants;
 
-    fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial_population)?;
         state.initialize_payload("cumulative_births", 0_u64)?;
@@ -613,6 +636,7 @@ recommended organization, not a requirement: schemas may live anywhere beneath
 
 ```json
 {
+  "seed": 42,
   "paths": {
     "states": {
       "population": "wf_configs/states/population.json"
@@ -640,6 +664,12 @@ recommended organization, not a requirement: schemas may live anywhere beneath
   }
 }
 ```
+
+The top-level `seed` is optional for deterministic projects. A stochastic
+execution unit requests purpose-named derived seeds through its
+`InitializationContext`; if it makes a request while `seed` is absent, that
+task fails instead of silently drawing entropy. The derived values are stable
+across scheduling changes and recorded in model metadata.
 
 Persistence is automatic. The omitted root `persistence` object infers the
 local backend with a 64 MB decimal chunk target and queue capacity.

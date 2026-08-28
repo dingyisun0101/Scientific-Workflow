@@ -82,7 +82,12 @@ task-NNNNNN/                         multi-model execution unit root
 Stable numeric indices—not application identities—form paths. Each recording's
 `user_metadata.workflow` object retains `member_index` and `member_identity`
 alongside the registered key, named state, parameter provenance, and effective
-persistence plan.
+persistence plan. If the unit successfully requested Workflow-derived seeds,
+the same object contains `seed_derivation`: its versioned `algorithm`, authored
+`master_seed`, and deterministic `requests` array. Each entry stores `scope`,
+`purpose`, the actual `seed`, and `model_identity` for model-scoped requests.
+Every recording contains shared requests plus only those belonging to that
+recording's model.
 
 ## Advanced API
 
@@ -110,7 +115,8 @@ Inspection and reconstruction methods:
 - `stream_names()` iterates logical streams in metadata order;
 - `format_version()` returns the validated wire-format version;
 - `user_metadata()` borrows creation-time model constants and Workflow
-  provenance, including stable execution-unit member identity and index;
+  provenance, including stable execution-unit member identity/index and any
+  applicable actual seed derivations;
 - `terminal_metadata()` borrows completion-time metadata;
 - `recording_timing() -> &RecordingTiming` returns verified host timing;
 - `stream_record_count(stream)` and `stream_encoded_bytes(stream)` compute

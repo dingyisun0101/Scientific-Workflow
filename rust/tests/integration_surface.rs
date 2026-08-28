@@ -26,27 +26,31 @@ fn ordinary_facade_and_error_are_available_through_every_supported_scope() {
 
 #[test]
 fn preludes_expose_the_complete_supported_inventories() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<scientific_workflow::task::basic::InitializationContext>();
+    assert_send_sync::<scientific_workflow::task::basic::SeedError>();
+
     {
         #[allow(unused_imports)]
         use scientific_workflow::prelude::basic::{
-            ExecutionUnit, ModelView, ObservationError, ObservationPlan, ObservationStream,
-            PayloadInsertError, StateError, StateSeries, StateSeriesError, StateSeriesPushError,
-            StateTime, SystemState, SystemStateSchema, TaskResult, WorkflowError, execution_unit,
-            model, run,
+            ExecutionUnit, InitializationContext, ModelView, ObservationError, ObservationPlan,
+            ObservationStream, PayloadInsertError, SeedError, StateError, StateSeries,
+            StateSeriesError, StateSeriesPushError, StateTime, SystemState, SystemStateSchema,
+            TaskResult, WorkflowError, execution_unit, model, run,
         };
     }
 
     {
         #[allow(unused_imports)]
         use scientific_workflow::prelude::advanced::{
-            ConfigError, ExecutionUnit, JsonPayloadDecoder, JsonPayloadDecoderRegistry,
-            JsonStringDecoder, JsonVecF64Decoder, ModelView, ObservationError, ObservationPlan,
-            ObservationStream, PayloadInsertError, PersistenceError, PhaseRunSummary,
-            RecordingTiming, ReplicateRunSummary, RunSummary, RuntimeError, StateError,
-            StateFieldSchema, StateMaintenance, StateSchemaAccess, StateSeries, StateSeriesError,
-            StateSeriesPushError, StateTime, StoredStateSeriesReader, Study, StudyError,
-            SystemState, SystemStateSchema, TaskResult, TaskRunKind, TaskRunSummary, WorkflowError,
-            execute, execution_unit, model, run,
+            ConfigError, ExecutionUnit, InitializationContext, JsonPayloadDecoder,
+            JsonPayloadDecoderRegistry, JsonStringDecoder, JsonVecF64Decoder, ModelView,
+            ObservationError, ObservationPlan, ObservationStream, PayloadInsertError,
+            PersistenceError, PhaseRunSummary, RecordingTiming, ReplicateRunSummary, RunSummary,
+            RuntimeError, SeedError, StateError, StateFieldSchema, StateMaintenance,
+            StateSchemaAccess, StateSeries, StateSeriesError, StateSeriesPushError, StateTime,
+            StoredStateSeriesReader, Study, StudyError, SystemState, SystemStateSchema, TaskResult,
+            TaskRunKind, TaskRunSummary, WorkflowError, execute, execution_unit, model, run,
         };
     }
 }

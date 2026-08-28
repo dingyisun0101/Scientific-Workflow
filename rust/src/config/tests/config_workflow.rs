@@ -93,6 +93,7 @@ impl Drop for TestProject {
 
 fn manifest() -> &'static str {
     r#"{
+      "seed": 8675309,
       "replicates": {
         "count": 3,
         "scheduling": "parallel",
@@ -164,6 +165,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
     let specification = ProjectSpecification::load(project.path()).unwrap();
     assert!(specification.project_root().is_absolute());
     assert_eq!(specification.phases().len(), 2);
+    assert_eq!(specification.manifest().master_seed(), Some(8_675_309));
 
     let replicates = specification.manifest().replicate_policy();
     assert_eq!(replicates.count(), 3);

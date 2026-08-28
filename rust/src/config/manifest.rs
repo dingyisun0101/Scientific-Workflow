@@ -59,11 +59,17 @@ pub(crate) enum FailurePolicy {
 /// The validated Workflow-owned portion of `wf_configs/study.json`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct StudyManifest {
+    master_seed: Option<u64>,
     replicates: ReplicatePolicy,
     persistence: PersistenceSpecification,
 }
 
 impl StudyManifest {
+    /// Returns the optional deterministic seed for the complete study.
+    pub(crate) const fn master_seed(self) -> Option<u64> {
+        self.master_seed
+    }
+
     /// Returns the complete effective replicate policy.
     pub(crate) const fn replicate_policy(self) -> ReplicatePolicy {
         self.replicates
@@ -205,6 +211,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
     )?;
 
     let manifest = StudyManifest {
+        master_seed: raw.seed,
         replicates: ReplicatePolicy {
             count: raw.replicates.count,
             scheduling: raw.replicates.scheduling.into(),
@@ -441,6 +448,8 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 #[serde(deny_unknown_fields)]
 struct RawStudy {
     paths: RawPaths,
+    #[serde(default)]
+    seed: Option<u64>,
     #[serde(default)]
     replicates: RawReplicatePolicy,
     #[serde(default)]

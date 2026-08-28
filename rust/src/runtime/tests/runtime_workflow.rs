@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::runtime::advanced::{RuntimeError, TaskRunSummary, execute};
 use crate::state::advanced::{StateTime, SystemState, SystemStateSchema};
 use crate::study::advanced::Study;
-use crate::task::basic::{ExecutionUnit, ModelView, TaskResult};
+use crate::task::basic::{ExecutionUnit, InitializationContext, ModelView, TaskResult};
 
 use super::execution::task_exceeded_timeout;
 
@@ -86,7 +86,11 @@ struct PanicAfterBeginModel {
 impl ExecutionUnit for PanicAfterBeginModel {
     type Constants = PanicConstants;
 
-    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self { state })
@@ -120,7 +124,11 @@ struct SlowModel {
 impl ExecutionUnit for SlowModel {
     type Constants = SlowConstants;
 
-    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("value", 0_u64)?;
         Ok(Self {
@@ -160,7 +168,14 @@ struct RuntimeEnsemble {
 impl ExecutionUnit for RuntimeEnsemble {
     type Constants = PanicConstants;
 
-    fn initialize(_constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        _constants: Self::Constants,
+        schema: &SystemStateSchema,
+        context: &InitializationContext,
+    ) -> TaskResult<Self> {
+        let _ = context.shared_seed("coordination")?;
+        let _ = context.model_seed("first", "initialization")?;
+        let _ = context.model_seed("second", "initialization")?;
         let mut states = Vec::with_capacity(2);
         for initial in [10_u64, 20] {
             let mut state = schema.create_empty_state(StateTime::from_iteration(0));
@@ -240,10 +255,9 @@ fn runtime_public_results_are_send_and_sync() {
 
 #[test]
 fn an_ensemble_task_persists_and_summarizes_each_model_independently() {
-    let project = Project::new(
-        model_study("runtime-ensemble", None),
-        serde_json::json!({"runtime-ensemble": {}}),
-    );
+    let mut study = model_study("runtime-ensemble", None);
+    study["seed"] = 42.into();
+    let project = Project::new(study, serde_json::json!({"runtime-ensemble": {}}));
 
     let summary = execute(Study::load(project.path()).unwrap()).unwrap();
     let task = &summary.replicates()[0].phases()[0].tasks()[0];
@@ -270,6 +284,30 @@ fn an_ensemble_task_persists_and_summarizes_each_model_independently() {
         assert_eq!(
             metadata["user_metadata"]["workflow"]["member_identity"],
             model.identity()
+        );
+        let derivation = &metadata["user_metadata"]["workflow"]["seed_derivation"];
+        assert_eq!(derivation["algorithm"], "scientific-workflow.seed.v1");
+        assert_eq!(derivation["master_seed"], 42);
+        assert_eq!(derivation["requests"].as_array().unwrap().len(), 2);
+        assert!(
+            derivation["requests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|request| {
+                    request["scope"] == "shared" && request["purpose"] == "coordination"
+                })
+        );
+        assert!(
+            derivation["requests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|request| {
+                    request["scope"] == "model"
+                        && request["model_identity"] == model.identity()
+                        && request["purpose"] == "initialization"
+                })
         );
     }
 }

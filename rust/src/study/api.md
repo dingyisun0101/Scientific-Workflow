@@ -30,7 +30,7 @@ tasks, identities, persistence plans, registries, or Study builders.
 `Study` is an immutable, clone-cheap plan backed by `Arc`. It owns the shared
 central Config, task-bound state schemas, internal phases/tasks, resolved constants,
 resolved executable/script/environment paths, schema-bound observation plans,
-inferred output root, replicate policy, and effective persistence/UI settings. None of those
+inferred output root, optional master seed, replicate policy, and effective persistence/UI settings. None of those
 internal planning types is public. `Study` is `Send + Sync`; clones may be
 moved or shared across host threads without mutable planning state.
 
@@ -39,7 +39,8 @@ moved or shared across host threads without mutable planning state.
   canonicalizes paths, parses JSON, expands model parameters, and resolves
   programs, Python scripts, interpreters, and environment managers. Study then
   validates registration keys and duplicates, resolves every model key,
-  validates every named state document, decodes every concrete constants value,
+  validates every named state document, retains the optional top-level master
+  seed, decodes every concrete constants value,
   calls each model's side-effect-free `observation_plan` exactly once, and binds
   that plan to the schema explicitly selected by that model task. It does not
   call `ExecutionUnit::initialize`. Loading is synchronous and may block on

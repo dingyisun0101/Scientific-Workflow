@@ -10,13 +10,15 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::config::advanced::ConfigSnapshot;
-use crate::observation::advanced::BoundObservationPlan;
 use crate::persistence::advanced::{
     ModelRecordingProvenance, PersistencePlan, PersistenceSession, ProgramLaunch,
     ProgramPersistenceSession,
 };
 use crate::state::advanced::SystemState;
-use crate::task::advanced::{ProgramTaskInvocation, TaskExecutionHost, TaskResult};
+use crate::task::advanced::{
+    InitializationContext, ModelInitialization, ProgramTaskInvocation, TaskExecutionHost,
+    TaskResult,
+};
 use crate::ui::advanced::TaskUi;
 
 use super::summary::ModelRunSummary;
@@ -26,6 +28,7 @@ pub(crate) struct RuntimeTaskHost {
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
     provenance: Option<ModelRecordingProvenance>,
+    initialization_context: Option<InitializationContext>,
     persistence: Vec<Option<PersistenceSession>>,
     member_iterations: Vec<u64>,
     member_targets: Vec<Option<u64>>,
@@ -65,6 +68,7 @@ impl RuntimeTaskHost {
         cancellation: Arc<AtomicBool>,
         output_directory: PathBuf,
         provenance: Option<ModelRecordingProvenance>,
+        initialization_context: Option<InitializationContext>,
         task_ui: TaskUi,
         environment: RuntimeTaskEnvironment,
     ) -> Self {
@@ -73,6 +77,7 @@ impl RuntimeTaskHost {
             cancellation,
             output_directory,
             provenance,
+            initialization_context,
             persistence: Vec::new(),
             member_iterations: Vec::new(),
             member_targets: Vec::new(),
@@ -125,6 +130,10 @@ impl RuntimeTaskHost {
 impl TaskExecutionHost for RuntimeTaskHost {
     fn cancellation_requested(&self) -> bool {
         self.cancellation_requested()
+    }
+
+    fn initialization_context(&self) -> Option<&InitializationContext> {
+        self.initialization_context.as_ref()
     }
 
     fn execute_program(&mut self, program: ProgramTaskInvocation<'_>) -> TaskResult {
@@ -209,21 +218,23 @@ impl TaskExecutionHost for RuntimeTaskHost {
         }
     }
 
-    fn begin_model(
-        &mut self,
-        index: usize,
-        model_count: usize,
-        identity: &str,
-        plan: BoundObservationPlan,
-        state: &SystemState,
-        target_iteration: Option<u64>,
-    ) -> TaskResult {
+    fn begin_model(&mut self, model: ModelInitialization<'_>) -> TaskResult {
+        let ModelInitialization {
+            index,
+            model_count,
+            identity,
+            seed_derivation,
+            plan,
+            state,
+            target_iteration,
+        } = model;
         let provenance = self
             .provenance
             .as_ref()
             .expect("a model task retains recording provenance")
             .clone()
-            .with_member(index, identity);
+            .with_member(index, identity)
+            .with_seed_derivation(seed_derivation);
         if self.persistence.is_empty() {
             self.persistence.resize_with(model_count, || None);
             self.member_iterations.resize(model_count, 0);

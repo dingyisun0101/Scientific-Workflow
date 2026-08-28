@@ -15,7 +15,8 @@ It re-exports:
   `SystemStateSchema`, `SystemState`, and `StateSeries`;
 - every `observation::basic` symbol: `ObservationPlan`, `ObservationStream`,
   and `ObservationError`;
-- every `task::basic` symbol: `ExecutionUnit`, `ModelView`, and `TaskResult`;
+- every `task::basic` symbol: `ExecutionUnit`, `InitializationContext`,
+  `ModelView`, `SeedError`, and `TaskResult`;
 - every `error::basic` symbol: only `WorkflowError`;
 - the crate-level `run(&Path)` facade;
 - the crate-level `execution_unit` attribute and its `model` compatibility spelling; and
@@ -88,7 +89,11 @@ struct Model { state: SystemState, target_iteration: u64 }
 #[scientific_workflow::execution_unit("example")]
 impl ExecutionUnit for Model {
     type Constants = Constants;
-    fn initialize(constants: Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial)?;
         state.initialize_payload("cumulative_births", 0_u64)?;

@@ -64,7 +64,11 @@ impl ExecutionUnit for HopfModel {
         .with_physical_time_unit("dimensionless_model_time")?)
     }
 
-    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         // Derived values are inserted alongside primary values so every stream
         // can select fields by schema name without knowing this Rust type.
         let radius = constants.initial_point[0].hypot(constants.initial_point[1]);

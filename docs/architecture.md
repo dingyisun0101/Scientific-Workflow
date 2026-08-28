@@ -16,7 +16,7 @@ programs plus project JSON:
 │   └── <units>.rs              registered ExecutionUnit implementations
 ├── scripts/                     optional executable and `.py` task programs
 └── wf_configs/                 required Workflow configuration root
-    ├── study.json              phases, tasks, replicates, operational policy
+    ├── study.json              phases, tasks, optional seed, operational policy
     ├── parameters.json         every custom-project parameter namespace
     └── states/                 recommended, optional schema grouping
         ├── population.json
@@ -109,7 +109,8 @@ study
         ▼
 runtime::execute
   execution directory + replicates + scheduling + cancellation
-  + execution-unit initialization/stepping or direct program/Python invocation
+  + immutable initialization context + execution-unit stepping
+  + direct program/Python invocation
         ├──── per-model observation boundaries ────► persistence
         │                                             one private bounded writer per model
         │                                             + atomic metadata/chunks
@@ -161,7 +162,8 @@ Current public surface:
 basic
 ├── state construction and manipulation
 ├── ObservationPlan / ObservationStream
-├── ExecutionUnit / ModelView / TaskResult / #[execution_unit]
+├── ExecutionUnit / InitializationContext / ModelView / SeedError / TaskResult
+│   / #[execution_unit]
 ├── crate-facade run(&Path)
 └── WorkflowError
 
@@ -365,7 +367,8 @@ direct arguments and no public Rust adapter. Config lowers a nested Python
 script/environment declaration to that same executable boundary. Study and
 Runtime decode equivalent constants instances independently from Config's same
 retained JSON value, so the constants type itself need not be `Send` or `Sync`.
-The unit initializes from its task-bound selected schema and exposes stable
+The unit initializes from its task-bound selected schema and a Workflow-owned
+`InitializationContext`, then exposes stable
 `ModelView`s. Each view names one independently complete model and directly
 borrows that model's state. The unit performs one coordinated `step`; a normal
 model is the one-view case, while an ensemble may synchronize or parallelize
@@ -379,6 +382,13 @@ tuple-payload borrowing methods directly.
 Task passes a semantic borrowed `ProgramTaskInvocation` through its execution
 host port, so Runtime does not depend on Config's resolved-program
 representation.
+Deterministic units ignore the initialization context. Stochastic units request
+stable purpose-named shared or per-model seeds only when needed. Seed
+derivation incorporates the optional study master seed, replicate, task,
+execution-unit key, scope, model identity, and purpose without an order-sensitive
+counter. Runtime validates model-scoped requests against the initialized views;
+Persistence records shared requests plus the applicable model requests and
+their actual derived values in each model's metadata.
 
 ### Config
 
@@ -387,6 +397,9 @@ Config canonicalizes the project and required `wf_configs` roots and parses
 (including all named state schemas), and the complete arbitrary
 `wf_configs/parameters.json` namespace with duplicate-key rejection. One
 clone-cheap immutable Config retains the entire value graph.
+The optional top-level `study.json.seed` is the sole master randomness input
+owned by Workflow. Config parses it once and Study retains it as immutable
+intent; neither layer draws random values.
 `wf_configs/study.json.paths.states` maps semantic state keys to configuration documents; every
 model task explicitly selects one key. A model key automatically selects its
 same-name parameter section; no per-task parameter path exists. Config expands
@@ -472,6 +485,10 @@ Model recording provenance calls the selected combination
 `parameter_ordinal` and its canonical `wf_configs/parameters.json` document
 `parameter_source`; `state` records the named schema selector bound during
 assembly. The removed per-task input-file vocabulary is not retained on disk.
+When an execution unit requested Workflow-derived seeds, the recording's
+`user_metadata.workflow.seed_derivation` stores the versioned algorithm,
+master seed, and actual applicable shared/per-model requests. Requests for a
+different ensemble member are intentionally absent from that model's metadata.
 
 ### UI
 

@@ -10,7 +10,7 @@ use crate::observation::advanced::BoundObservationPlan;
 use crate::state::advanced::{StateSchemaAccess, SystemState, SystemStateSchema};
 
 use super::result::TaskResult;
-use super::unit::{ExecutionUnit, ModelView};
+use super::unit::{ExecutionUnit, InitializationContext, ModelView};
 
 /// The runtime-owned services a task may use while executing.
 ///
@@ -22,21 +22,16 @@ pub(crate) trait TaskExecutionHost {
     /// Reports whether cooperative cancellation has been requested.
     fn cancellation_requested(&self) -> bool;
 
+    /// Returns initialization facts for a model task.
+    fn initialization_context(&self) -> Option<&InitializationContext>;
+
     /// Executes one validated external program in Runtime's standardized task
     /// workspace and configuration environment.
     fn execute_program(&mut self, program: ProgramTaskInvocation<'_>) -> TaskResult;
 
     /// Accepts the validated observation plan and emits the initial observation and
     /// automatic initialized snapshot for `state`.
-    fn begin_model(
-        &mut self,
-        index: usize,
-        model_count: usize,
-        identity: &str,
-        plan: BoundObservationPlan,
-        state: &SystemState,
-        target_iteration: Option<u64>,
-    ) -> TaskResult;
+    fn begin_model(&mut self, model: ModelInitialization<'_>) -> TaskResult;
 
     /// Emits the automatic observation and progress snapshot after one
     /// successful model step.
@@ -55,6 +50,17 @@ pub(crate) trait TaskExecutionHost {
         state: &SystemState,
         target_iteration: Option<u64>,
     ) -> TaskResult;
+}
+
+/// Complete semantic handoff when one model recording begins.
+pub(crate) struct ModelInitialization<'a> {
+    pub(crate) index: usize,
+    pub(crate) model_count: usize,
+    pub(crate) identity: &'a str,
+    pub(crate) seed_derivation: Option<serde_json::Value>,
+    pub(crate) plan: BoundObservationPlan,
+    pub(crate) state: &'a SystemState,
+    pub(crate) target_iteration: Option<u64>,
 }
 
 /// Borrowed semantic invocation facts passed from Task to Runtime.
@@ -151,7 +157,10 @@ where
         let constants: M::Constants = self.parameters.decode()?;
         let schema = self.schema.clone();
 
-        let mut unit = M::initialize(constants, &schema)?;
+        let context = host
+            .initialization_context()
+            .expect("a model task retains an initialization context");
+        let mut unit = M::initialize(constants, &schema, context)?;
         let model_count = unit.model_count();
         if model_count == 0 {
             return Err(ModelContractError::EmptyExecutionUnit.into());
@@ -163,16 +172,22 @@ where
         }
 
         let mut models = inspect_initial_models(&unit, &schema, model_count)?;
+        context.validate_model_identities(models.iter().map(|model| model.identity.as_ref()))?;
+        let seed_derivations = models
+            .iter()
+            .map(|model| context.metadata_for_model(&model.identity))
+            .collect::<Vec<_>>();
         for (index, model) in models.iter().enumerate() {
             let view = required_model(&unit, index)?;
-            host.begin_model(
+            host.begin_model(ModelInitialization {
                 index,
                 model_count,
-                &model.identity,
-                self.observation_plan.clone(),
-                view.state(),
-                model.target,
-            )?;
+                identity: &model.identity,
+                seed_derivation: seed_derivations[index].clone(),
+                plan: self.observation_plan.clone(),
+                state: view.state(),
+                target_iteration: model.target,
+            })?;
             if model.complete {
                 host.observe_model_final(index, view.state(), model.target)?;
             }

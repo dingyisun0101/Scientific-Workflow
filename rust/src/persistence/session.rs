@@ -28,6 +28,7 @@ pub(crate) struct ModelRecordingProvenance {
     model_constants: Value,
     member_index: Option<usize>,
     member_identity: Option<Box<str>>,
+    seed_derivation: Option<Value>,
 }
 
 impl ModelRecordingProvenance {
@@ -48,12 +49,18 @@ impl ModelRecordingProvenance {
             model_constants,
             member_index: None,
             member_identity: None,
+            seed_derivation: None,
         }
     }
 
     pub(crate) fn with_member(mut self, index: usize, identity: &str) -> Self {
         self.member_index = Some(index);
         self.member_identity = Some(identity.into());
+        self
+    }
+
+    pub(crate) fn with_seed_derivation(mut self, seed_derivation: Option<Value>) -> Self {
+        self.seed_derivation = seed_derivation;
         self
     }
 
@@ -69,7 +76,7 @@ impl ModelRecordingProvenance {
                 persistence_plan.queue_capacity().get().into(),
             ),
         ]));
-        let workflow = Value::Object(Map::from_iter([
+        let mut workflow = Map::from_iter([
             (
                 "task_identity".to_owned(),
                 Value::String(self.task_identity.into()),
@@ -98,10 +105,13 @@ impl ModelRecordingProvenance {
                     .into(),
             ),
             ("persistence".to_owned(), persistence),
-        ]));
+        ]);
+        if let Some(seed_derivation) = self.seed_derivation {
+            workflow.insert("seed_derivation".to_owned(), seed_derivation);
+        }
         Map::from_iter([
             ("model_constants".to_owned(), self.model_constants),
-            ("workflow".to_owned(), workflow),
+            ("workflow".to_owned(), Value::Object(workflow)),
         ])
     }
 }

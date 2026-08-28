@@ -22,7 +22,7 @@ mod task_workflow_tests;
 /// Ordinary application-facing task API.
 pub mod basic {
     pub use super::result::TaskResult;
-    pub use super::unit::{ExecutionUnit, ModelView};
+    pub use super::unit::{ExecutionUnit, InitializationContext, ModelView, SeedError};
 }
 
 /// Supported task API for advanced users and Workflow peer subsystems.
@@ -33,5 +33,7 @@ pub mod advanced {
     pub use super::catalog::ModelRegistration;
     pub(crate) use super::catalog::{ModelCatalog, ModelCatalogError};
     pub(crate) use super::definition::{ModelTaskProvenance, Task, TaskKind};
-    pub(crate) use super::execution::{ProgramTaskInvocation, TaskDefinition, TaskExecutionHost};
+    pub(crate) use super::execution::{
+        ModelInitialization, ProgramTaskInvocation, TaskDefinition, TaskExecutionHost,
+    };
 }

@@ -35,7 +35,11 @@ struct EnergyModel {
 impl ExecutionUnit for EnergyModel {
     type Constants = EnergyConstants;
 
-    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("energy", constants.initial)?;
         Ok(Self { state })
@@ -67,7 +71,11 @@ impl ExecutionUnit for EnergyModel {
 impl ExecutionUnit for CounterModel {
     type Constants = CounterConstants;
 
-    fn initialize(constants: Self::Constants, schema: &SystemStateSchema) -> TaskResult<Self> {
+    fn initialize(
+        constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> TaskResult<Self> {
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("count", constants.initial)?;
         Ok(Self {

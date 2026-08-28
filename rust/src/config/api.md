@@ -45,11 +45,12 @@ in `study.json.paths.states`. A state path outside `wf_configs/` is rejected.
 
 ### `wf_configs/study.json`
 
-The root object has required `paths` and `phases` objects and two optional
-objects:
+The root object has required `paths` and `phases` objects, an optional `seed`,
+and two optional objects:
 
 ```json
 {
+  "seed": 42,
   "paths": {
     "states": {
       "population": "wf_configs/states/population.json"
@@ -81,6 +82,10 @@ objects:
 
 Unknown properties are rejected at every Workflow-owned level.
 
+- `seed` is an optional unsigned 64-bit master seed. Config parses it once;
+  Runtime places it in each model task's immutable initialization context.
+  Deterministic execution units need not declare it. A unit that requests a
+  derived seed fails clearly when it is absent.
 - `paths.states` maps nonblank, whitespace-exact semantic state names to JSON
   paths. Paths must be project-root-relative, resolve once during Config
   loading, and identify captured `.json` documents beneath the canonical
