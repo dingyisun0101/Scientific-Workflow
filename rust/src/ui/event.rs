@@ -11,7 +11,6 @@ pub(crate) enum UiEvent<'a> {
         identity: &'a str,
         label: &'a str,
         kind: &'a str,
-        subject: &'a str,
     },
     ExecutionStarted {
         output_directory: &'a Path,

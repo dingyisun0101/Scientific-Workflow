@@ -50,7 +50,6 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
                     identity: task.identity(),
                     label: task.label(),
                     kind: task.kind_name(),
-                    subject: task.subject(),
                 });
             }
         }

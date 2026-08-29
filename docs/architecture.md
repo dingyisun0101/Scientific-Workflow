@@ -534,9 +534,10 @@ is checked from Runtime-facing publication, scheduler, and final-join
 boundaries, while the terminal lease restores process state during unwinding.
 The dashboard
 owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
-elapsed/ETA fields, a bounded message panel, and the former command editor.
+one compact `elapsed / ETA` field, a bounded message panel, and the former command editor.
 Every phase-start event replaces the visible task set. Replicate and phase
-appear once in the panel title; rows contain only task-specific information.
+appear once in the panel title; rows contain only the task label, a concise kind
+tag (`unit` for the internal `execution_unit` kind), status, progress, and timing.
 Exact lowercase `exit` is the interactive dashboard's sole normal close command.
 When entered during active work it also requests cooperative Runtime cancellation,
 stops further admission, and waits for active execution unit/program cleanup. Ctrl+C

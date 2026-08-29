@@ -37,7 +37,6 @@ pub(super) struct TaskSnapshot {
     pub(super) phase: String,
     pub(super) label: String,
     pub(super) kind: String,
-    pub(super) subject: String,
     pub(super) status: TaskStatus,
     pub(super) iteration: u64,
     pub(super) target: Option<u64>,
@@ -94,7 +93,6 @@ impl DashboardState {
                 identity,
                 label,
                 kind,
-                subject,
             } => {
                 let key = (*replicate, Box::<str>::from(*identity));
                 if !self.tasks.contains_key(&key) {
@@ -107,7 +105,6 @@ impl DashboardState {
                         phase: (*phase).to_owned(),
                         label: (*label).to_owned(),
                         kind: (*kind).to_owned(),
-                        subject: (*subject).to_owned(),
                         status: TaskStatus::Pending,
                         iteration: 0,
                         target: None,
@@ -403,7 +400,6 @@ mod tests {
             identity: "simulate/000000/unit-000000",
             label: "unit #0",
             kind: "unit",
-            subject: "unit",
         });
         state.apply(&UiEvent::ExecutionStarted {
             output_directory: Path::new("output/execution-0"),
@@ -462,7 +458,6 @@ mod tests {
                 identity,
                 label: identity,
                 kind: "program",
-                subject: identity,
             });
         }
         state.apply(&UiEvent::PhaseStarted {
@@ -486,7 +481,6 @@ mod tests {
                 identity,
                 label: identity,
                 kind: "program",
-                subject: identity,
             });
         }
 
@@ -521,7 +515,6 @@ mod tests {
                 identity,
                 label: identity,
                 kind: "unit",
-                subject: "unit",
             });
         }
         state.apply(&UiEvent::PhaseStarted {
@@ -586,7 +579,6 @@ mod tests {
                 identity,
                 label: identity,
                 kind: "program",
-                subject: identity,
             });
         }
 
@@ -631,7 +623,6 @@ mod tests {
             identity: "task",
             label: "task",
             kind: "unit",
-            subject: "unit",
         });
         state.apply(&UiEvent::TaskStarted {
             replicate: 0,

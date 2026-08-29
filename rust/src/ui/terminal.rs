@@ -25,6 +25,7 @@ use super::state::{DashboardSnapshot, TaskSnapshot, TaskStatus, event_message};
 
 static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const TIMING_WIDTH: u16 = 19;
 
 pub(super) fn interactive() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
@@ -226,7 +227,7 @@ fn render_tasks(
     snapshot: &DashboardSnapshot,
     tick: usize,
 ) {
-    let header = Row::new(["task", "status", "progress", "time"]).style(
+    let header = Row::new(["task", "status", "progress", "elapsed / ETA"]).style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
@@ -256,7 +257,7 @@ fn render_tasks(
             Constraint::Percentage(37),
             Constraint::Length(12),
             Constraint::Percentage(32),
-            Constraint::Length(22),
+            Constraint::Length(TIMING_WIDTH),
         ],
     )
     .header(header)
@@ -290,7 +291,7 @@ fn task_row(task: &TaskSnapshot, tick: usize) -> Row<'static> {
     let progress = progress_text(task, tick);
     let timing = timing_text(task);
     let task_label = if task.detail.is_empty() {
-        format!("{} · {} {}", task.label, task.kind, task.subject)
+        format!("{} · {}", task.label, display_kind(&task.kind))
     } else {
         format!("{} · {}", task.label, task.detail)
     };
@@ -300,6 +301,13 @@ fn task_row(task: &TaskSnapshot, tick: usize) -> Row<'static> {
         Cell::from(progress).style(Style::default().fg(Color::Cyan)),
         Cell::from(timing),
     ])
+}
+
+fn display_kind(kind: &str) -> &str {
+    match kind {
+        "execution_unit" => "unit",
+        other => other,
+    }
 }
 
 fn progress_text(task: &TaskSnapshot, tick: usize) -> String {
@@ -345,23 +353,23 @@ fn timing_text(task: &TaskSnapshot) -> String {
         .finished
         .unwrap_or_else(Instant::now)
         .duration_since(started);
-    let eta = task.target.and_then(|target| {
-        if task.iteration == 0 || task.iteration >= target {
+    timing_text_for(elapsed, task.iteration, task.target)
+}
+
+fn timing_text_for(elapsed: Duration, iteration: u64, target: Option<u64>) -> String {
+    let eta = target.and_then(|target| {
+        if iteration == 0 || iteration >= target {
             None
         } else {
-            let remaining = target - task.iteration;
+            let remaining = target - iteration;
             elapsed
                 .checked_mul(u32::try_from(remaining).ok()?)?
-                .checked_div(u32::try_from(task.iteration).ok()?)
+                .checked_div(u32::try_from(iteration).ok()?)
         }
     });
     match eta {
-        Some(eta) => format!(
-            "elapsed {} ETA {}",
-            format_duration(elapsed),
-            format_duration(eta)
-        ),
-        None => format!("elapsed {}", format_duration(elapsed)),
+        Some(eta) => format!("{} / {}", format_duration(elapsed), format_duration(eta)),
+        None => format_duration(elapsed),
     }
 }
 
@@ -442,4 +450,23 @@ fn format_duration(duration: Duration) -> String {
         (seconds / 60) % 60,
         seconds % 60
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timing_value_fits_its_column_without_clipping_eta() {
+        let timing = timing_text_for(Duration::from_secs(3_661), 25, Some(100));
+
+        assert_eq!(timing, "01:01:01 / 03:03:03");
+        assert_eq!(timing.chars().count(), usize::from(TIMING_WIDTH));
+    }
+
+    #[test]
+    fn execution_unit_uses_concise_display_kind() {
+        assert_eq!(display_kind("execution_unit"), "unit");
+        assert_eq!(display_kind("program"), "program");
+    }
 }

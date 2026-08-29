@@ -126,14 +126,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.8"
+scientific-workflow = "0.11.9"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.8
+cargo add scientific-workflow@0.11.9
 cargo add serde --features derive
 ```
 

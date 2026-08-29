@@ -32,9 +32,11 @@ Crossterm alternate screen and renders a Ratatui dashboard containing:
 - a bounded 100-line lifecycle/error message panel; and
 - the command editor.
 
-The task table itself contains task label/kind/subject, status, progress, and
-timing columns. Inferred task identities and phase prefixes remain available
-to lifecycle messages and durable summaries but are not repeated in each row.
+The task table itself contains the task label with a concise kind tag, status,
+progress, and an `elapsed / ETA` timing column. The internal `execution_unit`
+kind is presented as `unit`; configuration and API vocabulary are unchanged.
+Inferred task identities, full subjects, and phase prefixes remain available to
+lifecycle messages and durable summaries but are not repeated in each row.
 Runtime lifecycle lines are appended to the message panel instead of scrolling
 the interactive terminal. Scientific payloads are never rendered. When either
 standard stream is not interactive, UI deliberately selects its stable
