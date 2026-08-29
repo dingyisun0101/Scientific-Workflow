@@ -646,6 +646,7 @@ fn program_execution_uses_task_owned_semantic_invocation_view() {
         PathBuf::from("/resolved/python"),
         [OsString::from("script.py"), OsString::from("--plot")].into(),
         None,
+        None,
         PathBuf::from("/project/script.py"),
         "system".into(),
     ));

@@ -11,12 +11,13 @@ use std::time::{Duration, Instant};
 use crate::config::{ConfigSnapshot, FailurePolicy, ReplicateScheduling};
 use crate::persistence::{MemberRecordingProvenance, PersistencePlan};
 use crate::study::{Study, StudyPhase, StudyTask};
-use crate::task::InitializationContext;
-use crate::task::TaskKind;
+use crate::task::{
+    InitializationContext, SEED_DERIVATION_ALGORITHM, TaskKind, derive_program_seed,
+};
 use crate::ui::{UiEvent, UiSession};
 
 use super::error::RuntimeError;
-use super::host::{RuntimeTaskEnvironment, RuntimeTaskHost};
+use super::host::{ProgramSeed, RuntimeTaskEnvironment, RuntimeTaskHost, RuntimeTaskLaunch};
 use super::output::{create_execution, create_replicate};
 use super::summary::{
     PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
@@ -602,6 +603,30 @@ fn run_task(
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
+    let program_seed = task.program_seed_purpose().map(|purpose| {
+        let master_seed = runtime
+            .master_seed
+            .expect("Config rejects a program seed request without a master seed");
+        let seed = derive_program_seed(
+            master_seed,
+            runtime.replicate,
+            task.identity(),
+            task.kind_name(),
+            purpose,
+        );
+        ProgramSeed::new(
+            seed,
+            serde_json::json!({
+                "algorithm": SEED_DERIVATION_ALGORITHM,
+                "master_seed": master_seed,
+                "requests": [{
+                    "scope": "task",
+                    "purpose": purpose,
+                    "seed": seed
+                }]
+            }),
+        )
+    });
     let initialization_context = task.execution_unit().map(|execution_unit_key| {
         InitializationContext::new(
             runtime.master_seed,
@@ -630,10 +655,13 @@ fn run_task(
         runtime.persistence_plan,
         cancellation,
         output_directory,
-        provenance,
-        initialization_context,
-        runtime.ui.task(runtime.replicate, task.identity()),
-        environment,
+        RuntimeTaskLaunch::new(
+            provenance,
+            initialization_context,
+            program_seed,
+            runtime.ui.task(runtime.replicate, task.identity()),
+            environment,
+        ),
     );
     match catch_unwind(AssertUnwindSafe(|| task.definition().execute(&mut host))) {
         Ok(Ok(())) => {}

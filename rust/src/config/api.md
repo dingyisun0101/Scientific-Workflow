@@ -85,9 +85,12 @@ The root object has a required `phases` object and optional `paths`, `seed`,
 Unknown properties are rejected at every Workflow-owned level.
 
 - `seed` is an optional unsigned 64-bit master seed. Config parses it once;
-  Runtime places it in each execution unit task's immutable initialization context.
-  Deterministic execution units need not declare it. A unit that requests a
-  derived seed fails clearly when it is absent.
+  Runtime uses it only to derive explicitly requested task-scoped values. It
+  places execution-unit derivation behind the immutable initialization context
+  and supplies a declared program/Python derivation through the child-process
+  environment. Deterministic tasks need not declare it. Config rejects a
+  program seed request when the master seed is absent; an execution unit that
+  requests a derived seed fails clearly during initialization when it is absent.
 - `paths.states` defaults to an empty map and maps nonblank, whitespace-exact semantic state names to JSON
   paths. Paths must be project-root-relative, resolve once during Config
   loading, and identify captured `.json` documents beneath the canonical
@@ -118,11 +121,19 @@ Unknown properties are rejected at every Workflow-owned level.
 - each task is exactly one of:
   - an execution-unit task with nonblank `execution_unit`, optional nonblank
     `state`, and optional `timeout_ms`; or
-  - a program task with required `program`, optional `args`, and optional
-    `timeout_ms`, for example
+  - a program task with required `program`, optional `args`, optional `seed`,
+    and optional `timeout_ms`, for example
     `{"program":"bin/analyze","args":["--publication"]}`; or
   - a Python task with one nested `python` object and optional task-level
-    `timeout_ms`.
+    `seed` and `timeout_ms`.
+- A program/Python seed request is the strict object
+  `{"seed":{"purpose":"target-initial-conditions"}}`. `purpose` must be
+  nonempty and have no surrounding whitespace. The request requires the
+  top-level master seed. Config retains only the semantic purpose; Runtime
+  derives one task-scoped value using replicate, inferred task identity,
+  program kind, and purpose. The field is invalid on an execution-unit task,
+  whose implementation requests only the seeds it actually needs through
+  `InitializationContext`.
 - `args` is an array of opaque strings passed directly to the executable. No
   shell parses the program or arguments.
 - a project-relative program is resolved against the project root. A

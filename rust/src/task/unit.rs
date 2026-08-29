@@ -13,7 +13,7 @@ use crate::state::{StateSchemaProvider, SystemState, SystemStateSchema};
 
 use super::result::UnitResult;
 
-const SEED_DERIVATION_ALGORITHM: &str = "scientific-workflow.seed.v1";
+pub(crate) const SEED_DERIVATION_ALGORITHM: &str = "scientific-workflow.seed.v1";
 
 /// Immutable execution facts and optional deterministic seed derivation.
 ///
@@ -81,21 +81,14 @@ impl InitializationContext {
             return Ok(*seed);
         }
 
-        let mut digest = Sha256::new();
-        hash_part(&mut digest, SEED_DERIVATION_ALGORITHM.as_bytes());
-        digest.update(master_seed.to_le_bytes());
-        digest.update(self.replicate_ordinal.to_le_bytes());
-        hash_part(&mut digest, self.task_identity.as_bytes());
-        hash_part(&mut digest, self.execution_unit_key.as_bytes());
-        match &request.scope {
-            SeedScope::Shared => digest.update([0]),
-            SeedScope::Member(identity) => {
-                digest.update([1]);
-                hash_part(&mut digest, identity.as_bytes());
-            }
-        }
-        hash_part(&mut digest, request.purpose.as_bytes());
-        let seed = u64::from_le_bytes(digest.finalize()[..8].try_into().expect("SHA-256 prefix"));
+        let seed = derive_seed(
+            master_seed,
+            self.replicate_ordinal,
+            &self.task_identity,
+            &self.execution_unit_key,
+            &request.scope,
+            &request.purpose,
+        );
         self.request_ledger().insert(request, seed);
         Ok(seed)
     }
@@ -157,6 +150,48 @@ impl InitializationContext {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
     }
+}
+
+pub(crate) fn derive_program_seed(
+    master_seed: u64,
+    replicate_ordinal: u64,
+    task_identity: &str,
+    program_kind: &str,
+    purpose: &str,
+) -> u64 {
+    derive_seed(
+        master_seed,
+        replicate_ordinal,
+        task_identity,
+        program_kind,
+        &SeedScope::Shared,
+        purpose,
+    )
+}
+
+fn derive_seed(
+    master_seed: u64,
+    replicate_ordinal: u64,
+    task_identity: &str,
+    workload_key: &str,
+    scope: &SeedScope,
+    purpose: &str,
+) -> u64 {
+    let mut digest = Sha256::new();
+    hash_part(&mut digest, SEED_DERIVATION_ALGORITHM.as_bytes());
+    digest.update(master_seed.to_le_bytes());
+    digest.update(replicate_ordinal.to_le_bytes());
+    hash_part(&mut digest, task_identity.as_bytes());
+    hash_part(&mut digest, workload_key.as_bytes());
+    match scope {
+        SeedScope::Shared => digest.update([0]),
+        SeedScope::Member(identity) => {
+            digest.update([1]);
+            hash_part(&mut digest, identity.as_bytes());
+        }
+    }
+    hash_part(&mut digest, purpose.as_bytes());
+    u64::from_le_bytes(digest.finalize()[..8].try_into().expect("SHA-256 prefix"))
 }
 
 fn hash_part(digest: &mut Sha256, bytes: &[u8]) {
@@ -401,5 +436,26 @@ mod tests {
             Err(SeedError::MissingMasterSeed)
         ));
         assert!(context.metadata_for_member("member").is_none());
+    }
+
+    #[test]
+    fn program_seed_derivation_uses_task_kind_purpose_and_replicate() {
+        let seed = derive_program_seed(99, 3, "phase/task", "program", "preparation");
+        assert_eq!(
+            derive_program_seed(99, 3, "phase/task", "program", "preparation"),
+            seed
+        );
+        assert_ne!(
+            derive_program_seed(99, 4, "phase/task", "program", "preparation"),
+            seed
+        );
+        assert_ne!(
+            derive_program_seed(99, 3, "phase/task", "python", "preparation"),
+            seed
+        );
+        assert_ne!(
+            derive_program_seed(99, 3, "phase/task", "program", "analysis"),
+            seed
+        );
     }
 }

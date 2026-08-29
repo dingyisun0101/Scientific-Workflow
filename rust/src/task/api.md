@@ -181,6 +181,9 @@ downstream crates. Constructing it directly is unsupported.
 Resolved executable and Python tasks share Task's private erased execution
 port but expose no user-implemented Rust trait. They are declared in
 `wf_configs/study.json` and receive Runtime's standardized program environment.
+An optional task-level `seed: {"purpose":"..."}` declaration is carried
+through this private invocation path; it does not add a public Rust program
+trait or expose the study master seed to the child.
 
 ## Errors and failure atomicity
 

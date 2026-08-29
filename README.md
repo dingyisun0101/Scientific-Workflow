@@ -50,7 +50,7 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   cadence, and encoding boundaries.
 - [Task](rust/src/task/api.md): `ExecutionUnit`, immutable initialization/seed
   context, per-member `MemberView`, ensemble contracts, registration, and generic
-  program tasks.
+  program tasks with optional centralized task-seed derivation.
 - [Config](rust/src/config/api.md): project JSON, optional named state paths, parameter
   expansion, and program/Python resolution.
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable

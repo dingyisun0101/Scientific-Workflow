@@ -387,6 +387,12 @@ execution-unit key, scope, member identity, and purpose without an order-sensiti
 counter. Runtime validates member-scoped requests against the initialized views;
 Persistence records shared requests plus the applicable member requests and
 their actual derived values in each member's metadata.
+External program and Python tasks do not receive an initialization context. A
+task may instead declare one semantic seed purpose. Runtime derives one
+task-scoped value from the same master seed, replicate, inferred task identity,
+program kind, and purpose, exposes only that value to the child, and persists
+the request in `program.json`. Unseeded programs receive no seed environment
+variable.
 
 ### Config
 
@@ -397,7 +403,9 @@ Config canonicalizes the project and required `wf_configs` roots and parses
 clone-cheap immutable Config retains the entire value graph.
 The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
-intent; neither layer draws random values.
+intent; neither layer draws random values. Program/Python tasks may declare a
+strict purpose-named seed request only when this master exists; execution units
+continue to request shared or member seeds imperatively at initialization.
 `wf_configs/study.json.paths.states` optionally maps semantic state keys to
 configuration documents. An execution-unit task may explicitly select one key;
 otherwise Study resolves the unit's `standard_state_schema` provider. Explicit
@@ -491,6 +499,10 @@ When an execution unit requested Workflow-derived seeds, the recording's
 `user_metadata.workflow.seed_derivation` stores the versioned algorithm,
 master seed, and actual applicable shared/per-member requests. Requests for a
 different ensemble member are intentionally absent from that member's metadata.
+When an external task declared a seed purpose, its `program.json` stores the
+same algorithm and master provenance plus the single task-scoped request and
+actual seed. The subprocess receives that derived value through
+`WORKFLOW_TASK_SEED`; Workflow never exports its master seed.
 
 ### UI
 
@@ -569,7 +581,10 @@ conveniences. It owns no behavior or alternative implementation path.
     presentation interface, and panics on failure of its selected renderer.
 15. Scientific execution-unit and external-program tasks share phase, dependency, timeout, failure,
     summary, persistence-workspace, and UI lifecycle semantics without forcing
-    fake state or iteration onto programs.
+    fake state or iteration onto programs. Both may consume Workflow-derived
+    randomness: execution units request shared/member seeds through their
+    context, while an external task declares one task-scoped purpose and
+    receives only the derived value.
 16. A Python environment is declared inside its task's `python` object and is
     completely resolved during Study loading; there is no global environment
     registry or runtime environment discovery.

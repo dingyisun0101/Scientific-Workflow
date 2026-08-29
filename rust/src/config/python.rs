@@ -54,6 +54,7 @@ enum PythonEnvironment {
 pub(crate) fn resolve(
     project_root: &Path,
     declaration: PythonTaskDeclaration,
+    seed_purpose: Option<Box<str>>,
     timeout: Option<Duration>,
 ) -> Result<ResolvedProgramTask, ConfigError> {
     let script = resolve_script(project_root, &declaration.script)?;
@@ -129,6 +130,7 @@ pub(crate) fn resolve(
     Ok(ResolvedProgramTask::for_python(
         program,
         args.into_boxed_slice(),
+        seed_purpose,
         timeout,
         script,
         manager.into(),

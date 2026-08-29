@@ -60,6 +60,12 @@ remains best effort when reporting an already-authoritative task/process
 failure. For Python, metadata additionally records the canonical
 `python_script` and declared `python_environment_manager`; those fields are
 null for a generic program. Runtime passes the other paths to the child.
+When the task declared a seed request, `program.json.seed_derivation` records
+the same versioned algorithm and master-seed provenance used for execution
+units plus one task-scoped request containing its purpose and actual derived
+`u64` value. The field is null for an unseeded program. It is written in the
+initial `running` metadata and retained unchanged in either terminal state, so
+failed subprocesses remain reproducible.
 `artifacts/` is the default working directory and remains available for
 temporary or task-scoped results.
 An external program may instead read a project-relative destination from the

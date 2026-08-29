@@ -28,3 +28,4 @@ pub(crate) use execution::{
 pub(crate) use result::TaskResult;
 pub use result::UnitResult;
 pub use unit::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError};
+pub(crate) use unit::{SEED_DERIVATION_ALGORITHM, derive_program_seed};

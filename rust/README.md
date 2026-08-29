@@ -121,14 +121,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.6"
+scientific-workflow = "0.11.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.6
+cargo add scientific-workflow@0.11.7
 cargo add serde --features derive
 ```
 
@@ -623,7 +623,10 @@ Standalone executable and Python tasks require no Rust trait or wrapper.
 Declare them in `wf_configs/study.json`; they receive the same captured central project
 configuration and dependency results at runtime. A Python task declares its
 environment locally inside its nested `python` object—there is no global
-environment registry.
+environment registry. Either external-task form may declare one optional
+`seed: {"purpose":"..."}` request. Workflow derives a task-scoped value from
+the study master seed, passes only that value as `WORKFLOW_TASK_SEED`, and
+records the request in `program.json`.
 
 ### 2. Write project JSON
 
@@ -701,7 +704,8 @@ omission.
             "manager": "mamba",
             "name": "DSES"
           }
-        }
+        },
+        "seed": {"purpose":"plot-sampling"}
       }]
     }
   }
@@ -710,9 +714,11 @@ omission.
 
 The top-level `seed` is optional for deterministic projects. A stochastic
 execution unit requests purpose-named derived seeds through its
-`InitializationContext`; if it makes a request while `seed` is absent, that
-task fails instead of silently drawing entropy. The derived values are stable
-across scheduling changes and recorded in the applicable member metadata.
+`InitializationContext`; an external program or Python task declares one
+task-level purpose as shown above. A program request without the top-level seed
+is rejected during Config loading, while a unit request without it fails during
+initialization. Derived values are stable across scheduling changes and are
+recorded in the applicable member metadata or `program.json`.
 
 Persistence is automatic. The omitted root `persistence` object infers the
 local backend with a 64 MB decimal chunk target and queue capacity.
@@ -777,7 +783,8 @@ Each program or Python script receives absolute `WORKFLOW_CONFIG_PATH` and
 `WORKFLOW_DEPENDENCIES_PATH` snapshot files plus project, execution, replicate,
 and task-output paths through `WORKFLOW_*` environment variables. It runs in an
 isolated `artifacts/` working directory; Workflow captures stdout, stderr, and
-terminal status. A program may instead write domain outputs to a safe
+terminal status. A seeded external task additionally receives the derived
+decimal `WORKFLOW_TASK_SEED`; unseeded tasks do not receive that variable. A program may instead write domain outputs to a safe
 project-relative destination it reads from `wf_configs/parameters.json`. Editing project
 JSON after `Study::load` does not alter that execution.
 

@@ -268,6 +268,7 @@ fn program_status_transitions_leave_one_terminal_metadata_file() {
         kind: "program",
         python_script: None,
         python_environment_manager: None,
+        seed_derivation: None,
     };
     let mut session =
         ProgramPersistenceSession::start(completed.run(), b"{}", b"[]", launch).unwrap();
@@ -285,6 +286,7 @@ fn program_status_transitions_leave_one_terminal_metadata_file() {
         kind: "program",
         python_script: None,
         python_environment_manager: None,
+        seed_derivation: None,
     };
     let mut session = ProgramPersistenceSession::start(failed.run(), b"{}", b"[]", launch).unwrap();
     session.fail(Some(7), "expected program failure");

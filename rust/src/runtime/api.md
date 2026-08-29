@@ -34,7 +34,11 @@ For each execution unit task, Runtime also constructs one immutable
 task identity, and registered execution-unit key. The unit may request
 purpose-named shared or member-scoped seeds. Runtime validates member identities
 after initialization and passes each member's applicable actual requests into
-Persistence before that execution unit's recording begins. Programs receive no context.
+Persistence before that execution unit's recording begins. A program or Python
+task may instead declare one purpose-named task seed in `study.json`. Runtime
+derives it from the same master seed, replicate, inferred task identity,
+program kind, and purpose; the child receives only that derived value, not an
+`InitializationContext` or the master seed.
 
 Runtime also creates one automatic UI session from Study's private inferred UI
 plan. It publishes execution, replicate, phase, task, iteration, target,
@@ -180,7 +184,9 @@ paths through:
 - `WORKFLOW_EXECUTION_ROOT`: unique execution directory;
 - `WORKFLOW_REPLICATE_ROOT`: current replicate directory; and
 - `WORKFLOW_TASK_OUTPUT`: the task's `artifacts/` directory, also its working
-  directory.
+  directory; and
+- `WORKFLOW_TASK_SEED`: decimal unsigned 64-bit task seed, present only when
+  the program/Python task declared `seed: {"purpose":"..."}`.
 
 Programs may read any central configuration keys they understand. The supplied
 workspace is their default location for temporary or task-scoped artifacts,
@@ -191,7 +197,8 @@ Persistence does not relocate or publish those Python-owned files. A Study uses
 its captured snapshot: editing JSON after `Study::load` cannot alter these
 files.
 On completion Runtime writes terminal `program.json`; nonzero exit status is a
-task failure. Dependency JSON is deterministic. Each task contains `identity`,
+task failure. A seeded program's metadata records its purpose and actual
+derived seed even when the child fails. Dependency JSON is deterministic. Each task contains `identity`,
 `output_directory`, and one `workload` object. An execution-unit workload
 contains its kind, registration key, and member identity/iteration/recording
 summaries. A program workload contains `kind` (`program` or `python`), its

@@ -314,6 +314,41 @@ fn an_ensemble_task_persists_and_summarizes_each_member_independently() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_seeded_program_receives_only_its_derived_seed_and_persists_the_request() {
+    let project = Project::new(
+        serde_json::json!({
+            "seed": 42,
+            "phases": {"generate": {"tasks": [{
+                "program": "seeded-program.sh",
+                "seed": {"purpose": "target-initial-conditions"}
+            }]}}
+        }),
+        serde_json::json!({}),
+    );
+    project.write_executable(
+        "seeded-program.sh",
+        "#!/bin/sh\nprintf '%s' \"$WORKFLOW_TASK_SEED\" > \"$WORKFLOW_TASK_OUTPUT/seed\"\n",
+    );
+
+    let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+    let output = summary.replicates()[0].phases()[0].tasks()[0].output_directory();
+    let delivered = fs::read_to_string(output.join("artifacts/seed")).unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("program.json")).unwrap()).unwrap();
+    let request = &metadata["seed_derivation"]["requests"][0];
+    assert_eq!(
+        metadata["seed_derivation"]["algorithm"],
+        "scientific-workflow.seed.v1"
+    );
+    assert_eq!(metadata["seed_derivation"]["master_seed"], 42);
+    assert_eq!(request["scope"], "task");
+    assert_eq!(request["purpose"], "target-initial-conditions");
+    assert_eq!(delivered, request["seed"].as_u64().unwrap().to_string());
+    assert_ne!(delivered, "42");
+}
+
 #[test]
 fn completion_timestamp_controls_task_timeout_classification() {
     let started = Instant::now();

@@ -239,6 +239,10 @@ impl StudyTask {
     pub(crate) fn python_script(&self) -> Option<&Path> {
         self.task.python_script()
     }
+
+    pub(crate) fn program_seed_purpose(&self) -> Option<&str> {
+        self.task.program_seed_purpose()
+    }
 }
 
 impl std::fmt::Debug for StudyTask {

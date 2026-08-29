@@ -30,6 +30,7 @@ pub(crate) struct RuntimeTaskHost {
     output_directory: PathBuf,
     provenance: Option<MemberRecordingProvenance>,
     initialization_context: Option<InitializationContext>,
+    program_seed: Option<ProgramSeed>,
     persistence: Vec<Option<PersistenceSession>>,
     member_iterations: Vec<u64>,
     member_targets: Vec<Option<u64>>,
@@ -37,6 +38,43 @@ pub(crate) struct RuntimeTaskHost {
     member_directories: Vec<Option<PathBuf>>,
     task_ui: TaskUi,
     environment: RuntimeTaskEnvironment,
+}
+
+pub(crate) struct ProgramSeed {
+    seed: u64,
+    metadata: Value,
+}
+
+pub(crate) struct RuntimeTaskLaunch {
+    provenance: Option<MemberRecordingProvenance>,
+    initialization_context: Option<InitializationContext>,
+    program_seed: Option<ProgramSeed>,
+    task_ui: TaskUi,
+    environment: RuntimeTaskEnvironment,
+}
+
+impl RuntimeTaskLaunch {
+    pub(crate) fn new(
+        provenance: Option<MemberRecordingProvenance>,
+        initialization_context: Option<InitializationContext>,
+        program_seed: Option<ProgramSeed>,
+        task_ui: TaskUi,
+        environment: RuntimeTaskEnvironment,
+    ) -> Self {
+        Self {
+            provenance,
+            initialization_context,
+            program_seed,
+            task_ui,
+            environment,
+        }
+    }
+}
+
+impl ProgramSeed {
+    pub(crate) fn new(seed: u64, metadata: Value) -> Self {
+        Self { seed, metadata }
+    }
 }
 
 pub(crate) struct RuntimeTaskEnvironment {
@@ -67,24 +105,22 @@ impl RuntimeTaskHost {
         persistence_plan: PersistencePlan,
         cancellation: Arc<AtomicBool>,
         output_directory: PathBuf,
-        provenance: Option<MemberRecordingProvenance>,
-        initialization_context: Option<InitializationContext>,
-        task_ui: TaskUi,
-        environment: RuntimeTaskEnvironment,
+        launch: RuntimeTaskLaunch,
     ) -> Self {
         Self {
             persistence_plan,
             cancellation,
             output_directory,
-            provenance,
-            initialization_context,
+            provenance: launch.provenance,
+            initialization_context: launch.initialization_context,
+            program_seed: launch.program_seed,
             persistence: Vec::new(),
             member_iterations: Vec::new(),
             member_targets: Vec::new(),
             member_identities: Vec::new(),
             member_directories: Vec::new(),
-            task_ui,
-            environment,
+            task_ui: launch.task_ui,
+            environment: launch.environment,
         }
     }
 
@@ -144,6 +180,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
                 kind: program.kind(),
                 python_script: program.python_script(),
                 python_environment_manager: program.python_environment_manager(),
+                seed_derivation: self.program_seed.as_ref().map(|request| &request.metadata),
             },
         )?;
         let execution_root = self
@@ -167,9 +204,13 @@ impl TaskExecutionHost for RuntimeTaskHost {
                 &self.environment.replicate_directory,
             )
             .env("WORKFLOW_TASK_OUTPUT", persistence.artifacts_directory())
+            .env_remove("WORKFLOW_TASK_SEED")
             .stdin(Stdio::null())
             .stdout(Stdio::from(persistence.take_stdout()))
             .stderr(Stdio::from(persistence.take_stderr()));
+        if let Some(seed) = &self.program_seed {
+            command.env("WORKFLOW_TASK_SEED", seed.seed.to_string());
+        }
 
         let mut child = command.spawn().map_err(|source| {
             persistence.fail(None, &source.to_string());

@@ -18,6 +18,7 @@ struct ResolvedProgramTaskInner {
     program: PathBuf,
     args: Box<[OsString]>,
     timeout: Option<Duration>,
+    seed_purpose: Option<Box<str>>,
     subject: Box<str>,
     source: ProgramSource,
 }
@@ -32,7 +33,12 @@ enum ProgramSource {
 }
 
 impl ResolvedProgramTask {
-    pub(crate) fn new(program: PathBuf, args: Box<[Box<str>]>, timeout: Option<Duration>) -> Self {
+    pub(crate) fn new(
+        program: PathBuf,
+        args: Box<[Box<str>]>,
+        seed_purpose: Option<Box<str>>,
+        timeout: Option<Duration>,
+    ) -> Self {
         let subject = file_subject(&program, "program");
         Self {
             inner: Arc::new(ResolvedProgramTaskInner {
@@ -43,6 +49,7 @@ impl ResolvedProgramTask {
                     .map(|argument| OsString::from(String::from(argument)))
                     .collect(),
                 timeout,
+                seed_purpose,
                 subject,
                 source: ProgramSource::Executable,
             }),
@@ -52,6 +59,7 @@ impl ResolvedProgramTask {
     pub(crate) fn for_python(
         program: PathBuf,
         args: Box<[OsString]>,
+        seed_purpose: Option<Box<str>>,
         timeout: Option<Duration>,
         script: PathBuf,
         environment_manager: Box<str>,
@@ -62,6 +70,7 @@ impl ResolvedProgramTask {
                 program,
                 args,
                 timeout,
+                seed_purpose,
                 subject,
                 source: ProgramSource::Python {
                     script,
@@ -81,6 +90,10 @@ impl ResolvedProgramTask {
 
     pub(crate) fn timeout(&self) -> Option<Duration> {
         self.inner.timeout
+    }
+
+    pub(crate) fn seed_purpose(&self) -> Option<&str> {
+        self.inner.seed_purpose.as_deref()
     }
 
     pub(crate) fn subject(&self) -> &str {
@@ -119,6 +132,7 @@ impl std::fmt::Debug for ResolvedProgramTask {
             .field("program", &self.program())
             .field("args", &self.args())
             .field("timeout", &self.timeout())
+            .field("seed_purpose", &self.seed_purpose())
             .field("kind", &self.kind_name())
             .field("subject", &self.subject())
             .finish()

@@ -174,10 +174,12 @@ pub(crate) enum ParsedTask {
     Program {
         program: PathBuf,
         args: Box<[Box<str>]>,
+        seed_purpose: Option<Box<str>>,
         timeout: Option<Duration>,
     },
     Python {
         declaration: PythonTaskDeclaration,
+        seed_purpose: Option<Box<str>>,
         timeout: Option<Duration>,
     },
 }
@@ -309,8 +311,29 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("{phase_pointer}/tasks/{index}");
             let timeout = task.timeout_ms.map(Duration::from_millis);
+            let seed_purpose = task
+                .seed
+                .map(|seed| {
+                    validate_identifier(
+                        path,
+                        &format!("{pointer}/seed/purpose"),
+                        &seed.purpose,
+                        "seed purpose",
+                    )?;
+                    if manifest.master_seed().is_none() {
+                        return Err(ConfigError::invalid(
+                            path,
+                            format!("{pointer}/seed"),
+                            "a program seed request requires top-level `seed`",
+                        ));
+                    }
+                    Ok(seed.purpose.into_boxed_str())
+                })
+                .transpose()?;
             match (task.execution_unit, task.program, task.python) {
-                (Some(execution_unit), None, None) if task.args.is_empty() => {
+                (Some(execution_unit), None, None)
+                    if task.args.is_empty() && seed_purpose.is_none() =>
+                {
                     validate_identifier(
                         path,
                         &format!("{pointer}/execution_unit"),
@@ -337,12 +360,14 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     tasks.push(ParsedTask::Program {
                         program,
                         args: task.args.into_iter().map(String::into_boxed_str).collect(),
+                        seed_purpose,
                         timeout,
                     });
                 }
                 (None, None, Some(declaration)) if task.state.is_none() && task.args.is_empty() => {
                     tasks.push(ParsedTask::Python {
                         declaration,
+                        seed_purpose,
                         timeout,
                     });
                 }
@@ -350,7 +375,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit and top-level `args` only for a program",
+                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit, top-level `args` only for a program, and `seed` only for a program or Python task",
                     ));
                 }
             }
@@ -546,6 +571,14 @@ struct RawTask {
     args: Vec<String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    seed: Option<RawProgramSeed>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProgramSeed {
+    purpose: String,
 }
 
 #[derive(Default, Deserialize)]

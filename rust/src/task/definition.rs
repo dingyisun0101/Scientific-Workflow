@@ -141,6 +141,10 @@ impl Task {
         self.program().and_then(ResolvedProgramTask::python_script)
     }
 
+    pub(crate) fn program_seed_purpose(&self) -> Option<&str> {
+        self.program().and_then(ResolvedProgramTask::seed_purpose)
+    }
+
     pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
         match &self.descriptor {
             TaskDescriptor::ExecutionUnit { parameters, .. } => parameters.timeout(),

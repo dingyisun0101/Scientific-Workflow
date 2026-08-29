@@ -132,6 +132,7 @@ pub(crate) struct ProgramPersistenceSession {
     program_kind: Box<str>,
     python_script: Option<PathBuf>,
     python_environment_manager: Option<Box<str>>,
+    seed_derivation: Option<Value>,
 }
 
 /// Borrowed resolved launcher provenance used to construct a program workspace.
@@ -141,6 +142,7 @@ pub(crate) struct ProgramLaunch<'a> {
     pub(crate) kind: &'a str,
     pub(crate) python_script: Option<&'a Path>,
     pub(crate) python_environment_manager: Option<&'a str>,
+    pub(crate) seed_derivation: Option<&'a Value>,
 }
 
 impl ProgramPersistenceSession {
@@ -193,6 +195,7 @@ impl ProgramPersistenceSession {
             program_kind: launch.kind.into(),
             python_script: launch.python_script.map(Path::to_path_buf),
             python_environment_manager: launch.python_environment_manager.map(Into::into),
+            seed_derivation: launch.seed_derivation.cloned(),
         };
         session.write_status("running", None, None)?;
         Ok(session)
@@ -246,6 +249,7 @@ impl ProgramPersistenceSession {
             "args": self.args,
             "python_script": self.python_script,
             "python_environment_manager": self.python_environment_manager,
+            "seed_derivation": self.seed_derivation,
             "exit_code": exit_code,
             "reason": reason,
             "config": "workflow-config.json",

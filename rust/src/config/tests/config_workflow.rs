@@ -844,6 +844,58 @@ fn program_resolution_rejects_a_regular_file_without_execute_permission() {
 
 #[cfg(unix)]
 #[test]
+fn program_seed_requests_require_the_master_seed_and_are_retained_semantically() {
+    let project = TestProject::new_raw(
+        r#"{
+          "seed": 42,
+          "phases":{"only":{"tasks":[{
+            "program":"/bin/true",
+            "seed":{"purpose":"target-initial-conditions"}
+          }]}}
+        }"#,
+        &[],
+    );
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    assert_eq!(
+        program_task(&specification.phases()[0].tasks()[0]).seed_purpose(),
+        Some("target-initial-conditions")
+    );
+
+    let missing_master = TestProject::new_raw(
+        r#"{
+          "phases":{"only":{"tasks":[{
+            "program":"/bin/true",
+            "seed":{"purpose":"target-initial-conditions"}
+          }]}}
+        }"#,
+        &[],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(missing_master.path()),
+        Err(ConfigError::InvalidDocument { pointer, reason, .. })
+            if pointer == "/phases/only/tasks/0/seed"
+                && reason.contains("top-level `seed`")
+    ));
+
+    let invalid_purpose = TestProject::new_raw(
+        r#"{
+          "seed": 42,
+          "phases":{"only":{"tasks":[{
+            "program":"/bin/true",
+            "seed":{"purpose":" "}
+          }]}}
+        }"#,
+        &[],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(invalid_purpose.path()),
+        Err(ConfigError::InvalidDocument { pointer, .. })
+            if pointer == "/phases/only/tasks/0/seed/purpose"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn nested_python_task_resolves_its_mamba_environment_during_loading() {
     use std::os::unix::fs::PermissionsExt as _;
 
