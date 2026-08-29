@@ -3,6 +3,12 @@
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
+> **Breaking update — 0.11.8:** every `wf_configs/study.json` must now declare
+> a positive top-level `threads` value. Workflow creates and enforces one
+> shared study-wide compute pool with that exact worker count and propagates it
+> to external tasks. Add, for example, `"threads": 16` beside `phases` before
+> upgrading; there is no inferred or environment-controlled fallback.
+
 > **Breaking update — 0.11.3:** this release supersedes the 0.11.0 public API
 > generation. It replaces Basic/Advanced namespace tiers with one ordinary
 > prelude and module-root specialized APIs, uses data-bearing runtime workload
@@ -51,8 +57,8 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
 - [Task](rust/src/task/api.md): `ExecutionUnit`, immutable initialization/seed
   context, per-member `MemberView`, ensemble contracts, registration, and generic
   program tasks with optional centralized task-seed derivation.
-- [Config](rust/src/config/api.md): project JSON, optional named state paths, parameter
-  expansion, and program/Python resolution.
+- [Config](rust/src/config/api.md): required study-wide threads, project JSON,
+  optional named state paths, parameter expansion, and program/Python resolution.
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable
   execution intent.
 - [Persistence](rust/src/persistence/api.md): automatic recordings, lifecycle,

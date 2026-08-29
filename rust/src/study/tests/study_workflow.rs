@@ -176,6 +176,7 @@ impl Project {
     fn new(study: &str, parameters: &str) -> Self {
         let mut study: serde_json::Value = serde_json::from_str(study).unwrap();
         let root = study.as_object_mut().unwrap();
+        root.entry("threads").or_insert(2.into());
         root.entry("paths").or_insert_with(
             || serde_json::json!({"states":{"default":"wf_configs/states/default.json"}}),
         );
@@ -311,6 +312,7 @@ fn study_binds_registered_units_and_infers_plan_facts_without_output() {
 fn omitted_project_state_uses_the_units_standard_provider_and_records_its_identity() {
     let project = Project::new_raw(
         r#"{
+          "threads": 2,
           "phases": {
             "simulate": {
               "tasks": [{"execution_unit":"counter"}]
@@ -338,6 +340,7 @@ fn omitted_project_state_uses_the_units_standard_provider_and_records_its_identi
 fn omitted_project_state_without_a_unit_provider_fails_before_output() {
     let project = Project::new_raw(
         r#"{
+          "threads": 2,
           "phases": {
             "simulate": {
               "tasks": [{"execution_unit":"energy"}]
@@ -359,6 +362,7 @@ fn omitted_project_state_without_a_unit_provider_fails_before_output() {
 fn one_provider_identity_cannot_resolve_to_different_documents() {
     let project = Project::new_raw(
         r#"{
+          "threads": 2,
           "phases": {
             "simulate": {
               "tasks": [

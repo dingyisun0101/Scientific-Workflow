@@ -39,6 +39,7 @@ impl Study {
         let config = project.config().clone();
         let output_root = project_root.join("output");
         let manifest: StudyManifest = *project.manifest();
+        let threads = manifest.threads();
         let replicate_policy = manifest.replicate_policy();
         let master_seed = manifest.master_seed();
         let persistence: PersistenceSpecification = manifest.persistence();
@@ -53,6 +54,7 @@ impl Study {
                 config,
                 phases,
                 output_root,
+                threads,
                 master_seed,
                 replicate_policy,
                 persistence_plan,
@@ -69,6 +71,11 @@ impl Study {
     /// Returns the inferred output root, `<project-root>/output`.
     pub fn output_root(&self) -> &Path {
         &self.inner.output_root
+    }
+
+    /// Returns the required study-wide compute worker count.
+    pub fn threads(&self) -> usize {
+        self.inner.threads
     }
 
     /// Returns the frozen language-neutral configuration supplied to programs.
@@ -109,6 +116,7 @@ impl std::fmt::Debug for Study {
             .debug_struct("Study")
             .field("project_root", &self.project_root())
             .field("output_root", &self.output_root())
+            .field("threads", &self.threads())
             .field("config", &self.inner.config)
             .field("persistence", &self.persistence_plan())
             .field("ui", &self.ui_plan())
@@ -122,6 +130,7 @@ struct StudyInner {
     config: Config,
     phases: Box<[StudyPhase]>,
     output_root: PathBuf,
+    threads: usize,
     master_seed: Option<u64>,
     replicate_policy: ReplicatePolicy,
     persistence_plan: PersistencePlan,

@@ -9,6 +9,16 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// Runtime could not create the required study-wide compute pool.
+    #[error("failed to create the Workflow compute pool with {threads} threads")]
+    ComputePool {
+        /// Exact worker count authored in `wf_configs/study.json`.
+        threads: usize,
+        /// Rayon pool-construction failure.
+        #[source]
+        source: rayon::ThreadPoolBuildError,
+    },
+
     /// Interactive UI requested cooperative cancellation of the execution.
     #[error("workflow execution was cancelled by the user")]
     ExecutionCancelled,

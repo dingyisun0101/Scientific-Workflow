@@ -3,6 +3,11 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 
+> **Breaking update — 0.11.8:** every project must add a positive top-level
+> `threads` value to `wf_configs/study.json`. Workflow uses it to create one
+> shared study-wide compute pool and passes the same limit to external tasks;
+> no CPU-count or environment fallback remains.
+
 > **Breaking update — 0.11.3:** this release supersedes the 0.11.0 public API
 > generation. Import ordinary unit-authoring APIs from
 > `scientific_workflow::prelude::*` and specialized APIs from their owning
@@ -18,7 +23,7 @@ configuration-driven execution unit or program execution, and durable outputs.
 ### Architecture and ownership
 
 ```text
-Runtime (owns active execution, scheduling, cancellation, and coordination)
+Runtime (owns one study-wide compute pool, execution, scheduling, and cancellation)
 +-- consumes: immutable Study
 |   +-- retains: Config
 |   |   +-- owns: immutable parsed JSON snapshot
@@ -121,14 +126,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.7"
+scientific-workflow = "0.11.8"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.7
+cargo add scientific-workflow@0.11.8
 cargo add serde --features derive
 ```
 
@@ -682,6 +687,7 @@ omission.
 
 ```json
 {
+  "threads": 16,
   "seed": 42,
   "paths": {
     "states": {
@@ -712,7 +718,11 @@ omission.
 }
 ```
 
-The top-level `seed` is optional for deterministic projects. A stochastic
+The top-level positive `threads` field is required and is the sole
+study-wide compute-pool limit. Workflow creates one shared pool for all Rust
+execution units and passes the same value to external tasks as
+`WORKFLOW_THREADS` and `RAYON_NUM_THREADS`; environment variables cannot
+override the manifest. The top-level `seed` is optional for deterministic projects. A stochastic
 execution unit requests purpose-named derived seeds through its
 `InitializationContext`; an external program or Python task declares one
 task-level purpose as shown above. A program request without the top-level seed

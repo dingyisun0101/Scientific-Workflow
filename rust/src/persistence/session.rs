@@ -26,6 +26,7 @@ pub(crate) struct MemberRecordingProvenance {
     parameter_ordinal: u64,
     parameter_source: PathBuf,
     constants: Value,
+    threads: usize,
     member_index: Option<usize>,
     member_identity: Option<Box<str>>,
     seed_derivation: Option<Value>,
@@ -39,6 +40,7 @@ impl MemberRecordingProvenance {
         parameter_ordinal: u64,
         parameter_source: &Path,
         constants: Value,
+        threads: usize,
     ) -> Self {
         Self {
             task_identity: task_identity.into(),
@@ -47,6 +49,7 @@ impl MemberRecordingProvenance {
             parameter_ordinal,
             parameter_source: parameter_source.to_path_buf(),
             constants,
+            threads,
             member_index: None,
             member_identity: None,
             seed_derivation: None,
@@ -108,6 +111,7 @@ impl MemberRecordingProvenance {
                     .into(),
             ),
             ("persistence".to_owned(), persistence),
+            ("threads".to_owned(), self.threads.into()),
         ]);
         if let Some(seed_derivation) = self.seed_derivation {
             workflow.insert("seed_derivation".to_owned(), seed_derivation);
@@ -133,6 +137,7 @@ pub(crate) struct ProgramPersistenceSession {
     python_script: Option<PathBuf>,
     python_environment_manager: Option<Box<str>>,
     seed_derivation: Option<Value>,
+    threads: usize,
 }
 
 /// Borrowed resolved launcher provenance used to construct a program workspace.
@@ -143,6 +148,7 @@ pub(crate) struct ProgramLaunch<'a> {
     pub(crate) python_script: Option<&'a Path>,
     pub(crate) python_environment_manager: Option<&'a str>,
     pub(crate) seed_derivation: Option<&'a Value>,
+    pub(crate) threads: usize,
 }
 
 impl ProgramPersistenceSession {
@@ -196,6 +202,7 @@ impl ProgramPersistenceSession {
             python_script: launch.python_script.map(Path::to_path_buf),
             python_environment_manager: launch.python_environment_manager.map(Into::into),
             seed_derivation: launch.seed_derivation.cloned(),
+            threads: launch.threads,
         };
         session.write_status("running", None, None)?;
         Ok(session)
@@ -250,6 +257,7 @@ impl ProgramPersistenceSession {
             "python_script": self.python_script,
             "python_environment_manager": self.python_environment_manager,
             "seed_derivation": self.seed_derivation,
+            "threads": self.threads,
             "exit_code": exit_code,
             "reason": reason,
             "config": "workflow-config.json",

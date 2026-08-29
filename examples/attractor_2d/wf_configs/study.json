@@ -1,4 +1,5 @@
 {
+  "threads": 4,
   "paths": {
     "states": {
       "attractor": "wf_configs/states/attractor.json"

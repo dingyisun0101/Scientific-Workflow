@@ -22,6 +22,12 @@ beneath the inferred `<project-root>/output`, creates one isolated directory
 per replicate, executes all phases and tasks, and completes each member's
 recording or each program workspace.
 
+Before creating output, Runtime constructs exactly one owned Rayon pool with
+the required top-level `study.json.threads` worker count. Every execution-unit
+initialization and step runs with that pool installed, so concurrent tasks and
+replicates share one study-wide compute limit instead of creating independent
+model pools. Ambient `RAYON_NUM_THREADS` does not override the manifest.
+
 For each task, Runtime derives the destination and constructs private
 persistence sessions. A standalone unit opens one member recording; an ensemble
 opens one recording per member. ExecutionUnit views submit independent initial/step/final
@@ -184,7 +190,10 @@ paths through:
 - `WORKFLOW_EXECUTION_ROOT`: unique execution directory;
 - `WORKFLOW_REPLICATE_ROOT`: current replicate directory; and
 - `WORKFLOW_TASK_OUTPUT`: the task's `artifacts/` directory, also its working
-  directory; and
+  directory;
+- `WORKFLOW_THREADS`: decimal positive study-wide thread count;
+- `RAYON_NUM_THREADS`: the same authoritative count for Rayon-based child
+  programs; and
 - `WORKFLOW_TASK_SEED`: decimal unsigned 64-bit task seed, present only when
   the program/Python task declared `seed: {"purpose":"..."}`.
 
@@ -218,6 +227,8 @@ are fixed before output creation.
 
 This non-exhaustive enum reports failures after a valid Study is available:
 
+- `ComputePool { threads, source }`: Runtime could not create the exact
+  study-wide pool before output creation;
 - `ExecutionCancelled`: the interactive `exit` command or Ctrl+C requested
   cooperative cancellation;
 - `OutputScope { path, source }`: unique execution or replicate directory could

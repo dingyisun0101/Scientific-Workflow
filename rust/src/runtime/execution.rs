@@ -27,6 +27,16 @@ const SCHEDULER_POLL: Duration = Duration::from_millis(5);
 
 /// Executes one already validated immutable study and returns its summary.
 pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
+    let compute_pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(study.threads())
+            .thread_name(|index| format!("workflow-compute-{index}"))
+            .build()
+            .map_err(|source| RuntimeError::ComputePool {
+                threads: study.threads(),
+                source,
+            })?,
+    );
     let output = create_execution(study.output_root())?;
     let count = study.replicate_policy().count();
     let task_count_per_replicate = study.phases().iter().map(|phase| phase.tasks().len()).sum();
@@ -57,8 +67,12 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
             scopes.push((index, create_replicate(&output, index)?));
         }
         match study.replicate_policy().scheduling() {
-            ReplicateScheduling::Sequential => run_replicates_sequential(&study, scopes, &ui),
-            ReplicateScheduling::Parallel => run_replicates_parallel(&study, scopes, &ui),
+            ReplicateScheduling::Sequential => {
+                run_replicates_sequential(&study, scopes, &ui, &compute_pool)
+            }
+            ReplicateScheduling::Parallel => {
+                run_replicates_parallel(&study, scopes, &ui, &compute_pool)
+            }
         }
     })();
 
@@ -95,12 +109,13 @@ fn run_replicates_sequential(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
     ui: &UiSession,
+    compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut summaries = Vec::with_capacity(scopes.len());
     let mut first_error = None;
     for (index, scope) in scopes {
         let cancellation = AtomicBool::new(false);
-        match run_replicate(study, index, scope, ui, &cancellation) {
+        match run_replicate(study, index, scope, ui, &cancellation, compute_pool) {
             Ok(summary) => summaries.push(summary),
             Err(source) => {
                 first_error.get_or_insert(RuntimeError::Replicate {
@@ -123,6 +138,7 @@ fn run_replicates_parallel(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
     ui: &UiSession,
+    compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     enum WorkerOutcome {
         Finished(Result<ReplicateRunSummary, RuntimeError>),
@@ -138,11 +154,19 @@ fn run_replicates_parallel(
         let ui = ui.clone();
         let outcomes = outcomes.clone();
         let worker_cancellation = Arc::clone(&cancellation);
+        let compute_pool = Arc::clone(compute_pool);
         let worker = match thread::Builder::new()
             .name(format!("workflow-replicate-{index}"))
             .spawn(move || {
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
-                    run_replicate(&study, index, scope, &ui, &worker_cancellation)
+                    run_replicate(
+                        &study,
+                        index,
+                        scope,
+                        &ui,
+                        &worker_cancellation,
+                        &compute_pool,
+                    )
                 }))
                 .map_or(WorkerOutcome::Panicked, WorkerOutcome::Finished);
                 let _ = outcomes.send((index, outcome));
@@ -215,9 +239,17 @@ fn run_replicate(
     scope: PathBuf,
     ui: &UiSession,
     scheduler_cancellation: &AtomicBool,
+    compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     ui.publish(UiEvent::ReplicateStarted { index });
-    let result = run_replicate_inner(study, index, scope, ui, scheduler_cancellation);
+    let result = run_replicate_inner(
+        study,
+        index,
+        scope,
+        ui,
+        scheduler_cancellation,
+        compute_pool,
+    );
     match &result {
         Ok(_) => ui.publish(UiEvent::ReplicateCompleted { index }),
         Err(RuntimeError::ExecutionCancelled) => {
@@ -240,6 +272,7 @@ fn run_replicate_inner(
     scope: PathBuf,
     ui: &UiSession,
     scheduler_cancellation: &AtomicBool,
+    compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     let positions = topological_positions(study.phases());
     let mut phases = Vec::with_capacity(positions.len());
@@ -256,6 +289,7 @@ fn run_replicate_inner(
             replicate: index,
             ui,
             scheduler_cancellation,
+            compute_pool,
         };
         phases.push(run_phase(phase, &context)?);
     }
@@ -316,6 +350,7 @@ struct PhaseRuntime<'a> {
     replicate: u64,
     ui: &'a UiSession,
     scheduler_cancellation: &'a AtomicBool,
+    compute_pool: &'a Arc<rayon::ThreadPool>,
 }
 
 struct TaskRuntime {
@@ -326,6 +361,8 @@ struct TaskRuntime {
     dependencies_json: Box<[u8]>,
     replicate: u64,
     master_seed: Option<u64>,
+    threads: usize,
+    compute_pool: Arc<rayon::ThreadPool>,
     ui: UiSession,
 }
 
@@ -551,14 +588,22 @@ fn spawn_task(
         dependencies_json: context.dependencies_json.clone(),
         replicate: context.replicate,
         master_seed: context.study.master_seed(),
+        threads: context.study.threads(),
+        compute_pool: Arc::clone(context.compute_pool),
         ui: context.ui.clone(),
     };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
     let started = Instant::now();
     let worker = match thread::Builder::new().name(thread_name).spawn(move || {
         let identity = worker_task.identity().to_owned();
+        let task_kind = worker_task.kind();
+        let compute_pool = Arc::clone(&runtime.compute_pool);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            run_task(worker_task, runtime, worker_cancellation, output_directory)
+            let execute = || run_task(worker_task, runtime, worker_cancellation, output_directory);
+            match task_kind {
+                TaskKind::ExecutionUnit => compute_pool.install(execute),
+                TaskKind::Program => execute(),
+            }
         }))
         .unwrap_or_else(|_| Err(RuntimeError::TaskPanicked { task: identity }));
         TaskWorkerOutcome {
@@ -643,6 +688,7 @@ fn run_task(
             provenance.parameter_ordinal(),
             provenance.parameter_source(),
             provenance.constants().clone(),
+            runtime.threads,
         )
     });
     let environment = RuntimeTaskEnvironment::new(
@@ -659,6 +705,7 @@ fn run_task(
             provenance,
             initialization_context,
             program_seed,
+            runtime.threads,
             runtime.ui.task(runtime.replicate, task.identity()),
             environment,
         ),

@@ -31,6 +31,7 @@ pub(crate) struct RuntimeTaskHost {
     provenance: Option<MemberRecordingProvenance>,
     initialization_context: Option<InitializationContext>,
     program_seed: Option<ProgramSeed>,
+    threads: usize,
     persistence: Vec<Option<PersistenceSession>>,
     member_iterations: Vec<u64>,
     member_targets: Vec<Option<u64>>,
@@ -49,6 +50,7 @@ pub(crate) struct RuntimeTaskLaunch {
     provenance: Option<MemberRecordingProvenance>,
     initialization_context: Option<InitializationContext>,
     program_seed: Option<ProgramSeed>,
+    threads: usize,
     task_ui: TaskUi,
     environment: RuntimeTaskEnvironment,
 }
@@ -58,6 +60,7 @@ impl RuntimeTaskLaunch {
         provenance: Option<MemberRecordingProvenance>,
         initialization_context: Option<InitializationContext>,
         program_seed: Option<ProgramSeed>,
+        threads: usize,
         task_ui: TaskUi,
         environment: RuntimeTaskEnvironment,
     ) -> Self {
@@ -65,6 +68,7 @@ impl RuntimeTaskLaunch {
             provenance,
             initialization_context,
             program_seed,
+            threads,
             task_ui,
             environment,
         }
@@ -114,6 +118,7 @@ impl RuntimeTaskHost {
             provenance: launch.provenance,
             initialization_context: launch.initialization_context,
             program_seed: launch.program_seed,
+            threads: launch.threads,
             persistence: Vec::new(),
             member_iterations: Vec::new(),
             member_targets: Vec::new(),
@@ -181,6 +186,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
                 python_script: program.python_script(),
                 python_environment_manager: program.python_environment_manager(),
                 seed_derivation: self.program_seed.as_ref().map(|request| &request.metadata),
+                threads: self.threads,
             },
         )?;
         let execution_root = self
@@ -204,6 +210,8 @@ impl TaskExecutionHost for RuntimeTaskHost {
                 &self.environment.replicate_directory,
             )
             .env("WORKFLOW_TASK_OUTPUT", persistence.artifacts_directory())
+            .env("WORKFLOW_THREADS", self.threads.to_string())
+            .env("RAYON_NUM_THREADS", self.threads.to_string())
             .env_remove("WORKFLOW_TASK_SEED")
             .stdin(Stdio::null())
             .stdout(Stdio::from(persistence.take_stdout()))

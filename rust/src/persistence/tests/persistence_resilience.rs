@@ -183,6 +183,7 @@ fn execution_unit_provenance() -> MemberRecordingProvenance {
         0,
         Path::new("wf_configs/parameters.json"),
         Value::Null,
+        2,
     )
 }
 
@@ -269,6 +270,7 @@ fn program_status_transitions_leave_one_terminal_metadata_file() {
         python_script: None,
         python_environment_manager: None,
         seed_derivation: None,
+        threads: 2,
     };
     let mut session =
         ProgramPersistenceSession::start(completed.run(), b"{}", b"[]", launch).unwrap();
@@ -287,6 +289,7 @@ fn program_status_transitions_leave_one_terminal_metadata_file() {
         python_script: None,
         python_environment_manager: None,
         seed_derivation: None,
+        threads: 2,
     };
     let mut session = ProgramPersistenceSession::start(failed.run(), b"{}", b"[]", launch).unwrap();
     session.fail(Some(7), "expected program failure");

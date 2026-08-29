@@ -19,7 +19,12 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 struct Project(PathBuf);
 
 impl Project {
-    fn new(study: serde_json::Value, parameters: serde_json::Value) -> Self {
+    fn new(mut study: serde_json::Value, parameters: serde_json::Value) -> Self {
+        study
+            .as_object_mut()
+            .expect("runtime test study is an object")
+            .entry("threads")
+            .or_insert(2.into());
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "scientific-workflow-runtime-{}-{sequence}",
@@ -164,6 +169,69 @@ struct RuntimeEnsemble {
     states: Vec<SystemState>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThreadPoolConstants {
+    expected_threads: usize,
+}
+
+struct ThreadPoolUnit {
+    state: SystemState,
+    expected_threads: usize,
+}
+
+#[scientific_workflow::execution_unit("runtime-thread-pool")]
+impl ExecutionUnit for ThreadPoolUnit {
+    type Constants = ThreadPoolConstants;
+
+    fn initialize(
+        constants: Self::Constants,
+        schema: &SystemStateSchema,
+        _context: &InitializationContext,
+    ) -> UnitResult<Self> {
+        ensure_thread_count(constants.expected_threads)?;
+        let mut state = schema.create_empty_state(StateTime::from_iteration(0));
+        state.initialize_payload("value", 0_u64)?;
+        Ok(Self {
+            state,
+            expected_threads: constants.expected_threads,
+        })
+    }
+
+    fn member_count(&self) -> usize {
+        1
+    }
+
+    fn member(&self, index: usize) -> Option<MemberView<'_>> {
+        (index == 0).then(|| {
+            MemberView::new(
+                "pool",
+                &self.state,
+                (self.state.time().iteration() == 1).then_some(MemberCompletion::without_reason()),
+                Some(1),
+            )
+        })
+    }
+
+    fn step(&mut self) -> UnitResult {
+        ensure_thread_count(self.expected_threads)?;
+        self.state.advance_time(None)?;
+        Ok(())
+    }
+}
+
+fn ensure_thread_count(expected: usize) -> UnitResult {
+    let actual = rayon::current_num_threads();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "expected {expected} Workflow compute threads, found {actual}"
+        ))
+        .into())
+    }
+}
+
 #[scientific_workflow::execution_unit("runtime-ensemble")]
 impl ExecutionUnit for RuntimeEnsemble {
     type Constants = PanicConstants;
@@ -283,6 +351,7 @@ fn an_ensemble_task_persists_and_summarizes_each_member_independently() {
         .unwrap();
         assert_eq!(metadata["status"]["state"], "complete");
         assert_eq!(metadata["user_metadata"]["workflow"]["member_index"], index);
+        assert_eq!(metadata["user_metadata"]["workflow"]["threads"], 2);
         assert_eq!(
             metadata["user_metadata"]["workflow"]["member_identity"],
             unit.identity()
@@ -314,6 +383,18 @@ fn an_ensemble_task_persists_and_summarizes_each_member_independently() {
     }
 }
 
+#[test]
+fn execution_units_run_inside_the_required_study_pool() {
+    let mut study = execution_unit_study("runtime-thread-pool", None);
+    study["threads"] = 3.into();
+    let project = Project::new(
+        study,
+        serde_json::json!({"runtime-thread-pool": {"expected_threads": 3}}),
+    );
+
+    execute(Study::load(project.path()).unwrap()).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn a_seeded_program_receives_only_its_derived_seed_and_persists_the_request() {
@@ -329,12 +410,14 @@ fn a_seeded_program_receives_only_its_derived_seed_and_persists_the_request() {
     );
     project.write_executable(
         "seeded-program.sh",
-        "#!/bin/sh\nprintf '%s' \"$WORKFLOW_TASK_SEED\" > \"$WORKFLOW_TASK_OUTPUT/seed\"\n",
+        "#!/bin/sh\nprintf '%s' \"$WORKFLOW_TASK_SEED\" > \"$WORKFLOW_TASK_OUTPUT/seed\"\nprintf '%s' \"$WORKFLOW_THREADS\" > \"$WORKFLOW_TASK_OUTPUT/threads\"\nprintf '%s' \"$RAYON_NUM_THREADS\" > \"$WORKFLOW_TASK_OUTPUT/rayon-threads\"\n",
     );
 
     let summary = execute(Study::load(project.path()).unwrap()).unwrap();
     let output = summary.replicates()[0].phases()[0].tasks()[0].output_directory();
     let delivered = fs::read_to_string(output.join("artifacts/seed")).unwrap();
+    let workflow_threads = fs::read_to_string(output.join("artifacts/threads")).unwrap();
+    let rayon_threads = fs::read_to_string(output.join("artifacts/rayon-threads")).unwrap();
     let metadata: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("program.json")).unwrap()).unwrap();
     let request = &metadata["seed_derivation"]["requests"][0];
@@ -347,6 +430,9 @@ fn a_seeded_program_receives_only_its_derived_seed_and_persists_the_request() {
     assert_eq!(request["purpose"], "target-initial-conditions");
     assert_eq!(delivered, request["seed"].as_u64().unwrap().to_string());
     assert_ne!(delivered, "42");
+    assert_eq!(workflow_threads, "2");
+    assert_eq!(rayon_threads, "2");
+    assert_eq!(metadata["threads"], 2);
 }
 
 #[test]

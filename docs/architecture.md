@@ -16,7 +16,7 @@ programs plus project JSON:
 │   └── <units>.rs              registered ExecutionUnit implementations
 ├── scripts/                     optional executable and `.py` task programs
 └── wf_configs/                 required Workflow configuration root
-    ├── study.json              phases, tasks, optional seed, operational policy
+    ├── study.json              required threads, phases/tasks, optional seed, policy
     ├── parameters.json         every custom-project parameter namespace
     └── states/                 recommended, optional schema grouping
         ├── population.json
@@ -110,7 +110,7 @@ study
         │ immutable Study returned to the crate facade
         ▼
 runtime::execute
-  execution directory + replicates + scheduling + cancellation
+  one study-wide compute pool + execution directory + replicates + scheduling + cancellation
   + immutable initialization context + execution-unit stepping
   + direct program/Python invocation
         ├──── per-member observation boundaries ────► persistence
@@ -401,6 +401,8 @@ Config canonicalizes the project and required `wf_configs` roots and parses
 (including all named state schemas), and the complete arbitrary
 `wf_configs/parameters.json` namespace with duplicate-key rejection. One
 clone-cheap immutable Config retains the entire value graph.
+The required positive top-level `study.json.threads` is the authoritative
+compute worker count. It has no inferred or environment-derived fallback.
 The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
 intent; neither layer draws random values. Program/Python tasks may declare a
@@ -429,7 +431,8 @@ observation/task-schema binding over Config's already-resolved generic program
 and Python tasks. It retains
 the central Config and infers stable identities, labels, the output root, and
 private operational policy. Public inspection is limited to project/output
-roots; phases, tasks, schema, resolved parameters, and policies exist only for
+roots and the required thread count;
+phases, tasks, schema, resolved parameters, and policies exist only for
 Runtime. Its crate-visible Runtime view exposes compiled execution and semantic
 provenance facts without exposing Config or Task descriptors.
 
@@ -438,6 +441,12 @@ provenance facts without exposing Config or Task descriptors.
 The crate-level `run(&Path)` loads a Study and passes it to
 `runtime::execute(Study)`. Runtime has no project-root or loading
 entry point: it consumes only complete immutable intent. Runtime alone creates
+one owned Rayon pool containing exactly `Study::threads()` workers before any
+output. Every execution-unit task installs its complete initialization/step
+lifecycle in that shared pool, so task and replicate concurrency cannot multiply
+the model-worker budget. Runtime overrides ambient Rayon settings for child
+programs with `WORKFLOW_THREADS` and `RAYON_NUM_THREADS`; separate processes
+cannot share the in-process pool but receive the same authored limit. Runtime then creates
 `output/execution-<pid>-<sequence>`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
 topologically schedules generic tasks, applies concurrency/start intervals and
@@ -503,6 +512,8 @@ When an external task declared a seed purpose, its `program.json` stores the
 same algorithm and master provenance plus the single task-scoped request and
 actual seed. The subprocess receives that derived value through
 `WORKFLOW_TASK_SEED`; Workflow never exports its master seed.
+Both member metadata and `program.json` also record the effective authored
+thread count.
 
 ### UI
 

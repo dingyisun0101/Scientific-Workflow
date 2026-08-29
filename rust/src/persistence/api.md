@@ -53,7 +53,8 @@ task-NNNNNN/
 
 `program.json` is atomically replaced from `running` to `complete` or `failed`
 and records `kind` (`program` or `python`), the resolved launcher executable,
-arguments, exit code/reason, format name, and fixed workspace filenames. Each
+arguments, the authoritative `threads` count, exit code/reason, format name,
+and fixed workspace filenames. Each
 fixed file is synchronized before publication, and each program-status rename
 is followed by a workspace-directory synchronization. A failed-status update
 remains best effort when reporting an already-authoritative task/process
@@ -86,7 +87,8 @@ task-NNNNNN/                         multi-member execution-unit root
 
 Stable numeric indices—not application identities—form paths. Each recording's
 `user_metadata.workflow` object retains `member_index` and `member_identity`
-alongside the registered key, resolved state provenance, parameter provenance, and effective
+alongside the registered key, resolved state provenance, parameter provenance,
+the authoritative `threads` count, and effective
 persistence plan. If the unit successfully requested Workflow-derived seeds,
 the same object contains `seed_derivation`: its versioned `algorithm`, authored
 `master_seed`, and deterministic `requests` array. Each entry stores `scope`,

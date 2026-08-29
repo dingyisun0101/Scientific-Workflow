@@ -47,11 +47,12 @@ no state-schema file or `paths` object.
 
 ### `wf_configs/study.json`
 
-The root object has a required `phases` object and optional `paths`, `seed`,
-`replicates`, and `persistence` objects:
+The root object has required positive-integer `threads` and nonempty `phases`
+fields plus optional `paths`, `seed`, `replicates`, and `persistence` objects:
 
 ```json
 {
+  "threads": 16,
   "seed": 42,
   "paths": {
     "states": {
@@ -84,6 +85,11 @@ The root object has a required `phases` object and optional `paths`, `seed`,
 
 Unknown properties are rejected at every Workflow-owned level.
 
+- `threads` is the required positive number of workers in Workflow's one
+  study-wide compute pool. There is no default, host-CPU inference, or
+  environment override. Runtime installs every execution-unit invocation in
+  this shared pool and propagates the same authoritative value to child
+  programs.
 - `seed` is an optional unsigned 64-bit master seed. Config parses it once;
   Runtime uses it only to derive explicitly requested task-scoped values. It
   places execution-unit derivation behind the immutable initialization context
@@ -276,6 +282,7 @@ snapshot:
 ```json
 {
   "study": {
+    "threads": 16,
     "paths": {"states": {"population": "wf_configs/states/population.json"}},
     "phases": {"simulate": {"tasks": [{"execution_unit":"population","state":"population"}]}}
   },
@@ -388,6 +395,7 @@ Python task:
 
 ```json
 {
+  "threads": 16,
   "paths": {"states": {"population":"wf_configs/states/population.json"}},
   "phases": {
     "simulate": {

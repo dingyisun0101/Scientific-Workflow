@@ -28,7 +28,8 @@ The module root exposes exactly `Study` and `StudyError`.
 `Study` is an immutable, clone-cheap plan backed by `Arc`. It owns the shared
 central Config, task-bound state schemas, internal phases/tasks, resolved constants,
 resolved executable/script/environment paths, schema-bound observation plans,
-inferred output root, optional master seed, replicate policy, and effective persistence/UI settings. None of those
+inferred output root, required compute-thread count, optional master seed,
+replicate policy, and effective persistence/UI settings. None of those
 internal planning types is public. `Study` is `Send + Sync`; clones may be
 moved or shared across host threads without mutable planning state.
 
@@ -51,6 +52,9 @@ moved or shared across host threads without mutable planning state.
 - `output_root() -> &Path` returns the inferred
   `<canonical-project-root>/output`. The path need not exist until Runtime
   starts.
+- `threads() -> usize` returns the required positive worker count parsed from
+  top-level `study.json.threads`. Study retains the value as intent but starts
+  no workers; Runtime uses it to construct the shared compute pool.
 
 `Clone` increments shared reference counts; it does not reread files, repeat
 preflight, clone scientific payloads, or duplicate constants documents.
@@ -67,7 +71,8 @@ summaries provide output paths and task results.
 
 Runtime consumes a deliberately narrow crate-private peer API:
 
-- `Study` supplies replicate/phase policy, persistence and UI plans, and a
+- `Study` supplies the compute-thread count, replicate/phase policy,
+  persistence and UI plans, and a
   clone-cheap `ConfigSnapshot`. Runtime receives frozen program bytes without
   retaining Config's parsing or typed-lookup interface.
 - `StudyPhase` supplies only its semantic name, dependencies, admission policy,
