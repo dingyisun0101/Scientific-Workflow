@@ -3,20 +3,9 @@
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking update — 0.11.8:** every `wf_configs/study.json` must now declare
-> a positive top-level `threads` value. Workflow creates and enforces one
-> shared study-wide compute pool with that exact worker count and propagates it
-> to external tasks. Add, for example, `"threads": 16` beside `phases` before
-> upgrading; there is no inferred or environment-controlled fallback.
-
-> **Breaking update — 0.11.3:** this release supersedes the 0.11.0 public API
-> generation. It replaces Basic/Advanced namespace tiers with one ordinary
-> prelude and module-root specialized APIs, uses data-bearing runtime workload
-> summaries, makes state inspection/maintenance inherent, and names the public
-> execution-unit error boundary `UnitResult` instead of the scheduler-oriented
-> `TaskResult`. No compatibility aliases are provided. Do not use 0.11.1: its
-> published macro dependency can expand to the removed registration API;
-> 0.11.3 requires the corrected macro.
+> **Breaking updates:** Workflow is pre-1.0. Upgrading may require changes to
+> project configuration or public API usage. Review release notes before
+> updating.
 
 ## Start here
 

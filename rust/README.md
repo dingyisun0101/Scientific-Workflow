@@ -3,24 +3,13 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 
-> **Breaking update — 0.11.8:** every project must add a positive top-level
-> `threads` value to `wf_configs/study.json`. Workflow uses it to create one
-> shared study-wide compute pool and passes the same limit to external tasks;
-> no CPU-count or environment fallback remains.
-
-> **Breaking update — 0.11.3:** this release supersedes the 0.11.0 public API
-> generation. Import ordinary unit-authoring APIs from
-> `scientific_workflow::prelude::*` and specialized APIs from their owning
-> module roots. Runtime workload summaries are now data-bearing variants, and
-> state inspection/maintenance methods are inherent. The public unit lifecycle
-> now returns `UnitResult`; scheduler-oriented `TaskResult` is private. No
-> compatibility aliases are provided. Do not use 0.11.1: its published macro
-> dependency can expand to the removed registration API; 0.11.3 requires the
-> corrected macro.
+> **Breaking updates:** Workflow is pre-1.0. Upgrading may require changes to
+> project configuration or public API usage. Review release notes before
+> updating.
 
 ## New to Workflow?
 
-Start with the [beginner getting-started guide](getting-started.md). It
+Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/tmp/state-schema-provider/rust/getting-started.md). It
 explains Serde and deserialization, Rust traits, and the difference between a
 study, phase, task, execution unit, member, and state before presenting a
 minimal runnable project.
@@ -144,14 +133,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.10"
+scientific-workflow = "0.11.11"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.10
+cargo add scientific-workflow@0.11.11
 cargo add serde --features derive
 ```
 
@@ -163,7 +152,7 @@ downstream application. The execution-unit attribute is re-exported by
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
 into an execution unit's typed `Constants` value. Application code normally
-adds `#[derive(Deserialize)]`; the [getting-started guide](getting-started.md#why-serde-and-deserialize-appear)
+adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/tmp/state-schema-provider/rust/getting-started.md#why-serde-and-deserialize-appear)
 shows the exact JSON-to-Rust mapping and explains why
 `#[serde(deny_unknown_fields)]` is recommended.
 
