@@ -20,6 +20,9 @@ executable programs, and declarative JSON into validated, recorded studies.
 
 ## Start here
 
+- If Workflow, Serde, or Rust traits are new to you, begin with the
+  [getting-started guide](rust/getting-started.md). It defines studies, phases,
+  tasks, execution units, and members, then builds one minimal runnable project.
 - To use the library, follow the complete [Rust crate guide](rust/README.md).
   It contains installation, architecture and ownership diagrams, the full
   project procedure, execution unit examples, JSON grammar, execution, and validation.
@@ -38,11 +41,11 @@ executable programs, and declarative JSON into validated, recorded studies.
 
 ```text
 workflow/
-+-- rust/                   Rust crate, crate guide, sources, and Rust tests
++-- rust/                   Rust crate, beginner/complete guides, sources, and tests
 +-- macros/                 execution-unit registration procedural macros
 +-- python/                 verified recording reader and Python tests
 +-- examples/attractor_2d/ complete Rust unit + Python-analysis project
-+-- docs/                   architecture and test responsibility maps
++-- docs/                   architecture and test responsibility guides
 `-- README.md               repository navigation
 ```
 

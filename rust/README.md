@@ -18,6 +18,24 @@ configuration-driven execution unit or program execution, and durable outputs.
 > dependency can expand to the removed registration API; 0.11.3 requires the
 > corrected macro.
 
+## New to Workflow?
+
+Start with the [beginner getting-started guide](getting-started.md). It
+explains Serde and deserialization, Rust traits, and the difference between a
+study, phase, task, execution unit, member, and state before presenting a
+minimal runnable project.
+
+The shortest mental model is:
+
+```text
+Study -> Phase -> Task -> ExecutionUnit -> Member -> SystemState -> recording
+```
+
+Ordinary users author `wf_configs/study.json` and call `run`. They do not build
+the Rust `Study`, task graph, Runtime, persistence sessions, or UI themselves.
+Most scientific models expose exactly one member; ensembles use the same
+execution-unit contract but expose several independently recorded members.
+
 ## Workflow at a glance
 
 ### Architecture and ownership
@@ -126,14 +144,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.9"
+scientific-workflow = "0.11.10"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.9
+cargo add scientific-workflow@0.11.10
 cargo add serde --features derive
 ```
 
@@ -141,6 +159,13 @@ Rust 1.97 or newer is required. Application executables should commit
 `Cargo.lock`; libraries should normally leave final version selection to their
 downstream application. The execution-unit attribute is re-exported by
 `scientific-workflow`; no separate procedural-macro dependency is needed.
+
+Serde is Rust's standard data-conversion framework. Workflow uses its
+`Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
+into an execution unit's typed `Constants` value. Application code normally
+adds `#[derive(Deserialize)]`; the [getting-started guide](getting-started.md#why-serde-and-deserialize-appear)
+shows the exact JSON-to-Rust mapping and explains why
+`#[serde(deny_unknown_fields)]` is recommended.
 
 The published crate is the right choice when the supported workflow matches
 the project:
@@ -489,46 +514,6 @@ the subsystem contracts linked at the end of this guide.
 
 ## Complete user procedure
 
-### Standard upstream state providers
-
-Use a provider when one upstream crate—not each application project—owns the
-canonical state layout. The upstream embeds its JSON and exports a typed
-descriptor; it does not know the receiver, dispatcher, or project root:
-
-```rust,ignore
-use scientific_workflow::state::StateSchemaProvider;
-
-pub const fn ecological_state_schema() -> StateSchemaProvider {
-    StateSchemaProvider::new(
-        "ecological-state-toolkit.ecological-state.v1",
-        include_bytes!("../schemas/ecological_state.json"),
-    )
-}
-```
-
-The downstream execution unit is the receiver and delegates its optional trait
-hook to that upstream API:
-
-```rust,ignore
-impl ExecutionUnit for GlvUnit {
-    type Constants = GlvConstants;
-
-    fn standard_state_schema() -> Option<StateSchemaProvider> {
-        Some(ecological_state_toolkit::state_schema::ecological_state_schema())
-    }
-
-    // preflight, initialize, member_count, member, and step follow.
-}
-```
-
-Its project task can then be `{"execution_unit":"glv"}` with no `state` and no
-`paths.states`. Study validates and caches the embedded document, passes the
-resulting `SystemStateSchema` to `preflight` and `initialize`, and records
-`ecological-state-toolkit.ecological-state.v1` as state provenance. If a
-project does declare `{"execution_unit":"glv","state":"experiment"}`, that
-explicit schema wins.
-Omission without either an explicit selection or a provider fails before output.
-
 ### 1. Define an execution unit
 
 The execution unit directly owns its canonical `SystemState`. Its associated constants
@@ -537,6 +522,13 @@ type is the complete typed form of one expanded section selected from
 In the fixed-duration example below, `StateTime::iteration()` is the current
 completed iteration, while `target_iteration` retains the configured stopping
 target; it is not a second progress counter.
+
+`ExecutionUnit` is a Rust trait: a behavioral contract that lists what Workflow
+must be able to ask a scientific model to do. Writing
+`impl ExecutionUnit for PopulationUnit` promises that `PopulationUnit` supplies
+that lifecycle. The separate `#[execution_unit("population")]` attribute only
+registers the implementation under the JSON key `population`; it does not
+generate the model, state fields, or method bodies.
 
 ```rust,no_run
 use serde::Deserialize;
@@ -801,6 +793,46 @@ JSON after `Study::load` does not alter that execution.
 
 Output is created beneath `<project-root>/output` only after Study preflight
 succeeds.
+
+### Advanced: standard upstream state providers
+
+Use a provider when one upstream crate—not each application project—owns the
+canonical state layout. The upstream embeds its JSON and exports a typed
+descriptor; it does not know the receiver, dispatcher, or project root:
+
+```rust,ignore
+use scientific_workflow::state::StateSchemaProvider;
+
+pub const fn ecological_state_schema() -> StateSchemaProvider {
+    StateSchemaProvider::new(
+        "ecological-state-toolkit.ecological-state.v1",
+        include_bytes!("../schemas/ecological_state.json"),
+    )
+}
+```
+
+The downstream execution unit is the receiver and delegates its optional trait
+hook to that upstream API:
+
+```rust,ignore
+impl ExecutionUnit for GlvUnit {
+    type Constants = GlvConstants;
+
+    fn standard_state_schema() -> Option<StateSchemaProvider> {
+        Some(ecological_state_toolkit::state_schema::ecological_state_schema())
+    }
+
+    // preflight, initialize, member_count, member, and step follow.
+}
+```
+
+Its project task can then be `{"execution_unit":"glv"}` with no `state` and no
+`paths.states`. Study validates and caches the embedded document, passes the
+resulting `SystemStateSchema` to `preflight` and `initialize`, and records
+`ecological-state-toolkit.ecological-state.v1` as state provenance. If a
+project does declare `{"execution_unit":"glv","state":"experiment"}`, that
+explicit schema wins. Omission without either an explicit selection or a
+provider fails before output.
 
 ## Architecture at a glance
 

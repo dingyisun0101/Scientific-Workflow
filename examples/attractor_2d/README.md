@@ -105,6 +105,8 @@ inferred. The task's separate `"state": "attractor"` value selects the named
 schema registered in `study.json.paths.states`; it does not select parameters,
 and execution unit and state keys are not required to have the same spelling.
 
+Serde is Rust's standard serialization and deserialization framework; here
+Workflow uses its deserialization direction to convert JSON into a Rust value.
 Within the selected parameter object, Serde matches JSON property names such
 as `initial_point`, `step_count`, and `angular_frequency` to the identically
 named fields of `AttractorConstants`. Consequently, `#[derive(Deserialize)]` is

@@ -1,6 +1,6 @@
 [package]
 name = "scientific-workflow"
-version = "0.11.9"
+version = "0.11.10"
 edition = "2024"
 rust-version = "1.97"
 authors = ["Dingyi Sun"]
@@ -17,6 +17,7 @@ include = [
     "src/**/*.rs",
     "src/**/*.md",
     "tests/**",
+    "getting-started.md",
     "README.md",
     "LICENSE",
 ]

@@ -205,6 +205,7 @@ workflow/
 │   └── src/lib.rs                    registration attribute expansion
 ├── rust/
 │   ├── Cargo.toml                    primary library package/dependencies
+│   ├── getting-started.md             beginner concepts and minimal runnable project
 │   ├── README.md                     complete Rust user procedure
 │   ├── src/
 │   │   ├── lib.rs                    module declarations; run/macro/error exports

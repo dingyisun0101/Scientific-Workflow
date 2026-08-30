@@ -21,9 +21,11 @@ schema, but each owns a distinct state instance.
 
 Canonical path: `scientific_workflow::ExecutionUnit`. This public
 `Send + Sized + 'static` trait is implemented by application scientific
-workloads. A normal member implements it with `member_count() == 1`; an ensemble
-implements it directly and keeps its shared inputs, batching, synchronization,
-and internal parallelism private.
+workloads. A single-member execution unit implements it with
+`member_count() == 1`; a member is the stateful result exposed by that unit, not
+the trait implementor itself. An ensemble also implements `ExecutionUnit`
+directly, reports several members, and keeps its shared inputs, batching,
+synchronization, and internal parallelism private.
 
 Associated type:
 
