@@ -500,7 +500,7 @@ use scientific_workflow::state::StateSchemaProvider;
 
 pub const fn ecological_state_schema() -> StateSchemaProvider {
     StateSchemaProvider::new(
-        "eco_core.ecological-state.v1",
+        "ecological-state-toolkit.ecological-state.v1",
         include_bytes!("../schemas/ecological_state.json"),
     )
 }
@@ -514,7 +514,7 @@ impl ExecutionUnit for GlvUnit {
     type Constants = GlvConstants;
 
     fn standard_state_schema() -> Option<StateSchemaProvider> {
-        Some(eco_core::ecological_state_schema())
+        Some(ecological_state_toolkit::state_schema::ecological_state_schema())
     }
 
     // preflight, initialize, member_count, member, and step follow.
@@ -524,8 +524,9 @@ impl ExecutionUnit for GlvUnit {
 Its project task can then be `{"execution_unit":"glv"}` with no `state` and no
 `paths.states`. Study validates and caches the embedded document, passes the
 resulting `SystemStateSchema` to `preflight` and `initialize`, and records
-`eco_core.ecological-state.v1` as state provenance. If a project does declare
-`{"execution_unit":"glv","state":"experiment"}`, that explicit schema wins.
+`ecological-state-toolkit.ecological-state.v1` as state provenance. If a
+project does declare `{"execution_unit":"glv","state":"experiment"}`, that
+explicit schema wins.
 Omission without either an explicit selection or a provider fails before output.
 
 ### 1. Define an execution unit
