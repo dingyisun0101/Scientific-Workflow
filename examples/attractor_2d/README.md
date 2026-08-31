@@ -193,7 +193,7 @@ reader source tree so a clean checkout needs only Python 3.10 or newer.
 From the repository root:
 
 ```bash
-cargo run --manifest-path examples/attractor_2d/Cargo.toml
+cargo run -p attractor-2d
 ```
 
 Workflow creates a unique Rust execution beneath `examples/attractor_2d/output`.

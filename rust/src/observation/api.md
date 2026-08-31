@@ -21,7 +21,7 @@ binds the returned plan to the validated
 state schema, and stores that exact bound plan in the compiled task. Runtime
 never calls the execution unit method again.
 
-## Public API
+## Basic API
 
 ### `observation::ObservationPlan`
 
@@ -127,7 +127,9 @@ is not produced; a failed bind yields no descriptor; a failed session
 observation advances no stream's accepted-iteration marker and submits no
 encoded observation.
 
-## Crate-visible peer API
+## Advanced API
+
+### Crate-visible peer API
 
 Workflow peers use these crate-visible contracts:
 

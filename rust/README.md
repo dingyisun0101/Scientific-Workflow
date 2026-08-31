@@ -9,7 +9,7 @@ configuration-driven execution unit or program execution, and durable outputs.
 
 ## New to Workflow?
 
-Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/tmp/state-schema-provider/rust/getting-started.md). It
+Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/rust/getting-started.md). It
 explains Serde and deserialization, Rust traits, and the difference between a
 study, phase, task, execution unit, member, and state before presenting a
 minimal runnable project.
@@ -149,10 +149,24 @@ Rust 1.97 or newer is required. Application executables should commit
 downstream application. The execution-unit attribute is re-exported by
 `scientific-workflow`; no separate procedural-macro dependency is needed.
 
+The default `terminal-ui` feature preserves the automatic interactive
+dashboard and noninteractive lifecycle lines described in this guide. It is
+enabled by every dependency declaration above. Reader-only or explicitly
+headless integrations can omit Crossterm and Ratatui:
+
+```toml
+scientific-workflow = { version = "0.12.0", default-features = false }
+```
+
+In that explicit mode, `run` and `runtime::execute` use a silent observer: they
+still execute and return the same durable results/errors, but provide no
+terminal output or UI-originated cancellation. Disabling defaults is therefore
+an embedding choice, not an alternate end-user interface.
+
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
 into an execution unit's typed `Constants` value. Application code normally
-adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/tmp/state-schema-provider/rust/getting-started.md#why-serde-and-deserialize-appear)
+adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/rust/getting-started.md#why-serde-and-deserialize-appear)
 shows the exact JSON-to-Rust mapping and explains why
 `#[serde(deny_unknown_fields)]` is recommended.
 
@@ -878,8 +892,9 @@ See [`src/state/api.md`](src/state/api.md),
 From the repository root:
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets
-RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path rust/Cargo.toml --no-deps
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-targets --all-features --locked
+cargo test -p scientific-workflow --all-targets --no-default-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```

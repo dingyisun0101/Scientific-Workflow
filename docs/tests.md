@@ -132,14 +132,20 @@ unsupported APIs.
 ## Required validation commands
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets
-cargo test --manifest-path examples/attractor_2d/Cargo.toml
-RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path rust/Cargo.toml --no-deps
-cargo test --manifest-path rust/Cargo.toml --doc
-python3 -m unittest discover -s python/tests
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-targets --all-features --locked
+cargo test -p scientific-workflow --all-targets --no-default-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+cargo test -p scientific-workflow --doc --all-features --locked
+PYTHONPATH=python/src python -m unittest discover -s python/tests -v
 ```
+
+The root virtual workspace owns the sole tracked `Cargo.lock`; member-local
+lockfiles are not part of repository validation. `.github/workflows/ci.yml`
+runs these checks, validates protocol JSON, inspects publishable crate contents,
+and enforces the four required headings in every first-level subsystem
+`api.md`.
 
 Package inspection must also verify that every first-level module's `api.md`,
 `docs/architecture.md`, and proc-macro support are included where required.

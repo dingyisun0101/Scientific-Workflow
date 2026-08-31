@@ -1,0 +1,3 @@
+[workspace]
+members = ["rust", "macros", "examples/attractor_2d"]
+resolver = "3"

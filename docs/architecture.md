@@ -183,7 +183,7 @@ task        ──► config + observation + state
 study       ──► config + observation + persistence + state + task
 runtime     ──► config + persistence + state + study + task
 ui          ──► runtime-owned lifecycle observer contract
-composition ──► runtime + ui
+composition ──► runtime + default-on terminal-ui adapter (silent when disabled)
 error       ──► StudyError + RuntimeError
 crate facade──► study + composition + error
 
@@ -200,7 +200,10 @@ fully preflighted Study and its retained Config.
 
 ```text
 workflow/
+├── Cargo.toml                       virtual workspace for all Rust packages
+├── Cargo.lock                       sole tracked Rust dependency resolution
 ├── README.md                         repository entry and user outcome
+├── .github/workflows/ci.yml          Rust/Python/protocol validation
 ├── docs/
 │   ├── architecture.md               this complete ownership/tree guide
 │   └── tests.md                      validation responsibilities and commands
@@ -214,7 +217,7 @@ workflow/
 │   ├── src/
 │   │   ├── lib.rs                    module declarations; run/macro/error exports
 │   │   ├── clock.rs                  private UTC formatting and duration conversion
-│   │   ├── composition.rs            automatic Runtime/UI adapter composition
+│   │   ├── composition.rs            feature-selected Runtime observer composition
 │   │   ├── error.rs                  private facade-error implementation
 │   │   ├── error/api.md              complete facade-error contract
 │   │   ├── error/workflow.rs         WorkflowError composition
@@ -282,7 +285,7 @@ workflow/
 │   │   ├── runtime/summary.rs        successful immutable RunSummary tree
 │   │   └── runtime/tests/runtime_workflow.rs private scheduler/lifecycle tests
 │   │   │
-│   │   ├── ui.rs                     private UI root
+│   │   ├── ui.rs                     default-feature private UI root
 │   │   ├── ui/api.md                 automatic presentation contract
 │   │   ├── ui/plan.rs                private UI-owned inferred refresh policy
 │   │   ├── ui/command.rs             former command editor and exact exit parser
@@ -332,7 +335,7 @@ workflow/
 │   ├── compatibility.json             machine-readable package support data
 │   └── compatibility.md               human-readable compatibility matrix
 └── examples/attractor_2d/
-    ├── Cargo.toml / Cargo.lock         standalone example package
+    ├── Cargo.toml                     workspace example package
     ├── src/main.rs                     one run(&Path) call
     ├── src/hopf_model.rs              domain model implementing ExecutionUnit
     ├── wf_configs/
@@ -546,8 +549,9 @@ external task's effective permit request, which is also supplied to the child.
 
 Runtime owns the borrowed execution, replicate, phase, task, iteration,
 outcome, and path fact vocabulary plus the observer and task-progress ports.
-Crate-level composition selects one clone-cheap `UiSession` after Runtime
-creates the execution output. UI owns its private zero-configuration refresh
+With the default `terminal-ui` feature, crate-level composition selects one
+clone-cheap `UiSession` after Runtime creates the execution output. UI owns its
+private zero-configuration refresh
 policy; nothing is authored in `wf_configs/study.json`, and Study has no UI
 dependency.
 Execution unit progress comes from the same host boundaries already used for automatic
@@ -562,6 +566,11 @@ output is a fatal `RuntimeError::Presentation`, never cancellation or silent
 fallback. Renderer health is checked from Runtime-facing publication,
 scheduler, and final-join boundaries, while the terminal lease restores process
 state during ordinary error return and unexpected unwinding.
+Explicit `default-features = false` builds omit the whole UI module plus
+Crossterm and Ratatui; composition attaches a silent Runtime observer instead.
+That headless build retains execution, persistence, summaries, and errors but
+has no terminal output or UI cancellation source. Default builds retain the
+exact existing user-visible behavior.
 The dashboard
 owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
 one compact `elapsed / ETA` field, a bounded message panel, and the former command editor.
@@ -620,9 +629,11 @@ conveniences. It owns no behavior or alternative implementation path.
     whenever one safe deterministic answer exists.
 13. Public APIs contain irreducible user intent or a deliberate read/embedding
     contract, not internal flexibility for hypothetical use.
-14. UI consumes only Runtime-owned observer facts, activates automatically as
-    the sole presentation interface, and returns selected-renderer failures
-    through `RuntimeError` without reclassifying them as cancellation.
+14. The default UI consumes only Runtime-owned observer facts, activates
+    automatically as the sole presentation interface, and returns
+    selected-renderer failures through `RuntimeError` without reclassifying
+    them as cancellation. Explicit headless builds replace it only at the
+    composition boundary.
 15. Scientific execution-unit and external-program tasks share phase, dependency, timeout, failure,
     summary, persistence-workspace, and UI lifecycle semantics without forcing
     fake state or iteration onto programs. Both may consume Workflow-derived

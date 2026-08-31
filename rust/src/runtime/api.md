@@ -67,6 +67,12 @@ initialization/input/drawing, and plain-output failures return
 `RuntimeError::Presentation` rather than becoming cancellation or silent
 fallback.
 
+The default `terminal-ui` Cargo feature preserves this complete presentation
+path. When an embedding explicitly disables default features, the UI module and
+terminal dependencies are absent and composition attaches a silent observer to
+Runtime's unchanged port. Execution and summaries behave normally, but there
+is no presentation output or UI-originated cancellation in that build.
+
 An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. ExecutionUnit cancellation is cooperative
 between steps, so blocking application code inside one step may delay return.

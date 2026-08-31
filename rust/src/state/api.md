@@ -10,7 +10,7 @@ State performs filesystem I/O only while loading a JSON schema. It does not
 schedule tasks, infer recording paths, choose sampling policy, persist state,
 or render progress. Payloads remain application-owned concrete Rust values.
 
-## Public API
+## Basic API
 
 ### `state::StateTime`
 
@@ -207,6 +207,8 @@ the state error, while `Debug` intentionally omits payload contents.
 and the `StateSeriesError`. `error()` and `state()` borrow them; `into_parts()`
 moves out `(StateSeriesError, SystemState)`. Formatting never traverses payload
 values.
+
+## Advanced API
 
 ### `state::StateFieldSchema`
 

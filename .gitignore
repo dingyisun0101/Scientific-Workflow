@@ -6,10 +6,8 @@
 # applies to the active crate and any future workspace members.
 **/target/
 
-# The primary crate lockfile is tracked for reproducible repository validation,
-# as is the standalone executable example's lockfile. The proc-macro package is
-# a library-only dependency and does not retain a separately generated lockfile.
-/macros/Cargo.lock
+# The root Cargo.lock is tracked as the one reproducible workspace resolution.
+# Member-local lockfiles are not used by Cargo when invoked from this workspace.
 
 # Backup files produced by rustfmt.
 **/*.rs.bk

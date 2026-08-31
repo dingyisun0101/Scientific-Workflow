@@ -4,6 +4,7 @@ use std::path::Path;
 
 /// One borrowed lifecycle or progress fact published synchronously by Runtime.
 #[derive(Debug)]
+#[cfg_attr(not(feature = "terminal-ui"), allow(dead_code))]
 pub(crate) enum RuntimeEvent<'a> {
     TaskPlanned {
         replicate: u64,

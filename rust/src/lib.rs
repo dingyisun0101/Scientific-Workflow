@@ -113,6 +113,7 @@ pub mod runtime;
 pub mod state;
 pub mod study;
 mod task;
+#[cfg(feature = "terminal-ui")]
 mod ui;
 
 pub use error::WorkflowError;

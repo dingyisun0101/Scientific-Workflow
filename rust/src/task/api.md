@@ -15,7 +15,7 @@ retain independent identities, completion predicates, targets, observations,
 recordings, and final results. Every member in one unit uses the task's selected
 schema, but each owns a distinct state instance.
 
-## Public API
+## Basic API
 
 ### `ExecutionUnit`
 
@@ -190,7 +190,9 @@ retains the Config-validated external thread request so Study can inspect it and
 Runtime can enforce the global compute budget; execution units retain no
 per-task resource setting.
 
-## Errors and failure atomicity
+## Advanced API
+
+### Errors and failure atomicity
 
 User errors returned during unit-owned preflight prevent Study creation
 and therefore create no output. Initialization and step errors occur during
@@ -214,7 +216,7 @@ Beginning several recordings is failure-safe: a later begin failure causes
 Runtime to fail every recording that was already opened. Persistence owns all
 directory creation and durable status transitions.
 
-## Cross-module contract
+### Cross-module contract
 
 - Config alone reads and expands constants and explicit project schema documents.
 - Study matches registration keys, binds the common observation plan to the

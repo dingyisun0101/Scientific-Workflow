@@ -4,6 +4,8 @@
 authoring import. It owns no behavior and importing it performs no IO,
 registration discovery, or runtime initialization.
 
+## Basic API
+
 It re-exports exactly:
 
 - crate entry and registration: `run`, `execution_unit`, and `WorkflowError`;
@@ -14,6 +16,8 @@ It re-exports exactly:
   `StateSeries`; and
 - observation declarations: `ObservationPlan`, `ObservationStream`, and
   `ObservationError`.
+
+## Advanced API
 
 The prelude deliberately excludes project loading, active execution, summaries,
 completed-recording readers, decoder registries, configuration errors, and
@@ -28,6 +32,8 @@ use scientific_workflow::runtime::execute;
 use scientific_workflow::state::StateFieldSchema;
 use scientific_workflow::study::Study;
 ```
+
+## Example
 
 An ordinary execution unit normally needs only:
 

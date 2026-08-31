@@ -33,12 +33,14 @@ executable programs, and declarative JSON into validated, recorded studies.
 
 ```text
 workflow/
++-- Cargo.toml / Cargo.lock  unified Rust workspace and dependency resolution
 +-- rust/                   Rust crate, beginner/complete guides, sources, and tests
 +-- macros/                 execution-unit registration procedural macros
 +-- python/                 verified recording reader and Python tests
 +-- protocol/               normative recording contract and compatibility data
 +-- examples/attractor_2d/ complete Rust unit + Python-analysis project
 +-- docs/                   architecture and test responsibility guides
++-- .github/workflows/      cross-language CI and contract checks
 `-- README.md               repository navigation
 ```
 

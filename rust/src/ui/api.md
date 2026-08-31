@@ -14,9 +14,11 @@ Runtime port. Study has no UI dependency.
 
 ## Basic API
 
-The UI is private and starts automatically through
-`scientific_workflow::run(&Path)` or
-`runtime::execute(Study)`.
+The default `terminal-ui` Cargo feature compiles the private UI and starts it
+automatically through `scientific_workflow::run(&Path)` or
+`runtime::execute(Study)`. This feature is enabled by default, so existing
+dependency declarations and every visible interactive/noninteractive behavior
+remain unchanged.
 
 When both standard input and standard error are terminals, UI enters a
 Crossterm alternate screen and renders a Ratatui dashboard containing:
@@ -64,7 +66,8 @@ does not wait for input and returns immediately after its terminal lifecycle lin
 
 There is no `ui` object in `wf_configs/study.json`: no refresh rate, theme,
 field list, message callback, progress counter, renderer, or cancellation
-handle is user-defined. Because UI is the required sole interface, failure to
+handle is user-defined. With `terminal-ui` enabled, UI is the sole presentation
+interface, so failure to
 start its renderer thread, initialize the selected terminal, poll interactive
 input, draw the dashboard, or write plain output is fatal and returns
 `RuntimeError::Presentation`. Such failures are not reclassified as
@@ -83,6 +86,13 @@ Runtime and UI meet through crate-visible boundaries owned by Runtime:
 
 UI owns `UiPlan`, `UiSession`, and `UiFailure`. `UiSession` implements the
 Runtime-owned observer port and converts no execution outcome itself.
+
+An explicit `default-features = false` build omits the complete `ui` module and
+both terminal dependencies. Crate composition then attaches a private silent
+observer to the same Runtime port. Execution, persistence, summaries, and
+errors remain available, but no lifecycle lines, dashboard, terminal input, or
+UI cancellation source exists. This is intended for reader-only and headless
+embedding builds; it is not an alternate supported visual interface.
 
 These are peer-subsystem contracts, not downstream API. Event strings and
 paths are copied into small UI-owned presentation snapshots as required; UI
@@ -134,7 +144,8 @@ execution unit or JSON change is involved.
 
 ## Not API
 
-Ratatui/Crossterm types, event variants, dashboard snapshots, task statuses,
+Ratatui/Crossterm types, the headless silent observer, event variants,
+dashboard snapshots, task statuses,
 command parser/editor, renderer thread, alternate-screen lease, message
 capacity, layout, colors, glyphs, refresh interval, ETA formula, plain-line
 format, and cancellation atomics are private. Applications must not parse the

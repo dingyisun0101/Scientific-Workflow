@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test workspace
+        run: cargo test --workspace --all-targets --all-features --locked
+      - name: Test headless crate
+        run: cargo test -p scientific-workflow --all-targets --no-default-features --locked
+      - name: Document workspace
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps --locked
+      - name: Test documentation
+        run: cargo test -p scientific-workflow --doc --all-features --locked
+      - name: Inspect publishable crate
+        run: cargo package -p scientific-workflow --list --locked
+      - name: Verify subsystem API guide structure
+        shell: bash
+        run: |
+          for guide in rust/src/*/api.md; do
+            grep -qx '## Basic API' "$guide"
+            grep -qx '## Advanced API' "$guide"
+            grep -qx '## Example' "$guide"
+            grep -qx '## Not API' "$guide"
+          done
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Validate protocol JSON
+        run: |
+          python -m json.tool protocol/compatibility.json >/dev/null
+          python -m json.tool protocol/recording-v7.schema.json >/dev/null
+      - name: Test Python reader
+        env:
+          PYTHONPATH: python/src
+        run: python -m unittest discover -s python/tests -v
