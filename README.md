@@ -3,7 +3,7 @@
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking update — 0.12.0:** This release supersedes the unversioned 0.11.x
+> **Breaking update — 0.12.1:** This release supersedes the unversioned 0.11.x
 > project grammar. Every `wf_configs/study.json` must declare
 > `"workflow_schema": 1`; no compatibility alias exists for an omitted schema.
 
@@ -28,6 +28,8 @@ executable programs, and declarative JSON into validated, recorded studies.
   [compatibility matrix](protocol/compatibility.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
+- For the coordinated Rust 0.12.1 and Python 0.3.1 release summary, see the
+  [changelog](CHANGELOG.md).
 
 ## Repository map
 
@@ -41,6 +43,7 @@ workflow/
 +-- examples/attractor_2d/ complete Rust unit + Python-analysis project
 +-- docs/                   architecture and test responsibility guides
 +-- .github/workflows/      cross-language CI and contract checks
++-- CHANGELOG.md            coordinated package release notes
 `-- README.md               repository navigation
 ```
 

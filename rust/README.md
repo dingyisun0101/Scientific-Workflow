@@ -3,7 +3,7 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 
-> **Breaking update — 0.12.0:** This release supersedes the unversioned 0.11.x
+> **Breaking update — 0.12.1:** This release supersedes the unversioned 0.11.x
 > project grammar. Every `wf_configs/study.json` must declare
 > `"workflow_schema": 1`; no compatibility alias exists for an omitted schema.
 
@@ -133,14 +133,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.12.0"
+scientific-workflow = "0.12.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.12.0
+cargo add scientific-workflow@0.12.1
 cargo add serde --features derive
 ```
 
@@ -155,7 +155,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.12.0", default-features = false }
+scientific-workflow = { version = "0.12.1", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they

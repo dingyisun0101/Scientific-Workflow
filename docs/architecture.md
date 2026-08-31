@@ -1,5 +1,8 @@
 # Workflow architecture
 
+This document describes the reviewed architecture shipped by Rust package
+0.12.1 and its recording-v7 integration with Python reader 0.3.1.
+
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
 every source file does.
@@ -203,6 +206,7 @@ workflow/
 ├── Cargo.toml                       virtual workspace for all Rust packages
 ├── Cargo.lock                       sole tracked Rust dependency resolution
 ├── README.md                         repository entry and user outcome
+├── CHANGELOG.md                      coordinated package release notes
 ├── .github/workflows/ci.yml          Rust/Python/protocol validation
 ├── docs/
 │   ├── architecture.md               this complete ownership/tree guide

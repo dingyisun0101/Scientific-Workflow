@@ -1,5 +1,7 @@
 # UI API
 
+This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+
 The `ui` subsystem is the sole presentation interface for execution facts
 already known by Runtime. It does not inspect execution units, scientific payloads,
 project JSON, or persistence files. Execution units never define display fields, format

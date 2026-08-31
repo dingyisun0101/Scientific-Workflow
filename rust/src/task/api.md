@@ -1,5 +1,7 @@
 # Task API
 
+This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+
 Task owns Workflow's uniform scientific execution boundary. A configured
 scientific task selects one registered `ExecutionUnit`, one resolved constants
 value, and one resolved state schema. The schema is either explicitly named by

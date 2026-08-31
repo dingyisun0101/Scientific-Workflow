@@ -1,5 +1,7 @@
 # Study API
 
+This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
 Config to capture one project root and fully resolve its declarations, retains
 that central immutable Config, asks State to validate the centrally parsed

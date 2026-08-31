@@ -1,5 +1,7 @@
 # Observation API
 
+This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+
 The `observation` subsystem owns application-defined scientific observation: which
 state fields belong to which logical stream, how often iteration-based streams
 are sampled, the optional units attached to inferred time axes, and canonical

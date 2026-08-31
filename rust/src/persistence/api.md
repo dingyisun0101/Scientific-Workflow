@@ -1,5 +1,7 @@
 # Persistence API
 
+This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified member-state reconstruction. Config parses optional operational sizing,
 Study retains the effective private plan, and Runtime constructs and drives one

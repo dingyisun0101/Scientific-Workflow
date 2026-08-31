@@ -7,16 +7,18 @@ unknown recording versions fail closed.
 
 | Implementation | Package version | Writes | Reads |
 | --- | ---: | ---: | ---: |
-| Rust `scientific-workflow` | 0.12.0 | v7 | v7 |
-| Python `scientific-workflow-reader` | 0.3.0 | — | v7 |
+| Rust `scientific-workflow` | 0.12.1 | v7 | v7 |
+| Python `scientific-workflow-reader` | 0.3.1 | — | v7 |
 
 The Python package has no supported writer API. Its test-only round-trip bridge
 is conformance infrastructure, not a protocol producer offered to users.
 
-Rust 0.12.0 accepts project configuration `workflow_schema: 1`. That authored
+Rust 0.12.1 accepts project configuration `workflow_schema: 1`. That authored
 configuration generation is separate from recording format v7: changing one
 does not implicitly change the other.
 
+This matrix was reviewed for the coordinated 0.12.1/0.3.1 release. Recording
+format v7 is unchanged by that release.
+
 For the normative recording contract and coordinated bump policy, see
 [`recording-v7.md`](recording-v7.md).
-

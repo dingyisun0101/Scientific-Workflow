@@ -16,6 +16,7 @@ python -m pip install scientific-workflow-reader
 ```
 
 Python 3.10 or newer is required. The package has no runtime dependencies.
+This guide documents release 0.3.1.
 
 ## Reading a recording
 
@@ -68,7 +69,7 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-The initial release supports only
+Release 0.3.1 supports only
 `scientific-workflow-jsonl` format version 7, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.

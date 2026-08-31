@@ -1,5 +1,7 @@
 # Runtime API
 
+This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
 admission, dependency scheduling, task concurrency, cooperative timeouts and

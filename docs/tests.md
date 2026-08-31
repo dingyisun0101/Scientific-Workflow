@@ -1,5 +1,8 @@
 # Test structure
 
+This map is the release-qualification baseline for Rust 0.12.1 and Python
+reader 0.3.1.
+
 Tests follow subsystem responsibility and supported boundaries. Observation
 binding/session behavior, Config and Study compilation, and persistence write
 mechanics use internal tests because their working types are deliberately not

@@ -1,5 +1,9 @@
 # Scientific Workflow Recording Protocol v7
 
+Rust 0.12.1 and Python reader 0.3.1 completed a coordinated compatibility
+review against this unchanged protocol version. Package support remains
+authoritative in [`compatibility.json`](compatibility.json).
+
 This document is the normative cross-language contract for
 `scientific-workflow-jsonl` recording format version `7`. The words MUST,
 MUST NOT, SHOULD, and MAY are requirements terms.

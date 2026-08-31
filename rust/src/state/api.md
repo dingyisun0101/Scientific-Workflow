@@ -1,5 +1,7 @@
 # State API
 
+This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+
 The `state` subsystem owns validated field layouts, heterogeneous in-memory
 payloads, scientific time, and ordered in-memory state series. Its canonical
 public scope is the `scientific_workflow::state` module root. Ordinary state
