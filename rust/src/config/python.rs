@@ -56,6 +56,7 @@ pub(crate) fn resolve(
     declaration: PythonTaskDeclaration,
     seed_purpose: Option<Box<str>>,
     timeout: Option<Duration>,
+    threads: usize,
 ) -> Result<ResolvedProgramTask, ConfigError> {
     let script = resolve_script(project_root, &declaration.script)?;
     let (program, manager, mut args) = match declaration.environment {
@@ -134,6 +135,7 @@ pub(crate) fn resolve(
         timeout,
         script,
         manager.into(),
+        threads,
     ))
 }
 

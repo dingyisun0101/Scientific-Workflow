@@ -119,6 +119,7 @@ impl ProjectSpecification {
                         args,
                         seed_purpose,
                         timeout,
+                        threads,
                     } => {
                         let program = resolve_executable(config.project_root(), &program)?;
                         tasks.push(ResolvedTask::Program(ResolvedProgramTask::new(
@@ -126,17 +127,20 @@ impl ProjectSpecification {
                             args,
                             seed_purpose,
                             timeout,
+                            threads,
                         )));
                     }
                     ParsedTask::Python {
                         declaration,
                         seed_purpose,
                         timeout,
+                        threads,
                     } => tasks.push(ResolvedTask::Program(python::resolve(
                         config.project_root(),
                         declaration,
                         seed_purpose,
                         timeout,
+                        threads,
                     )?)),
                 }
             }

@@ -608,7 +608,7 @@ fn generic_program_task_receives_captured_config_and_dependency_outputs() {
         },
         "plot": {
           "after": ["simulate"],
-          "tasks": [{"program":"plot.py"}]
+          "tasks": [{"program":"plot.py","resources":{"threads":2}}]
         }
       }
     }
@@ -645,6 +645,21 @@ result = {
     fs::set_permissions(&program, permissions).unwrap();
 
     let study = Study::load(project.path()).unwrap();
+    let planned_program = study
+        .plan_summary()
+        .phases()
+        .nth(1)
+        .unwrap()
+        .tasks()
+        .next()
+        .unwrap();
+    assert!(matches!(
+        planned_program.kind(),
+        super::PlannedTaskKind::Program {
+            executable,
+            threads: 2,
+        } if executable == program
+    ));
     fs::write(
         project.path().join("wf_configs/parameters.json"),
         r#"{"counter":{"initial":2,"steps":1},"plot":{"title":"changed after Study load","dpi":72}}"#,

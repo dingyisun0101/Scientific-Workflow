@@ -959,6 +959,62 @@ fn program_seed_requests_require_the_master_seed_and_are_retained_semantically()
 
 #[cfg(unix)]
 #[test]
+fn external_thread_requests_are_validated_and_retained() {
+    let project = TestProject::new_raw(
+        r#"{
+          "workflow_schema": 1,
+          "threads": 4,
+          "phases":{"only":{"tasks":[
+            {"program":"/bin/true"},
+            {"program":"/bin/true","resources":{"threads":3}}
+          ]}}
+        }"#,
+        &[],
+    );
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    let tasks = specification.phases()[0].tasks();
+    assert_eq!(program_task(&tasks[0]).threads(), 1);
+    assert_eq!(program_task(&tasks[1]).threads(), 3);
+
+    for (resources, expected_pointer) in [
+        (r#"{"threads":0}"#, "/phases/only"),
+        (r#"{"threads":3}"#, "/phases/only/tasks/0/resources/threads"),
+    ] {
+        let source = format!(
+            r#"{{
+              "workflow_schema": 1,
+              "threads": 2,
+              "phases":{{"only":{{"tasks":[{{
+                "program":"/bin/true","resources":{resources}
+              }}]}}}}
+            }}"#
+        );
+        let invalid = TestProject::new_raw(&source, &[]);
+        assert!(matches!(
+            ProjectSpecification::load(invalid.path()),
+            Err(ConfigError::InvalidDocument { pointer, .. }) if pointer == expected_pointer
+        ));
+    }
+
+    let execution_unit = TestProject::new_raw(
+        r#"{
+          "workflow_schema": 1,
+          "threads": 2,
+          "phases":{"only":{"tasks":[{
+            "execution_unit":"unit","resources":{"threads":1}
+          }]}}
+        }"#,
+        &[("unit", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(execution_unit.path()),
+        Err(ConfigError::InvalidDocument { pointer, reason, .. })
+            if pointer == "/phases/only/tasks/0" && reason.contains("only for a program or Python")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn nested_python_task_resolves_its_mamba_environment_during_loading() {
     use std::os::unix::fs::PermissionsExt as _;
 

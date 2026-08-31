@@ -13,6 +13,7 @@ mod execution;
 mod host;
 mod output;
 mod presentation;
+mod resource;
 mod summary;
 
 #[cfg(test)]

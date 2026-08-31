@@ -1,7 +1,7 @@
 //! Validated Workflow-owned study manifest declarations.
 
 use std::collections::{BTreeMap, HashSet};
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -74,7 +74,7 @@ impl StudyManifest {
         self.workflow_schema
     }
 
-    /// Returns the required study-wide compute worker count.
+    /// Returns the required study-wide global compute budget.
     pub(crate) const fn threads(self) -> usize {
         self.threads
     }
@@ -190,11 +190,13 @@ pub(crate) enum ParsedTask {
         args: Box<[Box<str>]>,
         seed_purpose: Option<Box<str>>,
         timeout: Option<Duration>,
+        threads: usize,
     },
     Python {
         declaration: PythonTaskDeclaration,
         seed_purpose: Option<Box<str>>,
         timeout: Option<Duration>,
+        threads: usize,
     },
 }
 
@@ -344,6 +346,10 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         for (index, task) in raw.tasks.into_iter().enumerate() {
             let pointer = format!("{phase_pointer}/tasks/{index}");
             let timeout = task.timeout_ms.map(Duration::from_millis);
+            let requested_threads = task
+                .resources
+                .as_ref()
+                .map_or(1, |resources| resources.threads.get());
             let seed_purpose = task
                 .seed
                 .map(|seed| {
@@ -365,7 +371,9 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                 .transpose()?;
             match (task.execution_unit, task.program, task.python) {
                 (Some(execution_unit), None, None)
-                    if task.args.is_empty() && seed_purpose.is_none() =>
+                    if task.args.is_empty()
+                        && seed_purpose.is_none()
+                        && task.resources.is_none() =>
                 {
                     validate_identifier(
                         path,
@@ -383,6 +391,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     });
                 }
                 (None, Some(program), None) if task.state.is_none() => {
+                    validate_task_threads(path, &pointer, requested_threads, manifest.threads())?;
                     if program.as_os_str().is_empty() {
                         return Err(ConfigError::invalid(
                             path,
@@ -395,20 +404,23 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                         args: task.args.into_iter().map(String::into_boxed_str).collect(),
                         seed_purpose,
                         timeout,
+                        threads: requested_threads,
                     });
                 }
                 (None, None, Some(declaration)) if task.state.is_none() && task.args.is_empty() => {
+                    validate_task_threads(path, &pointer, requested_threads, manifest.threads())?;
                     tasks.push(ParsedTask::Python {
                         declaration,
                         seed_purpose,
                         timeout,
+                        threads: requested_threads,
                     });
                 }
                 _ => {
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit, top-level `args` only for a program, and `seed` only for a program or Python task",
+                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit, top-level `args` only for a program, and `seed` and `resources` only for a program or Python task",
                     ));
                 }
             }
@@ -431,6 +443,24 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         state_paths,
         phases,
     })
+}
+
+fn validate_task_threads(
+    path: &Path,
+    pointer: &str,
+    requested: usize,
+    available: usize,
+) -> Result<(), ConfigError> {
+    if requested > available {
+        return Err(ConfigError::invalid(
+            path,
+            format!("{pointer}/resources/threads"),
+            format!(
+                "task thread request {requested} exceeds the study-wide thread budget {available}"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn megabytes_to_bytes(
@@ -608,6 +638,14 @@ struct RawTask {
     timeout_ms: Option<u64>,
     #[serde(default)]
     seed: Option<RawProgramSeed>,
+    #[serde(default)]
+    resources: Option<RawTaskResources>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTaskResources {
+    threads: NonZeroUsize,
 }
 
 #[derive(Deserialize)]

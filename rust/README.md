@@ -694,18 +694,22 @@ omission.
             "name": "DSES"
           }
         },
-        "seed": {"purpose":"plot-sampling"}
+        "seed": {"purpose":"plot-sampling"},
+        "resources": {"threads": 4}
       }]
     }
   }
 }
 ```
 
-The top-level positive `threads` field is required and is the sole
-study-wide compute-pool limit. Workflow creates one shared pool for all Rust
-execution units and passes the same value to external tasks as
-`WORKFLOW_THREADS` and `RAYON_NUM_THREADS`; environment variables cannot
-override the manifest. The top-level `seed` is optional for deterministic projects. A stochastic
+The top-level positive `threads` field is required and is the global compute
+budget. Workflow creates one shared pool of that size for all Rust execution
+units. Program/Python tasks optionally declare `resources.threads`, defaulting
+to one; Runtime admits them against one shared permit ledger and supplies the
+reserved value as `WORKFLOW_THREADS` and `RAYON_NUM_THREADS`. External tasks do
+not overlap execution-unit tasks, so the fixed pool cannot oversubscribe the
+authored ceiling. Environment variables cannot override the manifest. The
+top-level `seed` is optional for deterministic projects. A stochastic
 execution unit requests purpose-named derived seeds through its
 `InitializationContext`; an external program or Python task declares one
 task-level purpose as shown above. A program request without the top-level seed

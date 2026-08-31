@@ -443,7 +443,8 @@ fn a_seeded_program_receives_only_its_derived_seed_and_persists_the_request() {
             "seed": 42,
             "phases": {"generate": {"tasks": [{
                 "program": "seeded-program.sh",
-                "seed": {"purpose": "target-initial-conditions"}
+                "seed": {"purpose": "target-initial-conditions"},
+                "resources": {"threads": 2}
             }]}}
         }),
         serde_json::json!({}),
@@ -767,9 +768,42 @@ fn sequential_and_parallel_replicate_policies_have_distinct_admission() {
 
 #[cfg(unix)]
 #[test]
+fn external_thread_requests_share_one_budget_across_parallel_replicates() {
+    let project = Project::new(
+        serde_json::json!({
+            "threads": 2,
+            "replicates": {"count": 2, "scheduling": "parallel"},
+            "phases": {"run": {"tasks": [{
+                "program": "timed.sh",
+                "resources": {"threads": 2}
+            }]}}
+        }),
+        serde_json::json!({}),
+    );
+    project.write_executable(
+        "timed.sh",
+        r#"#!/bin/sh
+replicate=$(basename "$WORKFLOW_REPLICATE_ROOT")
+: > "$WORKFLOW_PROJECT_ROOT/${replicate}.start"
+sleep 0.2
+: > "$WORKFLOW_PROJECT_ROOT/${replicate}.end"
+"#,
+    );
+
+    execute(Study::load(project.path()).unwrap()).unwrap();
+
+    let ranges = timing_ranges(project.path(), "replicate-");
+    let latest_start = ranges.iter().map(|range| range.0).max().unwrap();
+    let earliest_end = ranges.iter().map(|range| range.1).min().unwrap();
+    assert!(latest_start >= earliest_end);
+}
+
+#[cfg(unix)]
+#[test]
 fn phase_concurrency_respects_start_interval_and_summary_order() {
     let project = Project::new(
         serde_json::json!({
+            "threads": 3,
             "paths": {"states": {}},
             "phases": {"run": {
                 "tasks": [

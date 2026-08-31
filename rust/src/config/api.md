@@ -93,11 +93,10 @@ Unknown properties are rejected at every Workflow-owned level.
   project grammar and is retained in the frozen snapshot supplied to external
   tasks. An omitted or unsupported generation is never interpreted as the
   current grammar implicitly.
-- `threads` is the required positive number of workers in Workflow's one
-  study-wide compute pool. There is no default, host-CPU inference, or
-  environment override. Runtime installs every execution-unit invocation in
-  this shared pool and propagates the same authoritative value to child
-  programs.
+- `threads` is the required positive global compute budget. There is no
+  default, host-CPU inference, or environment override. Runtime gives its one
+  shared execution-unit pool exactly this many workers and admits external
+  tasks only while enough global permits are available.
 - `seed` is an optional unsigned 64-bit master seed. Config parses it once;
   Runtime uses it only to derive explicitly requested task-scoped values. It
   places execution-unit derivation behind the immutable initialization context
@@ -136,10 +135,16 @@ Unknown properties are rejected at every Workflow-owned level.
   - an execution-unit task with nonblank `execution_unit`, optional nonblank
     `state`, and optional `timeout_ms`; or
   - a program task with required `program`, optional `args`, optional `seed`,
-    and optional `timeout_ms`, for example
-    `{"program":"bin/analyze","args":["--publication"]}`; or
+    optional `resources`, and optional `timeout_ms`, for example
+    `{"program":"bin/analyze","args":["--publication"],"resources":{"threads":4}}`; or
   - a Python task with one nested `python` object and optional task-level
-    `seed` and `timeout_ms`.
+    `seed`, `resources`, and `timeout_ms`.
+- `resources` is the strict object `{"threads":N}`. It is valid only for a
+  program or Python task, defaults to one thread when omitted, and must request
+  a positive count no greater than top-level `threads`. The resolved count is
+  both the number of global permits held for the child's lifetime and the
+  value supplied to its thread-count environment variables. Execution units
+  do not accept this field because all of them share the one global Rayon pool.
 - A program/Python seed request is the strict object
   `{"seed":{"purpose":"target-initial-conditions"}}`. `purpose` must be
   nonempty and have no surrounding whitespace. The request requires the
@@ -183,6 +188,7 @@ Workflow lifecycle policy remains on the containing task:
     },
     "args": ["--publication"]
   },
+  "resources": {"threads": 4},
   "timeout_ms": 300000
 }
 ```

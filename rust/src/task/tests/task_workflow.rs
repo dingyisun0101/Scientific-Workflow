@@ -649,6 +649,7 @@ fn program_execution_uses_task_owned_semantic_invocation_view() {
         None,
         PathBuf::from("/project/script.py"),
         "system".into(),
+        1,
     ));
     let mut host = ProgramInvocationHost::default();
 

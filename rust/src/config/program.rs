@@ -19,6 +19,7 @@ struct ResolvedProgramTaskInner {
     args: Box<[OsString]>,
     timeout: Option<Duration>,
     seed_purpose: Option<Box<str>>,
+    threads: usize,
     subject: Box<str>,
     source: ProgramSource,
 }
@@ -38,6 +39,7 @@ impl ResolvedProgramTask {
         args: Box<[Box<str>]>,
         seed_purpose: Option<Box<str>>,
         timeout: Option<Duration>,
+        threads: usize,
     ) -> Self {
         let subject = file_subject(&program, "program");
         Self {
@@ -50,6 +52,7 @@ impl ResolvedProgramTask {
                     .collect(),
                 timeout,
                 seed_purpose,
+                threads,
                 subject,
                 source: ProgramSource::Executable,
             }),
@@ -63,6 +66,7 @@ impl ResolvedProgramTask {
         timeout: Option<Duration>,
         script: PathBuf,
         environment_manager: Box<str>,
+        threads: usize,
     ) -> Self {
         let subject = file_subject(&script, "python");
         Self {
@@ -71,6 +75,7 @@ impl ResolvedProgramTask {
                 args,
                 timeout,
                 seed_purpose,
+                threads,
                 subject,
                 source: ProgramSource::Python {
                     script,
@@ -94,6 +99,10 @@ impl ResolvedProgramTask {
 
     pub(crate) fn seed_purpose(&self) -> Option<&str> {
         self.inner.seed_purpose.as_deref()
+    }
+
+    pub(crate) fn threads(&self) -> usize {
+        self.inner.threads
     }
 
     pub(crate) fn subject(&self) -> &str {
@@ -133,6 +142,7 @@ impl std::fmt::Debug for ResolvedProgramTask {
             .field("args", &self.args())
             .field("timeout", &self.timeout())
             .field("seed_purpose", &self.seed_purpose())
+            .field("threads", &self.threads())
             .field("kind", &self.kind_name())
             .field("subject", &self.subject())
             .finish()

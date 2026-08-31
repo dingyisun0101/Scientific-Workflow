@@ -410,8 +410,11 @@ Config canonicalizes the project and required `wf_configs` roots and parses
 clone-cheap immutable Config retains the entire value graph.
 The required top-level `study.json.workflow_schema` is the independently
 versioned authored-configuration contract. The required positive top-level
-`study.json.threads` is the authoritative
-compute worker count. It has no inferred or environment-derived fallback.
+`study.json.threads` is the authoritative global compute budget. It has no
+inferred or environment-derived fallback. Program/Python tasks may declare a
+positive `resources.threads` request no greater than that budget; omission
+means one. Execution units have no per-task override because they share the
+fixed pool.
 The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
 intent; neither layer draws random values. Program/Python tasks may declare a
@@ -454,9 +457,12 @@ entry point: it consumes only complete immutable intent. Runtime alone creates
 one owned Rayon pool containing exactly `Study::threads()` workers before any
 output. Every execution-unit task installs its complete initialization/step
 lifecycle in that shared pool, so task and replicate concurrency cannot multiply
-the model-worker budget. Runtime overrides ambient Rayon settings for child
-programs with `WORKFLOW_THREADS` and `RAYON_NUM_THREADS`; separate processes
-cannot share the in-process pool but receive the same authored limit. Runtime then creates
+the model-worker budget. One permit ledger shared across every replicate also
+limits external tasks to an aggregate of `Study::threads()`. External tasks
+reserve their effective `resources.threads` count and receive that value as
+`WORKFLOW_THREADS` and `RAYON_NUM_THREADS`. External tasks may overlap each
+other when their aggregate fits, but do not overlap execution-unit tasks
+because the active fixed Rayon pool cannot be resized safely. Runtime then creates
 `output/execution-<pid>-<sequence>`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
 topologically schedules generic tasks, applies concurrency/start intervals and

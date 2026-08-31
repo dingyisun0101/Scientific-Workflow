@@ -13,6 +13,7 @@ use super::event::RuntimeEvent;
 use super::host::{ProgramSeed, RuntimeTaskEnvironment, RuntimeTaskHost, RuntimeTaskLaunch};
 use super::output::{create_execution, create_replicate};
 use super::presentation::{PresentationFailure, RuntimeObserver, RuntimePresentation};
+use super::resource::{ResourceBudget, ResourceLease, ResourceRequirement};
 use super::summary::{
     PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
 };
@@ -44,9 +45,11 @@ where
             })?,
     );
     let output = create_execution(study.output_root())?;
+    let resource_budget = ResourceBudget::new(study.threads());
     let observer = create_observer().map_err(RuntimeError::presentation_boxed)?;
     let presentation = RuntimePresentation::new(observer);
-    let outcome = execute_with_presentation(study, compute_pool, output, &presentation);
+    let outcome =
+        execute_with_presentation(study, compute_pool, resource_budget, output, &presentation);
     let finish = presentation.finish();
     finish?;
     outcome
@@ -55,6 +58,7 @@ where
 fn execute_with_presentation(
     study: Study,
     compute_pool: Arc<rayon::ThreadPool>,
+    resource_budget: ResourceBudget,
     output: PathBuf,
     presentation: &RuntimePresentation,
 ) -> Result<RunSummary, RuntimeError> {
@@ -85,12 +89,20 @@ fn execute_with_presentation(
             scopes.push((index, create_replicate(&output, index)?));
         }
         match study.replicate_policy().scheduling() {
-            ReplicateScheduling::Sequential => {
-                run_replicates_sequential(&study, scopes, presentation, &compute_pool)
-            }
-            ReplicateScheduling::Parallel => {
-                run_replicates_parallel(&study, scopes, presentation, &compute_pool)
-            }
+            ReplicateScheduling::Sequential => run_replicates_sequential(
+                &study,
+                scopes,
+                presentation,
+                &compute_pool,
+                &resource_budget,
+            ),
+            ReplicateScheduling::Parallel => run_replicates_parallel(
+                &study,
+                scopes,
+                presentation,
+                &compute_pool,
+                &resource_budget,
+            ),
         }
     })();
 
@@ -126,6 +138,7 @@ fn run_replicates_sequential(
     scopes: Vec<(u64, PathBuf)>,
     presentation: &RuntimePresentation,
     compute_pool: &Arc<rayon::ThreadPool>,
+    resource_budget: &ResourceBudget,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut summaries = Vec::with_capacity(scopes.len());
     let mut first_error = None;
@@ -138,6 +151,7 @@ fn run_replicates_sequential(
             presentation,
             &cancellation,
             compute_pool,
+            resource_budget,
         ) {
             Ok(summary) => summaries.push(summary),
             Err(source) => {
@@ -162,6 +176,7 @@ fn run_replicates_parallel(
     scopes: Vec<(u64, PathBuf)>,
     presentation: &RuntimePresentation,
     compute_pool: &Arc<rayon::ThreadPool>,
+    resource_budget: &ResourceBudget,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     enum WorkerOutcome {
         Finished(Result<ReplicateRunSummary, RuntimeError>),
@@ -178,6 +193,7 @@ fn run_replicates_parallel(
         let outcomes = outcomes.clone();
         let worker_cancellation = Arc::clone(&cancellation);
         let compute_pool = Arc::clone(compute_pool);
+        let resource_budget = resource_budget.clone();
         let worker = match thread::Builder::new()
             .name(format!("workflow-replicate-{index}"))
             .spawn(move || {
@@ -189,6 +205,7 @@ fn run_replicates_parallel(
                         &presentation,
                         &worker_cancellation,
                         &compute_pool,
+                        &resource_budget,
                     )
                 }))
                 .map_or(WorkerOutcome::Panicked, WorkerOutcome::Finished);
@@ -263,6 +280,7 @@ fn run_replicate(
     presentation: &RuntimePresentation,
     scheduler_cancellation: &AtomicBool,
     compute_pool: &Arc<rayon::ThreadPool>,
+    resource_budget: &ResourceBudget,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     presentation.publish(RuntimeEvent::ReplicateStarted { index })?;
     let result = run_replicate_inner(
@@ -272,6 +290,7 @@ fn run_replicate(
         presentation,
         scheduler_cancellation,
         compute_pool,
+        resource_budget,
     );
     match &result {
         Ok(_) => presentation.publish(RuntimeEvent::ReplicateCompleted { index })?,
@@ -296,6 +315,7 @@ fn run_replicate_inner(
     presentation: &RuntimePresentation,
     scheduler_cancellation: &AtomicBool,
     compute_pool: &Arc<rayon::ThreadPool>,
+    resource_budget: &ResourceBudget,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
     let positions = topological_positions(study.phases());
     let mut phases = Vec::with_capacity(positions.len());
@@ -313,6 +333,7 @@ fn run_replicate_inner(
             presentation,
             scheduler_cancellation,
             compute_pool,
+            resource_budget,
         };
         phases.push(run_phase(phase, &context)?);
     }
@@ -374,6 +395,7 @@ struct PhaseRuntime<'a> {
     presentation: &'a RuntimePresentation,
     scheduler_cancellation: &'a AtomicBool,
     compute_pool: &'a Arc<rayon::ThreadPool>,
+    resource_budget: &'a ResourceBudget,
 }
 
 struct TaskRuntime {
@@ -465,8 +487,13 @@ fn run_phase_inner(
             && !pending.is_empty()
             && Instant::now() >= next_admission
         {
+            let task = pending.front().expect("checked nonempty task queue");
+            let requirement = task_resource_requirement(task);
+            let Some(resource_lease) = context.resource_budget.try_acquire(requirement) else {
+                break;
+            };
             let task = pending.pop_front().expect("checked nonempty task queue");
-            match spawn_task(task, phase.name(), context) {
+            match spawn_task(task, phase.name(), context, resource_lease) {
                 Ok(task) => active.push(task),
                 Err(error) => {
                     first_error = Some(error);
@@ -596,6 +623,7 @@ fn spawn_task(
     task: StudyTask,
     phase: &str,
     context: &PhaseRuntime<'_>,
+    resource_lease: ResourceLease,
 ) -> Result<ActiveTask, RuntimeError> {
     let cancellation = Arc::new(AtomicBool::new(false));
     let worker_cancellation = Arc::clone(&cancellation);
@@ -611,13 +639,14 @@ fn spawn_task(
         dependencies_json: context.dependencies_json.clone(),
         replicate: context.replicate,
         master_seed: context.study.master_seed(),
-        threads: context.study.threads(),
+        threads: task_effective_threads(&worker_task, context.study.threads()),
         compute_pool: Arc::clone(context.compute_pool),
         presentation: context.presentation.clone(),
     };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
     let started = Instant::now();
     let worker = match thread::Builder::new().name(thread_name).spawn(move || {
+        let _resource_lease = resource_lease;
         let identity = worker_task.identity().to_owned();
         let task_kind = worker_task.kind();
         let compute_pool = Arc::clone(&runtime.compute_pool);
@@ -663,6 +692,22 @@ fn spawn_task(
         started,
         worker,
     })
+}
+
+fn task_resource_requirement(task: &StudyTask) -> ResourceRequirement {
+    match task.kind() {
+        TaskKind::ExecutionUnit => ResourceRequirement::InProcess,
+        TaskKind::Program => ResourceRequirement::External {
+            threads: task.program_threads(),
+        },
+    }
+}
+
+fn task_effective_threads(task: &StudyTask, study_threads: usize) -> usize {
+    match task.kind() {
+        TaskKind::ExecutionUnit => study_threads,
+        TaskKind::Program => task.program_threads(),
+    }
 }
 
 fn run_task(

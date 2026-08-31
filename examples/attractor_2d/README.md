@@ -68,9 +68,11 @@ immediately). This phase-owned scheduling delay is separate from the execution u
 one-millisecond per-step presentation delay. With the supplied workload, a
 normal run takes roughly 16 seconds, subject to machine and IO overhead.
 Top-level `study.json.workflow_schema: 1` selects the supported authored
-configuration grammar. Top-level `study.json.threads` is the required study-wide numerical worker
-limit. Workflow owns that one shared pool; the phase's `max_concurrency`
-controls task admission and does not create additional model pools.
+configuration grammar. Top-level `study.json.threads` is the required global
+compute budget. Workflow owns one shared execution-unit pool of that size; the
+phase's `max_concurrency` controls task admission and does not create additional
+model pools. The final Python plot task omits `resources`, so it reserves the
+default one external-task thread after simulation has completed.
 
 ### How parameters reach `AttractorConstants`
 

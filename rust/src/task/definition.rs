@@ -145,6 +145,10 @@ impl Task {
         self.program().and_then(ResolvedProgramTask::seed_purpose)
     }
 
+    pub(crate) fn program_threads(&self) -> Option<usize> {
+        self.program().map(ResolvedProgramTask::threads)
+    }
+
     pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
         match &self.descriptor {
             TaskDescriptor::ExecutionUnit { parameters, .. } => parameters.timeout(),

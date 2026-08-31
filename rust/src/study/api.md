@@ -54,9 +54,10 @@ moved or shared across host threads without mutable planning state.
 - `output_root() -> &Path` returns the inferred
   `<canonical-project-root>/output`. The path need not exist until Runtime
   starts.
-- `threads() -> usize` returns the required positive worker count parsed from
-  top-level `study.json.threads`. Study retains the value as intent but starts
-  no workers; Runtime uses it to construct the shared compute pool.
+- `threads() -> usize` returns the required positive global compute budget
+  parsed from top-level `study.json.threads`. Study retains the value as intent
+  but starts no workers; Runtime uses it for the shared execution-unit pool and
+  global external-task permits.
 - `plan_summary() -> PlanSummary<'_>` returns a bounded immutable view of the
   fully compiled plan. The view borrows the Study and performs no IO,
   allocation, decoding, or preflight. It cannot mutate or execute the plan.
@@ -107,10 +108,10 @@ view is:
 - `ExecutionUnit { execution_unit, state, parameter_ordinal,
   parameter_source }`, containing the linked key, selected named-state key or
   provider ID, expanded parameter ordinal, and canonical parameters document;
-- `Program { executable }`, containing the preflight-resolved canonical
-  executable; or
-- `Python { launcher, script }`, containing the preflight-resolved canonical
-  launcher and script.
+- `Program { executable, threads }`, containing the preflight-resolved
+  canonical executable and effective permit request; or
+- `Python { launcher, script, threads }`, containing the preflight-resolved
+  canonical launcher, script, and effective permit request.
 
 All strings and paths are borrowed. Inspection never returns raw constants,
 schema payloads, observation internals, executable trait objects, environment

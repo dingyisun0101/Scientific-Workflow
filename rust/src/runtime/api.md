@@ -27,6 +27,12 @@ the required top-level `study.json.threads` worker count. Every execution-unit
 initialization and step runs with that pool installed, so concurrent tasks and
 replicates share one study-wide compute limit instead of creating independent
 model pools. Ambient `RAYON_NUM_THREADS` does not override the manifest.
+The same count also initializes one process-wide permit budget shared by all
+replicate schedulers. External tasks reserve their configured thread count and
+may overlap only while their aggregate reservation fits. External work and
+in-process execution-unit work do not overlap: execution units cannot safely
+shrink the fixed Rayon pool while it is active. This conservative class boundary
+keeps the authored global ceiling exact.
 
 For each task, Runtime derives the destination and constructs private
 persistence sessions. A standalone unit opens one member recording; an ensemble
@@ -100,7 +106,9 @@ summary order remains independent of worker completion order.
 
 Phases run in stable topological order. Within a phase, runtime respects
 `max_concurrency`, the minimum `start_interval` between successive admissions,
-task timeout, phase timeout, and sibling failure policy. The first eligible
+the global resource budget, task timeout, phase timeout, and sibling failure
+policy. A resource-blocked task remains pending and is not reported as started.
+The first eligible
 task has no artificial pre-admission wait. Fail-fast stops further admission
 and requests cancellation of active siblings; finish-all continues admitting
 declared siblings and returns an error after they finish.
@@ -194,8 +202,9 @@ paths through:
 - `WORKFLOW_REPLICATE_ROOT`: current replicate directory; and
 - `WORKFLOW_TASK_OUTPUT`: the task's `artifacts/` directory, also its working
   directory;
-- `WORKFLOW_THREADS`: decimal positive study-wide thread count;
-- `RAYON_NUM_THREADS`: the same authoritative count for Rayon-based child
+- `WORKFLOW_THREADS`: decimal positive thread count reserved for this external
+  task (one when `resources` is omitted);
+- `RAYON_NUM_THREADS`: the same task reservation for Rayon-based child
   programs; and
 - `WORKFLOW_TASK_SEED`: decimal unsigned 64-bit task seed, present only when
   the program/Python task declared `seed: {"purpose":"..."}`.

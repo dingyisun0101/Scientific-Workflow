@@ -72,7 +72,7 @@ impl Study {
         &self.inner.output_root
     }
 
-    /// Returns the required study-wide compute worker count.
+    /// Returns the required study-wide global compute budget.
     pub fn threads(&self) -> usize {
         self.inner.threads
     }
@@ -162,7 +162,7 @@ impl<'a> PlanSummary<'a> {
         self.study.inner.workflow_schema
     }
 
-    /// Returns the study-wide authored compute-thread count.
+    /// Returns the study-wide authored global compute budget.
     pub fn threads(self) -> usize {
         self.study.threads()
     }
@@ -346,6 +346,7 @@ impl<'a> TaskPlanSummary<'a> {
                     .program_path()
                     .expect("a compiled Python task has a resolved launcher"),
                 script,
+                threads: self.task.program_threads(),
             }
         } else {
             PlannedTaskKind::Program {
@@ -353,6 +354,7 @@ impl<'a> TaskPlanSummary<'a> {
                     .task
                     .program_path()
                     .expect("a compiled program task has a resolved executable"),
+                threads: self.task.program_threads(),
             }
         }
     }
@@ -376,6 +378,8 @@ pub enum PlannedTaskKind<'a> {
     Program {
         /// Canonical executable selected during preflight.
         executable: &'a Path,
+        /// Number of global compute permits reserved while the program runs.
+        threads: usize,
     },
     /// A Python script invoked through a resolved environment launcher.
     Python {
@@ -383,6 +387,8 @@ pub enum PlannedTaskKind<'a> {
         launcher: &'a Path,
         /// Canonical Python script selected during preflight.
         script: &'a Path,
+        /// Number of global compute permits reserved while the script runs.
+        threads: usize,
     },
 }
 
@@ -507,6 +513,12 @@ impl StudyTask {
 
     pub(crate) fn program_seed_purpose(&self) -> Option<&str> {
         self.task.program_seed_purpose()
+    }
+
+    pub(crate) fn program_threads(&self) -> usize {
+        self.task
+            .program_threads()
+            .expect("a compiled program task retains its positive thread request")
     }
 }
 
