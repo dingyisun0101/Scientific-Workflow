@@ -71,6 +71,14 @@ fn workflow_error_preserves_stage_conversion_and_thread_safety() {
         runtime,
         WorkflowError::Runtime(RuntimeError::ExecutionCancelled)
     ));
+
+    let presentation = WorkflowError::from(RuntimeError::Presentation {
+        source: Box::new(std::io::Error::other("renderer unavailable")),
+    });
+    assert!(matches!(
+        presentation,
+        WorkflowError::Runtime(RuntimeError::Presentation { .. })
+    ));
 }
 
 #[test]

@@ -20,8 +20,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 
 use super::command::{CommandInput, CommandSubmission, EditAction, UiCommand};
-use super::event::UiEvent;
 use super::state::{DashboardSnapshot, TaskSnapshot, TaskStatus, event_message};
+use crate::runtime::RuntimeEvent;
 
 static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -31,7 +31,7 @@ pub(super) fn interactive() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
-pub(super) fn render_plain(event: &UiEvent<'_>) -> io::Result<()> {
+pub(super) fn render_plain(event: &RuntimeEvent<'_>) -> io::Result<()> {
     if let Some(message) = event_message(event) {
         writeln!(io::stderr().lock(), "[{message}]")?;
     }

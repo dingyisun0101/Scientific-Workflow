@@ -11,7 +11,7 @@ Runtime does not parse JSON, discover execution units, decode constants for plan
 or let application code construct phases/tasks. It never reparses the central
 Config retained by Study.
 
-## Automatic runtime behavior
+## Basic API
 
 Ordinary applications call the crate-level `scientific_workflow::run(&Path)`
 facade, which loads a Study before handing it to Runtime. This keeps project
@@ -46,17 +46,20 @@ derives it from the same master seed, replicate, inferred task identity,
 program kind, and purpose; the child receives only that derived value, not an
 `InitializationContext` or the master seed.
 
-Runtime also creates one automatic UI session from Study's private inferred UI
-plan. It publishes execution, replicate, phase, task, iteration, target,
-outcome, and recording-path facts. Interactive stdin plus stderr selects the
+Runtime owns the presentation observer port and execution, replicate, phase,
+task, iteration, target, outcome, and recording-path fact vocabulary.
+Crate-level composition attaches UI's automatic adapter after output creation;
+Study contains no UI policy. Interactive stdin plus stderr selects the
 Ratatui dashboard; otherwise UI emits stable plain lifecycle lines. Typing
 `exit` while work is active or pressing Ctrl+C requests cooperative execution
 cancellation. After any terminal outcome the dashboard remains visible until the
 user explicitly types `exit`; Ctrl+C alone never closes it. Consequently an
 interactive `execute` call returns only after execution has ended and that final
-`exit` is submitted. Noninteractive execution never waits for input. UI is the sole presentation boundary: renderer startup,
-terminal initialization/input/drawing, and plain-output failures panic rather
-than becoming `RuntimeError` or silent fallback.
+`exit` is submitted. Noninteractive execution never waits for input. UI is the
+sole presentation boundary: renderer startup, terminal
+initialization/input/drawing, and plain-output failures return
+`RuntimeError::Presentation` rather than becoming cancellation or silent
+fallback.
 
 An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. ExecutionUnit cancellation is cooperative
@@ -70,7 +73,7 @@ diagnosis. The crate-level facade wraps an active `RuntimeError` in
 `WorkflowError::Runtime`; the complete-workflow composition is documented by
 `WorkflowError`.
 
-## Public API
+## Advanced API
 
 ### `runtime::execute`
 
@@ -231,6 +234,9 @@ This non-exhaustive enum reports failures after a valid Study is available:
   study-wide pool before output creation;
 - `ExecutionCancelled`: the interactive `exit` command or Ctrl+C requested
   cooperative cancellation;
+- `Presentation { source }`: the selected automatic presentation adapter could
+  not start, publish plain/dashboard output, poll input, draw, or finish; it is
+  never a cancellation result;
 - `OutputScope { path, source }`: unique execution or replicate directory could
   not be created;
 - `Task { task, source }`: execution unit, program, state, observation, config decode,
@@ -302,7 +308,7 @@ Scheduler polling, worker thread names, active task handles, atomic cancellation
 flags, completion channels/timestamps, bounded panic-payload formatting,
 task output ordinals, `RuntimeTaskHost`,
 execution unit/program task environments, child-process polling, `PersistenceSession`,
-UI events/session, backend ownership, and
+Runtime-owned observer/event/task-presentation contracts, UI session, backend ownership, and
 topological-position calculation are private.
 
 Runtime passes `MemberRecordingProvenance` as semantic facts—task identity,

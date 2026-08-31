@@ -14,7 +14,7 @@ Config never discovers execution unit types, initializes an execution unit, crea
 schedules work, or persists state. Study owns cross-domain binding; Runtime
 owns effects.
 
-## Project declaration API
+## Basic API
 
 The ordinary user-facing API is this project layout:
 
@@ -323,7 +323,7 @@ failure-atomic with respect to output: no directory, execution unit, task thread
 persistence session exists yet. Later edits on disk do not affect the retained
 Study or an execution made from it.
 
-## Public Rust API
+## Advanced API
 
 The module root exports only `ConfigError` to downstream crates. The same
 module is the named crate-visible peer boundary used by Study and Runtime;

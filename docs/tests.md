@@ -91,7 +91,8 @@ public.
   rows, per-phase task-panel replacement, progress, bounded message history,
   source-neutral cancellation, and phase/replicate/execution closure of
   pending rows as skipped. `ui/session.rs` verifies that recorded renderer
-  failure panics at the Runtime-facing health boundary. Before a release,
+  failure returns at the Runtime-facing health boundary, while Runtime tests
+  verify conversion to `RuntimeError::Presentation`. Before a release,
   manual PTY validation should confirm alternate-screen Ratatui rendering,
   completion retention, explicit keyboard exit, Ctrl+C cancellation without
   closure, cooperative Runtime cancellation, and terminal restoration.

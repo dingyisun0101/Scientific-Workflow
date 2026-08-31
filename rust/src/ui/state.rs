@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use super::event::UiEvent;
+use crate::runtime::RuntimeEvent;
 
 const MESSAGE_HISTORY: usize = 100;
 
@@ -85,9 +85,9 @@ impl DashboardState {
         }
     }
 
-    pub(super) fn apply(&mut self, event: &UiEvent<'_>) {
+    pub(super) fn apply(&mut self, event: &RuntimeEvent<'_>) {
         match event {
-            UiEvent::TaskPlanned {
+            RuntimeEvent::TaskPlanned {
                 replicate,
                 phase,
                 identity,
@@ -115,7 +115,7 @@ impl DashboardState {
                 );
                 return;
             }
-            UiEvent::ExecutionStarted {
+            RuntimeEvent::ExecutionStarted {
                 output_directory,
                 replicate_count,
                 ..
@@ -123,19 +123,20 @@ impl DashboardState {
                 self.output = Some((*output_directory).to_path_buf());
                 self.replicate_count = *replicate_count;
             }
-            UiEvent::PhaseStarted {
+            RuntimeEvent::PhaseStarted {
                 replicate, name, ..
             } => self.active_phase = Some((*replicate, Box::from(*name))),
-            UiEvent::PhaseFailed {
+            RuntimeEvent::PhaseFailed {
                 replicate, name, ..
             }
-            | UiEvent::PhaseCancelled { replicate, name } => {
+            | RuntimeEvent::PhaseCancelled { replicate, name } => {
                 self.skip_pending_in_phase(*replicate, name);
             }
-            UiEvent::ReplicateFailed { index, .. } | UiEvent::ReplicateCancelled { index } => {
+            RuntimeEvent::ReplicateFailed { index, .. }
+            | RuntimeEvent::ReplicateCancelled { index } => {
                 self.skip_pending_in_replicate(*index);
             }
-            UiEvent::TaskStarted {
+            RuntimeEvent::TaskStarted {
                 replicate,
                 identity,
                 ..
@@ -146,7 +147,7 @@ impl DashboardState {
                     task.detail.clear();
                 }
             }
-            UiEvent::TaskProgress {
+            RuntimeEvent::TaskProgress {
                 replicate,
                 identity,
                 iteration,
@@ -158,7 +159,7 @@ impl DashboardState {
                 }
                 return;
             }
-            UiEvent::TaskCompleted {
+            RuntimeEvent::TaskCompleted {
                 replicate,
                 identity,
                 final_iteration,
@@ -172,7 +173,7 @@ impl DashboardState {
                     }
                 }
             }
-            UiEvent::TaskFailed {
+            RuntimeEvent::TaskFailed {
                 replicate,
                 identity,
                 reason,
@@ -188,7 +189,7 @@ impl DashboardState {
                     task.detail = (*reason).to_owned();
                 }
             }
-            UiEvent::TaskCancelled {
+            RuntimeEvent::TaskCancelled {
                 replicate,
                 identity,
             } => {
@@ -198,12 +199,12 @@ impl DashboardState {
                     task.detail = "cancelled".to_owned();
                 }
             }
-            UiEvent::ExecutionCompleted { .. } => self.execution_finished = true,
-            UiEvent::ExecutionFailed { .. } => {
+            RuntimeEvent::ExecutionCompleted { .. } => self.execution_finished = true,
+            RuntimeEvent::ExecutionFailed { .. } => {
                 self.skip_all_pending();
                 self.execution_finished = true;
             }
-            UiEvent::ExecutionCancelled => {
+            RuntimeEvent::ExecutionCancelled => {
                 self.exit_requested = true;
                 self.execution_finished = true;
                 for task in self.tasks.values_mut() {
@@ -303,10 +304,10 @@ impl DashboardState {
     }
 }
 
-pub(super) fn event_message(event: &UiEvent<'_>) -> Option<String> {
+pub(super) fn event_message(event: &RuntimeEvent<'_>) -> Option<String> {
     match event {
-        UiEvent::TaskPlanned { .. } | UiEvent::TaskProgress { .. } => None,
-        UiEvent::ExecutionStarted {
+        RuntimeEvent::TaskPlanned { .. } | RuntimeEvent::TaskProgress { .. } => None,
+        RuntimeEvent::ExecutionStarted {
             output_directory,
             replicate_count,
             task_count_per_replicate,
@@ -314,39 +315,39 @@ pub(super) fn event_message(event: &UiEvent<'_>) -> Option<String> {
             "workflow: started {replicate_count} replicate(s), {task_count_per_replicate} task(s) each → {}",
             output_directory.display()
         )),
-        UiEvent::ExecutionCompleted { output_directory } => Some(format!(
+        RuntimeEvent::ExecutionCompleted { output_directory } => Some(format!(
             "workflow: completed → {}",
             output_directory.display()
         )),
-        UiEvent::ExecutionFailed { reason } => Some(format!("workflow: failed: {reason}")),
-        UiEvent::ExecutionCancelled => Some("workflow: cancelled".to_owned()),
-        UiEvent::ReplicateStarted { index } => Some(format!("replicate {index}: started")),
-        UiEvent::ReplicateCompleted { index } => Some(format!("replicate {index}: completed")),
-        UiEvent::ReplicateFailed { index, reason } => {
+        RuntimeEvent::ExecutionFailed { reason } => Some(format!("workflow: failed: {reason}")),
+        RuntimeEvent::ExecutionCancelled => Some("workflow: cancelled".to_owned()),
+        RuntimeEvent::ReplicateStarted { index } => Some(format!("replicate {index}: started")),
+        RuntimeEvent::ReplicateCompleted { index } => Some(format!("replicate {index}: completed")),
+        RuntimeEvent::ReplicateFailed { index, reason } => {
             Some(format!("replicate {index}: failed: {reason}"))
         }
-        UiEvent::ReplicateCancelled { index } => Some(format!("replicate {index}: cancelled")),
-        UiEvent::PhaseStarted {
+        RuntimeEvent::ReplicateCancelled { index } => Some(format!("replicate {index}: cancelled")),
+        RuntimeEvent::PhaseStarted {
             replicate,
             name,
             task_count,
         } => Some(format!(
             "replicate {replicate}: phase {name} started ({task_count} task(s))"
         )),
-        UiEvent::PhaseCompleted { replicate, name } => {
+        RuntimeEvent::PhaseCompleted { replicate, name } => {
             Some(format!("replicate {replicate}: phase {name} completed"))
         }
-        UiEvent::PhaseFailed {
+        RuntimeEvent::PhaseFailed {
             replicate,
             name,
             reason,
         } => Some(format!(
             "replicate {replicate}: phase {name} failed: {reason}"
         )),
-        UiEvent::PhaseCancelled { replicate, name } => {
+        RuntimeEvent::PhaseCancelled { replicate, name } => {
             Some(format!("replicate {replicate}: phase {name} cancelled"))
         }
-        UiEvent::TaskStarted {
+        RuntimeEvent::TaskStarted {
             replicate,
             phase,
             identity,
@@ -356,7 +357,7 @@ pub(super) fn event_message(event: &UiEvent<'_>) -> Option<String> {
         } => Some(format!(
             "replicate {replicate}: {identity} started {label} ({kind} {subject}, phase {phase})"
         )),
-        UiEvent::TaskCompleted {
+        RuntimeEvent::TaskCompleted {
             replicate,
             identity,
             final_iteration,
@@ -371,14 +372,14 @@ pub(super) fn event_message(event: &UiEvent<'_>) -> Option<String> {
                 output_directory.display()
             ),
         }),
-        UiEvent::TaskFailed {
+        RuntimeEvent::TaskFailed {
             replicate,
             identity,
             reason,
         } => Some(format!(
             "replicate {replicate}: {identity} failed: {reason}"
         )),
-        UiEvent::TaskCancelled {
+        RuntimeEvent::TaskCancelled {
             replicate,
             identity,
         } => Some(format!("replicate {replicate}: {identity} cancelled")),
@@ -394,24 +395,24 @@ mod tests {
     #[test]
     fn runtime_events_drive_rows_and_bounded_dashboard_messages() {
         let mut state = DashboardState::new();
-        state.apply(&UiEvent::TaskPlanned {
+        state.apply(&RuntimeEvent::TaskPlanned {
             replicate: 0,
             phase: "simulate",
             identity: "simulate/000000/unit-000000",
             label: "unit #0",
             kind: "unit",
         });
-        state.apply(&UiEvent::ExecutionStarted {
+        state.apply(&RuntimeEvent::ExecutionStarted {
             output_directory: Path::new("output/execution-0"),
             replicate_count: 1,
             task_count_per_replicate: 1,
         });
-        state.apply(&UiEvent::PhaseStarted {
+        state.apply(&RuntimeEvent::PhaseStarted {
             replicate: 0,
             name: "simulate",
             task_count: 1,
         });
-        state.apply(&UiEvent::TaskStarted {
+        state.apply(&RuntimeEvent::TaskStarted {
             replicate: 0,
             phase: "simulate",
             identity: "simulate/000000/unit-000000",
@@ -419,7 +420,7 @@ mod tests {
             kind: "unit",
             subject: "unit",
         });
-        state.apply(&UiEvent::TaskProgress {
+        state.apply(&RuntimeEvent::TaskProgress {
             replicate: 0,
             identity: "simulate/000000/unit-000000",
             iteration: 25,
@@ -452,7 +453,7 @@ mod tests {
     fn task_rows_retain_planned_order_instead_of_sorting_identities() {
         let mut state = DashboardState::new();
         for identity in ["z-first", "a-second"] {
-            state.apply(&UiEvent::TaskPlanned {
+            state.apply(&RuntimeEvent::TaskPlanned {
                 replicate: 0,
                 phase: "phase",
                 identity,
@@ -460,7 +461,7 @@ mod tests {
                 kind: "program",
             });
         }
-        state.apply(&UiEvent::PhaseStarted {
+        state.apply(&RuntimeEvent::PhaseStarted {
             replicate: 0,
             name: "phase",
             task_count: 2,
@@ -475,7 +476,7 @@ mod tests {
     fn task_section_switches_to_only_the_newly_started_phase() {
         let mut state = DashboardState::new();
         for (phase, identity) in [("simulate", "simulation"), ("plot", "plotter")] {
-            state.apply(&UiEvent::TaskPlanned {
+            state.apply(&RuntimeEvent::TaskPlanned {
                 replicate: 0,
                 phase,
                 identity,
@@ -484,7 +485,7 @@ mod tests {
             });
         }
 
-        state.apply(&UiEvent::PhaseStarted {
+        state.apply(&RuntimeEvent::PhaseStarted {
             replicate: 0,
             name: "simulate",
             task_count: 1,
@@ -494,7 +495,7 @@ mod tests {
         assert_eq!(simulation.tasks.len(), 1);
         assert_eq!(simulation.tasks[0].label, "simulation");
 
-        state.apply(&UiEvent::PhaseStarted {
+        state.apply(&RuntimeEvent::PhaseStarted {
             replicate: 0,
             name: "plot",
             task_count: 1,
@@ -509,7 +510,7 @@ mod tests {
     fn exit_marks_unstarted_and_active_work_without_fabricating_failure() {
         let mut state = DashboardState::new();
         for identity in ["active", "pending"] {
-            state.apply(&UiEvent::TaskPlanned {
+            state.apply(&RuntimeEvent::TaskPlanned {
                 replicate: 0,
                 phase: "simulate",
                 identity,
@@ -517,12 +518,12 @@ mod tests {
                 kind: "unit",
             });
         }
-        state.apply(&UiEvent::PhaseStarted {
+        state.apply(&RuntimeEvent::PhaseStarted {
             replicate: 0,
             name: "simulate",
             task_count: 2,
         });
-        state.apply(&UiEvent::TaskStarted {
+        state.apply(&RuntimeEvent::TaskStarted {
             replicate: 0,
             phase: "simulate",
             identity: "active",
@@ -531,11 +532,11 @@ mod tests {
             subject: "unit",
         });
         state.request_exit();
-        state.apply(&UiEvent::TaskCancelled {
+        state.apply(&RuntimeEvent::TaskCancelled {
             replicate: 0,
             identity: "active",
         });
-        state.apply(&UiEvent::ExecutionCancelled);
+        state.apply(&RuntimeEvent::ExecutionCancelled);
 
         let snapshot = state.snapshot();
         assert_eq!(snapshot.tasks[0].status, TaskStatus::Cancelled);
@@ -553,11 +554,11 @@ mod tests {
     #[test]
     fn terminal_execution_events_mark_the_dashboard_finished() {
         for event in [
-            UiEvent::ExecutionCompleted {
+            RuntimeEvent::ExecutionCompleted {
                 output_directory: Path::new("output/execution-0"),
             },
-            UiEvent::ExecutionFailed { reason: "failure" },
-            UiEvent::ExecutionCancelled,
+            RuntimeEvent::ExecutionFailed { reason: "failure" },
+            RuntimeEvent::ExecutionCancelled,
         ] {
             let mut state = DashboardState::new();
             state.apply(&event);
@@ -573,7 +574,7 @@ mod tests {
             (0, "second", "replicate-pending"),
             (1, "first", "execution-pending"),
         ] {
-            state.apply(&UiEvent::TaskPlanned {
+            state.apply(&RuntimeEvent::TaskPlanned {
                 replicate,
                 phase,
                 identity,
@@ -582,7 +583,7 @@ mod tests {
             });
         }
 
-        state.apply(&UiEvent::PhaseFailed {
+        state.apply(&RuntimeEvent::PhaseFailed {
             replicate: 0,
             name: "first",
             reason: "expected failure",
@@ -596,7 +597,7 @@ mod tests {
             TaskStatus::Pending
         );
 
-        state.apply(&UiEvent::ReplicateFailed {
+        state.apply(&RuntimeEvent::ReplicateFailed {
             index: 0,
             reason: "expected failure",
         });
@@ -605,7 +606,7 @@ mod tests {
             TaskStatus::Skipped
         );
 
-        state.apply(&UiEvent::ExecutionFailed {
+        state.apply(&RuntimeEvent::ExecutionFailed {
             reason: "expected failure",
         });
         assert_eq!(
@@ -617,14 +618,14 @@ mod tests {
     #[test]
     fn task_cancellation_detail_does_not_invent_its_source() {
         let mut state = DashboardState::new();
-        state.apply(&UiEvent::TaskPlanned {
+        state.apply(&RuntimeEvent::TaskPlanned {
             replicate: 0,
             phase: "phase",
             identity: "task",
             label: "task",
             kind: "unit",
         });
-        state.apply(&UiEvent::TaskStarted {
+        state.apply(&RuntimeEvent::TaskStarted {
             replicate: 0,
             phase: "phase",
             identity: "task",
@@ -632,7 +633,7 @@ mod tests {
             kind: "unit",
             subject: "unit",
         });
-        state.apply(&UiEvent::TaskCancelled {
+        state.apply(&RuntimeEvent::TaskCancelled {
             replicate: 0,
             identity: "task",
         });

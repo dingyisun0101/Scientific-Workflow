@@ -5,12 +5,14 @@ already known by Runtime. It does not inspect execution units, scientific payloa
 project JSON, or persistence files. Execution units never define display fields, format
 messages, increment counters, or receive a UI handle.
 
-Study owns a private inferred UI policy. Runtime publishes planned-task,
-lifecycle, progress, path, and outcome facts. UI alone owns terminal detection,
-the Ratatui dashboard state, command editing, message history, refresh timing,
-and the internal exit request observed by Runtime.
+Runtime owns the planned-task, lifecycle, progress, path, and outcome fact
+vocabulary plus the observer port. Crate-level composition attaches UI's
+automatic adapter after Runtime allocates the execution scope. UI alone owns
+terminal detection, its inferred refresh policy, the Ratatui dashboard state,
+command editing, message history, and the exit request observed through the
+Runtime port. Study has no UI dependency.
 
-## Automatic behavior
+## Basic API
 
 The UI is private and starts automatically through
 `scientific_workflow::run(&Path)` or
@@ -64,19 +66,23 @@ There is no `ui` object in `wf_configs/study.json`: no refresh rate, theme,
 field list, message callback, progress counter, renderer, or cancellation
 handle is user-defined. Because UI is the required sole interface, failure to
 start its renderer thread, initialize the selected terminal, poll interactive
-input, draw the dashboard, or write plain output is fatal and panics. These
-failures are not reclassified as cooperative cancellation and are not wrapped
-in `WorkflowError` or `RuntimeError`.
+input, draw the dashboard, or write plain output is fatal and returns
+`RuntimeError::Presentation`. Such failures are not reclassified as
+cooperative cancellation and are transparently wrapped by `WorkflowError` from
+the ordinary crate facade.
 
-## Crate-visible peer API
+## Advanced API
 
-Runtime and Study use crate-visible boundaries:
+Runtime and UI meet through crate-visible boundaries owned by Runtime:
 
-- `UiPlan` is the immutable inferred refresh policy;
-- `UiEvent` is the borrowed synchronous fact vocabulary;
-- `UiSession` owns shared reduced state, terminal selection, the renderer
-  thread, and cancellation request; and
-- `TaskUi` publishes iteration/target facts for one inferred task.
+- `RuntimeEvent` is the borrowed synchronous fact vocabulary;
+- `RuntimeObserver` is the downstream publication, cancellation, and final
+  join port;
+- `RuntimePresentation` is Runtime's clone-cheap adapter handle; and
+- `TaskPresentation` publishes iteration/target facts for one inferred task.
+
+UI owns `UiPlan`, `UiSession`, and `UiFailure`. `UiSession` implements the
+Runtime-owned observer port and converts no execution outcome itself.
 
 These are peer-subsystem contracts, not downstream API. Event strings and
 paths are copied into small UI-owned presentation snapshots as required; UI
@@ -88,11 +94,12 @@ mutex protects only dashboard presentation state, and a single bounded-refresh
 thread owns interactive terminal input and drawing.
 
 Interactive initialization uses a renderer-thread handshake, so setup failure
-panics before a usable session is returned. Later terminal IO failures are
-retained in shared render health and re-panicked from the next Runtime-facing
+returns before a usable session is published. Later terminal IO failures are
+retained in shared render health and returned from the next Runtime-facing
 publication, scheduler cancellation check, or final join. Unexpected renderer
-thread panics are resumed when joined. The terminal lease still restores raw
-mode, alternate screen, cursor, and mouse state during unwinding.
+thread panics become the same presentation failure. The terminal lease still
+restores raw mode, alternate screen, cursor, and mouse state during ordinary
+error return and unwinding.
 
 When fail-fast, timeout, or cancellation prevents admission, phase, replicate,
 and execution terminal events close affected `pending` rows as `skipped`.
@@ -104,8 +111,8 @@ policy.
 For an interactive dashboard it marks execution finished, waits for the renderer
 to receive `exit`, and then joins it before Runtime returns. Alternate-screen,
 raw-mode, cursor, and mouse state are restored on success, workflow failure,
-cancellation, or UI panic. With plain rendering there is no renderer to join and
-no interactive wait.
+cancellation, presentation error, or unexpected panic. With plain rendering
+there is no renderer to join and no interactive wait.
 
 ## Example
 
@@ -134,8 +141,9 @@ format, and cancellation atomics are private. Applications must not parse the
 human display as a machine protocol; durable facts belong to Runtime summaries
 and persistence metadata.
 
-A replacement UI must remain downstream of Runtime facts, require no execution-unit
-participation, tolerate concurrent publishers, preserve plain noninteractive
-diagnostics, support cooperative `exit`, restore terminal state while
-unwinding, and treat failure of its selected presentation mode as a fatal
-panic rather than cancellation or silent degradation.
+A replacement UI must implement Runtime's observer port, remain downstream of
+Runtime facts, require no Study/execution-unit/config participation, tolerate
+concurrent publishers, preserve plain noninteractive diagnostics, support
+cooperative `exit`, restore terminal state on return and while unwinding, and
+return failure of its selected presentation mode as a fatal presentation error
+rather than cancellation or silent degradation.

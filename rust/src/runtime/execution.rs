@@ -8,25 +8,31 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::error::RuntimeError;
+use super::event::RuntimeEvent;
+use super::host::{ProgramSeed, RuntimeTaskEnvironment, RuntimeTaskHost, RuntimeTaskLaunch};
+use super::output::{create_execution, create_replicate};
+use super::presentation::{PresentationFailure, RuntimeObserver, RuntimePresentation};
+use super::summary::{
+    PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
+};
 use crate::config::{ConfigSnapshot, FailurePolicy, ReplicateScheduling};
 use crate::persistence::{MemberRecordingProvenance, PersistencePlan};
 use crate::study::{Study, StudyPhase, StudyTask};
 use crate::task::{
     InitializationContext, SEED_DERIVATION_ALGORITHM, TaskKind, derive_program_seed,
 };
-use crate::ui::{UiEvent, UiSession};
-
-use super::error::RuntimeError;
-use super::host::{ProgramSeed, RuntimeTaskEnvironment, RuntimeTaskHost, RuntimeTaskLaunch};
-use super::output::{create_execution, create_replicate};
-use super::summary::{
-    PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
-};
 
 const SCHEDULER_POLL: Duration = Duration::from_millis(5);
 
-/// Executes one already validated immutable study and returns its summary.
-pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
+pub(crate) fn execute_with_observer<O, F>(
+    study: Study,
+    create_observer: F,
+) -> Result<RunSummary, RuntimeError>
+where
+    O: RuntimeObserver,
+    F: FnOnce() -> Result<O, PresentationFailure>,
+{
     let compute_pool = Arc::new(
         rayon::ThreadPoolBuilder::new()
             .num_threads(study.threads())
@@ -38,27 +44,40 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
             })?,
     );
     let output = create_execution(study.output_root())?;
+    let observer = create_observer().map_err(RuntimeError::presentation_boxed)?;
+    let presentation = RuntimePresentation::new(observer);
+    let outcome = execute_with_presentation(study, compute_pool, output, &presentation);
+    let finish = presentation.finish();
+    finish?;
+    outcome
+}
+
+fn execute_with_presentation(
+    study: Study,
+    compute_pool: Arc<rayon::ThreadPool>,
+    output: PathBuf,
+    presentation: &RuntimePresentation,
+) -> Result<RunSummary, RuntimeError> {
     let count = study.replicate_policy().count();
     let task_count_per_replicate = study.phases().iter().map(|phase| phase.tasks().len()).sum();
-    let ui = UiSession::automatic(study.ui_plan());
     for replicate in 0..count {
         for phase in study.phases() {
             for task in phase.tasks() {
-                ui.publish(UiEvent::TaskPlanned {
+                presentation.publish(RuntimeEvent::TaskPlanned {
                     replicate,
                     phase: phase.name(),
                     identity: task.identity(),
                     label: task.label(),
                     kind: task.kind_name(),
-                });
+                })?;
             }
         }
     }
-    ui.publish(UiEvent::ExecutionStarted {
+    presentation.publish(RuntimeEvent::ExecutionStarted {
         output_directory: &output,
         replicate_count: count,
         task_count_per_replicate,
-    });
+    })?;
 
     let result = (|| {
         let mut scopes = Vec::new();
@@ -67,24 +86,24 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
         }
         match study.replicate_policy().scheduling() {
             ReplicateScheduling::Sequential => {
-                run_replicates_sequential(&study, scopes, &ui, &compute_pool)
+                run_replicates_sequential(&study, scopes, presentation, &compute_pool)
             }
             ReplicateScheduling::Parallel => {
-                run_replicates_parallel(&study, scopes, &ui, &compute_pool)
+                run_replicates_parallel(&study, scopes, presentation, &compute_pool)
             }
         }
     })();
 
-    let result = if ui.cancellation_requested() {
+    let result = if presentation.cancellation_requested()? {
         Err(RuntimeError::ExecutionCancelled)
     } else {
         result
     };
-    let outcome = match result {
+    match result {
         Ok(replicates) => {
-            ui.publish(UiEvent::ExecutionCompleted {
+            presentation.publish(RuntimeEvent::ExecutionCompleted {
                 output_directory: &output,
-            });
+            })?;
             Ok(RunSummary {
                 output_directory: output,
                 replicates: replicates.into_boxed_slice(),
@@ -92,29 +111,34 @@ pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
         }
         Err(error) => {
             if matches!(error, RuntimeError::ExecutionCancelled) {
-                ui.publish(UiEvent::ExecutionCancelled);
+                presentation.publish(RuntimeEvent::ExecutionCancelled)?;
             } else {
                 let reason = error.to_string();
-                ui.publish(UiEvent::ExecutionFailed { reason: &reason });
+                presentation.publish(RuntimeEvent::ExecutionFailed { reason: &reason })?;
             }
             Err(error)
         }
-    };
-    ui.finish();
-    outcome
+    }
 }
 
 fn run_replicates_sequential(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
-    ui: &UiSession,
+    presentation: &RuntimePresentation,
     compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut summaries = Vec::with_capacity(scopes.len());
     let mut first_error = None;
     for (index, scope) in scopes {
         let cancellation = AtomicBool::new(false);
-        match run_replicate(study, index, scope, ui, &cancellation, compute_pool) {
+        match run_replicate(
+            study,
+            index,
+            scope,
+            presentation,
+            &cancellation,
+            compute_pool,
+        ) {
             Ok(summary) => summaries.push(summary),
             Err(source) => {
                 first_error.get_or_insert(RuntimeError::Replicate {
@@ -136,7 +160,7 @@ fn run_replicates_sequential(
 fn run_replicates_parallel(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
-    ui: &UiSession,
+    presentation: &RuntimePresentation,
     compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     enum WorkerOutcome {
@@ -150,7 +174,7 @@ fn run_replicates_parallel(
     let mut workers: Vec<(u64, JoinHandle<()>)> = Vec::with_capacity(worker_count);
     for (index, scope) in scopes {
         let study = study.clone();
-        let ui = ui.clone();
+        let presentation = presentation.clone();
         let outcomes = outcomes.clone();
         let worker_cancellation = Arc::clone(&cancellation);
         let compute_pool = Arc::clone(compute_pool);
@@ -162,7 +186,7 @@ fn run_replicates_parallel(
                         &study,
                         index,
                         scope,
-                        &ui,
+                        &presentation,
                         &worker_cancellation,
                         &compute_pool,
                     )
@@ -236,30 +260,30 @@ fn run_replicate(
     study: &Study,
     index: u64,
     scope: PathBuf,
-    ui: &UiSession,
+    presentation: &RuntimePresentation,
     scheduler_cancellation: &AtomicBool,
     compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
-    ui.publish(UiEvent::ReplicateStarted { index });
+    presentation.publish(RuntimeEvent::ReplicateStarted { index })?;
     let result = run_replicate_inner(
         study,
         index,
         scope,
-        ui,
+        presentation,
         scheduler_cancellation,
         compute_pool,
     );
     match &result {
-        Ok(_) => ui.publish(UiEvent::ReplicateCompleted { index }),
+        Ok(_) => presentation.publish(RuntimeEvent::ReplicateCompleted { index })?,
         Err(RuntimeError::ExecutionCancelled) => {
-            ui.publish(UiEvent::ReplicateCancelled { index });
+            presentation.publish(RuntimeEvent::ReplicateCancelled { index })?;
         }
         Err(error) => {
             let reason = error.to_string();
-            ui.publish(UiEvent::ReplicateFailed {
+            presentation.publish(RuntimeEvent::ReplicateFailed {
                 index,
                 reason: &reason,
-            });
+            })?;
         }
     }
     result
@@ -269,7 +293,7 @@ fn run_replicate_inner(
     study: &Study,
     index: u64,
     scope: PathBuf,
-    ui: &UiSession,
+    presentation: &RuntimePresentation,
     scheduler_cancellation: &AtomicBool,
     compute_pool: &Arc<rayon::ThreadPool>,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
@@ -286,7 +310,7 @@ fn run_replicate_inner(
             replicate_directory: &scope,
             dependencies_json,
             replicate: index,
-            ui,
+            presentation,
             scheduler_cancellation,
             compute_pool,
         };
@@ -347,7 +371,7 @@ struct PhaseRuntime<'a> {
     replicate_directory: &'a Path,
     dependencies_json: Box<[u8]>,
     replicate: u64,
-    ui: &'a UiSession,
+    presentation: &'a RuntimePresentation,
     scheduler_cancellation: &'a AtomicBool,
     compute_pool: &'a Arc<rayon::ThreadPool>,
 }
@@ -362,37 +386,37 @@ struct TaskRuntime {
     master_seed: Option<u64>,
     threads: usize,
     compute_pool: Arc<rayon::ThreadPool>,
-    ui: UiSession,
+    presentation: RuntimePresentation,
 }
 
 fn run_phase(
     phase: &StudyPhase,
     context: &PhaseRuntime<'_>,
 ) -> Result<PhaseRunSummary, RuntimeError> {
-    context.ui.publish(UiEvent::PhaseStarted {
+    context.presentation.publish(RuntimeEvent::PhaseStarted {
         replicate: context.replicate,
         name: phase.name(),
         task_count: phase.tasks().len(),
-    });
+    })?;
     let result = run_phase_inner(phase, context);
     match &result {
-        Ok(_) => context.ui.publish(UiEvent::PhaseCompleted {
+        Ok(_) => context.presentation.publish(RuntimeEvent::PhaseCompleted {
             replicate: context.replicate,
             name: phase.name(),
-        }),
+        })?,
         Err(RuntimeError::ExecutionCancelled) => {
-            context.ui.publish(UiEvent::PhaseCancelled {
+            context.presentation.publish(RuntimeEvent::PhaseCancelled {
                 replicate: context.replicate,
                 name: phase.name(),
-            });
+            })?;
         }
         Err(error) => {
             let reason = error.to_string();
-            context.ui.publish(UiEvent::PhaseFailed {
+            context.presentation.publish(RuntimeEvent::PhaseFailed {
                 replicate: context.replicate,
                 name: phase.name(),
                 reason: &reason,
-            });
+            })?;
         }
     }
     result
@@ -412,7 +436,7 @@ fn run_phase_inner(
     let mut execution_cancelled = false;
 
     while !pending.is_empty() || !active.is_empty() {
-        if (context.ui.cancellation_requested()
+        if (context.presentation.cancellation_requested()?
             || context.scheduler_cancellation.load(Ordering::Acquire))
             && !execution_cancelled
         {
@@ -495,27 +519,27 @@ fn run_phase_inner(
             };
             match result {
                 Ok(summary) => {
-                    context.ui.publish(UiEvent::TaskCompleted {
+                    context.presentation.publish(RuntimeEvent::TaskCompleted {
                         replicate: context.replicate,
                         identity: active_task.task.identity(),
                         final_iteration: summary.final_iteration(),
                         output_directory: summary.output_directory(),
-                    });
+                    })?;
                     completed.push((active_task.task.output_ordinal(), summary));
                 }
                 Err(error) => {
                     if matches!(error, RuntimeError::TaskCancelled { .. }) {
-                        context.ui.publish(UiEvent::TaskCancelled {
+                        context.presentation.publish(RuntimeEvent::TaskCancelled {
                             replicate: context.replicate,
                             identity: active_task.task.identity(),
-                        });
+                        })?;
                     } else {
                         let reason = error.to_string();
-                        context.ui.publish(UiEvent::TaskFailed {
+                        context.presentation.publish(RuntimeEvent::TaskFailed {
                             replicate: context.replicate,
                             identity: active_task.task.identity(),
                             reason: &reason,
-                        });
+                        })?;
                     }
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -589,7 +613,7 @@ fn spawn_task(
         master_seed: context.study.master_seed(),
         threads: context.study.threads(),
         compute_pool: Arc::clone(context.compute_pool),
-        ui: context.ui.clone(),
+        presentation: context.presentation.clone(),
     };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
     let started = Instant::now();
@@ -617,22 +641,22 @@ fn spawn_task(
                 source,
             };
             let reason = error.to_string();
-            context.ui.publish(UiEvent::TaskFailed {
+            context.presentation.publish(RuntimeEvent::TaskFailed {
                 replicate: context.replicate,
                 identity: task.identity(),
                 reason: &reason,
-            });
+            })?;
             return Err(error);
         }
     };
-    context.ui.publish(UiEvent::TaskStarted {
+    context.presentation.publish(RuntimeEvent::TaskStarted {
         replicate: context.replicate,
         phase,
         identity: task.identity(),
         label: task.label(),
         kind: task.kind_name(),
         subject: task.subject(),
-    });
+    })?;
     Ok(ActiveTask {
         task,
         cancellation,
@@ -705,7 +729,9 @@ fn run_task(
             initialization_context,
             program_seed,
             runtime.threads,
-            runtime.ui.task(runtime.replicate, task.identity()),
+            runtime
+                .presentation
+                .task(runtime.replicate, task.identity()),
             environment,
         ),
     );

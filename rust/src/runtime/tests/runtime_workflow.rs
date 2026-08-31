@@ -7,7 +7,10 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::runtime::{RuntimeError, TaskRunKind, TaskRunSummary, execute};
+use crate::runtime::{
+    PresentationFailure, RuntimeError, RuntimeEvent, RuntimeObserver, TaskRunKind, TaskRunSummary,
+    execute, execute_with_observer,
+};
 use crate::state::{StateTime, SystemState, SystemStateSchema};
 use crate::study::Study;
 use crate::task::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView, UnitResult};
@@ -325,6 +328,38 @@ fn runtime_public_results_are_send_and_sync() {
 
     assert_send_sync::<RuntimeError>();
     assert_send_sync::<TaskRunSummary>();
+}
+
+struct FailingObserver;
+
+impl RuntimeObserver for FailingObserver {
+    fn publish(&self, _event: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
+        Err(std::io::Error::other("test presentation failure").into())
+    }
+
+    fn cancellation_requested(&self) -> Result<bool, PresentationFailure> {
+        Ok(false)
+    }
+
+    fn finish(&self) -> Result<(), PresentationFailure> {
+        Ok(())
+    }
+}
+
+#[test]
+fn presentation_failures_return_through_the_runtime_error_boundary() {
+    let project = Project::new(
+        execution_unit_study("runtime-thread-pool", None),
+        serde_json::json!({"runtime-thread-pool": {"expected_threads": 2}}),
+    );
+
+    let error = execute_with_observer(Study::load(project.path()).unwrap(), || Ok(FailingObserver))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RuntimeError::Presentation { source }
+            if source.to_string() == "test presentation failure"
+    ));
 }
 
 #[test]

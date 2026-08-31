@@ -12,7 +12,6 @@ use crate::persistence::PersistencePlan;
 use crate::task::{
     ExecutionUnitCatalog, ExecutionUnitTaskProvenance, Task, TaskDefinition, TaskKind,
 };
-use crate::ui::UiPlan;
 
 use super::compilation;
 use super::error::StudyError;
@@ -48,7 +47,6 @@ impl Study {
             persistence.chunk_target_bytes(),
             persistence.queue_capacity_bytes(),
         );
-        let ui_plan = UiPlan::automatic();
         Self {
             inner: Arc::new(StudyInner {
                 project_root,
@@ -60,7 +58,6 @@ impl Study {
                 master_seed,
                 replicate_policy,
                 persistence_plan,
-                ui_plan,
             }),
         }
     }
@@ -113,11 +110,6 @@ impl Study {
     pub(crate) fn persistence_plan(&self) -> PersistencePlan {
         self.inner.persistence_plan
     }
-
-    /// Returns the immutable inferred UI plan.
-    pub(crate) fn ui_plan(&self) -> UiPlan {
-        self.inner.ui_plan
-    }
 }
 
 impl std::fmt::Debug for Study {
@@ -129,7 +121,6 @@ impl std::fmt::Debug for Study {
             .field("threads", &self.threads())
             .field("config", &self.inner.config)
             .field("persistence", &self.persistence_plan())
-            .field("ui", &self.ui_plan())
             .field("phases", &self.phases().len())
             .finish_non_exhaustive()
     }
@@ -145,7 +136,6 @@ struct StudyInner {
     master_seed: Option<u64>,
     replicate_policy: ReplicatePolicy,
     persistence_plan: PersistencePlan,
-    ui_plan: UiPlan,
 }
 
 /// A read-only view of one fully compiled [`Study`].

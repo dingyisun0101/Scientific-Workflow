@@ -20,8 +20,8 @@ use crate::task::{
     InitializationContext, MemberInitialization, ProgramTaskInvocation, TaskExecutionHost,
     TaskResult,
 };
-use crate::ui::TaskUi;
 
+use super::presentation::TaskPresentation;
 use super::summary::MemberRunSummary;
 
 pub(crate) struct RuntimeTaskHost {
@@ -37,7 +37,7 @@ pub(crate) struct RuntimeTaskHost {
     member_targets: Vec<Option<u64>>,
     member_identities: Vec<Option<Box<str>>>,
     member_directories: Vec<Option<PathBuf>>,
-    task_ui: TaskUi,
+    task_presentation: TaskPresentation,
     environment: RuntimeTaskEnvironment,
 }
 
@@ -51,7 +51,7 @@ pub(crate) struct RuntimeTaskLaunch {
     initialization_context: Option<InitializationContext>,
     program_seed: Option<ProgramSeed>,
     threads: usize,
-    task_ui: TaskUi,
+    task_presentation: TaskPresentation,
     environment: RuntimeTaskEnvironment,
 }
 
@@ -61,7 +61,7 @@ impl RuntimeTaskLaunch {
         initialization_context: Option<InitializationContext>,
         program_seed: Option<ProgramSeed>,
         threads: usize,
-        task_ui: TaskUi,
+        task_presentation: TaskPresentation,
         environment: RuntimeTaskEnvironment,
     ) -> Self {
         Self {
@@ -69,7 +69,7 @@ impl RuntimeTaskLaunch {
             initialization_context,
             program_seed,
             threads,
-            task_ui,
+            task_presentation,
             environment,
         }
     }
@@ -124,7 +124,7 @@ impl RuntimeTaskHost {
             member_targets: Vec::new(),
             member_identities: Vec::new(),
             member_directories: Vec::new(),
-            task_ui: launch.task_ui,
+            task_presentation: launch.task_presentation,
             environment: launch.environment,
         }
     }
@@ -383,6 +383,6 @@ impl RuntimeTaskHost {
             .copied()
             .collect::<Option<Vec<_>>>()
             .map(|targets| targets.into_iter().fold(0_u64, u64::saturating_add));
-        self.task_ui.progress(iteration, target);
+        self.task_presentation.progress(iteration, target);
     }
 }

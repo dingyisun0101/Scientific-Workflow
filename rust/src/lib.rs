@@ -81,7 +81,8 @@
 //! - [`state`] owns canonical scientific state and schema.
 //! - [`observation`] owns scientific observation meaning, not persistence mechanics.
 //! - [`persistence`] owns automatic durable output and verified reading.
-//! - The private UI subsystem owns automatic terminal presentation of Runtime facts.
+//! - Runtime owns lifecycle facts; the private UI subsystem implements their
+//!   automatically composed terminal presentation.
 //! - [`WorkflowError`] composes complete-workflow Study/Runtime failures.
 //!
 //! The crate-level [`run`] facade performs the sole ordinary transition from
@@ -101,6 +102,7 @@
 extern crate self as scientific_workflow;
 
 mod clock;
+mod composition;
 mod error;
 
 pub mod config;

@@ -743,8 +743,9 @@ cancellation. Ctrl+C cancels active work but does not close the dashboard, so a
 final `exit` is still required. Noninteractive runs never wait for input.
 Redirected execution uses stable plain lifecycle lines. The dashboard and
 plain renderer are the only presentation modes. Failure of the selected mode
-is fatal and panics rather than silently degrading or being reported as
-cooperative workflow cancellation.
+is fatal and returns `RuntimeError::Presentation` rather than silently
+degrading or being reported as cooperative workflow cancellation. All visible
+dashboard/plain behavior remains identical to earlier 0.11.x operation.
 
 Config alone reads `wf_configs/study.json`, every named project state document, and the complete
 arbitrary `wf_configs/parameters.json` namespace once. `$sweep` creates independent Cartesian

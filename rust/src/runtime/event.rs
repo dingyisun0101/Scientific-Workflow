@@ -1,10 +1,10 @@
-//! Runtime facts accepted by the automatic UI.
+//! Runtime-owned lifecycle and progress facts consumed by presentation.
 
 use std::path::Path;
 
 /// One borrowed lifecycle or progress fact published synchronously by Runtime.
 #[derive(Debug)]
-pub(crate) enum UiEvent<'a> {
+pub(crate) enum RuntimeEvent<'a> {
     TaskPlanned {
         replicate: u64,
         phase: &'a str,

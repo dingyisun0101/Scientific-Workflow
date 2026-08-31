@@ -23,6 +23,15 @@ pub enum RuntimeError {
     #[error("workflow execution was cancelled by the user")]
     ExecutionCancelled,
 
+    /// The automatically selected presentation adapter could not start,
+    /// publish lifecycle output, poll input, draw, or finish cleanly.
+    #[error("workflow presentation failed: {source}")]
+    Presentation {
+        /// Original presentation failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
     /// Runtime could not create an inferred execution or replicate scope.
     #[error("failed to create inferred output scope `{path}`")]
     OutputScope {
@@ -106,4 +115,12 @@ pub enum RuntimeError {
         #[source]
         source: Box<RuntimeError>,
     },
+}
+
+impl RuntimeError {
+    pub(crate) fn presentation_boxed(
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    ) -> Self {
+        Self::Presentation { source }
+    }
 }

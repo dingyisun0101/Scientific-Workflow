@@ -4,6 +4,8 @@ The `error` module owns the single error returned by the crate-level complete
 workflow facade. It composes failures from Study and Runtime without taking
 ownership of either subsystem's detailed error vocabulary.
 
+## Basic API
+
 ### `WorkflowError`
 
 `WorkflowError` is a public non-exhaustive enum and the error type returned by
@@ -34,10 +36,12 @@ Formatting it is side-effect free. It borrows nothing from the project or
 Runtime, so it can outlive the failed `run` call. `WorkflowError` is `Send +
 Sync` because every retained subsystem source has that contract.
 
-Fatal UI renderer failures deliberately panic and therefore do not produce a
-`WorkflowError` variant. The error boundary represents expected Study and
-Runtime failures returned by the facade, not failure of the required
-presentation interface.
+Fatal UI renderer failures are active-runtime failures. They return
+`RuntimeError::Presentation` and therefore appear through
+`WorkflowError::Runtime` from the complete facade; they are never reported as
+cooperative cancellation or hidden behind a fallback renderer.
+
+## Advanced API
 
 Callers that need phase separation load `Study` and call
 `runtime::execute`. Those calls return their precise owning error

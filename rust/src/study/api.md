@@ -13,13 +13,13 @@ binding.
 Study creates no output, starts no worker, initializes no execution unit, and writes no
 recording. Runtime alone owns active effects.
 
-## Ordinary use
+## Basic API
 
 Ordinary users express Study intent in `wf_configs/study.json` and call
 `scientific_workflow::run(project_root: &Path)`. They do not construct phases,
 tasks, identities, persistence plans, registries, or Study builders.
 
-## Public Rust API
+## Advanced API
 
 The module root exposes `Study`, `StudyError`, and the borrowed inspection
 types `PlanSummary`, `PhasePlanSummary`, `TaskPlanSummary`,
@@ -31,7 +31,7 @@ types `PlanSummary`, `PhasePlanSummary`, `TaskPlanSummary`,
 central Config, task-bound state schemas, internal phases/tasks, resolved constants,
 resolved executable/script/environment paths, schema-bound observation plans,
 inferred output root, required compute-thread count, optional master seed,
-replicate policy, and effective persistence/UI settings. None of those
+replicate policy, and effective persistence settings. None of those
 internal planning types is public. `Study` is `Send + Sync`; clones may be
 moved or shared across host threads without mutable planning state.
 
@@ -121,7 +121,7 @@ arguments, the master seed value, or persistence writer construction.
 Runtime consumes a deliberately narrow crate-private peer API:
 
 - `Study` supplies the compute-thread count, replicate/phase policy,
-  persistence and UI plans, and a
+  persistence plan, and a
   clone-cheap `ConfigSnapshot`. Runtime receives frozen program bytes without
   retaining Config's parsing or typed-lookup interface.
 - `StudyPhase` supplies only its semantic name, dependencies, admission policy,
@@ -205,7 +205,7 @@ println!("actual execution: {}", summary.output_directory().display());
 `Config`, resolved execution unit parameters/programs and Python launchers,
 type-erased task definitions,
 named and task-bound state schemas, bound observation plans,
-mutable replicate/persistence policies, UI plan, identity/label construction
+mutable replicate/persistence policies, identity/label construction
 algorithms, and executable topological planning data are private. Their stable
 read-only results are available only through the plan-summary types above.
 `StudyPhase` and `StudyTask` are the named crate-visible Runtime view described

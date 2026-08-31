@@ -180,10 +180,12 @@ Dependency direction is one-way:
 observation ──► state
 persistence ─► observation + state
 task        ──► config + observation + state
-study       ──► config + observation + persistence + state + task + ui plan
-runtime     ──► config + persistence + state + study + task + ui events
+study       ──► config + observation + persistence + state + task
+runtime     ──► config + persistence + state + study + task
+ui          ──► runtime-owned lifecycle observer contract
+composition ──► runtime + ui
 error       ──► StudyError + RuntimeError
-crate facade──► study + runtime + error
+crate facade──► study + composition + error
 
 prelude aggregates ordinary authoring contracts
 ```
@@ -212,6 +214,7 @@ workflow/
 │   ├── src/
 │   │   ├── lib.rs                    module declarations; run/macro/error exports
 │   │   ├── clock.rs                  private UTC formatting and duration conversion
+│   │   ├── composition.rs            automatic Runtime/UI adapter composition
 │   │   ├── error.rs                  private facade-error implementation
 │   │   ├── error/api.md              complete facade-error contract
 │   │   ├── error/workflow.rs         WorkflowError composition
@@ -271,7 +274,9 @@ workflow/
 │   │   ├── runtime.rs                public execution/summary/error root
 │   │   ├── runtime/api.md            execute/summary/error contract
 │   │   ├── runtime/error.rs          active execution RuntimeError
+│   │   ├── runtime/event.rs          Runtime-owned lifecycle fact vocabulary
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
+│   │   ├── runtime/presentation.rs   observer port and task progress publisher
 │   │   ├── runtime/host.rs           execution unit/program execution and persistence adapter
 │   │   ├── runtime/execution.rs      Study-only replicate/phase/task schedulers
 │   │   ├── runtime/summary.rs        successful immutable RunSummary tree
@@ -279,8 +284,7 @@ workflow/
 │   │   │
 │   │   ├── ui.rs                     private UI root
 │   │   ├── ui/api.md                 automatic presentation contract
-│   │   ├── ui/plan.rs                private Study-owned inferred UI policy
-│   │   ├── ui/event.rs               borrowed Runtime-to-UI fact vocabulary
+│   │   ├── ui/plan.rs                private UI-owned inferred refresh policy
 │   │   ├── ui/command.rs             former command editor and exact exit parser
 │   │   ├── ui/state.rs               event-reduced rows/messages/status snapshot
 │   │   ├── ui/session.rs             renderer thread and cancellation bridge
@@ -523,10 +527,12 @@ thread count.
 
 ### UI
 
-Study owns a private zero-configuration `UiPlan`; its current effective policy
-is inferred rather than authored in `wf_configs/study.json`. Runtime constructs one
-clone-cheap `UiSession` after creating the execution output and publishes
-borrowed execution, replicate, phase, task, iteration, outcome, and path facts.
+Runtime owns the borrowed execution, replicate, phase, task, iteration,
+outcome, and path fact vocabulary plus the observer and task-progress ports.
+Crate-level composition selects one clone-cheap `UiSession` after Runtime
+creates the execution output. UI owns its private zero-configuration refresh
+policy; nothing is authored in `wf_configs/study.json`, and Study has no UI
+dependency.
 Execution unit progress comes from the same host boundaries already used for automatic
 persistence. Programs publish generic lifecycle facts without invented
 iteration values, so neither workload supplies UI code or values.
@@ -535,9 +541,10 @@ Interactive stdin and stderr select the Ratatui/Crossterm alternate-screen
 dashboard; noninteractive runs deliberately select UI's stable plain lifecycle
 renderer. UI is the sole presentation interface, so failure to start or
 initialize the selected renderer, poll terminal input, draw, or write plain
-output is a fatal panic rather than cancellation or fallback. Renderer health
-is checked from Runtime-facing publication, scheduler, and final-join
-boundaries, while the terminal lease restores process state during unwinding.
+output is a fatal `RuntimeError::Presentation`, never cancellation or silent
+fallback. Renderer health is checked from Runtime-facing publication,
+scheduler, and final-join boundaries, while the terminal lease restores process
+state during ordinary error return and unexpected unwinding.
 The dashboard
 owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
 one compact `elapsed / ETA` field, a bounded message panel, and the former command editor.
@@ -563,7 +570,8 @@ source was user input, failure policy, or a deadline.
 `RuntimeError` stages without absorbing either subsystem's detailed
 vocabulary. The crate root re-exports that type and owns the sole ordinary
 `run(&Path)` facade. Its transparent variants forward subsystem display and
-source chains, retain `Send + Sync`, and do not absorb fatal UI renderer panics.
+source chains and retain `Send + Sync`; presentation failures are ordinary
+active-runtime failures.
 
 The single prelude aggregates ordinary state, observation, and execution-unit
 contracts plus the crate-owned `run`, `execution_unit`, and `WorkflowError`
@@ -595,8 +603,9 @@ conveniences. It owns no behavior or alternative implementation path.
     whenever one safe deterministic answer exists.
 13. Public APIs contain irreducible user intent or a deliberate read/embedding
     contract, not internal flexibility for hypothetical use.
-14. UI consumes only Runtime facts, activates automatically as the sole
-    presentation interface, and panics on failure of its selected renderer.
+14. UI consumes only Runtime-owned observer facts, activates automatically as
+    the sole presentation interface, and returns selected-renderer failures
+    through `RuntimeError` without reclassifying them as cancellation.
 15. Scientific execution-unit and external-program tasks share phase, dependency, timeout, failure,
     summary, persistence-workspace, and UI lifecycle semantics without forcing
     fake state or iteration onto programs. Both may consume Workflow-derived
@@ -647,6 +656,8 @@ conveniences. It owns no behavior or alternative implementation path.
   bounded execution unit submission, program workspace isolation/snapshots/logs,
   ownership of durable metadata/format concerns, terminal evidence/provenance,
   and verified execution unit reads.
-- A UI replacement remains downstream of Runtime, requires no execution unit/config
-  participation, handles concurrent publishers, restores terminal state while
-  unwinding, and treats renderer failure as fatal rather than cancellation.
+- A UI replacement implements Runtime's private observer port, remains
+  downstream of Runtime, requires no Study/execution-unit/config participation,
+  handles concurrent publishers, restores terminal state on return and while
+  unwinding, and reports renderer failure as fatal presentation failure rather
+  than cancellation.

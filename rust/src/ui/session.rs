@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 
+use thiserror::Error;
+
 use super::command::{CommandSubmission, UiCommand};
-use super::event::UiEvent;
 use super::plan::UiPlan;
 use super::state::DashboardState;
 use super::terminal::{self, DashboardTerminal};
+use crate::runtime::{PresentationFailure, RuntimeEvent, RuntimeObserver};
 
 /// Clone-cheap, thread-safe UI session shared by Runtime workers.
 #[derive(Clone)]
@@ -16,11 +18,19 @@ pub(crate) struct UiSession {
     inner: Arc<UiSessionInner>,
 }
 
-/// Task-scoped publisher supplied to Runtime's task host.
-pub(crate) struct TaskUi {
-    session: UiSession,
-    replicate: u64,
-    identity: Box<str>,
+/// A structured failure of the automatically selected presentation adapter.
+#[derive(Clone, Debug, Error)]
+#[error("{reason}")]
+pub(crate) struct UiFailure {
+    reason: String,
+}
+
+impl UiFailure {
+    fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
 }
 
 struct UiSessionInner {
@@ -43,20 +53,21 @@ impl RenderHealth {
         lock(&self.failure).get_or_insert(reason);
     }
 
-    fn assert_healthy(&self) {
+    fn check(&self) -> Result<(), UiFailure> {
         if let Some(reason) = lock(&self.failure).clone() {
-            panic!("workflow UI failed: {reason}");
+            return Err(UiFailure::new(reason));
         }
+        Ok(())
     }
 }
 
 impl UiSession {
     /// Selects the Ratatui dashboard for a terminal and plain lines otherwise.
-    pub(crate) fn automatic(plan: UiPlan) -> Self {
+    pub(crate) fn automatic() -> Result<Self, UiFailure> {
         let interactive = terminal::interactive();
         let inner = Arc::new(UiSessionInner {
             interactive,
-            plan,
+            plan: UiPlan::automatic(),
             state: Mutex::new(DashboardState::new()),
             cancellation_requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
@@ -69,72 +80,74 @@ impl UiSession {
             let renderer = thread::Builder::new()
                 .name("scientific-workflow-ui".to_owned())
                 .spawn(move || render_loop(&renderer_inner, ready))
-                .unwrap_or_else(|source| {
-                    panic!("workflow UI failed to start its renderer thread: {source}")
-                });
+                .map_err(|source| {
+                    UiFailure::new(format!("failed to start renderer thread: {source}"))
+                })?;
             match readiness.recv() {
                 Ok(Ok(())) => *lock(&inner.renderer) = Some(renderer),
                 Ok(Err(reason)) => {
                     let _ = renderer.join();
-                    panic!("workflow UI failed: {reason}");
+                    return Err(UiFailure::new(reason));
                 }
                 Err(_) => match renderer.join() {
-                    Ok(()) => panic!("workflow UI renderer stopped before initialization"),
-                    Err(payload) => std::panic::resume_unwind(payload),
+                    Ok(()) => {
+                        return Err(UiFailure::new(
+                            "renderer stopped before terminal initialization",
+                        ));
+                    }
+                    Err(_) => return Err(UiFailure::new("renderer thread panicked")),
                 },
             }
         }
-        Self { inner }
+        Ok(Self { inner })
     }
 
     /// Publishes one event and enforces the selected UI as a healthy interface.
-    pub(crate) fn publish(&self, event: UiEvent<'_>) {
-        self.inner.render_health.assert_healthy();
+    pub(crate) fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), UiFailure> {
+        self.inner.render_health.check()?;
         lock(&self.inner.state).apply(&event);
         if !self.inner.interactive
             && let Err(source) = terminal::render_plain(&event)
         {
-            panic!("workflow UI failed to render plain output: {source}");
+            let reason = format!("plain output failed: {source}");
+            self.inner.render_health.fail(reason.clone());
+            return Err(UiFailure::new(reason));
         }
-        self.inner.render_health.assert_healthy();
+        self.inner.render_health.check()
     }
 
-    pub(crate) fn task(&self, replicate: u64, identity: impl Into<Box<str>>) -> TaskUi {
-        TaskUi {
-            session: self.clone(),
-            replicate,
-            identity: identity.into(),
-        }
-    }
-
-    pub(crate) fn cancellation_requested(&self) -> bool {
-        self.inner.render_health.assert_healthy();
-        self.inner.cancellation_requested.load(Ordering::Acquire)
+    pub(crate) fn cancellation_requested(&self) -> Result<bool, UiFailure> {
+        self.inner.render_health.check()?;
+        Ok(self.inner.cancellation_requested.load(Ordering::Acquire))
     }
 
     /// Marks execution finished and waits for an interactive user to type `exit`.
-    pub(crate) fn finish(&self) {
+    pub(crate) fn finish(&self) -> Result<(), UiFailure> {
         if self.inner.finished.swap(true, Ordering::AcqRel) {
-            self.inner.render_health.assert_healthy();
-            return;
+            return self.inner.render_health.check();
         }
         if let Some(renderer) = lock(&self.inner.renderer).take()
-            && let Err(payload) = renderer.join()
+            && renderer.join().is_err()
         {
-            std::panic::resume_unwind(payload);
+            self.inner
+                .render_health
+                .fail("renderer thread panicked".to_owned());
         }
-        self.inner.render_health.assert_healthy();
+        self.inner.render_health.check()
     }
 }
 
-impl TaskUi {
-    pub(crate) fn progress(&self, iteration: u64, target_iteration: Option<u64>) {
-        self.session.publish(UiEvent::TaskProgress {
-            replicate: self.replicate,
-            identity: &self.identity,
-            iteration,
-            target_iteration,
-        });
+impl RuntimeObserver for UiSession {
+    fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
+        UiSession::publish(self, event).map_err(|source| Box::new(source) as _)
+    }
+
+    fn cancellation_requested(&self) -> Result<bool, PresentationFailure> {
+        UiSession::cancellation_requested(self).map_err(|source| Box::new(source) as _)
+    }
+
+    fn finish(&self) -> Result<(), PresentationFailure> {
+        UiSession::finish(self).map_err(|source| Box::new(source) as _)
     }
 }
 
@@ -213,11 +226,11 @@ mod tests {
     use super::{RenderHealth, renderer_should_close};
 
     #[test]
-    #[should_panic(expected = "workflow UI failed: terminal drawing failed")]
-    fn a_recorded_render_failure_is_fatal_to_the_runtime_facing_boundary() {
+    fn a_recorded_render_failure_is_returned_to_the_runtime_facing_boundary() {
         let health = RenderHealth::default();
         health.fail("terminal drawing failed".to_owned());
-        health.assert_healthy();
+        let error = health.check().unwrap_err();
+        assert_eq!(error.to_string(), "terminal drawing failed");
     }
 
     #[test]
