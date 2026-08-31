@@ -15,6 +15,8 @@ from scientific_workflow_reader import (
     RecordingError,
     RecordingNotCompleteError,
     UnknownStreamError,
+    FORMAT_NAME,
+    FORMAT_VERSION,
     open_completed_recording,
 )
 
@@ -22,6 +24,10 @@ FIXTURE = Path(__file__).parent / "fixtures" / "complete"
 INVALID_METADATA_CASES = (
     Path(__file__).parent / "fixtures" / "invalid_metadata_cases.json"
 )
+REPOSITORY_ROOT = Path(__file__).parents[2]
+COMPATIBILITY = REPOSITORY_ROOT / "protocol" / "compatibility.json"
+PROTOCOL_SCHEMA = REPOSITORY_ROOT / "protocol" / "recording-v7.schema.json"
+PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
 
 
 def replace_json_pointer(document: object, pointer: str, value: object) -> None:
@@ -80,6 +86,27 @@ class ReaderTests(unittest.TestCase):
         metadata["streams"][0]["chunks"] = chunks
         metadata_path.write_text(json.dumps(metadata))
         return temporary, recording
+
+    def test_protocol_manifests_match_the_python_package_and_reader(self) -> None:
+        compatibility = json.loads(COMPATIBILITY.read_text())
+        schema = json.loads(PROTOCOL_SCHEMA.read_text())
+        package_version = next(
+            line.split('"')[1]
+            for line in PYPROJECT.read_text().splitlines()
+            if line.startswith("version = ")
+        )
+
+        self.assertEqual(compatibility["recording"], {
+            "format": FORMAT_NAME,
+            "version": FORMAT_VERSION,
+        })
+        self.assertEqual(schema["properties"]["format"]["const"], FORMAT_NAME)
+        self.assertEqual(schema["properties"]["version"]["const"], FORMAT_VERSION)
+        implementation = compatibility["implementations"]["python"]
+        self.assertEqual(implementation["package"], "scientific-workflow-reader")
+        self.assertEqual(implementation["version"], package_version)
+        self.assertEqual(implementation["writes"], [])
+        self.assertEqual(implementation["reads"], [FORMAT_VERSION])
 
     def test_completed_fixture_reconstructs_exact_series_and_latest_state(self) -> None:
         reader = open_completed_recording(FIXTURE)

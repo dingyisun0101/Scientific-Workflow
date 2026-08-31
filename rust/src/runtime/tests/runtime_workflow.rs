@@ -564,6 +564,7 @@ fn a_phase_finishing_after_its_deadline_is_timed_out_and_not_completed() {
 fn replicate_program_project(failure_policy: &str, sibling_sleep: u64) -> Project {
     let project = Project::new(
         serde_json::json!({
+            "threads": 3,
             "paths": {"states": {}},
             "replicates": {
                 "count": 3,

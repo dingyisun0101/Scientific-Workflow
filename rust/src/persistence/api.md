@@ -16,7 +16,18 @@ only stores the resulting encoded observations, lifecycle metadata, and
 Workflow provenance. It does not parse project JSON, bind tasks, or schedule
 execution.
 
-## Automatic persistence behavior
+The repository-level
+[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/recording-v7.md) is the
+normative language-neutral contract for member recordings. Its companion JSON
+Schema covers structural constraints, while the protocol document defines
+cross-field, filesystem, ordering, integrity, and transaction requirements.
+The package support matrix is maintained separately in
+[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/compatibility.md). Program
+workspaces are explicitly outside that wire protocol.
+
+## Basic API
+
+### Automatic persistence behavior
 
 The ordinary user-facing surface is the optional root object in
 `wf_configs/study.json`:
@@ -102,7 +113,7 @@ task omitted `state`, it is instead the stable ID of the unit's validated
 `StateSchemaProvider`. Persistence does not distinguish their storage behavior;
 both are already-resolved Study facts.
 
-## Public completed-recording API
+## Advanced API
 
 The module root exposes only completed-recording readers, payload decoder
 contracts, operational timing, and `PersistenceError`. It exposes no plan or
@@ -299,4 +310,6 @@ one must not broaden the execution unit/task API. A replacement backend must pre
 observation order, bounded backpressure, program/Python input/log/status and
 launcher-provenance capture,
 failure evidence, terminal metadata, effective-setting provenance, and the
-verified reader contract.
+verified reader contract. A backend that emits v7 MUST satisfy the normative
+repository protocol; an incompatible layout or semantic change MUST allocate a
+new recording-format version and follow its coordinated bump checklist.

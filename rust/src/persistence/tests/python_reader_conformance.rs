@@ -50,6 +50,12 @@ fn invalid_metadata_cases() -> PathBuf {
         .join("../python/tests/fixtures/invalid_metadata_cases.json")
 }
 
+fn protocol_file(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../protocol")
+        .join(name)
+}
+
 fn repository_python_support_is_available() -> bool {
     fixture().is_dir()
         && invalid_metadata_cases().is_file()
@@ -153,6 +159,56 @@ fn rust_and_python_readers_share_one_format_v7_fixture() {
             .payload::<String>("label")
             .unwrap(),
         "later"
+    );
+}
+
+#[test]
+fn protocol_manifests_match_the_rust_package_and_reader() {
+    if !protocol_file("compatibility.json").is_file()
+        || !protocol_file("recording-v7.schema.json").is_file()
+    {
+        return;
+    }
+    let compatibility: Value =
+        serde_json::from_slice(&fs::read(protocol_file("compatibility.json")).unwrap()).unwrap();
+    let schema: Value =
+        serde_json::from_slice(&fs::read(protocol_file("recording-v7.schema.json")).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        compatibility["recording"]["format"],
+        "scientific-workflow-jsonl"
+    );
+    assert_eq!(compatibility["recording"]["version"], 7);
+    assert_eq!(
+        schema["properties"]["format"]["const"],
+        compatibility["recording"]["format"]
+    );
+    assert_eq!(
+        schema["properties"]["version"]["const"],
+        compatibility["recording"]["version"]
+    );
+    assert_eq!(
+        compatibility["implementations"]["rust"]["package"],
+        env!("CARGO_PKG_NAME")
+    );
+    assert_eq!(
+        compatibility["implementations"]["rust"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(
+        compatibility["implementations"]["rust"]["writes"],
+        serde_json::json!([7])
+    );
+    assert_eq!(
+        compatibility["implementations"]["rust"]["reads"],
+        serde_json::json!([7])
+    );
+
+    let reader = StoredStateSeriesReader::open_completed_recording(&fixture(), decoders()).unwrap();
+    assert_eq!(
+        Value::from(reader.format_version()),
+        compatibility["recording"]["version"]
     );
 }
 

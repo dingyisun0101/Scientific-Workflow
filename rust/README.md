@@ -207,7 +207,8 @@ include:
 
 - exposing a different public orchestration or execution unit contract;
 - implementing a custom persistence backend, writer lifecycle, or incompatible
-  recording format;
+  recording format (the current cross-language contract is the repository's
+  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/recording-v7.md));
 - replacing scheduling, cancellation, output-layout, or UI policy;
 - carrying organization-specific changes that cannot be contributed upstream;
   or

@@ -73,6 +73,12 @@ The initial release supports only
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
 
+The normative language-neutral contract is the repository's
+[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/recording-v7.md),
+with a strict structural JSON Schema and a package
+[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/compatibility.md). This package is the
+v7 reader listed there; it does not expose a supported writer.
+
 The record containers cannot be reassigned and their value mappings are
 read-only. Decoded payload objects retain the type and mutability chosen by
 JSON decoding or by the caller's field decoder.
@@ -101,7 +107,8 @@ Checksums detect storage corruption and accidental alteration. They do not
 establish scientific correctness, authorship, or cryptographic authenticity.
 
 The fixture under `tests/fixtures/complete` is also opened by Workflow's Rust
-reader, making it a cross-language conformance contract.
+reader, making it the shared cross-language golden example. The normative
+protocol and schema remain authoritative over any individual fixture.
 
 Workflow's Rust integration suite additionally runs a bidirectional test. Its
 internal automatic persistence path produces a multi-chunk recording for this

@@ -115,7 +115,15 @@ The write path is intentionally tested beneath
   ordered-field reconstruction boundary rather than a JSON serialization and
   reparse round trip.
 - `python_reader_conformance.rs` verifies Rust/Python format-v7 compatibility
-  and exact floating-point/unicode round trips.
+  and exact floating-point/unicode round trips. It also checks that
+  `protocol/compatibility.json` names the active Rust package and recording
+  version.
+
+The normative protocol lives in `protocol/recording-v7.md`; its strict
+structural companion is `protocol/recording-v7.schema.json`. Python tests open
+the shared golden fixture and verify that the compatibility manifest matches
+the Python package/version constants. Any wire-format change follows the bump
+checklist in the protocol rather than editing version constants independently.
 
 Recovery/resume, public writer builders, per-stream layout controls, legacy
 execution scopes, artifacts, and RNG-record tests were removed with those

@@ -326,6 +326,11 @@ workflow/
 │       ├── test_reader.py             reader/integrity behavior
 │       ├── roundtrip_bridge.py        Rust/Python conformance helper
 │       └── fixtures/                  shared valid/invalid format fixtures
+├── protocol/
+│   ├── recording-v7.md                normative member-recording contract
+│   ├── recording-v7.schema.json       strict structural metadata schema
+│   ├── compatibility.json             machine-readable package support data
+│   └── compatibility.md               human-readable compatibility matrix
 └── examples/attractor_2d/
     ├── Cargo.toml / Cargo.lock         standalone example package
     ├── src/main.rs                     one run(&Path) call
@@ -501,7 +506,13 @@ exact byte values.
 
 Specialized users can only open completed recordings with a decoder registry.
 Readers verify metadata, sizes, hashes, framing, ordering, schema, decoding,
-and StateSeries invariants before publishing owned results. A future local or
+and StateSeries invariants before publishing owned results. The repository-level
+`protocol/recording-v7.md` and its structural JSON Schema are the normative
+Rust/Python member-recording boundary; `protocol/compatibility.json` records
+which independently versioned packages read and write it. External program
+workspaces are not member recordings and remain outside this wire contract. An
+incompatible protocol change allocates a new format integer and coordinated
+fixtures rather than reinterpreting v7. A future local or
 remote adapter belongs behind the private `PersistenceSession`, not in execution unit
 or task APIs. A separate private program session creates an isolated artifacts
 directory, freezes central config and dependency JSON, captures stdout/stderr,
@@ -528,8 +539,8 @@ When an external task declared a seed purpose, its `program.json` stores the
 same algorithm and master provenance plus the single task-scoped request and
 actual seed. The subprocess receives that derived value through
 `WORKFLOW_TASK_SEED`; Workflow never exports its master seed.
-Both member metadata and `program.json` also record the effective authored
-thread count.
+Member metadata records the study-wide pool size. `program.json` records that
+external task's effective permit request, which is also supplied to the child.
 
 ### UI
 

@@ -23,6 +23,9 @@ executable programs, and declarative JSON into validated, recorded studies.
   [architecture guide](docs/architecture.md).
 - To consume completed recordings from Python, use the verified
   [Scientific Workflow Reader](python/README.md).
+- To implement or audit a cross-language reader, use the normative
+  [recording v7 protocol](protocol/recording-v7.md) and
+  [compatibility matrix](protocol/compatibility.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
 
@@ -33,6 +36,7 @@ workflow/
 +-- rust/                   Rust crate, beginner/complete guides, sources, and tests
 +-- macros/                 execution-unit registration procedural macros
 +-- python/                 verified recording reader and Python tests
++-- protocol/               normative recording contract and compatibility data
 +-- examples/attractor_2d/ complete Rust unit + Python-analysis project
 +-- docs/                   architecture and test responsibility guides
 `-- README.md               repository navigation
@@ -54,7 +58,7 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable
   execution intent.
 - [Persistence](rust/src/persistence/api.md): automatic recordings, lifecycle,
-  format, and verified reconstruction.
+  format, verified reconstruction, and the repository-level wire protocol.
 - [Runtime](rust/src/runtime/api.md): execution, scheduling, cancellation,
   program environments, and summaries.
 - [UI](rust/src/ui/api.md): automatic terminal presentation and exit handling.
