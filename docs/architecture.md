@@ -16,7 +16,7 @@ programs plus project JSON:
 │   └── <units>.rs              registered ExecutionUnit implementations
 ├── scripts/                     optional executable and `.py` task programs
 └── wf_configs/                 required Workflow configuration root
-    ├── study.json              required threads, phases/tasks, optional seed, policy
+    ├── study.json              required schema generation, threads, phases/tasks, policy
     ├── parameters.json         every custom-project parameter namespace
     └── states/                 recommended, optional schema grouping
         ├── population.json
@@ -25,6 +25,8 @@ programs plus project JSON:
 
 The presence of `wf_configs/` identifies the root passed to `run`; a valid
 project requires `wf_configs/study.json` and `wf_configs/parameters.json`.
+Every study manifest declares `workflow_schema: 1`; Config rejects an omitted
+or unsupported project-grammar generation rather than guessing compatibility.
 The `states/` subdirectory is organizational convention, not grammar. A state
 schema may use any path beneath `wf_configs/`, but its project-root-relative
 path must be registered explicitly in `study.json.paths.states`. State paths
@@ -402,7 +404,9 @@ Config canonicalizes the project and required `wf_configs` roots and parses
 (including all named state schemas), and the complete arbitrary
 `wf_configs/parameters.json` namespace with duplicate-key rejection. One
 clone-cheap immutable Config retains the entire value graph.
-The required positive top-level `study.json.threads` is the authoritative
+The required top-level `study.json.workflow_schema` is the independently
+versioned authored-configuration contract. The required positive top-level
+`study.json.threads` is the authoritative
 compute worker count. It has no inferred or environment-derived fallback.
 The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
@@ -431,11 +435,12 @@ validation, execution unit-key resolution, constants decoding, and
 observation/task-schema binding over Config's already-resolved generic program
 and Python tasks. It retains
 the central Config and infers stable identities, labels, the output root, and
-private operational policy. Public inspection is limited to project/output
-roots and the required thread count;
-phases, tasks, schema, resolved parameters, and policies exist only for
-Runtime. Its crate-visible Runtime view exposes compiled execution and semantic
-provenance facts without exposing Config or Task descriptors.
+private operational policy. Public inspection includes project/output roots,
+the required thread count, and a bounded read-only view of compiled phases,
+deterministic task identities, workload provenance, and effective policy.
+Executable handles, constants payloads, schemas, and mutable planning types
+remain private. Its crate-visible Runtime view exposes compiled execution and
+semantic provenance facts without exposing Config or Task descriptors.
 
 ### Runtime
 
@@ -613,6 +618,8 @@ conveniences. It owns no behavior or alternative implementation path.
     executable, script, and environment paths before any exact path must cross
     a language-neutral JSON snapshot or provenance boundary; Runtime and
     Persistence never apply lossy path conversion.
+21. Every project manifest declares a supported configuration-schema
+    generation; package SemVer is never used as an implicit grammar selector.
 
 ## Replacement boundaries
 

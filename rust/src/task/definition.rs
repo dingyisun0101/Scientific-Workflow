@@ -47,12 +47,12 @@ pub(crate) struct ExecutionUnitTaskProvenance<'a> {
     state: &'a str,
 }
 
-impl ExecutionUnitTaskProvenance<'_> {
-    pub(crate) fn execution_unit(&self) -> &str {
+impl<'a> ExecutionUnitTaskProvenance<'a> {
+    pub(crate) fn execution_unit(&self) -> &'a str {
         self.parameters.execution_unit()
     }
 
-    pub(crate) fn state(&self) -> &str {
+    pub(crate) fn state(&self) -> &'a str {
         self.state
     }
 
@@ -60,11 +60,11 @@ impl ExecutionUnitTaskProvenance<'_> {
         self.parameters.ordinal()
     }
 
-    pub(crate) fn parameter_source(&self) -> &Path {
+    pub(crate) fn parameter_source(&self) -> &'a Path {
         self.parameters.source_path()
     }
 
-    pub(crate) fn constants(&self) -> &serde_json::Value {
+    pub(crate) fn constants(&self) -> &'a serde_json::Value {
         self.parameters.resolved_value()
     }
 }

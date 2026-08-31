@@ -176,6 +176,7 @@ impl Project {
     fn new(study: &str, parameters: &str) -> Self {
         let mut study: serde_json::Value = serde_json::from_str(study).unwrap();
         let root = study.as_object_mut().unwrap();
+        root.entry("workflow_schema").or_insert(1.into());
         root.entry("threads").or_insert(2.into());
         root.entry("paths").or_insert_with(
             || serde_json::json!({"states":{"default":"wf_configs/states/default.json"}}),
@@ -306,12 +307,48 @@ fn study_binds_registered_units_and_infers_plan_facts_without_output() {
         study.phases()[1].tasks()[0].identity(),
         "simulate/000001/counter-000000"
     );
+
+    let plan = study.plan_summary();
+    assert_eq!(plan.workflow_schema(), 1);
+    assert_eq!(plan.threads(), 2);
+    assert_eq!(plan.replicate_count(), 1);
+    assert_eq!(
+        plan.replicate_scheduling(),
+        super::PlanReplicateScheduling::Sequential
+    );
+    assert_eq!(
+        plan.replicate_failure_policy(),
+        super::PlanFailurePolicy::FailFast
+    );
+    assert!(!plan.has_master_seed());
+    assert_eq!(plan.persistence_chunk_target_bytes(), 1_000_000);
+    assert_eq!(plan.persistence_queue_capacity_bytes(), 2_000_000);
+    let phases = plan.phases().collect::<Vec<_>>();
+    assert_eq!(phases.len(), 2);
+    assert_eq!(phases[0].name(), "measure");
+    assert_eq!(phases[0].dependencies().collect::<Vec<_>>(), ["simulate"]);
+    let task = phases[0].tasks().next().unwrap();
+    assert_eq!(task.identity(), "measure/000000/counter-000000");
+    assert_eq!(task.label(), "counter #0");
+    assert_eq!(task.output_ordinal(), 0);
+    assert_eq!(task.timeout(), None);
+    assert_eq!(task.seed_purpose(), None);
+    assert!(matches!(
+        task.kind(),
+        super::PlannedTaskKind::ExecutionUnit {
+            execution_unit: "counter",
+            state: "default",
+            parameter_ordinal: 0,
+            parameter_source,
+        } if parameter_source.ends_with("wf_configs/parameters.json")
+    ));
 }
 
 #[test]
 fn omitted_project_state_uses_the_units_standard_provider_and_records_its_identity() {
     let project = Project::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "phases": {
             "simulate": {
@@ -340,6 +377,7 @@ fn omitted_project_state_uses_the_units_standard_provider_and_records_its_identi
 fn omitted_project_state_without_a_unit_provider_fails_before_output() {
     let project = Project::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "phases": {
             "simulate": {
@@ -362,6 +400,7 @@ fn omitted_project_state_without_a_unit_provider_fails_before_output() {
 fn one_provider_identity_cannot_resolve_to_different_documents() {
     let project = Project::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "phases": {
             "simulate": {

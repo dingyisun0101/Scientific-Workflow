@@ -23,6 +23,11 @@ impl Project {
         study
             .as_object_mut()
             .expect("runtime test study is an object")
+            .entry("workflow_schema")
+            .or_insert(1.into());
+        study
+            .as_object_mut()
+            .expect("runtime test study is an object")
             .entry("threads")
             .or_insert(2.into());
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);

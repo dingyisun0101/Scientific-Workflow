@@ -16,5 +16,8 @@ mod plan;
 mod study_workflow_tests;
 
 pub use error::StudyError;
-pub use plan::Study;
+pub use plan::{
+    PhasePlanSummary, PlanFailurePolicy, PlanReplicateScheduling, PlanSummary, PlannedTaskKind,
+    Study, TaskPlanSummary,
+};
 pub(crate) use plan::{StudyPhase, StudyTask};

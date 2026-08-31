@@ -33,7 +33,8 @@ public.
   session markers. The public declaration boundary remains covered separately
   by `rust/tests/observation_workflow.rs`.
 - `rust/src/config/tests/config_workflow.rs` covers the required `wf_configs/`
-  root and reserved files, optional `states/` grouping, rejection of schemas
+  root and reserved files, required supported configuration-schema generation,
+  optional `states/` grouping, rejection of schemas
   outside that root, duplicate keys, strict unknown-field rejection, canonical
   `wf_configs/parameters.json`, automatic execution unit-key section selection, named
   state-path maps, explicit per-task selectors, omission for later provider
@@ -63,7 +64,8 @@ public.
   identities, per-task binding of multiple named state schemas, standard
   provider resolution and provenance, missing-provider rejection before output, phase
   composition, replicate/persistence policy, runtime
-  scheduling, automatic task recordings, and crate-level `run(&Path)`. Its
+  scheduling, public read-only compiled-plan inspection, automatic task
+  recordings, and crate-level `run(&Path)`. Its
   recording checks require canonical `parameter_ordinal`/`parameter_source`
   provenance, exact Persistence-owned backend/effective-setting metadata, and
   rejection of legacy input-path fields. Its

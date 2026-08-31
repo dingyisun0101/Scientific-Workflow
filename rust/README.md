@@ -3,9 +3,9 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 
-> **Breaking updates:** Workflow is pre-1.0. Upgrading may require changes to
-> project configuration or public API usage. Review release notes before
-> updating.
+> **Breaking update — 0.12.0:** This release supersedes the unversioned 0.11.x
+> project grammar. Every `wf_configs/study.json` must declare
+> `"workflow_schema": 1`; no compatibility alias exists for an omitted schema.
 
 ## New to Workflow?
 
@@ -133,14 +133,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.11.11"
+scientific-workflow = "0.12.0"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.11.11
+cargo add scientific-workflow@0.12.0
 cargo add serde --features derive
 ```
 
@@ -669,6 +669,7 @@ omission.
 
 ```json
 {
+  "workflow_schema": 1,
   "threads": 16,
   "seed": 42,
   "paths": {

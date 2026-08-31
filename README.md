@@ -3,9 +3,9 @@
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking updates:** Workflow is pre-1.0. Upgrading may require changes to
-> project configuration or public API usage. Review release notes before
-> updating.
+> **Breaking update — 0.12.0:** This release supersedes the unversioned 0.11.x
+> project grammar. Every `wf_configs/study.json` must declare
+> `"workflow_schema": 1`; no compatibility alias exists for an omitted schema.
 
 ## Start here
 

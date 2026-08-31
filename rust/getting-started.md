@@ -134,7 +134,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [dependencies]
-scientific-workflow = "0.11.11"
+scientific-workflow = "0.12.0"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -229,6 +229,7 @@ fn main() -> Result<(), WorkflowError> {
 
 ```json
 {
+  "workflow_schema": 1,
   "threads": 1,
   "paths": {
     "states": {

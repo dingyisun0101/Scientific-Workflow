@@ -47,11 +47,15 @@ no state-schema file or `paths` object.
 
 ### `wf_configs/study.json`
 
-The root object has required positive-integer `threads` and nonempty `phases`
-fields plus optional `paths`, `seed`, `replicates`, and `persistence` objects:
+The root object has required `workflow_schema`, positive-integer `threads`, and
+nonempty `phases` fields plus optional `paths`, `seed`, `replicates`, and
+`persistence` objects. `workflow_schema` is independent of the crate version;
+this release accepts exactly generation `1` and rejects missing or unknown
+generations before assembly:
 
 ```json
 {
+  "workflow_schema": 1,
   "threads": 16,
   "seed": 42,
   "paths": {
@@ -85,6 +89,10 @@ fields plus optional `paths`, `seed`, `replicates`, and `persistence` objects:
 
 Unknown properties are rejected at every Workflow-owned level.
 
+- `workflow_schema` is required and must equal `1`. It versions the authored
+  project grammar and is retained in the frozen snapshot supplied to external
+  tasks. An omitted or unsupported generation is never interpreted as the
+  current grammar implicitly.
 - `threads` is the required positive number of workers in Workflow's one
   study-wide compute pool. There is no default, host-CPU inference, or
   environment override. Runtime installs every execution-unit invocation in
@@ -282,6 +290,7 @@ snapshot:
 ```json
 {
   "study": {
+    "workflow_schema": 1,
     "threads": 16,
     "paths": {"states": {"population": "wf_configs/states/population.json"}},
     "phases": {"simulate": {"tasks": [{"execution_unit":"population","state":"population"}]}}
@@ -395,6 +404,7 @@ Python task:
 
 ```json
 {
+  "workflow_schema": 1,
   "threads": 16,
   "paths": {"states": {"population":"wf_configs/states/population.json"}},
   "phases": {

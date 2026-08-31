@@ -13,6 +13,8 @@ use super::error::ConfigError;
 use super::parameters::ResolvedTask;
 use super::python::PythonTaskDeclaration;
 
+pub(crate) const WORKFLOW_SCHEMA_VERSION: u64 = 1;
+
 /// Effective policy for isolated study replicates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ReplicatePolicy {
@@ -59,6 +61,7 @@ pub(crate) enum FailurePolicy {
 /// The validated Workflow-owned portion of `wf_configs/study.json`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct StudyManifest {
+    workflow_schema: u64,
     threads: usize,
     master_seed: Option<u64>,
     replicates: ReplicatePolicy,
@@ -66,6 +69,11 @@ pub(crate) struct StudyManifest {
 }
 
 impl StudyManifest {
+    /// Returns the validated project-configuration schema generation.
+    pub(crate) const fn workflow_schema(self) -> u64 {
+        self.workflow_schema
+    }
+
     /// Returns the required study-wide compute worker count.
     pub(crate) const fn threads(self) -> usize {
         self.threads
@@ -193,6 +201,16 @@ pub(crate) enum ParsedTask {
 pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigError> {
     let raw: RawStudy = serde_json::from_value(value)
         .map_err(|error| ConfigError::invalid(path, "/", error.to_string()))?;
+    if raw.workflow_schema != WORKFLOW_SCHEMA_VERSION {
+        return Err(ConfigError::invalid(
+            path,
+            "/workflow_schema",
+            format!(
+                "unsupported Workflow configuration schema {}; this release requires schema {}",
+                raw.workflow_schema, WORKFLOW_SCHEMA_VERSION
+            ),
+        ));
+    }
     if raw.phases.is_empty() {
         return Err(ConfigError::invalid(
             path,
@@ -226,6 +244,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
     )?;
 
     let manifest = StudyManifest {
+        workflow_schema: raw.workflow_schema,
         threads: raw.threads,
         master_seed: raw.seed,
         replicates: ReplicatePolicy {
@@ -493,6 +512,7 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawStudy {
+    workflow_schema: u64,
     threads: usize,
     #[serde(default)]
     paths: RawPaths,

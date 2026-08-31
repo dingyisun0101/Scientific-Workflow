@@ -17,6 +17,7 @@ impl TestProject {
     fn new(study: &str, parameter_sections: &[(&str, &str)]) -> Self {
         let mut study: serde_json::Value = serde_json::from_str(study).unwrap();
         let root = study.as_object_mut().unwrap();
+        root.entry("workflow_schema").or_insert(1.into());
         root.entry("threads").or_insert(2.into());
         root.entry("paths").or_insert_with(
             || serde_json::json!({"states":{"default":"wf_configs/states/default.json"}}),
@@ -152,6 +153,7 @@ fn program_task(task: &ResolvedTask) -> &ResolvedProgramTask {
 fn execution_unit_state_and_state_paths_may_be_omitted_for_later_provider_resolution() {
     let project = TestProject::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "phases": {
             "simulate": {
@@ -286,7 +288,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
 #[test]
 fn study_threads_are_required_and_positive() {
     let missing = TestProject::new_raw(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{"workflow_schema":1,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     assert!(matches!(
@@ -296,12 +298,36 @@ fn study_threads_are_required_and_positive() {
     ));
 
     let zero = TestProject::new_raw(
-        r#"{"threads":0,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{"workflow_schema":1,"threads":0,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     assert!(matches!(
         ProjectSpecification::load(zero.path()),
         Err(ConfigError::InvalidDocument { pointer, .. }) if pointer == "/threads"
+    ));
+}
+
+#[test]
+fn workflow_configuration_schema_is_required_and_rejects_unknown_generations() {
+    let missing = TestProject::new_raw(
+        r#"{"threads":2,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(missing.path()),
+        Err(ConfigError::InvalidDocument { reason, .. })
+            if reason.contains("missing field `workflow_schema`")
+    ));
+
+    let future = TestProject::new_raw(
+        r#"{"workflow_schema":2,"threads":2,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(future.path()),
+        Err(ConfigError::InvalidDocument { pointer, reason, .. })
+            if pointer == "/workflow_schema"
+                && reason.contains("requires schema 1")
     ));
 }
 
@@ -387,6 +413,7 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_execution_unit
 
     let missing_selector = TestProject::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "paths":{"states":{"known":"wf_configs/states/default.json"}},
           "phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}
@@ -456,6 +483,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
 
     let removed_model_field = TestProject::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "paths":{"states":{"default":"wf_configs/states/default.json"}},
           "phases":{"one":{"tasks":[{"model":"x","state":"default"}]}}
@@ -560,6 +588,7 @@ fn workflow_project_root_requires_reserved_wf_configs_documents() {
 fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
     let project = TestProject::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "paths":{"states":{"outside":"state.json"}},
           "phases":{"only":{"tasks":[{"execution_unit":"unit","state":"outside"}]}}
@@ -875,6 +904,7 @@ fn program_resolution_rejects_a_regular_file_without_execute_permission() {
 fn program_seed_requests_require_the_master_seed_and_are_retained_semantically() {
     let project = TestProject::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "seed": 42,
           "phases":{"only":{"tasks":[{
@@ -892,6 +922,7 @@ fn program_seed_requests_require_the_master_seed_and_are_retained_semantically()
 
     let missing_master = TestProject::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "phases":{"only":{"tasks":[{
             "program":"/bin/true",
@@ -909,6 +940,7 @@ fn program_seed_requests_require_the_master_seed_and_are_retained_semantically()
 
     let invalid_purpose = TestProject::new_raw(
         r#"{
+          "workflow_schema": 1,
           "threads": 2,
           "seed": 42,
           "phases":{"only":{"tasks":[{

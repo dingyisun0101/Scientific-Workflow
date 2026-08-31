@@ -49,7 +49,10 @@ fn specialized_capabilities_live_at_their_owning_module_roots() {
     #[allow(unused_imports)]
     use scientific_workflow::state::{StateFieldSchema, StateSchemaProvider};
     #[allow(unused_imports)]
-    use scientific_workflow::study::{Study, StudyError};
+    use scientific_workflow::study::{
+        PhasePlanSummary, PlanFailurePolicy, PlanReplicateScheduling, PlanSummary, PlannedTaskKind,
+        Study, StudyError, TaskPlanSummary,
+    };
 }
 
 #[test]

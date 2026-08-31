@@ -1,4 +1,5 @@
 {
+  "workflow_schema": 1,
   "threads": 4,
   "paths": {
     "states": {

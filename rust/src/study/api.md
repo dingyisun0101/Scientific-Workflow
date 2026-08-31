@@ -21,7 +21,9 @@ tasks, identities, persistence plans, registries, or Study builders.
 
 ## Public Rust API
 
-The module root exposes exactly `Study` and `StudyError`.
+The module root exposes `Study`, `StudyError`, and the borrowed inspection
+types `PlanSummary`, `PhasePlanSummary`, `TaskPlanSummary`,
+`PlanReplicateScheduling`, `PlanFailurePolicy`, and `PlannedTaskKind`.
 
 ### `study::Study`
 
@@ -55,17 +57,64 @@ moved or shared across host threads without mutable planning state.
 - `threads() -> usize` returns the required positive worker count parsed from
   top-level `study.json.threads`. Study retains the value as intent but starts
   no workers; Runtime uses it to construct the shared compute pool.
+- `plan_summary() -> PlanSummary<'_>` returns a bounded immutable view of the
+  fully compiled plan. The view borrows the Study and performs no IO,
+  allocation, decoding, or preflight. It cannot mutate or execute the plan.
 
 `Clone` increments shared reference counts; it does not reread files, repeat
 preflight, clone scientific payloads, or duplicate constants documents.
 `Debug` prints bounded root/plan information and never execution unit captures or raw
 constants.
 
-There is no public manual-catalog loader, phase accessor, task accessor, state
-schema map/accessor, replicate-policy accessor, persistence-plan accessor, source
-document view, UI-plan accessor, or mutable Study operation. Embedding consumers that need to run
+There is no public manual-catalog loader, executable task accessor, state
+schema map/accessor, constants view, source-document view, UI-plan accessor,
+or mutable Study operation. Embedding consumers that need to run
 a preloaded Study pass it to `runtime::execute`; successful runtime
 summaries provide output paths and task results.
+
+### Read-only compiled-plan inspection
+
+`PlanSummary<'a>` is acquired only from `Study::plan_summary` and cannot outlive
+the borrowed Study. It is `Clone + Copy + Debug` and exposes:
+
+- `workflow_schema() -> u64`, the validated authored-configuration generation;
+- `threads() -> usize`;
+- `replicate_count() -> u64`;
+- `replicate_scheduling() -> PlanReplicateScheduling`;
+- `replicate_failure_policy() -> PlanFailurePolicy`;
+- `has_master_seed() -> bool`, which deliberately reports only presence so
+  diagnostics do not accidentally publish the master value;
+- `persistence_chunk_target_bytes() -> u64` and
+  `persistence_queue_capacity_bytes() -> u64`; and
+- `phases()`, an exact-size declaration-order iterator of
+  `PhasePlanSummary<'a>`.
+
+`PlanReplicateScheduling` is the closed `Sequential | Parallel` vocabulary.
+`PlanFailurePolicy` is the closed `FailFast | FinishAll` vocabulary. Both are
+`Clone + Copy + Debug + Eq + PartialEq` and describe compiled effective policy,
+not mutable controls.
+
+Each `PhasePlanSummary<'a>` is `Clone + Copy + Debug` and exposes `name()`, an
+exact-size declaration-order `dependencies()` iterator, `max_concurrency()`,
+`start_interval()`, optional `timeout()`, `failure_policy()`, and an exact-size
+deterministic `tasks()` iterator.
+
+Each `TaskPlanSummary<'a>` is `Clone + Copy + Debug` and exposes `identity()`,
+`label()`, global `output_ordinal()`, optional `timeout()`, optional external
+task `seed_purpose()`, and `kind() -> PlannedTaskKind<'a>`. The closed task-kind
+view is:
+
+- `ExecutionUnit { execution_unit, state, parameter_ordinal,
+  parameter_source }`, containing the linked key, selected named-state key or
+  provider ID, expanded parameter ordinal, and canonical parameters document;
+- `Program { executable }`, containing the preflight-resolved canonical
+  executable; or
+- `Python { launcher, script }`, containing the preflight-resolved canonical
+  launcher and script.
+
+All strings and paths are borrowed. Inspection never returns raw constants,
+schema payloads, observation internals, executable trait objects, environment
+arguments, the master seed value, or persistence writer construction.
 
 ### Crate-visible Runtime view
 
@@ -141,6 +190,9 @@ use scientific_workflow::study::Study;
 # fn host() -> Result<(), Box<dyn std::error::Error>> {
 let study = Study::load(Path::new("."))?;
 println!("planned output root: {}", study.output_root().display());
+for phase in study.plan_summary().phases() {
+    println!("phase {} has {} task(s)", phase.name(), phase.tasks().len());
+}
 let summary = execute(study)?;
 println!("actual execution: {}", summary.output_directory().display());
 # Ok(())
@@ -153,8 +205,9 @@ println!("actual execution: {}", summary.output_directory().display());
 `Config`, resolved execution unit parameters/programs and Python launchers,
 type-erased task definitions,
 named and task-bound state schemas, bound observation plans,
-replicate/persistence policies, UI plan, global
-output ordinals, identity/label formats, and topological planning data are private.
+mutable replicate/persistence policies, UI plan, identity/label construction
+algorithms, and executable topological planning data are private. Their stable
+read-only results are available only through the plan-summary types above.
 `StudyPhase` and `StudyTask` are the named crate-visible Runtime view described
 above; their backing representation remains private.
 
