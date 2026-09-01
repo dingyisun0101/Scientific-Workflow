@@ -13,7 +13,7 @@ validation. A failure never returns a partial scientific series.
 
 ```bash
 python -m pip install \
-  "scientific-workflow-reader @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@9f9fe75#subdirectory=python"
+  "scientific-workflow-reader @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@6c8e7d4#subdirectory=python"
 ```
 
 Python 3.10 or newer is required. The core reader has no runtime dependencies.
@@ -22,7 +22,7 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 
 ```bash
 python -m pip install \
-  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@9f9fe75#subdirectory=python"
+  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@6c8e7d4#subdirectory=python"
 ```
 
 This guide documents release 0.4.1.
