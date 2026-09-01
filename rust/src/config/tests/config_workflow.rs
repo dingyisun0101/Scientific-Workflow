@@ -334,7 +334,7 @@ fn top_level_sweeps_expand_every_task_while_execution_unit_sweeps_remain_local()
 }
 
 #[test]
-fn reserved_npy_phase_synthesizes_one_task_per_global_configuration() {
+fn reserved_npy_phase_synthesizes_one_aggregate_task() {
     let project = TestProject::new(
         r#"{
           "phases": {
@@ -352,13 +352,13 @@ fn reserved_npy_phase_synthesizes_one_task_per_global_configuration() {
     let npy = &specification.phases()[1];
     assert_eq!(npy.name(), "$npy");
     assert_eq!(npy.dependencies().collect::<Vec<_>>(), ["simulate"]);
-    assert_eq!(npy.tasks().len(), 2);
+    assert_eq!(npy.tasks().len(), 1);
     assert_eq!(
         npy.tasks()
             .iter()
             .map(ResolvedTask::configuration)
             .collect::<Vec<_>>(),
-        [0, 1]
+        [0]
     );
     assert!(
         npy.tasks()

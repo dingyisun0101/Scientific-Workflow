@@ -1,273 +1,136 @@
-"""Render all completed Hopf trajectories from Workflow dependency outputs."""
+"""Plot Hopf trajectories from Workflow's standard processed NPY output."""
 
 from __future__ import annotations
 
 import html
 import json
 import os
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 
-def _object(value: Any, name: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{name} must be a JSON object")
+def _json(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected a JSON object at {path}")
     return value
 
 
-def _string(value: Any, name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{name} must be a nonempty string")
-    return value
+def _settings() -> dict[str, Any]:
+    snapshot = _json(Path(os.environ["WORKFLOW_CONFIG_PATH"]))
+    return snapshot["config"]["parameters.json"]["plot"]
 
 
-def _number(value: Any, name: str, *, positive: bool = False) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be numeric")
-    number = float(value)
-    if positive and number <= 0.0:
-        raise ValueError(f"{name} must be positive")
-    return number
-
-
-def _integer(value: Any, name: str, *, nonnegative: bool = False) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be an integer")
-    if nonnegative and value < 0:
-        raise ValueError(f"{name} must be nonnegative")
-    return value
-
-
-def _project_root() -> Path:
-    return Path(os.environ["WORKFLOW_PROJECT_ROOT"]).resolve(strict=True)
-
-
-def _settings() -> Mapping[str, Any]:
-    snapshot = json.loads(Path(os.environ["WORKFLOW_CONFIG_PATH"]).read_text())
-    config = _object(snapshot, "configuration snapshot").get("config")
-    documents = _object(config, "configuration snapshot.config")
-    parameters = _object(
-        documents.get("parameters.json"), "wf_configs/parameters.json"
-    )
-    return _object(parameters.get("plot"), "wf_configs/parameters.json.plot")
-
-
-def _output_directory(settings: Mapping[str, Any]) -> Path:
-    authored = Path(
-        _string(settings.get("output_directory"), "plot.output_directory")
-    )
-    if authored.is_absolute() or not authored.parts or any(
-        part in {"", ".", ".."} for part in authored.parts
-    ):
-        raise ValueError(
-            "plot.output_directory must be a normalized project-relative path"
-        )
-    project_root = _project_root()
-    output = (project_root / authored).resolve()
-    if not output.is_relative_to(project_root):
-        raise ValueError("plot.output_directory escapes the project root")
-    output.mkdir(parents=True, exist_ok=True)
-    return output
-
-
-def _processed_manifests() -> list[Path]:
+def _processed_root() -> Path:
     dependencies = json.loads(
-        Path(os.environ["WORKFLOW_DEPENDENCIES_PATH"]).read_text()
+        Path(os.environ["WORKFLOW_DEPENDENCIES_PATH"]).read_text(encoding="utf-8")
     )
-    if not isinstance(dependencies, list):
-        raise ValueError("dependency snapshot must be an array")
-    manifests: list[Path] = []
-    for phase in dependencies:
-        phase = _object(phase, "dependency phase")
-        if phase.get("phase") != "$npy":
-            continue
-        tasks = phase.get("tasks")
-        if not isinstance(tasks, list):
-            raise ValueError("dependency phase tasks must be an array")
-        for task in tasks:
-            task = _object(task, "dependency task")
-            workload = _object(task.get("workload"), "dependency workload")
-            if workload.get("kind") != "npy":
-                continue
-            output = Path(_string(task.get("output_directory"), "conversion output"))
-            batch_path = output / "artifacts" / "manifest.json"
-            batch = _object(json.loads(batch_path.read_text()), "conversion manifest")
-            if batch.get("format") != "scientific-workflow-npy-batch.v1":
-                raise ValueError("unsupported conversion batch manifest")
-            members = batch.get("members")
-            if not isinstance(members, list):
-                raise ValueError("conversion manifest members must be an array")
-            for member in members:
-                member = _object(member, "converted member")
-                manifests.append(
-                    batch_path.parent
-                    / _string(member.get("manifest"), "converted member manifest")
-                )
-    if not manifests:
-        raise ValueError("plot phase received no processed recordings")
-    return manifests
+    npy_phase = next(phase for phase in dependencies if phase["phase"] == "$npy")
+    npy_task = next(
+        task for task in npy_phase["tasks"] if task["workload"]["kind"] == "npy"
+    )
+    return Path(npy_task["workload"]["processed_directory"])
 
 
-def _trajectories(stream: str) -> list[dict[str, Any]]:
-    expected_parameter_source = (
-        _project_root() / "wf_configs" / "parameters.json"
-    ).resolve(strict=True)
-    trajectories: list[dict[str, Any]] = []
-    for manifest_path in _processed_manifests():
-        processed = _object(json.loads(manifest_path.read_text()), "NPY manifest")
-        if processed.get("format") != "scientific-workflow-npy.v1":
-            raise ValueError(f"unsupported NPY manifest at {manifest_path}")
-        descriptors = processed.get("arrays")
-        if not isinstance(descriptors, list):
-            raise ValueError("NPY manifest arrays must be an array")
-        point_descriptor = next(
-            (
-                item
-                for item in descriptors
-                if isinstance(item, Mapping)
-                and item.get("role") == "field"
-                and item.get("stream") == stream
-                and item.get("field") == "point"
-            ),
-            None,
+def _trajectories(root: Path, stream: str) -> list[dict[str, Any]]:
+    batch = _json(root / "manifest.json")
+    if batch.get("format") != "scientific-workflow-npy-batch.v1":
+        raise ValueError("unsupported NPY batch manifest")
+
+    trajectories = []
+    for member in batch["members"]:
+        manifest_path = root / member["manifest"]
+        manifest = _json(manifest_path)
+        descriptor = next(
+            array
+            for array in manifest["arrays"]
+            if array.get("role") == "field"
+            and array.get("stream") == stream
+            and array.get("field") == "point"
         )
-        if point_descriptor is None:
-            raise ValueError(f"processed recording has no {stream!r} point array")
-        points_array = np.load(
-            manifest_path.parent / _string(point_descriptor.get("path"), "point array path"),
+        points = np.load(
+            manifest_path.parent / descriptor["path"],
             mmap_mode="r",
             allow_pickle=False,
         )
-        if points_array.ndim != 2 or points_array.shape[1] != 2:
-            raise ValueError("processed point array must have shape (records, 2)")
-        if not points_array.flags.c_contiguous:
-            raise ValueError("processed point array must be C-contiguous")
-        points = [(float(point[0]), float(point[1])) for point in points_array]
-        metadata = _object(processed.get("user_metadata"), "recording user metadata")
-        constants = _object(metadata.get("constants"), "constants")
-        workflow = _object(metadata.get("workflow"), "workflow provenance")
-        if (
-            workflow.get("kind") != "execution_unit"
-            or workflow.get("execution_unit") != "attractor"
-        ):
-            raise ValueError(f"processed recording {manifest_path} is not an attractor recording")
-        if workflow.get("state") != "attractor":
-            raise ValueError(
-                f"processed recording {manifest_path} was not assembled with the attractor state"
-            )
-        parameter_ordinal = _integer(
-            workflow.get("parameter_ordinal"),
-            "workflow.parameter_ordinal",
-            nonnegative=True,
-        )
-        parameter_source = Path(
-            _string(workflow.get("parameter_source"), "workflow.parameter_source")
-        ).resolve(strict=True)
-        if parameter_source != expected_parameter_source:
-            raise ValueError(
-                f"processed recording {manifest_path} has unexpected parameter provenance"
-            )
+        if points.ndim != 2 or points.shape[1] != 2 or not points.flags.c_contiguous:
+            raise ValueError("point array must be C-contiguous with shape (N, 2)")
+        constants = manifest["user_metadata"]["constants"]
         trajectories.append(
             {
-                "recording": _string(processed.get("source_recording"), "source recording"),
-                "parameter_ordinal": parameter_ordinal,
-                "state": workflow["state"],
-                "mu": _number(constants.get("mu"), "constants.mu"),
-                "omega": _number(
-                    constants.get("angular_frequency"),
-                    "constants.angular_frequency",
-                ),
+                "mu": float(constants["mu"]),
+                "omega": float(constants["angular_frequency"]),
                 "points": points,
+                "manifest": str(manifest_path),
             }
         )
-    trajectories.sort(key=lambda item: (item["mu"], item["omega"]))
-    return trajectories
+    return sorted(trajectories, key=lambda item: (item["mu"], item["omega"]))
 
 
-def _svg(settings: Mapping[str, Any], trajectories: list[dict[str, Any]]) -> str:
-    width = int(_number(settings.get("width"), "plot.width", positive=True))
-    height = int(_number(settings.get("height"), "plot.height", positive=True))
-    margin = _number(settings.get("margin"), "plot.margin", positive=True)
-    stroke_width = _number(
-        settings.get("stroke_width"), "plot.stroke_width", positive=True
+def _svg(settings: dict[str, Any], trajectories: list[dict[str, Any]]) -> str:
+    width, height = int(settings["width"]), int(settings["height"])
+    margin = float(settings["margin"])
+    extent = max(
+        1.0e-12,
+        max(
+            max(abs(float(point[0])), abs(float(point[1])))
+            for trajectory in trajectories
+            for point in trajectory["points"]
+        )
+        * 1.08,
     )
-    if width <= 2 * margin or height <= 2 * margin:
-        raise ValueError("plot dimensions must exceed twice the margin")
-    palette = settings.get("palette")
-    if not isinstance(palette, list) or not palette:
-        raise ValueError("plot.palette must be a nonempty array")
-    colors = [_string(color, "plot.palette item") for color in palette]
-    title = html.escape(_string(settings.get("title"), "plot.title"))
-    background = html.escape(_string(settings.get("background"), "plot.background"))
-    foreground = html.escape(_string(settings.get("foreground"), "plot.foreground"))
-    axis = html.escape(_string(settings.get("axis"), "plot.axis"))
 
-    all_points = [point for trajectory in trajectories for point in trajectory["points"]]
-    extent = max(max(abs(x), abs(y)) for x, y in all_points)
-    extent = max(extent * 1.08, 1.0e-12)
-    plot_width = width - 2.0 * margin
-    plot_height = height - 2.0 * margin
-
-    def project(point: tuple[float, float]) -> tuple[float, float]:
-        x, y = point
+    def project(point: np.ndarray[Any, Any]) -> tuple[float, float]:
         return (
-            margin + (x / extent + 1.0) * plot_width / 2.0,
-            margin + (1.0 - y / extent) * plot_height / 2.0,
+            margin + (float(point[0]) / extent + 1.0) * (width - 2 * margin) / 2,
+            margin + (1.0 - float(point[1]) / extent) * (height - 2 * margin) / 2,
         )
 
+    foreground = html.escape(settings["foreground"])
     lines = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-        f'<rect width="100%" height="100%" fill="{background}"/>',
-        f'<text x="{width / 2:.1f}" y="36" text-anchor="middle" fill="{foreground}" font-family="sans-serif" font-size="22">{title}</text>',
-        f'<line x1="{margin:.1f}" y1="{height / 2:.1f}" x2="{width - margin:.1f}" y2="{height / 2:.1f}" stroke="{axis}"/>',
-        f'<line x1="{width / 2:.1f}" y1="{margin:.1f}" x2="{width / 2:.1f}" y2="{height - margin:.1f}" stroke="{axis}"/>',
+        f'<rect width="100%" height="100%" fill="{html.escape(settings["background"])}"/>',
+        f'<text x="{width / 2:.1f}" y="36" text-anchor="middle" fill="{foreground}" font-family="sans-serif" font-size="22">{html.escape(settings["title"])}</text>',
+        f'<line x1="{margin}" y1="{height / 2}" x2="{width - margin}" y2="{height / 2}" stroke="{html.escape(settings["axis"])}"/>',
+        f'<line x1="{width / 2}" y1="{margin}" x2="{width / 2}" y2="{height - margin}" stroke="{html.escape(settings["axis"])}"/>',
     ]
     for index, trajectory in enumerate(trajectories):
-        color = html.escape(colors[index % len(colors)])
+        color = html.escape(settings["palette"][index % len(settings["palette"])])
         points = " ".join(
             f"{x:.2f},{y:.2f}" for x, y in map(project, trajectory["points"])
         )
-        lines.append(
-            f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="{stroke_width:.2f}" stroke-linejoin="round" stroke-linecap="round"/>'
-        )
         legend_y = 58 + index * 20
-        label = html.escape(
-            f'mu={trajectory["mu"]:g}, omega={trajectory["omega"]:g}'
-        )
+        label = html.escape(f'mu={trajectory["mu"]:g}, omega={trajectory["omega"]:g}')
         lines.extend(
             [
+                f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="{float(settings["stroke_width"]):.2f}"/>',
                 f'<line x1="{width - 250}" y1="{legend_y}" x2="{width - 220}" y2="{legend_y}" stroke="{color}" stroke-width="3"/>',
                 f'<text x="{width - 212}" y="{legend_y + 4}" fill="{foreground}" font-family="monospace" font-size="13">{label}</text>',
             ]
         )
-    lines.append("</svg>")
-    return "\n".join(lines) + "\n"
+    return "\n".join([*lines, "</svg>", ""])
 
 
 def main() -> None:
     settings = _settings()
-    stream = _string(settings.get("stream"), "plot.stream")
-    trajectories = _trajectories(stream)
-    output = _output_directory(settings)
-    output_file = _string(settings.get("output_file"), "plot.output_file")
-    if Path(output_file).name != output_file or not output_file.endswith(".svg"):
-        raise ValueError("plot.output_file must be a plain `.svg` filename")
-    (output / output_file).write_text(_svg(settings, trajectories), encoding="utf-8")
+    processed_root = _processed_root()
+    trajectories = _trajectories(processed_root, settings["stream"])
+    output = Path(os.environ["WORKFLOW_PROJECT_ROOT"]) / settings["output_directory"]
+    output.mkdir(parents=True, exist_ok=True)
+    (output / settings["output_file"]).write_text(
+        _svg(settings, trajectories), encoding="utf-8"
+    )
     summary = {
         "format": "scientific-workflow-attractor-plot-v3",
-        "stream": stream,
-        "output": output_file,
+        "processed_data": str(processed_root),
         "trajectories": [
             {
-                "recording": trajectory["recording"],
-                "parameter_ordinal": trajectory["parameter_ordinal"],
-                "state": trajectory["state"],
                 "mu": trajectory["mu"],
                 "angular_frequency": trajectory["omega"],
                 "record_count": len(trajectory["points"]),
+                "manifest": trajectory["manifest"],
             }
             for trajectory in trajectories
         ],

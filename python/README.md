@@ -12,7 +12,8 @@ validation. A failure never returns a partial scientific series.
 ## Installation
 
 ```bash
-python -m pip install scientific-workflow-reader
+python -m pip install \
+  "scientific-workflow-reader @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@9f9fe75#subdirectory=python"
 ```
 
 Python 3.10 or newer is required. The core reader has no runtime dependencies.
@@ -20,10 +21,11 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 `$npy` phase or when converting a recording directly:
 
 ```bash
-python -m pip install "scientific-workflow-reader[npy]==0.4.0"
+python -m pip install \
+  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@9f9fe75#subdirectory=python"
 ```
 
-This guide documents release 0.4.0.
+This guide documents release 0.4.1.
 
 ## Reading a recording
 
@@ -76,7 +78,7 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.4.0 supports only
+Release 0.4.1 supports only
 `scientific-workflow-jsonl` format version 7, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
@@ -152,7 +154,8 @@ Python callers may use
 `scientific_workflow_reader.npy.convert_recording(recording, output=None)`.
 Workflow itself invokes the same module in batch mode for the reserved `$npy`
 phase and publishes one member directory plus a
-`scientific-workflow-npy-batch.v1` manifest in that task's artifact directory.
+`scientific-workflow-npy-batch.v1` manifest at the standard
+`<execution>/processed/replicate-NNNNNN` path.
 
 ## Development
 

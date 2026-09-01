@@ -1,7 +1,7 @@
 # Two-dimensional attractor study
 
 This example is the release-qualified end-to-end project for
-`scientific-workflow` 0.13.1 and `scientific-workflow-reader` 0.4.0.
+`scientific-workflow` 0.13.2 and `scientific-workflow-reader` 0.4.1.
 
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all
@@ -159,9 +159,9 @@ The reserved `$npy` phase needs only its prerequisite:
 ```
 
 Workflow synthesizes the conversion task, gives it every transitively
-prerequisite execution-unit recording for the same global configuration, and
-writes a `scientific-workflow-npy-batch.v1` manifest plus C-contiguous arrays
-inside that task's artifact directory. Project authors provide no converter
+prerequisite execution-unit recording in the replicate, and writes a
+`scientific-workflow-npy-batch.v1` manifest plus C-contiguous arrays at
+`output/<execution>/processed/replicate-000000`. Project authors provide no converter
 script, paths, arguments, or duplicated recording selectors.
 
 The `plot` phase depends on `$npy` and declares `scripts/plot.py` directly:
@@ -181,8 +181,9 @@ completed conversion output, and isolated artifact directory through the
 standard `WORKFLOW_*` contract.
 
 The plotter retrieves its visual settings from the `plot` section of
-`wf_configs/parameters.json`, reads only the verified processed manifests and
-memory-mapped `.npy` arrays, and produces:
+`wf_configs/parameters.json`, obtains `processed_directory` directly from the
+`$npy` dependency workload, reads the processed manifests and memory-mapped
+`.npy` arrays, and produces:
 
 ```text
 output/plots/
@@ -190,13 +191,11 @@ output/plots/
 └── plot-summary.json
 ```
 
-For every processed member it verifies the retained recording provenance: execution unit kind
-and key, explicitly selected `attractor` state key, parameter ordinal, and the
-canonical `wf_configs/parameters.json` source. The plot summary retains the
-state key and ordinal so the generated artifact remains traceable to the
-assembled task rather than inferring state from the execution unit name. The
-plotter never opens JSONL chunks itself. These provenance fields are the
-`scientific-workflow-attractor-plot-v2` summary shape.
+The plot summary records the standard processed directory and each member
+manifest, so every plotted trajectory remains traceable to its verified source
+recording. The plotter never opens JSONL chunks or reconstructs Workflow output
+paths itself. Its output uses the
+`scientific-workflow-attractor-plot-v3` summary shape.
 
 ## Run
 

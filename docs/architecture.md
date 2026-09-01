@@ -1,7 +1,7 @@
 # Workflow architecture
 
 This document describes the reviewed architecture shipped by Rust package
-0.13.1 and its recording-v7 integration with Python reader 0.4.0.
+0.13.2 and its recording-v7 integration with Python reader 0.4.1.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -454,11 +454,12 @@ parsing interface. The downstream-public Rust API is only `ConfigError`;
 closed peer types are explicitly named through the same owning scope.
 
 A phase named exactly `$npy` is reserved. It has prerequisites but no authored
-tasks; Config synthesizes one standard Python converter task per global
-configuration. Runtime gives that task every execution-unit recording in its
-transitive prerequisite graph, filtered to the same configuration. The
-official reader verifies each completed recording before the optional NumPy
-converter atomically publishes fixed-shape numeric arrays and manifests.
+tasks; Config synthesizes one aggregate standard Python converter task. Runtime
+runs it once per replicate and gives it every execution-unit recording in its
+transitive prerequisite graph across all global configurations. The official
+reader verifies each completed recording before the optional NumPy converter
+atomically publishes fixed-shape numeric arrays and manifests beneath the
+execution-level `processed/replicate-NNNNNN` path.
 
 ### Study
 

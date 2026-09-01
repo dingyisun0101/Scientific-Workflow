@@ -6,6 +6,16 @@ both package versions; see the [compatibility matrix](protocol/compatibility.md)
 
 ## Unreleased
 
+## Rust 0.13.2 and Python reader 0.4.1 — 2026-09-01
+
+- Makes `$npy` one aggregate task per replicate, covering transitive member
+  recordings across every inferred global configuration.
+- Publishes converted data at the standard discoverable path
+  `<execution>/processed/replicate-NNNNNN` and exposes that path to downstream
+  tasks as `processed_directory`.
+- Simplifies the attractor plotter to read the batch manifest and C-contiguous
+  arrays directly from the standard processed directory.
+
 ## Rust 0.13.1 and Python reader 0.4.0 — 2026-09-01
 
 - Adds the standard single-recording `scientific-workflow-to-npy` converter.

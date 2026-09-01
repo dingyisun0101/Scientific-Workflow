@@ -1,7 +1,7 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.13.1 and Python
-reader 0.4.0.
+This map is the release-qualification baseline for Rust 0.13.2 and Python
+reader 0.4.1.
 
 Tests follow subsystem responsibility and supported boundaries. Observation
 binding/session behavior, Config and Study compilation, and persistence write
@@ -49,7 +49,8 @@ public.
   provenance, RFC 6901 diagnostic pointers,
   deterministic `$sweep`/`$cases` expansion, inferred global-versus-local
   scope, whole-graph task multiplication, reserved `$npy` synthesis and
-  validation, and malformed-marker rejection,
+  validation, one aggregate task across global configurations, and
+  malformed-marker rejection,
   private typed constants decoding, decimal-MB persistence-size conversion,
   overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
   clone-cheap frozen snapshot bytes, and contextual errors. Even an
@@ -135,6 +136,9 @@ checklist in the protocol rather than editing version constants independently.
 C-contiguity, coordinate arrays, immutable raw recordings, integrity failure
 atomicity, resume validation, and Workflow dependency-batch conversion with
 duplicate member suppression.
+Runtime unit coverage verifies that `$npy` receives every transitive global
+configuration and that its standard `processed_directory` remains visible to
+each downstream configuration.
 
 Recovery/resume, public writer builders, per-stream layout controls, legacy
 execution scopes, artifacts, and RNG-record tests were removed with those

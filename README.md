@@ -30,7 +30,7 @@ executable programs, and declarative JSON into validated, recorded studies.
   [compatibility matrix](protocol/compatibility.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
-- For the Rust 0.13.1 and Python reader 0.4.0 release summary, see the
+- For the Rust 0.13.2 and Python reader 0.4.1 release summary, see the
   [changelog](CHANGELOG.md).
 
 ## Repository map

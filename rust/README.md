@@ -135,14 +135,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.1"
+scientific-workflow = "0.13.2"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.13.1
+cargo add scientific-workflow@0.13.2
 cargo add serde --features derive
 ```
 
@@ -155,7 +155,8 @@ Projects declaring the reserved `$npy` phase also install the coordinated
 optional converter:
 
 ```bash
-python -m pip install "scientific-workflow-reader[npy]==0.4.0"
+python -m pip install \
+  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@9f9fe75#subdirectory=python"
 ```
 
 The default `terminal-ui` feature preserves the automatic interactive
@@ -164,7 +165,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.13.1", default-features = false }
+scientific-workflow = { version = "0.13.2", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they

@@ -86,6 +86,7 @@ pub(crate) struct RuntimeTaskEnvironment {
     project_root: PathBuf,
     replicate_directory: PathBuf,
     dependencies_json: Box<[u8]>,
+    processed_directory: Option<PathBuf>,
 }
 
 impl RuntimeTaskEnvironment {
@@ -94,12 +95,14 @@ impl RuntimeTaskEnvironment {
         project_root: PathBuf,
         replicate_directory: PathBuf,
         dependencies_json: Box<[u8]>,
+        processed_directory: Option<PathBuf>,
     ) -> Self {
         Self {
             config_snapshot,
             project_root,
             replicate_directory,
             dependencies_json,
+            processed_directory,
         }
     }
 }
@@ -216,6 +219,11 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .stdin(Stdio::null())
             .stdout(Stdio::from(persistence.take_stdout()))
             .stderr(Stdio::from(persistence.take_stderr()));
+        if let Some(processed_directory) = &self.environment.processed_directory {
+            command.env("WORKFLOW_NPY_OUTPUT", processed_directory);
+        } else {
+            command.env_remove("WORKFLOW_NPY_OUTPUT");
+        }
         if let Some(seed) = &self.program_seed {
             command.env("WORKFLOW_TASK_SEED", seed.seed.to_string());
         }

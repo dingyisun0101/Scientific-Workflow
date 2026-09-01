@@ -202,14 +202,16 @@ impl ProjectSpecification {
                             config.project_root(),
                             Path::new("python3"),
                         )?);
-                        for (configuration, (_, snapshot)) in resolved_parameters.iter().enumerate()
-                        {
-                            tasks.push(ResolvedTask::Program {
-                                configuration,
-                                snapshot: snapshot.clone(),
-                                program: program.clone(),
-                            });
-                        }
+                        let snapshot = resolved_parameters
+                            .first()
+                            .expect("parameter expansion always produces one configuration")
+                            .1
+                            .clone();
+                        tasks.push(ResolvedTask::Program {
+                            configuration: 0,
+                            snapshot,
+                            program,
+                        });
                     }
                 }
             }

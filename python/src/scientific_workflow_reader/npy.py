@@ -381,7 +381,7 @@ def main() -> None:
             parser.error("--workflow-dependencies does not accept recording or --output")
         try:
             dependencies_path = os.environ["WORKFLOW_DEPENDENCIES_PATH"]
-            output_directory = os.environ["WORKFLOW_TASK_OUTPUT"]
+            output_directory = os.environ["WORKFLOW_NPY_OUTPUT"]
         except KeyError as error:
             parser.error(f"missing required Workflow environment variable {error.args[0]}")
         convert_workflow_dependencies(dependencies_path, output_directory)

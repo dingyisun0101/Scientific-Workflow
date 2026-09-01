@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.13.1 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.2 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -165,7 +165,8 @@ index.
 `TaskRunKind` is a non-exhaustive data-bearing enum. `ExecutionUnit` contains
 the registration key and stable `Box<[MemberRunSummary]>`; `Program` contains
 the resolved launcher executable and optional canonical Python script; and
-`Npy` contains the Python launcher used by Workflow's reserved converter.
+`Npy` contains the Python launcher used by Workflow's reserved converter and
+the standard execution-level processed-data directory.
 Callers matching it must retain a fallback for future workload kinds.
 
 ### `runtime::TaskRunSummary`
@@ -215,6 +216,8 @@ paths through:
 - `WORKFLOW_REPLICATE_ROOT`: current replicate directory; and
 - `WORKFLOW_TASK_OUTPUT`: the task's `artifacts/` directory, also its working
   directory;
+- `WORKFLOW_NPY_OUTPUT`: present only for `$npy` and naming the standard
+  `<execution>/processed/replicate-NNNNNN` destination;
 - `WORKFLOW_THREADS`: decimal positive thread count reserved for this external
   task (one when `resources` is omitted);
 - `RAYON_NUM_THREADS`: the same task reservation for Rayon-based child
@@ -239,12 +242,14 @@ summaries. A program workload contains `kind` (`program` or `python`), its
 launcher executable, and the optional canonical Python script. Dependency JSON
 remains a data handoff, not a shell command protocol.
 
-A reserved `$npy` task receives the transitive prerequisite phase graph,
-rather than only its direct dependencies, still filtered to the same inferred
-global configuration. It converts every unique execution-unit member recording
-to C-contiguous `.npy` arrays under `WORKFLOW_TASK_OUTPUT` and writes a batch
-manifest. Its dependency workload kind is `npy`; ordinary task dependency
-snapshots remain direct-only.
+A reserved `$npy` task receives the complete transitive prerequisite phase
+graph across all inferred global configurations in its replicate. It converts
+every unique execution-unit member recording to C-contiguous `.npy` arrays at
+`<execution>/processed/replicate-NNNNNN` and writes a batch manifest there.
+Its dependency workload kind is `npy` and includes `processed_directory`, so a
+downstream task never reconstructs the path. Ordinary dependency snapshots
+remain direct and configuration-correlated; the aggregate `$npy` summary is
+visible to every downstream configuration.
 
 A nested Python task follows this exact runtime contract after Config lowers
 its environment to one invocation. Runtime has no Python-specific scheduler,

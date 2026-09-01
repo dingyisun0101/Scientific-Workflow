@@ -87,6 +87,8 @@ pub enum TaskRunKind {
     Npy {
         /// Resolved Python interpreter used to launch the standard converter.
         launcher: PathBuf,
+        /// Standard execution-level directory containing manifests and arrays.
+        processed_directory: PathBuf,
     },
 }
 

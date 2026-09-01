@@ -403,6 +403,7 @@ struct TaskRuntime {
     project_root: PathBuf,
     replicate_directory: PathBuf,
     dependencies_json: Box<[u8]>,
+    processed_directory: Option<PathBuf>,
     configuration: usize,
     replicate: u64,
     master_seed: Option<u64>,
@@ -631,6 +632,19 @@ fn spawn_task(
     let output_directory = context
         .replicate_directory
         .join(format!("task-{:06}", worker_task.output_ordinal()));
+    let processed_directory = worker_task.is_npy().then(|| {
+        context
+            .replicate_directory
+            .parent()
+            .expect("a replicate directory always belongs to an execution")
+            .join("processed")
+            .join(
+                context
+                    .replicate_directory
+                    .file_name()
+                    .expect("a replicate directory always has a stable name"),
+            )
+    });
     let dependencies_json = dependency_snapshot(
         phase,
         context.study.phases(),
@@ -644,6 +658,7 @@ fn spawn_task(
         project_root: context.study.project_root().to_path_buf(),
         replicate_directory: context.replicate_directory.to_path_buf(),
         dependencies_json,
+        processed_directory,
         configuration: worker_task.configuration(),
         replicate: context.replicate,
         master_seed: context.study.master_seed(),
@@ -724,6 +739,7 @@ fn run_task(
     cancellation: Arc<AtomicBool>,
     output_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
+    let processed_directory = runtime.processed_directory.clone();
     let program_seed = task.program_seed_purpose().map(|purpose| {
         let master_seed = runtime
             .master_seed
@@ -784,6 +800,7 @@ fn run_task(
         runtime.project_root,
         runtime.replicate_directory,
         runtime.dependencies_json,
+        runtime.processed_directory,
     );
     let mut host = RuntimeTaskHost::new(
         runtime.persistence_plan,
@@ -836,6 +853,8 @@ fn run_task(
                 .program_path()
                 .expect("NPY task retains its resolved Python launcher")
                 .to_path_buf(),
+            processed_directory: processed_directory
+                .expect("an NPY task retains its standard processed directory"),
         },
         TaskKind::Program => TaskRunKind::Program {
             executable: task
@@ -889,7 +908,9 @@ fn dependency_snapshot(
             serde_json::json!({
                 "phase": summary.name(),
                 "tasks": summary.tasks().iter().filter(|task| {
-                    task.configuration() == configuration
+                    transitive
+                        || task.configuration() == configuration
+                        || matches!(task.kind(), TaskRunKind::Npy { .. })
                 }).map(|task| {
                     serde_json::json!({
                         "identity": task.identity(),
@@ -958,10 +979,15 @@ fn dependency_workload(kind: &TaskRunKind) -> serde_json::Value {
             "python_script": python_script.as_deref().map(|path| path.to_str()
                 .expect("Config preflight requires UTF-8 Python script paths")),
         }),
-        TaskRunKind::Npy { launcher } => serde_json::json!({
+        TaskRunKind::Npy {
+            launcher,
+            processed_directory,
+        } => serde_json::json!({
             "kind": "npy",
             "launcher": launcher.to_str()
                 .expect("Config preflight requires UTF-8 Python launcher paths"),
+            "processed_directory": processed_directory.to_str()
+                .expect("UTF-8 project roots produce UTF-8 processed paths"),
         }),
     }
 }
@@ -997,5 +1023,65 @@ mod tests {
         assert!(dependencies.contains("prepare"));
         assert!(dependencies.contains("simulate"));
         assert!(dependencies.contains("export"));
+    }
+
+    #[test]
+    fn npy_aggregates_configurations_and_remains_visible_downstream() {
+        let phases = [
+            phase("simulate", &[]),
+            phase("$npy", &["simulate"]),
+            phase("plot", &["$npy"]),
+        ];
+        let completed_simulation = PhaseRunSummary {
+            name: "simulate".into(),
+            tasks: [0, 1]
+                .into_iter()
+                .map(|configuration| TaskRunSummary {
+                    identity: format!("simulate-{configuration}").into(),
+                    kind: TaskRunKind::Program {
+                        executable: PathBuf::from("/bin/true"),
+                        python_script: None,
+                    },
+                    output_directory: PathBuf::from(format!("task-{configuration}")),
+                    configuration,
+                })
+                .collect(),
+        };
+
+        let aggregate = dependency_snapshot(
+            &phases[1],
+            &phases,
+            std::slice::from_ref(&completed_simulation),
+            0,
+            true,
+        );
+        let aggregate: serde_json::Value = serde_json::from_slice(&aggregate).unwrap();
+        assert_eq!(aggregate[0]["tasks"].as_array().unwrap().len(), 2);
+
+        let completed_npy = PhaseRunSummary {
+            name: "$npy".into(),
+            tasks: [TaskRunSummary {
+                identity: "npy".into(),
+                kind: TaskRunKind::Npy {
+                    launcher: PathBuf::from("/usr/bin/python3"),
+                    processed_directory: PathBuf::from("processed/replicate-000000"),
+                },
+                output_directory: PathBuf::from("task-npy"),
+                configuration: 0,
+            }]
+            .into(),
+        };
+        let downstream = dependency_snapshot(
+            &phases[2],
+            &phases,
+            std::slice::from_ref(&completed_npy),
+            1,
+            false,
+        );
+        let downstream: serde_json::Value = serde_json::from_slice(&downstream).unwrap();
+        assert_eq!(
+            downstream[0]["tasks"][0]["workload"]["processed_directory"],
+            "processed/replicate-000000"
+        );
     }
 }
