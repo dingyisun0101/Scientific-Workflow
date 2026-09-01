@@ -185,6 +185,7 @@ fn execution_unit_provenance() -> MemberRecordingProvenance {
         Value::Null,
         2,
     )
+    .with_parameters(serde_json::json!({"species": 200}))
 }
 
 #[test]

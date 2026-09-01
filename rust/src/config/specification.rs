@@ -1,7 +1,9 @@
 //! Loading one project root into an immutable resolved specification.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+use serde_json::Value;
 
 use super::document::{StateSchemaDocument, child_pointer};
 use super::error::ConfigError;
@@ -64,6 +66,38 @@ impl ProjectSpecification {
             )
         })?;
 
+        let execution_units = parsed
+            .phases
+            .iter()
+            .flat_map(|phase| phase.tasks.iter())
+            .filter_map(|task| match task {
+                ParsedTask::ExecutionUnit { execution_unit, .. } => {
+                    Some(execution_unit.to_string())
+                }
+                ParsedTask::Program { .. } | ParsedTask::Python { .. } => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let shared = parameter_sections
+            .iter()
+            .filter(|(key, _)| !execution_units.contains(key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let expanded_shared = expansion::expand(parameters_path, &Value::Object(shared))?;
+        let mut resolved_parameters = Vec::with_capacity(expanded_shared.len());
+        for shared in expanded_shared {
+            let Value::Object(mut resolved) = shared else {
+                unreachable!("expanding an object produces objects");
+            };
+            for key in &execution_units {
+                if let Some(value) = parameter_sections.get(key) {
+                    resolved.insert(key.clone(), value.clone());
+                }
+            }
+            let value = Value::Object(resolved);
+            let snapshot = config.snapshot_with_parameters(&value);
+            resolved_parameters.push((value, snapshot));
+        }
+
         let mut phases = Vec::with_capacity(parsed.phases.len());
         for phase in parsed.phases {
             let mut tasks = Vec::new();
@@ -83,35 +117,43 @@ impl ProjectSpecification {
                                 state: state.to_owned(),
                             });
                         }
-                        let value = parameter_sections.get(execution_unit.as_ref()).ok_or_else(|| {
-                            ConfigError::invalid(
-                                parameters_path,
-                                child_pointer("/", &execution_unit),
-                                format!("registered execution unit `{execution_unit}` has no parameter section"),
-                            )
-                        })?;
-                        let expanded = expansion::expand(parameters_path, value)?;
-                        tasks.try_reserve(expanded.len()).map_err(|_| {
-                            ConfigError::ExpansionOverflow {
-                                path: parameters_path.to_path_buf(),
-                            }
-                        })?;
-                        for (ordinal, value) in expanded.into_iter().enumerate() {
-                            let ordinal = u64::try_from(ordinal).map_err(|_| {
+                        for (configuration, (resolved, snapshot)) in
+                            resolved_parameters.iter().enumerate()
+                        {
+                            let value = resolved
+                                .get(execution_unit.as_ref())
+                                .ok_or_else(|| {
+                                    ConfigError::invalid(
+                                        parameters_path,
+                                        child_pointer("/", &execution_unit),
+                                        format!("registered execution unit `{execution_unit}` has no parameter section"),
+                                    )
+                                })?;
+                            let expanded = expansion::expand(parameters_path, value)?;
+                            tasks.try_reserve(expanded.len()).map_err(|_| {
                                 ConfigError::ExpansionOverflow {
                                     path: parameters_path.to_path_buf(),
                                 }
                             })?;
-                            tasks.push(ResolvedTask::ExecutionUnit {
-                                parameters: ResolvedExecutionUnitParameters::new(
-                                    execution_unit.clone(),
-                                    parameters_path.to_path_buf(),
-                                    ordinal,
-                                    value,
-                                    timeout,
-                                ),
-                                state: state.clone(),
-                            });
+                            for (ordinal, value) in expanded.into_iter().enumerate() {
+                                let ordinal = u64::try_from(ordinal).map_err(|_| {
+                                    ConfigError::ExpansionOverflow {
+                                        path: parameters_path.to_path_buf(),
+                                    }
+                                })?;
+                                tasks.push(ResolvedTask::ExecutionUnit {
+                                    configuration,
+                                    snapshot: snapshot.clone(),
+                                    parameters: ResolvedExecutionUnitParameters::new(
+                                        execution_unit.clone(),
+                                        parameters_path.to_path_buf(),
+                                        ordinal,
+                                        value,
+                                        timeout,
+                                    ),
+                                    state: state.clone(),
+                                });
+                            }
                         }
                     }
                     ParsedTask::Program {
@@ -122,26 +164,39 @@ impl ProjectSpecification {
                         threads,
                     } => {
                         let program = resolve_executable(config.project_root(), &program)?;
-                        tasks.push(ResolvedTask::Program(ResolvedProgramTask::new(
-                            program,
-                            args,
-                            seed_purpose,
-                            timeout,
-                            threads,
-                        )));
+                        let program =
+                            ResolvedProgramTask::new(program, args, seed_purpose, timeout, threads);
+                        for (configuration, (_, snapshot)) in resolved_parameters.iter().enumerate()
+                        {
+                            tasks.push(ResolvedTask::Program {
+                                configuration,
+                                snapshot: snapshot.clone(),
+                                program: program.clone(),
+                            });
+                        }
                     }
                     ParsedTask::Python {
                         declaration,
                         seed_purpose,
                         timeout,
                         threads,
-                    } => tasks.push(ResolvedTask::Program(python::resolve(
-                        config.project_root(),
-                        declaration,
-                        seed_purpose,
-                        timeout,
-                        threads,
-                    )?)),
+                    } => {
+                        let program = python::resolve(
+                            config.project_root(),
+                            declaration,
+                            seed_purpose,
+                            timeout,
+                            threads,
+                        )?;
+                        for (configuration, (_, snapshot)) in resolved_parameters.iter().enumerate()
+                        {
+                            tasks.push(ResolvedTask::Program {
+                                configuration,
+                                snapshot: snapshot.clone(),
+                                program: program.clone(),
+                            });
+                        }
+                    }
                 }
             }
             phases.push(PhaseSpecification {

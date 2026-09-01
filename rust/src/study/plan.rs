@@ -85,11 +85,6 @@ impl Study {
         PlanSummary { study: self }
     }
 
-    /// Returns the frozen language-neutral configuration supplied to programs.
-    pub(crate) fn config_snapshot(&self) -> ConfigSnapshot {
-        self.inner.config.snapshot()
-    }
-
     /// Returns immutable phases in manifest declaration order.
     pub(crate) fn phases(&self) -> &[StudyPhase] {
         &self.inner.phases
@@ -454,6 +449,8 @@ pub(crate) struct StudyTask {
     pub(crate) identity: Box<str>,
     pub(crate) label: Box<str>,
     pub(crate) output_ordinal: u64,
+    pub(crate) configuration: usize,
+    pub(crate) config_snapshot: ConfigSnapshot,
     pub(crate) task: Task,
 }
 
@@ -493,6 +490,14 @@ impl StudyTask {
 
     pub(crate) fn output_ordinal(&self) -> u64 {
         self.output_ordinal
+    }
+
+    pub(crate) const fn configuration(&self) -> usize {
+        self.configuration
+    }
+
+    pub(crate) fn config_snapshot(&self) -> ConfigSnapshot {
+        self.config_snapshot.clone()
     }
 
     pub(crate) fn definition(&self) -> &dyn TaskDefinition {

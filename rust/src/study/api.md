@@ -1,6 +1,6 @@
 # Study API
 
-This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
 
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
 Config to capture one project root and fully resolve its declarations, retains
@@ -39,7 +39,8 @@ moved or shared across host threads without mutable planning state.
 
 - `Study::load(project_root: &Path) -> Result<Study, StudyError>` performs the
   complete effect-free loading and preflight transaction. Config first
-  canonicalizes paths, parses JSON, expands execution unit parameters, and resolves
+  canonicalizes paths, parses JSON, infers and expands global and local
+  parameters, clones the phase graph per global configuration, and resolves
   programs, Python scripts, interpreters, and environment managers. Study then
   validates registration keys and duplicates, resolves every execution unit key,
   validates every named state document, resolves an omitted task state through
@@ -102,6 +103,10 @@ exact-size declaration-order `dependencies()` iterator, `max_concurrency()`,
 `start_interval()`, optional `timeout()`, `failure_policy()`, and an exact-size
 deterministic `tasks()` iterator.
 
+Task iteration includes every inferred global configuration. The internal
+configuration correlation key is deliberately absent from this public view;
+users author only parameter values and inspect the resulting tasks.
+
 Each `TaskPlanSummary<'a>` is `Clone + Copy + Debug` and exposes `identity()`,
 `label()`, global `output_ordinal()`, optional `timeout()`, optional external
 task `seed_purpose()`, and `kind() -> PlannedTaskKind<'a>`. The closed task-kind
@@ -123,14 +128,15 @@ arguments, the master seed value, or persistence writer construction.
 
 Runtime consumes a deliberately narrow crate-private peer API:
 
-- `Study` supplies the compute-thread count, replicate/phase policy,
-  persistence plan, and a
-  clone-cheap `ConfigSnapshot`. Runtime receives frozen program bytes without
+- `Study` supplies the compute-thread count, replicate/phase policy, and
+  persistence plan. Each `StudyTask` supplies its clone-cheap resolved
+  `ConfigSnapshot`. Runtime receives frozen program bytes without
   retaining Config's parsing or typed-lookup interface.
 - `StudyPhase` supplies only its semantic name, dependencies, admission policy,
   and compiled task slice.
-- `StudyTask` supplies its stable identity/label, timeout, generic execution
-  definition, semantic execution unit provenance, and program summary facts. Runtime no
+- `StudyTask` supplies its stable identity/label, private global-configuration
+  correlation, timeout, generic execution definition, semantic execution-unit
+  provenance, and program summary facts. Runtime no
   longer reaches through it to Task descriptors or Config-resolved types.
 
 This view is crate-visible, not downstream-public. Its explicit names and

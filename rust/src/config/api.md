@@ -1,14 +1,14 @@
 # Config API
 
-This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by
 an optional `study.json.paths.states`, and the canonical `wf_configs/parameters.json` in a
 central immutable `Config`. The parameters
 document is the one arbitrary nested namespace for every user-project setting:
-execution unit constants and sweeps, plotting settings, validation tolerances, and
-external-program options. Config also resolves environment-managed Python
+global sweeps, execution unit constants and local sweeps, plotting settings,
+validation tolerances, and external-program options. Config also resolves environment-managed Python
 declarations into concrete invocations. Applications author files rather than
 constructing Rust configuration objects.
 
@@ -245,11 +245,13 @@ snapshot.
 
 ### `wf_configs/parameters.json`
 
-This required root object contains every custom-project parameter, grouped by
-the stable key of its consumer:
+This required root object contains every custom-project parameter. Users write
+only the parameters and selection markers; there is no scope declaration,
+reference syntax, phase selector, or configuration ordinal:
 
 ```json
 {
+  "species": {"$sweep": [200, 400]},
   "population": {
     "initial": 10,
     "growth": {"$sweep": [0.1, 0.2]}
@@ -261,12 +263,20 @@ the stable key of its consumer:
 }
 ```
 
+Config infers scope from `study.json`. Every top-level key named by an
+execution-unit task is that unit's local constants section. All other
+top-level values form the shared parameter object. Config first expands the
+shared object into global configurations, then instantiates every task in every
+phase once per configuration. Within each task copy, a selected execution-unit
+section is expanded independently, so its `$sweep` and `$cases` markers remain
+local to that unit.
+
 For `{"execution_unit":"population","state":"population"}` or
-`{"execution_unit":"population"}`, Config selects only the
-`population` section, expands it, and decodes each result as one complete
-`ExecutionUnit::Constants`. Other sections remain arbitrary and are available
-to external programs through the frozen central snapshot. Config owns two
-expansion markers inside a selected execution unit section:
+`{"execution_unit":"population"}`, Config selects the `population` section,
+expands it locally, and decodes each result as one complete
+`ExecutionUnit::Constants`. The `species` sweep above therefore duplicates the
+whole phase graph, while the `growth` sweep duplicates only `population` tasks.
+Config owns two expansion markers wherever selection is allowed:
 
 - `{"$sweep": [a, b, ...]}` selects independent alternatives at that object
   position. Multiple sweeps form a deterministic Cartesian product.
@@ -279,9 +289,11 @@ expansion markers inside a selected execution unit section:
 Choices and cases must be nonempty. A `$sweep` object has no siblings.
 Reserved markers cannot occur inside a choice/case, and unknown `$...` keys
 are rejected. Ordinary arrays are literal constants, not implicit sweeps.
-Expansion order is object declaration order, then choice order. Each concrete
-result becomes one internal resolved execution unit-parameter value and is decoded as
-one complete owned constants value during Study preflight.
+Expansion order is object declaration order, then choice order. Each global
+configuration is internal correlation state, never user-authored syntax. Each
+concrete local result becomes one internal resolved execution unit-parameter
+value and is decoded as one complete owned constants value during Study
+preflight.
 
 ### Central configuration snapshot
 
@@ -292,8 +304,9 @@ captured reserved `study.json`) is still captured and validated for forward
 compatibility, but the supported ordinary layout puts every custom project
 parameter in `parameters.json` rather than fragmenting it across files.
 
-Generic program and Python tasks receive a deterministic language-neutral
-snapshot:
+Every task is bound to a deterministic language-neutral snapshot in which the
+shared selections are resolved. Generic program and Python tasks receive that
+snapshot through Runtime:
 
 ```json
 {
@@ -376,10 +389,11 @@ These contracts are crate-private:
   and fully resolved task declarations consumed by Study.
 - `Config` is the immutable central graph. Its typed lookup/decode operations
   supply already-parsed configuration to Study; it performs no later disk IO.
-- `ConfigSnapshot` is a clone-cheap `Arc<[u8]>` handle. `bytes()` borrows the
-  deterministic complete-project JSON supplied to external programs, allowing
-  each runtime task to retain the frozen bytes without retaining Config's
-  parsing and lookup interface.
+- `ConfigSnapshot` is clone-cheap and retains both deterministic
+  complete-project JSON bytes and the corresponding global-resolved parameters
+  value. Runtime uses the bytes for external programs and the value for
+  execution-unit provenance without retaining Config's parsing and lookup
+  interface.
 - `StateSchemaDocument` names one semantic state key and borrows its canonical
   source path and already-parsed JSON value.
 - `StudyManifest`, `PhaseSpecification`, `PersistenceSpecification`,

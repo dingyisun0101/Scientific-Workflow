@@ -10,7 +10,7 @@ use super::error::ConfigError;
 use super::program::{ResolvedProgramTask, resolve_executable};
 use super::store::ensure_utf8;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonTaskDeclaration {
     script: PathBuf,
@@ -19,7 +19,7 @@ pub(crate) struct PythonTaskDeclaration {
     args: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "manager", rename_all = "snake_case", deny_unknown_fields)]
 enum PythonEnvironment {
     System {

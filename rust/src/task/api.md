@@ -1,6 +1,6 @@
 # Task API
 
-This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
 
 Task owns Workflow's uniform scientific execution boundary. A configured
 scientific task selects one registered `ExecutionUnit`, one resolved constants
@@ -84,6 +84,10 @@ and the unit cannot retain it after `initialize` returns.
 
 - `has_master_seed(&self) -> bool` reports whether the optional top-level
   `study.json.seed` exists. Merely inspecting this value records nothing.
+- `dependencies(&self) -> &serde_json::Value` borrows completed summaries from
+  the task's declared dependency phases. When global parameters sweep, Workflow
+  includes only upstream task copies belonging to the same resolved global
+  configuration.
 - `shared_seed(&self, purpose: &str) -> Result<u64, SeedError>` derives a seed
   for coordinated behavior shared by every member in the unit.
 - `member_seed(&self, member_identity: &str, purpose: &str) -> Result<u64,

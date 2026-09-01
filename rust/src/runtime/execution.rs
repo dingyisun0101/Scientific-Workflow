@@ -324,11 +324,10 @@ fn run_replicate_inner(
             return Err(RuntimeError::ExecutionCancelled);
         }
         let phase = &study.phases()[position];
-        let dependencies_json = dependency_snapshot(phase, &phases);
         let context = PhaseRuntime {
             study,
             replicate_directory: &scope,
-            dependencies_json,
+            completed_phases: &phases,
             replicate: index,
             presentation,
             scheduler_cancellation,
@@ -390,7 +389,7 @@ struct TaskWorkerOutcome {
 struct PhaseRuntime<'a> {
     study: &'a Study,
     replicate_directory: &'a Path,
-    dependencies_json: Box<[u8]>,
+    completed_phases: &'a [PhaseRunSummary],
     replicate: u64,
     presentation: &'a RuntimePresentation,
     scheduler_cancellation: &'a AtomicBool,
@@ -404,6 +403,7 @@ struct TaskRuntime {
     project_root: PathBuf,
     replicate_directory: PathBuf,
     dependencies_json: Box<[u8]>,
+    configuration: usize,
     replicate: u64,
     master_seed: Option<u64>,
     threads: usize,
@@ -493,7 +493,7 @@ fn run_phase_inner(
                 break;
             };
             let task = pending.pop_front().expect("checked nonempty task queue");
-            match spawn_task(task, phase.name(), context, resource_lease) {
+            match spawn_task(task, phase, context, resource_lease) {
                 Ok(task) => active.push(task),
                 Err(error) => {
                     first_error = Some(error);
@@ -621,7 +621,7 @@ pub(super) fn task_exceeded_timeout(
 
 fn spawn_task(
     task: StudyTask,
-    phase: &str,
+    phase: &StudyPhase,
     context: &PhaseRuntime<'_>,
     resource_lease: ResourceLease,
 ) -> Result<ActiveTask, RuntimeError> {
@@ -631,12 +631,15 @@ fn spawn_task(
     let output_directory = context
         .replicate_directory
         .join(format!("task-{:06}", worker_task.output_ordinal()));
+    let dependencies_json =
+        dependency_snapshot(phase, context.completed_phases, worker_task.configuration());
     let runtime = TaskRuntime {
         persistence_plan: context.study.persistence_plan(),
-        config_snapshot: context.study.config_snapshot(),
+        config_snapshot: worker_task.config_snapshot(),
         project_root: context.study.project_root().to_path_buf(),
         replicate_directory: context.replicate_directory.to_path_buf(),
-        dependencies_json: context.dependencies_json.clone(),
+        dependencies_json,
+        configuration: worker_task.configuration(),
         replicate: context.replicate,
         master_seed: context.study.master_seed(),
         threads: task_effective_threads(&worker_task, context.study.threads()),
@@ -680,7 +683,7 @@ fn spawn_task(
     };
     context.presentation.publish(RuntimeEvent::TaskStarted {
         replicate: context.replicate,
-        phase,
+        phase: phase.name(),
         identity: task.identity(),
         label: task.label(),
         kind: task.kind_name(),
@@ -741,14 +744,25 @@ fn run_task(
         )
     });
     let initialization_context = task.execution_unit().map(|execution_unit_key| {
-        InitializationContext::new(
+        let dependencies = serde_json::from_slice(&runtime.dependencies_json)
+            .expect("Runtime's dependency snapshot is valid JSON");
+        InitializationContext::with_dependencies(
             runtime.master_seed,
             runtime.replicate,
             task.identity(),
             execution_unit_key,
+            dependencies,
         )
     });
     let provenance = task.execution_unit_provenance().map(|provenance| {
+        let mut parameters = runtime.config_snapshot.parameters().clone();
+        parameters
+            .as_object_mut()
+            .expect("parameters.json root is an object")
+            .insert(
+                provenance.execution_unit().to_owned(),
+                provenance.constants().clone(),
+            );
         MemberRecordingProvenance::new(
             task.identity(),
             provenance.execution_unit(),
@@ -758,6 +772,7 @@ fn run_task(
             provenance.constants().clone(),
             runtime.threads,
         )
+        .with_parameters(parameters)
     });
     let environment = RuntimeTaskEnvironment::new(
         runtime.config_snapshot,
@@ -823,6 +838,7 @@ fn run_task(
         identity: task.identity().into(),
         kind,
         output_directory: host.output_directory().to_path_buf(),
+        configuration: runtime.configuration,
     })
 }
 
@@ -843,7 +859,11 @@ fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box<[u8]> {
+fn dependency_snapshot(
+    phase: &StudyPhase,
+    completed: &[PhaseRunSummary],
+    configuration: usize,
+) -> Box<[u8]> {
     let dependencies = phase
         .dependencies()
         .collect::<std::collections::HashSet<_>>();
@@ -853,7 +873,9 @@ fn dependency_snapshot(phase: &StudyPhase, completed: &[PhaseRunSummary]) -> Box
         .map(|summary| {
             serde_json::json!({
                 "phase": summary.name(),
-                "tasks": summary.tasks().iter().map(|task| {
+                "tasks": summary.tasks().iter().filter(|task| {
+                    task.configuration() == configuration
+                }).map(|task| {
                     serde_json::json!({
                         "identity": task.identity(),
                         "workload": dependency_workload(task.kind()),

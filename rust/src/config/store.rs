@@ -24,18 +24,31 @@ struct ConfigInner {
     study_path: PathBuf,
     study: Value,
     documents: BTreeMap<PathBuf, ConfigDocument>,
-    snapshot_json: Arc<[u8]>,
 }
 
 /// Clone-cheap immutable language-neutral configuration snapshot for programs.
 #[derive(Clone)]
 pub(crate) struct ConfigSnapshot {
     bytes: Arc<[u8]>,
+    parameters: Arc<Value>,
 }
 
 impl ConfigSnapshot {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub(crate) fn parameters(&self) -> &Value {
+        &self.parameters
+    }
+}
+
+impl std::fmt::Debug for ConfigSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConfigSnapshot")
+            .field("bytes", &self.bytes.len())
+            .finish()
     }
 }
 
@@ -88,7 +101,6 @@ impl Config {
             );
         }
 
-        let snapshot_json = Arc::from(snapshot_json(&study, &documents));
         Ok(Self {
             inner: Arc::new(ConfigInner {
                 project_root,
@@ -96,7 +108,6 @@ impl Config {
                 study_path,
                 study,
                 documents,
-                snapshot_json,
             }),
         })
     }
@@ -146,10 +157,15 @@ impl Config {
             .map(|document| (document.path.as_path(), &document.value)))
     }
 
-    /// Returns a clone-cheap snapshot handle for active program execution.
-    pub(crate) fn snapshot(&self) -> ConfigSnapshot {
+    /// Builds a language-neutral snapshot with one resolved parameters document.
+    pub(crate) fn snapshot_with_parameters(&self, parameters: &Value) -> ConfigSnapshot {
         ConfigSnapshot {
-            bytes: Arc::clone(&self.inner.snapshot_json),
+            bytes: Arc::from(snapshot_json_with_parameters(
+                &self.inner.study,
+                &self.inner.documents,
+                parameters,
+            )),
+            parameters: Arc::new(parameters.clone()),
         }
     }
 }
@@ -194,15 +210,32 @@ fn discover_json(directory: &Path, paths: &mut Vec<PathBuf>) -> Result<(), Confi
     Ok(())
 }
 
-fn snapshot_json(study: &Value, documents: &BTreeMap<PathBuf, ConfigDocument>) -> Box<[u8]> {
+fn snapshot_json_with_parameters(
+    study: &Value,
+    documents: &BTreeMap<PathBuf, ConfigDocument>,
+    parameters: &Value,
+) -> Box<[u8]> {
+    snapshot_json_inner(study, documents, parameters)
+}
+
+fn snapshot_json_inner(
+    study: &Value,
+    documents: &BTreeMap<PathBuf, ConfigDocument>,
+    resolved_parameters: &Value,
+) -> Box<[u8]> {
     let mut config = Map::new();
     for (relative, document) in documents {
+        let value = if relative == Path::new("parameters.json") {
+            resolved_parameters
+        } else {
+            &document.value
+        };
         config.insert(
             relative
                 .to_str()
                 .expect("config paths were validated as UTF-8")
                 .replace(std::path::MAIN_SEPARATOR, "/"),
-            document.value.clone(),
+            value.clone(),
         );
     }
     let snapshot = Value::Object(Map::from_iter([

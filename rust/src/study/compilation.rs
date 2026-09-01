@@ -29,8 +29,12 @@ pub(crate) fn compile(
         let phase: &PhaseSpecification = phase;
         let mut tasks = Vec::with_capacity(phase.tasks().len());
         for resolved in phase.tasks() {
+            let configuration = resolved.configuration();
+            let config_snapshot = resolved.snapshot().clone();
             let (identity_suffix, label, task) = match resolved {
-                ResolvedTask::ExecutionUnit { parameters, state } => {
+                ResolvedTask::ExecutionUnit {
+                    parameters, state, ..
+                } => {
                     let registration =
                         catalog.get(parameters.execution_unit()).ok_or_else(|| {
                             StudyError::UnknownExecutionUnit {
@@ -102,7 +106,7 @@ pub(crate) fn compile(
                         registration.make_task(parameters.clone(), state, schema, observation_plan),
                     )
                 }
-                ResolvedTask::Program(program) => {
+                ResolvedTask::Program { program, .. } => {
                     let name = program.subject();
                     let kind = program.kind_name();
                     (
@@ -117,6 +121,8 @@ pub(crate) fn compile(
                 identity: identity.into_boxed_str(),
                 label: label.into_boxed_str(),
                 output_ordinal,
+                configuration,
+                config_snapshot,
                 task,
             });
             output_ordinal = output_ordinal

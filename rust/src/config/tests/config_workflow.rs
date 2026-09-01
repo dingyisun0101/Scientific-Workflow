@@ -129,7 +129,7 @@ fn manifest() -> &'static str {
 fn execution_unit_task(task: &ResolvedTask) -> &ResolvedExecutionUnitParameters {
     match task {
         ResolvedTask::ExecutionUnit { parameters, .. } => parameters,
-        ResolvedTask::Program(_) => panic!("expected a unit task"),
+        ResolvedTask::Program { .. } => panic!("expected a unit task"),
     }
 }
 
@@ -138,14 +138,14 @@ fn execution_unit_state(task: &ResolvedTask) -> &str {
         ResolvedTask::ExecutionUnit { state, .. } => state
             .as_deref()
             .expect("test helper expects an explicit project state"),
-        ResolvedTask::Program(_) => panic!("expected a unit task"),
+        ResolvedTask::Program { .. } => panic!("expected a unit task"),
     }
 }
 
 fn program_task(task: &ResolvedTask) -> &ResolvedProgramTask {
     match task {
         ResolvedTask::ExecutionUnit { .. } => panic!("expected a program task"),
-        ResolvedTask::Program(program) => program,
+        ResolvedTask::Program { program, .. } => program,
     }
 }
 
@@ -283,6 +283,54 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
     assert_eq!(analysis.dependencies().collect::<Vec<_>>(), ["simulate"]);
     assert_eq!(analysis.timeout(), Some(Duration::from_millis(500)));
     assert_eq!(analysis.failure_policy(), FailurePolicy::FinishAll);
+}
+
+#[test]
+fn top_level_sweeps_expand_every_task_while_execution_unit_sweeps_remain_local() {
+    let project = TestProject::new(
+        r#"{
+          "phases": {
+            "simulate": {
+              "tasks": [{"execution_unit":"unit"}]
+            }
+          }
+        }"#,
+        &[
+            ("species", r#"{"$sweep":[200,400]}"#),
+            ("shared", r#"{"scale":0.3}"#),
+            ("unit", r#"{"steps":{"$sweep":[1,2]}}"#),
+        ],
+    );
+
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    let tasks = specification.phases()[0].tasks();
+    assert_eq!(tasks.len(), 4);
+    assert_eq!(
+        tasks
+            .iter()
+            .map(ResolvedTask::configuration)
+            .collect::<Vec<_>>(),
+        [0, 0, 1, 1]
+    );
+
+    let resolved = tasks
+        .iter()
+        .map(|task| {
+            let snapshot: serde_json::Value =
+                serde_json::from_slice(task.snapshot().bytes()).unwrap();
+            (
+                snapshot["config"]["parameters.json"]["species"]
+                    .as_u64()
+                    .unwrap(),
+                execution_unit_task(task)
+                    .decode::<serde_json::Value>()
+                    .unwrap()["steps"]
+                    .as_u64()
+                    .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(resolved, [(200, 1), (200, 2), (400, 1), (400, 2)]);
 }
 
 #[test]
@@ -724,7 +772,7 @@ fn central_config_captures_all_project_parameters_in_one_namespace() {
 
     let specification = ProjectSpecification::load(project.path()).unwrap();
     let snapshot: serde_json::Value =
-        serde_json::from_slice(specification.config().snapshot().bytes()).unwrap();
+        serde_json::from_slice(specification.phases()[0].tasks()[0].snapshot().bytes()).unwrap();
     assert_eq!(
         snapshot["study"]["phases"]["only"]["tasks"][0]["execution_unit"],
         "unit"
@@ -813,7 +861,7 @@ fn json_file_symlinks_preserve_authored_keys_and_enforce_containment() {
     .unwrap();
     let specification = ProjectSpecification::load(contained.path()).unwrap();
     let snapshot: serde_json::Value =
-        serde_json::from_slice(specification.config().snapshot().bytes()).unwrap();
+        serde_json::from_slice(specification.phases()[0].tasks()[0].snapshot().bytes()).unwrap();
     assert_eq!(
         snapshot["config"]["alias.json"],
         snapshot["config"]["states/default.json"]

@@ -9,15 +9,38 @@ use serde_json::Value;
 
 use super::error::ConfigError;
 use super::program::ResolvedProgramTask;
+use super::store::ConfigSnapshot;
 
 /// One centrally resolved generic task declaration.
 #[derive(Clone, Debug)]
 pub(crate) enum ResolvedTask {
     ExecutionUnit {
+        configuration: usize,
+        snapshot: ConfigSnapshot,
         parameters: ResolvedExecutionUnitParameters,
         state: Option<Box<str>>,
     },
-    Program(ResolvedProgramTask),
+    Program {
+        configuration: usize,
+        snapshot: ConfigSnapshot,
+        program: ResolvedProgramTask,
+    },
+}
+
+impl ResolvedTask {
+    pub(crate) const fn configuration(&self) -> usize {
+        match self {
+            Self::ExecutionUnit { configuration, .. } | Self::Program { configuration, .. } => {
+                *configuration
+            }
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> &ConfigSnapshot {
+        match self {
+            Self::ExecutionUnit { snapshot, .. } | Self::Program { snapshot, .. } => snapshot,
+        }
+    }
 }
 
 /// One complete execution-unit parameter combination after deterministic expansion.

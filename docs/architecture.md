@@ -1,7 +1,7 @@
 # Workflow architecture
 
 This document describes the reviewed architecture shipped by Rust package
-0.12.1 and its recording-v7 integration with Python reader 0.3.1.
+0.13.0 and its recording-v7 integration with Python reader 0.3.1.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -420,6 +420,11 @@ Config canonicalizes the project and required `wf_configs` roots and parses
 (including all named state schemas), and the complete arbitrary
 `wf_configs/parameters.json` namespace with duplicate-key rejection. One
 clone-cheap immutable Config retains the entire value graph.
+Top-level sections selected as execution units by `study.json` are inferred as
+local constants. Config expands every other top-level value together as the
+global parameter object, clones the complete phase graph for each resulting
+configuration, and then expands each execution-unit section locally. This
+correlation index is private runtime state, not project syntax.
 The required top-level `study.json.workflow_schema` is the independently
 versioned authored-configuration contract. The required positive top-level
 `study.json.threads` is the authoritative global compute budget. It has no
@@ -533,9 +538,10 @@ default working area, but Python or another external program owns its
 domain-specific IO and may write to a safe project-relative destination from
 `wf_configs/parameters.json`; the attractor plotter uses `output/plots`.
 
-Member-recording provenance calls the selected combination
+Member-recording provenance calls the selected local combination
 `parameter_ordinal` and its canonical `wf_configs/parameters.json` document
-`parameter_source`; `state` records either the named project selector or the
+`parameter_source`; `parameters` stores the resolved shared project values,
+while `state` records either the named project selector or the
 standard provider ID bound during assembly. The removed per-task input-file
 vocabulary is not retained on disk.
 When an execution unit requested Workflow-derived seeds, the recording's

@@ -169,6 +169,7 @@ pub(crate) struct ParsedManifest {
     pub(crate) phases: Vec<ParsedPhase>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ParsedPhase {
     pub(crate) name: Box<str>,
     pub(crate) dependencies: Box<[Box<str>]>,
@@ -179,6 +180,7 @@ pub(crate) struct ParsedPhase {
     pub(crate) failure_policy: FailurePolicy,
 }
 
+#[derive(Clone)]
 pub(crate) enum ParsedTask {
     ExecutionUnit {
         execution_unit: Box<str>,

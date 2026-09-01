@@ -1,6 +1,6 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.12.1 and Python
+This map is the release-qualification baseline for Rust 0.13.0 and Python
 reader 0.3.1.
 
 Tests follow subsystem responsibility and supported boundaries. Observation
@@ -47,7 +47,8 @@ public.
   and executable preflight, contained/escaping JSON symlinks, authored
   snapshot keys, non-UTF-8 document and project-root rejection before JSON
   provenance, RFC 6901 diagnostic pointers,
-  deterministic `$sweep`/`$cases` expansion and malformed-marker rejection,
+  deterministic `$sweep`/`$cases` expansion, inferred global-versus-local
+  scope, whole-graph task multiplication, and malformed-marker rejection,
   private typed constants decoding, decimal-MB persistence-size conversion,
   overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
   clone-cheap frozen snapshot bytes, and contextual errors. Even an
@@ -74,7 +75,9 @@ public.
   rejection of legacy input-path fields. Its
   Unix program-task test verifies the frozen central Config after source files
   change, dependency-summary handoff, direct executable invocation, artifacts,
-  logs, metadata, and generic runtime summaries. A separate direct Python task
+  logs, metadata, and generic runtime summaries. A global-sweep execution test
+  also verifies per-task resolved snapshots and same-configuration dependency
+  filtering. A separate direct Python task
   verifies that a non-executable `.py` script runs through its nested `system`
   environment without any Rust wrapper and records Python launcher provenance.
 - `rust/src/runtime/tests/runtime_workflow.rs` covers summary/error

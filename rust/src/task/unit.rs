@@ -15,35 +15,59 @@ use super::result::UnitResult;
 
 pub(crate) const SEED_DERIVATION_ALGORITHM: &str = "scientific-workflow.seed.v1";
 
-/// Immutable execution facts and optional deterministic seed derivation.
+/// Immutable dependency results, execution facts, and optional seed derivation.
 ///
 /// Workflow creates one context for each execution-unit initialization. A
-/// deterministic unit may ignore it. A stochastic unit requests only the
-/// named seeds it actually needs; Workflow derives them without counters or
-/// request-order dependence and records successful requests with the affected
-/// member's output metadata.
+/// unit may inspect completed correlated dependencies. A stochastic unit
+/// requests only the named seeds it actually needs; Workflow derives them
+/// without counters or request-order dependence and records successful
+/// requests with the affected member's output metadata.
 pub struct InitializationContext {
     master_seed: Option<u64>,
     replicate_ordinal: u64,
     task_identity: Box<str>,
     execution_unit_key: Box<str>,
+    dependencies: Value,
     requests: Mutex<BTreeMap<SeedRequest, u64>>,
 }
 
 impl InitializationContext {
+    #[cfg(test)]
     pub(crate) fn new(
         master_seed: Option<u64>,
         replicate_ordinal: u64,
         task_identity: &str,
         execution_unit_key: &str,
     ) -> Self {
+        Self::with_dependencies(
+            master_seed,
+            replicate_ordinal,
+            task_identity,
+            execution_unit_key,
+            Value::Array(Vec::new()),
+        )
+    }
+
+    pub(crate) fn with_dependencies(
+        master_seed: Option<u64>,
+        replicate_ordinal: u64,
+        task_identity: &str,
+        execution_unit_key: &str,
+        dependencies: Value,
+    ) -> Self {
         Self {
             master_seed,
             replicate_ordinal,
             task_identity: task_identity.into(),
             execution_unit_key: execution_unit_key.into(),
+            dependencies,
             requests: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Returns completed summaries from the task's declared dependency phases.
+    pub const fn dependencies(&self) -> &Value {
+        &self.dependencies
     }
 
     /// Returns whether `wf_configs/study.json` supplied a master seed.

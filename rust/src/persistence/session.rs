@@ -26,6 +26,7 @@ pub(crate) struct MemberRecordingProvenance {
     parameter_ordinal: u64,
     parameter_source: PathBuf,
     constants: Value,
+    parameters: Value,
     threads: usize,
     member_index: Option<usize>,
     member_identity: Option<Box<str>>,
@@ -49,11 +50,17 @@ impl MemberRecordingProvenance {
             parameter_ordinal,
             parameter_source: parameter_source.to_path_buf(),
             constants,
+            parameters: Value::Object(Map::new()),
             threads,
             member_index: None,
             member_identity: None,
             seed_derivation: None,
         }
+    }
+
+    pub(crate) fn with_parameters(mut self, parameters: Value) -> Self {
+        self.parameters = parameters;
+        self
     }
 
     pub(crate) fn with_member(mut self, index: usize, identity: &str) -> Self {
@@ -110,6 +117,7 @@ impl MemberRecordingProvenance {
                     .expect("Config preflight requires UTF-8 parameter paths")
                     .into(),
             ),
+            ("parameters".to_owned(), self.parameters),
             ("persistence".to_owned(), persistence),
             ("threads".to_owned(), self.threads.into()),
         ]);

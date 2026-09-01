@@ -3,9 +3,11 @@
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 
-> **Breaking update — 0.12.1:** This release supersedes the unversioned 0.11.x
-> project grammar. Every `wf_configs/study.json` must declare
-> `"workflow_schema": 1`; no compatibility alias exists for an omitted schema.
+> **Breaking update — 0.13.0:** This release supersedes Workflow 0.12.x
+> parameter expansion. Top-level `$sweep` values outside execution-unit
+> sections now expand the complete study graph; no compatibility alias retains
+> their former local interpretation. Projects still declare
+> `"workflow_schema": 1`.
 
 ## New to Workflow?
 
@@ -133,14 +135,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.12.1"
+scientific-workflow = "0.13.0"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.12.1
+cargo add scientific-workflow@0.13.0
 cargo add serde --features derive
 ```
 
@@ -155,7 +157,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.12.1", default-features = false }
+scientific-workflow = { version = "0.13.0", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they
@@ -301,7 +303,9 @@ immutable Config value; custom `Deserialize` implementations must therefore be
 deterministic and side-effect-free.
 
 `InitializationContext` is a Workflow-created, immutable
-initialization service. `has_master_seed()` reports whether the study declared
+initialization service. `dependencies()` exposes completed summaries from the
+task's declared dependency phases, already correlated to the same resolved
+global parameter configuration. `has_master_seed()` reports whether the study declared
 one. `shared_seed(purpose)` derives a seed for unit-wide coordination;
 `member_seed(member_identity, purpose)` derives one for a specific exposed member.
 Both return `Result<u64, SeedError>`. Names must be stable, nonempty, and free
@@ -767,9 +771,13 @@ degrading or being reported as cooperative workflow cancellation. All visible
 dashboard/plain behavior remains identical to earlier 0.11.x operation.
 
 Config alone reads `wf_configs/study.json`, every named project state document, and the complete
-arbitrary `wf_configs/parameters.json` namespace once. `$sweep` creates independent Cartesian
-choices; `$cases` creates correlated alternatives; ordinary arrays remain
-literal. Program arguments are optional opaque strings and executables are
+arbitrary `wf_configs/parameters.json` namespace once. A top-level section
+whose name is selected by an execution-unit task is inferred as local to that
+unit; every other top-level parameter is shared globally. Global choices clone
+the complete phase graph, and local choices clone only their execution-unit
+task. `$sweep` creates independent Cartesian choices; `$cases` creates
+correlated alternatives; ordinary arrays remain literal. Users do not write a
+scope marker, reference, or ordinal. Program arguments are optional opaque strings and executables are
 started directly without a shell. Python-specific `script`, `environment`, and
 `args` stay nested beneath `python`; generic timeout policy remains on the
 containing task. Supported managers are `system`, `venv`, `mamba`, `conda`,
@@ -793,7 +801,8 @@ and persists every exposed member automatically while publishing inferred
 aggregate terminal progress.
 
 Each program or Python script receives absolute `WORKFLOW_CONFIG_PATH` and
-`WORKFLOW_DEPENDENCIES_PATH` snapshot files plus project, execution, replicate,
+`WORKFLOW_DEPENDENCIES_PATH` snapshot files for its resolved global
+configuration plus project, execution, replicate,
 and task-output paths through `WORKFLOW_*` environment variables. It runs in an
 isolated `artifacts/` working directory; Workflow captures stdout, stderr, and
 terminal status. A seeded external task additionally receives the derived

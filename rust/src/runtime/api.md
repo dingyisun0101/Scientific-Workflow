@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -45,7 +45,9 @@ down; application/execution unit code performs none of this coordination.
 
 For each execution unit task, Runtime also constructs one immutable
 `InitializationContext` from Study's optional master seed, replicate ordinal,
-task identity, and registered execution-unit key. The unit may request
+task identity, registered execution-unit key, and the completed summaries from
+its declared dependency phases. Dependency summaries are filtered to the same
+resolved global configuration before initialization. The unit may request
 purpose-named shared or member-scoped seeds. Runtime validates member identities
 after initialization and passes each member's applicable actual requests into
 Persistence before that execution unit's recording begins. A program or Python
@@ -202,9 +204,11 @@ error are captured as `stdout.log` and `stderr.log`. Runtime supplies absolute
 paths through:
 
 - `WORKFLOW_CONFIG_PATH`: immutable `workflow-config.json`, containing the
-  captured `study` value and all `wf_configs/` JSON documents;
+  captured `study` value and all `wf_configs/` JSON documents, with global
+  parameter selections resolved for this task;
 - `WORKFLOW_DEPENDENCIES_PATH`: immutable `workflow-dependencies.json`, with
-  completed task summaries from declared dependency phases;
+  completed task summaries from declared dependency phases, filtered to this
+  task's resolved global configuration;
 - `WORKFLOW_PROJECT_ROOT`: canonical project root;
 - `WORKFLOW_EXECUTION_ROOT`: unique execution directory;
 - `WORKFLOW_REPLICATE_ROOT`: current replicate directory; and
@@ -329,13 +333,14 @@ Runtime-owned observer/event/task-presentation contracts, UI session, backend ow
 topological-position calculation are private.
 
 Runtime passes `MemberRecordingProvenance` as semantic facts—task identity,
-registered unit key, selected state, parameter ordinal/source, and resolved constants—to
+registered unit key, selected state, local parameter ordinal/source, resolved
+constants, and the task's resolved project parameters—to
 Persistence. Runtime does not construct durable JSON namespaces and does not
 name the local backend or its format fields. Persistence authors recording
 metadata, which keeps complete resolved constants under `constants`
 and Workflow identity/source facts under a separate `workflow` object. The
-workflow object names the selected registration, `parameter_ordinal`, and canonical
-`parameter_source`, plus the explicitly selected `state` key; the effective
+workflow object names the selected registration, `parameter_ordinal`, canonical
+`parameter_source`, resolved `parameters`, and the explicitly selected `state` key; the effective
 object also records `member_index` and `member_identity` for every execution unit;
 backend and byte settings are recorded under
 `workflow.persistence`. The user-authored `chunk_target_mb` and

@@ -116,6 +116,7 @@ pub struct TaskRunSummary {
     pub(crate) identity: Box<str>,
     pub(crate) kind: TaskRunKind,
     pub(crate) output_directory: PathBuf,
+    pub(crate) configuration: usize,
 }
 
 impl TaskRunSummary {
@@ -144,5 +145,9 @@ impl TaskRunSummary {
             }
             TaskRunKind::Program { .. } => None,
         }
+    }
+
+    pub(crate) const fn configuration(&self) -> usize {
+        self.configuration
     }
 }

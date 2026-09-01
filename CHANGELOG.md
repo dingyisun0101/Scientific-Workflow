@@ -4,6 +4,24 @@ This repository coordinates the independently versioned Rust workflow crate
 and Python recording reader. Recording-format versions remain independent of
 both package versions; see the [compatibility matrix](protocol/compatibility.md).
 
+## Unreleased
+
+## Rust 0.13.0 — 2026-09-01
+
+This is a breaking parameter-expansion release. It keeps project configuration
+at `workflow_schema: 1` and recording format v7, but does not provide a
+compatibility alias for the former interpretation of non-unit top-level
+`$sweep` values.
+
+- Infers global parameter sweeps from every top-level `parameters.json` value
+  not selected as an execution-unit section, then clones the complete phase
+  graph for each resolved configuration.
+- Keeps execution-unit-section sweeps local, correlates dependency summaries
+  by resolved global configuration, exposes them through
+  `InitializationContext`, and supplies each program with its resolved config.
+- Records resolved project parameters in execution-unit provenance without
+  adding user-authored scope, reference, or ordinal syntax.
+
 ## Rust 0.12.1 and Python reader 0.3.1 — 2026-08-31
 
 This is a breaking Rust workflow-generation release and the coordinated Python

@@ -3,9 +3,11 @@
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
 
-> **Breaking update — 0.12.1:** This release supersedes the unversioned 0.11.x
-> project grammar. Every `wf_configs/study.json` must declare
-> `"workflow_schema": 1`; no compatibility alias exists for an omitted schema.
+> **Breaking update — 0.13.0:** This release supersedes Workflow 0.12.x
+> parameter expansion. Top-level `$sweep` values outside execution-unit
+> sections now expand the complete study graph; no compatibility alias retains
+> their former local interpretation. Projects still declare
+> `"workflow_schema": 1`.
 
 ## Start here
 
@@ -28,7 +30,7 @@ executable programs, and declarative JSON into validated, recorded studies.
   [compatibility matrix](protocol/compatibility.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
-- For the coordinated Rust 0.12.1 and Python 0.3.1 release summary, see the
+- For the Rust 0.13.0 release summary and Python 0.3.1 compatibility, see the
   [changelog](CHANGELOG.md).
 
 ## Repository map
@@ -59,13 +61,14 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   context, per-member `MemberView`, ensemble contracts, registration, and generic
   program tasks with optional centralized task-seed derivation.
 - [Config](rust/src/config/api.md): required study-wide threads, project JSON,
-  optional named state paths, parameter expansion, and program/Python resolution.
+  optional named state paths, inferred global/local parameter expansion, and
+  program/Python resolution.
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable
   execution intent.
 - [Persistence](rust/src/persistence/api.md): automatic recordings, lifecycle,
   format, verified reconstruction, and the repository-level wire protocol.
 - [Runtime](rust/src/runtime/api.md): execution, scheduling, cancellation,
-  program environments, and summaries.
+  per-configuration dependency correlation, program environments, and summaries.
 - [UI](rust/src/ui/api.md): automatic terminal presentation and exit handling.
 - [Error](rust/src/error/api.md): complete-workflow error composition.
 - [Prelude](rust/src/prelude/api.md): the ordinary execution-unit authoring

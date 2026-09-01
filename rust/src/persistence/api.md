@@ -1,6 +1,6 @@
 # Persistence API
 
-This guide documents the `scientific-workflow` 0.12.1 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
 
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified member-state reconstruction. Config parses optional operational sizing,
@@ -101,7 +101,7 @@ task-NNNNNN/                         multi-member execution-unit root
 Stable numeric indices—not application identities—form paths. Each recording's
 `user_metadata.workflow` object retains `member_index` and `member_identity`
 alongside the registered key, resolved state provenance, parameter provenance,
-the authoritative `threads` count, and effective
+the resolved project `parameters`, the authoritative `threads` count, and effective
 persistence plan. If the unit successfully requested Workflow-derived seeds,
 the same object contains `seed_derivation`: its versioned `algorithm`, authored
 `master_seed`, and deterministic `requests` array. Each entry stores `scope`,
@@ -273,7 +273,8 @@ the persistence module root:
   queue byte limits.
 - `MemberRecordingProvenance` owns semantic execution unit facts supplied by Runtime. It
   does not accept an arbitrary metadata map; Persistence alone constructs the
-  exact `constants`, `workflow`, backend, and effective-setting JSON.
+  exact `constants`, resolved-project `parameters`, `workflow`, backend, and
+  effective-setting JSON.
   Runtime derives one member-specific value with a stable index and identity
   before opening each recording. Every retained path is exact UTF-8 already guaranteed by Config preflight;
   Persistence never substitutes replacement characters in provenance.

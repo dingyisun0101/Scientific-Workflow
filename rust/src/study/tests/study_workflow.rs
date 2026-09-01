@@ -454,6 +454,10 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
         );
         assert_eq!(metadata["user_metadata"]["workflow"]["state"], "default");
         assert_eq!(
+            metadata["user_metadata"]["workflow"]["parameters"]["counter"],
+            serde_json::json!({"initial": 5, "steps": 2})
+        );
+        assert_eq!(
             metadata["user_metadata"]["workflow"]["parameter_ordinal"],
             0
         );
@@ -636,6 +640,7 @@ result = {
     "dependency_kind": dependencies[0]["tasks"][0]["workload"]["kind"],
     "dependency_exists": Path(dependencies[0]["tasks"][0]["output_directory"]).is_dir(),
 }
+
 (output / "plot-result.json").write_text(json.dumps(result))
 "#,
     )
@@ -712,6 +717,87 @@ result = {
             .join("stderr.log")
             .is_file()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn global_sweeps_clone_the_phase_graph_and_keep_dependencies_correlated() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let project = Project::new(
+        r#"{
+          "phases": {
+            "prepare": {"tasks": [{"program":"prepare.py"}]},
+            "consume": {
+              "after": ["prepare"],
+              "tasks": [{"program":"consume.py"}]
+            }
+          }
+        }"#,
+        r#"{"initial":0,"steps":0}"#,
+    );
+    fs::write(
+        project.path().join("wf_configs/parameters.json"),
+        r#"{"species":{"$sweep":[200,400]},"protocol":{"scale":0.3}}"#,
+    )
+    .unwrap();
+    let prepare = project.path().join("prepare.py");
+    fs::write(
+        &prepare,
+        r#"#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+config = json.loads(Path(os.environ["WORKFLOW_CONFIG_PATH"]).read_text())
+species = config["config"]["parameters.json"]["species"]
+Path(os.environ["WORKFLOW_TASK_OUTPUT"]).joinpath("species.json").write_text(json.dumps(species))
+"#,
+    )
+    .unwrap();
+    let consume = project.path().join("consume.py");
+    fs::write(
+        &consume,
+        r#"#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+config = json.loads(Path(os.environ["WORKFLOW_CONFIG_PATH"]).read_text())
+dependencies = json.loads(Path(os.environ["WORKFLOW_DEPENDENCIES_PATH"]).read_text())
+tasks = dependencies[0]["tasks"]
+upstream = Path(tasks[0]["output_directory"]) / "artifacts" / "species.json"
+result = {
+    "resolved": config["config"]["parameters.json"]["species"],
+    "upstream": json.loads(upstream.read_text()),
+    "dependency_count": len(tasks),
+}
+Path(os.environ["WORKFLOW_TASK_OUTPUT"]).joinpath("result.json").write_text(json.dumps(result))
+"#,
+    )
+    .unwrap();
+    for program in [&prepare, &consume] {
+        fs::set_permissions(program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+    let replicate = &summary.replicates()[0];
+    assert_eq!(replicate.phases()[0].tasks().len(), 2);
+    assert_eq!(replicate.phases()[1].tasks().len(), 2);
+    let results = replicate.phases()[1]
+        .tasks()
+        .iter()
+        .map(|task| {
+            serde_json::from_slice::<serde_json::Value>(
+                &fs::read(task.output_directory().join("artifacts/result.json")).unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results[0]["resolved"], 200);
+    assert_eq!(results[0]["upstream"], 200);
+    assert_eq!(results[0]["dependency_count"], 1);
+    assert_eq!(results[1]["resolved"], 400);
+    assert_eq!(results[1]["upstream"], 400);
+    assert_eq!(results[1]["dependency_count"], 1);
 }
 
 #[cfg(unix)]
