@@ -1,6 +1,6 @@
 # Config API
 
-This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.1 subsystem contract.
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by
@@ -127,7 +127,9 @@ Unknown properties are rejected at every Workflow-owned level.
   have no surrounding whitespace.
 - `after` defaults to empty. Dependencies must exist, be unique, differ from
   the containing phase, and form an acyclic graph.
-- each phase must contain at least one task.
+- each ordinary phase must contain at least one task. The reserved `$npy`
+  phase is the sole exception: it declares no `tasks` and must declare at
+  least one prerequisite in `after`.
 - `max_concurrency` defaults to `1` and must be positive.
 - `start_interval_ms` defaults to zero and is the minimum delay between
   successive task admissions within that phase; the first eligible task is
@@ -141,6 +143,13 @@ Unknown properties are rejected at every Workflow-owned level.
     `{"program":"bin/analyze","args":["--publication"],"resources":{"threads":4}}`; or
   - a Python task with one nested `python` object and optional task-level
     `seed`, `resources`, and `timeout_ms`.
+- A phase named exactly `$npy` is Workflow's standard post-processing request.
+  Its complete minimal form is `"$npy":{"after":["simulate"]}`. Authors do
+  not declare a converter task, executable, paths, or arguments. Config
+  synthesizes one converter task for every inferred global configuration and
+  rejects authored `tasks` on this reserved phase. Runtime supplies all
+  transitively prerequisite execution-unit recordings from that same global
+  configuration; the converter ignores prerequisite program workspaces.
 - `resources` is the strict object `{"threads":N}`. It is valid only for a
   program or Python task, defaults to one thread when omitted, and must request
   a positive count no greater than top-level `threads`. The resolved count is

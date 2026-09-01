@@ -135,14 +135,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.0"
+scientific-workflow = "0.13.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.13.0
+cargo add scientific-workflow@0.13.1
 cargo add serde --features derive
 ```
 
@@ -151,13 +151,20 @@ Rust 1.97 or newer is required. Application executables should commit
 downstream application. The execution-unit attribute is re-exported by
 `scientific-workflow`; no separate procedural-macro dependency is needed.
 
+Projects declaring the reserved `$npy` phase also install the coordinated
+optional converter:
+
+```bash
+python -m pip install "scientific-workflow-reader[npy]==0.4.0"
+```
+
 The default `terminal-ui` feature preserves the automatic interactive
 dashboard and noninteractive lifecycle lines described in this guide. It is
 enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.13.0", default-features = false }
+scientific-workflow = { version = "0.13.1", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they

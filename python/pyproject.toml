@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scientific-workflow-reader"
-version = "0.3.1"
-description = "Verified Python reader for Scientific Workflow recordings"
+version = "0.4.0"
+description = "Verified Python reader and optional NumPy converter for Scientific Workflow recordings"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -18,6 +18,12 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Topic :: Scientific/Engineering",
 ]
+
+[project.optional-dependencies]
+npy = ["numpy>=1.26"]
+
+[project.scripts]
+scientific-workflow-to-npy = "scientific_workflow_reader.npy:main"
 
 [project.urls]
 Homepage = "https://github.com/dingyisun0101/Scientific-Workflow"

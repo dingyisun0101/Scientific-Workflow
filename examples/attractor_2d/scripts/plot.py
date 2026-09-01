@@ -3,27 +3,13 @@
 from __future__ import annotations
 
 import html
-import importlib
 import json
 import os
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-
-def _workflow_reader() -> Any:
-    """Import the installed reader, with a source-checkout fallback for this example."""
-
-    try:
-        return importlib.import_module("scientific_workflow_reader")
-    except ModuleNotFoundError:
-        project_root = Path(os.environ["WORKFLOW_PROJECT_ROOT"])
-        checkout_source = project_root.parents[1] / "python" / "src"
-        if not checkout_source.is_dir():
-            raise
-        sys.path.insert(0, str(checkout_source))
-        return importlib.import_module("scientific_workflow_reader")
+import numpy as np
 
 
 def _object(value: Any, name: str) -> Mapping[str, Any]:
@@ -87,16 +73,16 @@ def _output_directory(settings: Mapping[str, Any]) -> Path:
     return output
 
 
-def _recordings() -> list[Path]:
+def _processed_manifests() -> list[Path]:
     dependencies = json.loads(
         Path(os.environ["WORKFLOW_DEPENDENCIES_PATH"]).read_text()
     )
     if not isinstance(dependencies, list):
         raise ValueError("dependency snapshot must be an array")
-    recordings: list[Path] = []
+    manifests: list[Path] = []
     for phase in dependencies:
         phase = _object(phase, "dependency phase")
-        if phase.get("phase") != "simulate":
+        if phase.get("phase") != "$npy":
             continue
         tasks = phase.get("tasks")
         if not isinstance(tasks, list):
@@ -104,53 +90,73 @@ def _recordings() -> list[Path]:
         for task in tasks:
             task = _object(task, "dependency task")
             workload = _object(task.get("workload"), "dependency workload")
-            if workload.get("kind") != "execution_unit":
+            if workload.get("kind") != "npy":
                 continue
-            members = workload.get("members")
+            output = Path(_string(task.get("output_directory"), "conversion output"))
+            batch_path = output / "artifacts" / "manifest.json"
+            batch = _object(json.loads(batch_path.read_text()), "conversion manifest")
+            if batch.get("format") != "scientific-workflow-npy-batch.v1":
+                raise ValueError("unsupported conversion batch manifest")
+            members = batch.get("members")
             if not isinstance(members, list):
-                raise ValueError("execution-unit members must be an array")
+                raise ValueError("conversion manifest members must be an array")
             for member in members:
-                member = _object(member, "execution-unit member")
-                recordings.append(
-                    Path(_string(member.get("output_directory"), "member output"))
+                member = _object(member, "converted member")
+                manifests.append(
+                    batch_path.parent
+                    / _string(member.get("manifest"), "converted member manifest")
                 )
-    if not recordings:
-        raise ValueError("plot phase received no simulation recordings")
-    return recordings
+    if not manifests:
+        raise ValueError("plot phase received no processed recordings")
+    return manifests
 
 
 def _trajectories(stream: str) -> list[dict[str, Any]]:
-    reader_module = _workflow_reader()
     expected_parameter_source = (
         _project_root() / "wf_configs" / "parameters.json"
     ).resolve(strict=True)
     trajectories: list[dict[str, Any]] = []
-    for recording in _recordings():
-        reader = reader_module.open_completed_recording(recording)
-        series = reader.read_stream(stream)
-        points: list[tuple[float, float]] = []
-        for record in series:
-            point = record.values.get("point")
-            if (
-                not isinstance(point, list)
-                or len(point) != 2
-                or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in point)
-            ):
-                raise ValueError(f"recording {recording} contains an invalid point payload")
-            points.append((float(point[0]), float(point[1])))
-        if not points:
-            raise ValueError(f"recording {recording} has an empty {stream!r} stream")
-        metadata = _object(reader.user_metadata, "recording user metadata")
+    for manifest_path in _processed_manifests():
+        processed = _object(json.loads(manifest_path.read_text()), "NPY manifest")
+        if processed.get("format") != "scientific-workflow-npy.v1":
+            raise ValueError(f"unsupported NPY manifest at {manifest_path}")
+        descriptors = processed.get("arrays")
+        if not isinstance(descriptors, list):
+            raise ValueError("NPY manifest arrays must be an array")
+        point_descriptor = next(
+            (
+                item
+                for item in descriptors
+                if isinstance(item, Mapping)
+                and item.get("role") == "field"
+                and item.get("stream") == stream
+                and item.get("field") == "point"
+            ),
+            None,
+        )
+        if point_descriptor is None:
+            raise ValueError(f"processed recording has no {stream!r} point array")
+        points_array = np.load(
+            manifest_path.parent / _string(point_descriptor.get("path"), "point array path"),
+            mmap_mode="r",
+            allow_pickle=False,
+        )
+        if points_array.ndim != 2 or points_array.shape[1] != 2:
+            raise ValueError("processed point array must have shape (records, 2)")
+        if not points_array.flags.c_contiguous:
+            raise ValueError("processed point array must be C-contiguous")
+        points = [(float(point[0]), float(point[1])) for point in points_array]
+        metadata = _object(processed.get("user_metadata"), "recording user metadata")
         constants = _object(metadata.get("constants"), "constants")
         workflow = _object(metadata.get("workflow"), "workflow provenance")
         if (
             workflow.get("kind") != "execution_unit"
             or workflow.get("execution_unit") != "attractor"
         ):
-            raise ValueError(f"recording {recording} is not an attractor recording")
+            raise ValueError(f"processed recording {manifest_path} is not an attractor recording")
         if workflow.get("state") != "attractor":
             raise ValueError(
-                f"recording {recording} was not assembled with the attractor state"
+                f"processed recording {manifest_path} was not assembled with the attractor state"
             )
         parameter_ordinal = _integer(
             workflow.get("parameter_ordinal"),
@@ -162,11 +168,11 @@ def _trajectories(stream: str) -> list[dict[str, Any]]:
         ).resolve(strict=True)
         if parameter_source != expected_parameter_source:
             raise ValueError(
-                f"recording {recording} has unexpected parameter provenance"
+                f"processed recording {manifest_path} has unexpected parameter provenance"
             )
         trajectories.append(
             {
-                "recording": str(recording),
+                "recording": _string(processed.get("source_recording"), "source recording"),
                 "parameter_ordinal": parameter_ordinal,
                 "state": workflow["state"],
                 "mu": _number(constants.get("mu"), "constants.mu"),
@@ -251,7 +257,7 @@ def main() -> None:
         raise ValueError("plot.output_file must be a plain `.svg` filename")
     (output / output_file).write_text(_svg(settings, trajectories), encoding="utf-8")
     summary = {
-        "format": "scientific-workflow-attractor-plot-v2",
+        "format": "scientific-workflow-attractor-plot-v3",
         "stream": stream,
         "output": output_file,
         "trajectories": [

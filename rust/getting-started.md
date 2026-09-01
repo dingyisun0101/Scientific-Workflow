@@ -134,7 +134,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [dependencies]
-scientific-workflow = "0.13.0"
+scientific-workflow = "0.13.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -261,7 +261,8 @@ recording beneath `output/` automatically.
 - Follow the [complete Rust guide](README.md) for parameter sweeps,
   external programs, Python tasks, seeds, observation plans, and all public APIs.
 - Study the [two-dimensional attractor example](../examples/attractor_2d/README.md)
-  for a complete multi-phase project with six swept Rust tasks and a Python plot
-  phase.
+  for a complete multi-phase project with six swept Rust tasks, Workflow's
+  reserved `$npy` conversion phase, and a Python plot phase that reads the
+  processed arrays.
 - Read the [architecture guide](../docs/architecture.md) when you need subsystem
   ownership, dependency direction, or implementation and replacement details.

@@ -525,6 +525,10 @@ impl StudyTask {
             .program_threads()
             .expect("a compiled program task retains its positive thread request")
     }
+
+    pub(crate) fn is_npy(&self) -> bool {
+        self.task.is_npy()
+    }
 }
 
 impl std::fmt::Debug for StudyTask {

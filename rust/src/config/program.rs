@@ -27,6 +27,7 @@ struct ResolvedProgramTaskInner {
 #[derive(Clone, Debug)]
 enum ProgramSource {
     Executable,
+    Npy,
     Python {
         script: PathBuf,
         environment_manager: Box<str>,
@@ -85,6 +86,25 @@ impl ResolvedProgramTask {
         }
     }
 
+    pub(crate) fn for_npy(program: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(ResolvedProgramTaskInner {
+                program,
+                args: [
+                    OsString::from("-m"),
+                    OsString::from("scientific_workflow_reader.npy"),
+                    OsString::from("--workflow-dependencies"),
+                ]
+                .into(),
+                timeout: None,
+                seed_purpose: None,
+                threads: 1,
+                subject: "NPY conversion".into(),
+                source: ProgramSource::Npy,
+            }),
+        }
+    }
+
     pub(crate) fn program(&self) -> &Path {
         &self.inner.program
     }
@@ -112,25 +132,30 @@ impl ResolvedProgramTask {
     pub(crate) fn kind_name(&self) -> &'static str {
         match self.inner.source {
             ProgramSource::Executable => "program",
+            ProgramSource::Npy => "npy",
             ProgramSource::Python { .. } => "python",
         }
     }
 
     pub(crate) fn python_script(&self) -> Option<&Path> {
         match &self.inner.source {
-            ProgramSource::Executable => None,
+            ProgramSource::Executable | ProgramSource::Npy => None,
             ProgramSource::Python { script, .. } => Some(script),
         }
     }
 
     pub(crate) fn python_environment_manager(&self) -> Option<&str> {
         match &self.inner.source {
-            ProgramSource::Executable => None,
+            ProgramSource::Executable | ProgramSource::Npy => None,
             ProgramSource::Python {
                 environment_manager,
                 ..
             } => Some(environment_manager),
         }
+    }
+
+    pub(crate) fn is_npy(&self) -> bool {
+        matches!(self.inner.source, ProgramSource::Npy)
     }
 }
 

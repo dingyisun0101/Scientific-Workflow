@@ -1,12 +1,12 @@
 # Two-dimensional attractor study
 
 This example is the release-qualified end-to-end project for
-`scientific-workflow` 0.13.0 and `scientific-workflow-reader` 0.3.1.
+`scientific-workflow` 0.13.1 and `scientific-workflow-reader` 0.4.0.
 
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all
-configuration, and a final Python task turns the completed recordings into an
-SVG figure.
+configuration, Workflow's standard `$npy` phase converts the completed
+recordings, and a final Python task turns those arrays into an SVG figure.
 
 ```text
 attractor_2d/
@@ -15,7 +15,7 @@ attractor_2d/
 │   ├── main.rs                 one scientific_workflow::run(&Path) call
 │   └── hopf_model.rs          Hopf model registered as one execution unit
 ├── wf_configs/                 required Workflow configuration root
-│   ├── study.json              simulate phase followed by plot phase
+│   ├── study.json              simulate, reserved $npy, then plot
 │   ├── parameters.json         execution-unit and plotting parameters
 │   └── states/                 recommended schema grouping
 │       └── attractor.json      canonical scientific state schema
@@ -74,8 +74,8 @@ Top-level `study.json.workflow_schema: 1` selects the supported authored
 configuration grammar. Top-level `study.json.threads` is the required global
 compute budget. Workflow owns one shared execution-unit pool of that size; the
 phase's `max_concurrency` controls task admission and does not create additional
-model pools. The final Python plot task omits `resources`, so it reserves the
-default one external-task thread after simulation has completed.
+model pools. The synthesized `$npy` converter and final Python plot task each
+reserve one external-task thread after simulation has completed.
 
 ### How parameters reach `AttractorConstants`
 
@@ -150,9 +150,21 @@ seed. A stochastic unit would call `shared_seed(purpose)` for unit-wide random
 work or `member_seed(identity, purpose)` for one member. Workflow would then
 record each actual derived seed with the corresponding member metadata.
 
-## Python plot phase
+## Standard NPY and Python plot phases
 
-The `plot` phase depends on `simulate` and declares `scripts/plot.py` directly:
+The reserved `$npy` phase needs only its prerequisite:
+
+```json
+"$npy": {"after": ["simulate"]}
+```
+
+Workflow synthesizes the conversion task, gives it every transitively
+prerequisite execution-unit recording for the same global configuration, and
+writes a `scientific-workflow-npy-batch.v1` manifest plus C-contiguous arrays
+inside that task's artifact directory. Project authors provide no converter
+script, paths, arguments, or duplicated recording selectors.
+
+The `plot` phase depends on `$npy` and declares `scripts/plot.py` directly:
 
 ```json
 {
@@ -165,12 +177,12 @@ The `plot` phase depends on `simulate` and declares `scripts/plot.py` directly:
 
 No Rust closure or caller wraps Python. Workflow resolves `python3` during
 Study loading, captures stdout/stderr, and supplies the central configuration,
-completed simulation outputs, and isolated artifact directory through the
+completed conversion output, and isolated artifact directory through the
 standard `WORKFLOW_*` contract.
 
 The plotter retrieves its visual settings from the `plot` section of
-`wf_configs/parameters.json`, opens every dependency recording with the official
-verified `scientific_workflow_reader`, and produces:
+`wf_configs/parameters.json`, reads only the verified processed manifests and
+memory-mapped `.npy` arrays, and produces:
 
 ```text
 output/plots/
@@ -178,24 +190,20 @@ output/plots/
 └── plot-summary.json
 ```
 
-For every dependency it verifies the current recording provenance: execution unit kind
+For every processed member it verifies the retained recording provenance: execution unit kind
 and key, explicitly selected `attractor` state key, parameter ordinal, and the
 canonical `wf_configs/parameters.json` source. The plot summary retains the
 state key and ordinal so the generated artifact remains traceable to the
-assembled task rather than inferring state from the execution unit name. Reader metadata
-is consumed through its immutable mapping interface; the example does not rely
-on a concrete mutable dictionary representation. These provenance fields are
-the `scientific-workflow-attractor-plot-v2` summary shape.
-
-An installed `scientific-workflow-reader` is used normally. When this example
-runs from the repository checkout, the script falls back to the adjacent
-reader source tree so a clean checkout needs only Python 3.10 or newer.
+assembled task rather than inferring state from the execution unit name. The
+plotter never opens JSONL chunks itself. These provenance fields are the
+`scientific-workflow-attractor-plot-v2` summary shape.
 
 ## Run
 
 From the repository root:
 
 ```bash
+python -m pip install "./python[npy]"
 cargo run -p attractor-2d
 ```
 
@@ -215,4 +223,5 @@ per-step demonstration delay belongs to the example implementation itself.
 
 `Study::load` performs complete effect-free validation of the required
 `wf_configs/` root, reserved documents, named-state path, execution-unit
-selector, typed constants, and Python environment before Runtime creates output.
+selector, typed constants, Python environment, and `$npy` launcher before
+Runtime creates output.

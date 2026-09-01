@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.1 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -164,8 +164,9 @@ index.
 
 `TaskRunKind` is a non-exhaustive data-bearing enum. `ExecutionUnit` contains
 the registration key and stable `Box<[MemberRunSummary]>`; `Program` contains
-the resolved launcher executable and optional canonical Python script. Callers
-matching it must retain a fallback for future workload kinds.
+the resolved launcher executable and optional canonical Python script; and
+`Npy` contains the Python launcher used by Workflow's reserved converter.
+Callers matching it must retain a fallback for future workload kinds.
 
 ### `runtime::TaskRunSummary`
 
@@ -237,6 +238,13 @@ contains its kind, registration key, and member identity/iteration/recording
 summaries. A program workload contains `kind` (`program` or `python`), its
 launcher executable, and the optional canonical Python script. Dependency JSON
 remains a data handoff, not a shell command protocol.
+
+A reserved `$npy` task receives the transitive prerequisite phase graph,
+rather than only its direct dependencies, still filtered to the same inferred
+global configuration. It converts every unique execution-unit member recording
+to C-contiguous `.npy` arrays under `WORKFLOW_TASK_OUTPUT` and writes a batch
+manifest. Its dependency workload kind is `npy`; ordinary task dependency
+snapshots remain direct-only.
 
 A nested Python task follows this exact runtime contract after Config lowers
 its environment to one invocation. Runtime has no Python-specific scheduler,

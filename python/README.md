@@ -15,8 +15,15 @@ validation. A failure never returns a partial scientific series.
 python -m pip install scientific-workflow-reader
 ```
 
-Python 3.10 or newer is required. The package has no runtime dependencies.
-This guide documents release 0.3.1.
+Python 3.10 or newer is required. The core reader has no runtime dependencies.
+Install the optional NumPy converter when a project uses Workflow's reserved
+`$npy` phase or when converting a recording directly:
+
+```bash
+python -m pip install "scientific-workflow-reader[npy]==0.4.0"
+```
+
+This guide documents release 0.4.0.
 
 ## Reading a recording
 
@@ -69,7 +76,7 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.3.1 supports only
+Release 0.4.0 supports only
 `scientific-workflow-jsonl` format version 7, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
@@ -117,6 +124,35 @@ package to read; the test-only Python bridge re-encodes those records; and the
 public Rust reader validates the Python result, including exact
 sensitive-float bits and Unicode. The Rust write session and Python bridge are
 test infrastructure, not supported writer APIs.
+
+## NumPy conversion
+
+The optional converter verifies one completed recording through the official
+reader and writes fixed-shape numeric JSON fields as C-contiguous `.npy`
+arrays. It also writes iteration arrays, physical-time arrays when present,
+and a `scientific-workflow-npy.v1` manifest describing every array and every
+field omitted because it was nonnumeric or changed shape or dtype.
+
+```bash
+scientific-workflow-to-npy path/to/member-recording
+scientific-workflow-to-npy path/to/member-recording --output path/to/processed
+```
+
+The equivalent module entry point is
+`python -m scientific_workflow_reader.npy`. With no `--output`, conversion uses
+a sibling directory named `<recording>-npy`. It never writes inside or modifies
+the raw recording. Conversion uses bounded-memory verified iteration, writes a
+private temporary directory, atomically publishes the completed result, and
+resumes an existing result only when its manifest and arrays still match.
+From a source checkout, the dependency-free launcher script is
+`python/scripts/recording_to_npy.py`; it adds the adjacent package source and
+accepts the same recording and `--output` arguments.
+
+Python callers may use
+`scientific_workflow_reader.npy.convert_recording(recording, output=None)`.
+Workflow itself invokes the same module in batch mode for the reserved `$npy`
+phase and publishes one member directory plus a
+`scientific-workflow-npy-batch.v1` manifest in that task's artifact directory.
 
 ## Development
 

@@ -1,7 +1,7 @@
 # Workflow architecture
 
 This document describes the reviewed architecture shipped by Rust package
-0.13.0 and its recording-v7 integration with Python reader 0.3.1.
+0.13.1 and its recording-v7 integration with Python reader 0.4.0.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -80,8 +80,8 @@ The current first-level library modules are:
   lowering), `ExecutionUnit`/`MemberView` contract, linked registration, and
   uniform private execution;
 - `config`: sole reader/parser of all project JSON, immutable central snapshot,
-  executable/Python-environment resolution, and sole typed execution unit-constants
-  supplier;
+  executable/Python-environment resolution, reserved `$npy` synthesis, and
+  sole typed execution unit-constants supplier;
 - `study`: effect-free coordinator of all declared intent and preflight;
 - `runtime`: sole coordinator of active execution and output creation;
 - `persistence`: automatic durable recordings and verified reconstruction;
@@ -105,19 +105,19 @@ crate facade: run(&Path)
         ▼
 config
   all project JSON captured once + strict Workflow grammar
-  + paths + defaults + expansion + executable/Python resolution
+  + paths + defaults + expansion + executable/Python/$npy resolution
         │ private Config / ProjectSpecification / ResolvedTask
         ▼
 study
   retained Config + explicit-or-provided state semantics + execution unit discovery + constants decode
-  + generic program/Python tasks + one-time observation-plan binding
+  + generic program/Python tasks + standard NPY task + one-time observation-plan binding
   + identities + phases
         │ immutable Study returned to the crate facade
         ▼
 runtime::execute
   one study-wide compute pool + execution directory + replicates + scheduling + cancellation
   + immutable initialization context + execution-unit stepping
-  + direct program/Python invocation
+  + direct program/Python/NPY invocation
         ├──── per-member observation boundaries ────► persistence
         │                                             one private bounded writer per member
         │                                             + atomic metadata/chunks
@@ -323,14 +323,17 @@ workflow/
 ├── python/
 │   ├── pyproject.toml                 reader package metadata and build policy
 │   ├── README.md / LICENSE            Python reader guide and license
+│   ├── scripts/recording_to_npy.py    source-checkout converter launcher
 │   ├── src/scientific_workflow_reader/
 │   │   ├── __init__.py                supported reader exports
 │   │   ├── errors.py                  typed verification/read failures
 │   │   ├── state.py                  read-only field/record/series containers
 │   │   ├── reader.py                  format-v7 validation and reconstruction
+│   │   ├── npy.py                     verified C-contiguous NPY conversion
 │   │   └── py.typed                   typing marker
 │   └── tests/
 │       ├── test_reader.py             reader/integrity behavior
+│       ├── test_npy.py                conversion and batch behavior
 │       ├── roundtrip_bridge.py        Rust/Python conformance helper
 │       └── fixtures/                  shared valid/invalid format fixtures
 ├── protocol/
@@ -343,10 +346,10 @@ workflow/
     ├── src/main.rs                     one run(&Path) call
     ├── src/hopf_model.rs              domain model implementing ExecutionUnit
     ├── wf_configs/
-    │   ├── study.json                  swept simulation then Python plot phase
+    │   ├── study.json                  swept simulation, `$npy`, then plot
     │   ├── parameters.json             execution unit sweeps + plotter settings
     │   └── states/attractor.json       named `attractor` state schema
-    └── scripts/plot.py                 direct verified-recording SVG task
+    └── scripts/plot.py                 processed-array SVG task
 ```
 
 ## Subsystem details
@@ -449,6 +452,13 @@ documents use the same lookup graph. Runtime retains only a clone-cheap
 `ConfigSnapshot` byte handle for an active task, not Config's typed lookup and
 parsing interface. The downstream-public Rust API is only `ConfigError`;
 closed peer types are explicitly named through the same owning scope.
+
+A phase named exactly `$npy` is reserved. It has prerequisites but no authored
+tasks; Config synthesizes one standard Python converter task per global
+configuration. Runtime gives that task every execution-unit recording in its
+transitive prerequisite graph, filtered to the same configuration. The
+official reader verifies each completed recording before the optional NumPy
+converter atomically publishes fixed-shape numeric arrays and manifests.
 
 ### Study
 

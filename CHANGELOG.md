@@ -6,6 +6,20 @@ both package versions; see the [compatibility matrix](protocol/compatibility.md)
 
 ## Unreleased
 
+## Rust 0.13.1 and Python reader 0.4.0 — 2026-09-01
+
+- Adds the standard single-recording `scientific-workflow-to-npy` converter.
+  It verifies completed metadata and chunks, publishes fixed-shape numeric
+  fields and scientific coordinates as C-contiguous `.npy` arrays, records
+  non-convertible fields, and never modifies the raw recording.
+- Keeps the core Python reader dependency-free while offering NumPy conversion
+  through the `npy` installation extra.
+- Adds the reserved task-free `$npy` phase. Workflow synthesizes one converter
+  per global configuration and supplies all transitive prerequisite member
+  recordings from that configuration.
+- Extends the attractor example with `$npy` and makes its plotter consume only
+  processed manifests and arrays.
+
 ## Rust 0.13.0 — 2026-09-01
 
 This is a breaking parameter-expansion release. It keeps project configuration

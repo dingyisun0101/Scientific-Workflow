@@ -149,6 +149,10 @@ impl Task {
         self.program().map(ResolvedProgramTask::threads)
     }
 
+    pub(crate) fn is_npy(&self) -> bool {
+        self.program().is_some_and(ResolvedProgramTask::is_npy)
+    }
+
     pub(crate) fn timeout(&self) -> Option<std::time::Duration> {
         match &self.descriptor {
             TaskDescriptor::ExecutionUnit { parameters, .. } => parameters.timeout(),

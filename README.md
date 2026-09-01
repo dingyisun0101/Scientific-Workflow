@@ -24,13 +24,13 @@ executable programs, and declarative JSON into validated, recorded studies.
 - To understand subsystem boundaries and dependency direction, read the
   [architecture guide](docs/architecture.md).
 - To consume completed recordings from Python, use the verified
-  [Scientific Workflow Reader](python/README.md).
+  [Scientific Workflow Reader and standard NumPy converter](python/README.md).
 - To implement or audit a cross-language reader, use the normative
   [recording v7 protocol](protocol/recording-v7.md) and
   [compatibility matrix](protocol/compatibility.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
-- For the Rust 0.13.0 release summary and Python 0.3.1 compatibility, see the
+- For the Rust 0.13.1 and Python reader 0.4.0 release summary, see the
   [changelog](CHANGELOG.md).
 
 ## Repository map
@@ -61,8 +61,8 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   context, per-member `MemberView`, ensemble contracts, registration, and generic
   program tasks with optional centralized task-seed derivation.
 - [Config](rust/src/config/api.md): required study-wide threads, project JSON,
-  optional named state paths, inferred global/local parameter expansion, and
-  program/Python resolution.
+  optional named state paths, inferred global/local parameter expansion,
+  reserved `$npy` phase, and program/Python resolution.
 - [Study](rust/src/study/api.md): effect-free assembly, preflight, and immutable
   execution intent.
 - [Persistence](rust/src/persistence/api.md): automatic recordings, lifecycle,

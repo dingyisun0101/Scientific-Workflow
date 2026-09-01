@@ -74,7 +74,7 @@ impl ProjectSpecification {
                 ParsedTask::ExecutionUnit { execution_unit, .. } => {
                     Some(execution_unit.to_string())
                 }
-                ParsedTask::Program { .. } | ParsedTask::Python { .. } => None,
+                ParsedTask::Program { .. } | ParsedTask::Python { .. } | ParsedTask::Npy => None,
             })
             .collect::<BTreeSet<_>>();
         let shared = parameter_sections
@@ -188,6 +188,20 @@ impl ProjectSpecification {
                             timeout,
                             threads,
                         )?;
+                        for (configuration, (_, snapshot)) in resolved_parameters.iter().enumerate()
+                        {
+                            tasks.push(ResolvedTask::Program {
+                                configuration,
+                                snapshot: snapshot.clone(),
+                                program: program.clone(),
+                            });
+                        }
+                    }
+                    ParsedTask::Npy => {
+                        let program = ResolvedProgramTask::for_npy(resolve_executable(
+                            config.project_root(),
+                            Path::new("python3"),
+                        )?);
                         for (configuration, (_, snapshot)) in resolved_parameters.iter().enumerate()
                         {
                             tasks.push(ResolvedTask::Program {

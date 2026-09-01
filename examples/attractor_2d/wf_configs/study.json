@@ -17,8 +17,11 @@
       "max_concurrency": 3,
       "start_interval_ms": 2000
     },
+    "$npy": {
+      "after": ["simulate"]
+    },
     "plot": {
-      "after": ["simulate"],
+      "after": ["$npy"],
       "tasks": [
         {
           "python": {

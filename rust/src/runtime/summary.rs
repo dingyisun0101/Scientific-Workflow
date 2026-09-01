@@ -83,6 +83,11 @@ pub enum TaskRunKind {
         /// Canonical script path when this was a nested Python task.
         python_script: Option<PathBuf>,
     },
+    /// Workflow's reserved conversion of prerequisite recordings to NumPy arrays.
+    Npy {
+        /// Resolved Python interpreter used to launch the standard converter.
+        launcher: PathBuf,
+    },
 }
 
 /// Successful completion facts for one member inside an execution unit.
@@ -143,7 +148,7 @@ impl TaskRunSummary {
             TaskRunKind::ExecutionUnit { members, .. } => {
                 members.iter().map(MemberRunSummary::final_iteration).max()
             }
-            TaskRunKind::Program { .. } => None,
+            TaskRunKind::Program { .. } | TaskRunKind::Npy { .. } => None,
         }
     }
 

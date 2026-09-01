@@ -334,6 +334,63 @@ fn top_level_sweeps_expand_every_task_while_execution_unit_sweeps_remain_local()
 }
 
 #[test]
+fn reserved_npy_phase_synthesizes_one_task_per_global_configuration() {
+    let project = TestProject::new(
+        r#"{
+          "phases": {
+            "simulate": {"tasks": [{"execution_unit":"unit"}]},
+            "$npy": {"after": ["simulate"]}
+          }
+        }"#,
+        &[
+            ("species", r#"{"$sweep":[100,200]}"#),
+            ("unit", r#"{"steps":1}"#),
+        ],
+    );
+
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    let npy = &specification.phases()[1];
+    assert_eq!(npy.name(), "$npy");
+    assert_eq!(npy.dependencies().collect::<Vec<_>>(), ["simulate"]);
+    assert_eq!(npy.tasks().len(), 2);
+    assert_eq!(
+        npy.tasks()
+            .iter()
+            .map(ResolvedTask::configuration)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert!(
+        npy.tasks()
+            .iter()
+            .map(program_task)
+            .all(|task| task.is_npy())
+    );
+}
+
+#[test]
+fn reserved_npy_phase_rejects_authored_tasks_and_missing_prerequisites() {
+    for phase in [
+        r#""$npy":{"tasks":[{"program":"/bin/true"}]}"#,
+        r#""$npy":{}"#,
+    ] {
+        let source = format!(
+            r#"{{
+              "workflow_schema":1,
+              "threads":2,
+              "phases":{{{phase}}}
+            }}"#
+        );
+        let project = TestProject::new_raw(&source, &[]);
+        assert!(matches!(
+            ProjectSpecification::load(project.path()),
+            Err(ConfigError::InvalidDocument { pointer, .. })
+                if pointer.starts_with("/phases/$npy/")
+        ));
+    }
+}
+
+#[test]
 fn study_threads_are_required_and_positive() {
     let missing = TestProject::new_raw(
         r#"{"workflow_schema":1,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,

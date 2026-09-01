@@ -631,8 +631,13 @@ fn spawn_task(
     let output_directory = context
         .replicate_directory
         .join(format!("task-{:06}", worker_task.output_ordinal()));
-    let dependencies_json =
-        dependency_snapshot(phase, context.completed_phases, worker_task.configuration());
+    let dependencies_json = dependency_snapshot(
+        phase,
+        context.study.phases(),
+        context.completed_phases,
+        worker_task.configuration(),
+        worker_task.is_npy(),
+    );
     let runtime = TaskRuntime {
         persistence_plan: context.study.persistence_plan(),
         config_snapshot: worker_task.config_snapshot(),
@@ -826,6 +831,12 @@ fn run_task(
                 .into(),
             members: host.member_summaries(),
         },
+        TaskKind::Program if task.is_npy() => TaskRunKind::Npy {
+            launcher: task
+                .program_path()
+                .expect("NPY task retains its resolved Python launcher")
+                .to_path_buf(),
+        },
         TaskKind::Program => TaskRunKind::Program {
             executable: task
                 .program_path()
@@ -861,12 +872,16 @@ fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
 
 fn dependency_snapshot(
     phase: &StudyPhase,
+    study_phases: &[StudyPhase],
     completed: &[PhaseRunSummary],
     configuration: usize,
+    transitive: bool,
 ) -> Box<[u8]> {
-    let dependencies = phase
-        .dependencies()
-        .collect::<std::collections::HashSet<_>>();
+    let dependencies = if transitive {
+        transitive_dependencies(phase, study_phases)
+    } else {
+        phase.dependencies().collect()
+    };
     let values = completed
         .iter()
         .filter(|summary| dependencies.contains(summary.name()))
@@ -889,6 +904,31 @@ fn dependency_snapshot(
     serde_json::to_vec_pretty(&values)
         .expect("serializing runtime dependency summaries cannot fail")
         .into_boxed_slice()
+}
+
+fn transitive_dependencies<'a>(
+    phase: &'a StudyPhase,
+    phases: &'a [StudyPhase],
+) -> std::collections::HashSet<&'a str> {
+    fn visit<'a>(
+        phase: &'a StudyPhase,
+        by_name: &HashMap<&'a str, &'a StudyPhase>,
+        found: &mut std::collections::HashSet<&'a str>,
+    ) {
+        for dependency in phase.dependencies() {
+            if found.insert(dependency) {
+                visit(by_name[dependency], by_name, found);
+            }
+        }
+    }
+
+    let by_name = phases
+        .iter()
+        .map(|phase| (phase.name(), phase))
+        .collect::<HashMap<_, _>>();
+    let mut found = std::collections::HashSet::new();
+    visit(phase, &by_name, &mut found);
+    found
 }
 
 fn dependency_workload(kind: &TaskRunKind) -> serde_json::Value {
@@ -918,5 +958,44 @@ fn dependency_workload(kind: &TaskRunKind) -> serde_json::Value {
             "python_script": python_script.as_deref().map(|path| path.to_str()
                 .expect("Config preflight requires UTF-8 Python script paths")),
         }),
+        TaskRunKind::Npy { launcher } => serde_json::json!({
+            "kind": "npy",
+            "launcher": launcher.to_str()
+                .expect("Config preflight requires UTF-8 Python launcher paths"),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phase(name: &str, dependencies: &[&str]) -> StudyPhase {
+        StudyPhase {
+            name: name.into(),
+            dependencies: dependencies.iter().map(|value| (*value).into()).collect(),
+            tasks: Vec::new().into_boxed_slice(),
+            max_concurrency: 1,
+            start_interval: Duration::ZERO,
+            timeout: None,
+            failure_policy: FailurePolicy::FailFast,
+        }
+    }
+
+    #[test]
+    fn npy_dependency_walk_reaches_every_ancestor_once() {
+        let phases = [
+            phase("prepare", &[]),
+            phase("simulate", &["prepare"]),
+            phase("export", &["prepare", "simulate"]),
+            phase("$npy", &["export"]),
+        ];
+
+        let dependencies = transitive_dependencies(&phases[3], &phases);
+
+        assert_eq!(dependencies.len(), 3);
+        assert!(dependencies.contains("prepare"));
+        assert!(dependencies.contains("simulate"));
+        assert!(dependencies.contains("export"));
     }
 }

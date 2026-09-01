@@ -1,7 +1,7 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.13.0 and Python
-reader 0.3.1.
+This map is the release-qualification baseline for Rust 0.13.1 and Python
+reader 0.4.0.
 
 Tests follow subsystem responsibility and supported boundaries. Observation
 binding/session behavior, Config and Study compilation, and persistence write
@@ -48,7 +48,8 @@ public.
   snapshot keys, non-UTF-8 document and project-root rejection before JSON
   provenance, RFC 6901 diagnostic pointers,
   deterministic `$sweep`/`$cases` expansion, inferred global-versus-local
-  scope, whole-graph task multiplication, and malformed-marker rejection,
+  scope, whole-graph task multiplication, reserved `$npy` synthesis and
+  validation, and malformed-marker rejection,
   private typed constants decoding, decimal-MB persistence-size conversion,
   overflow/legacy-byte-field rejection, central arbitrary-parameter capture,
   clone-cheap frozen snapshot bytes, and contextual errors. Even an
@@ -130,6 +131,10 @@ structural companion is `protocol/recording-v7.schema.json`. Python tests open
 the shared golden fixture and verify that the compatibility manifest matches
 the Python package/version constants. Any wire-format change follows the bump
 checklist in the protocol rather than editing version constants independently.
+`python/tests/test_npy.py` verifies fixed-shape numeric conversion,
+C-contiguity, coordinate arrays, immutable raw recordings, integrity failure
+atomicity, resume validation, and Workflow dependency-batch conversion with
+duplicate member suppression.
 
 Recovery/resume, public writer builders, per-stream layout controls, legacy
 execution scopes, artifacts, and RNG-record tests were removed with those
@@ -158,12 +163,13 @@ Package inspection must also verify that every first-level module's `api.md`,
 
 The attractor example is an executable integration demonstration, not merely a
 compile fixture. A manual or release validation run should confirm that its six
-execution unit tasks produce completed recordings and its dependent Python task writes
+execution unit tasks produce completed recordings, `$npy` publishes a batch of
+C-contiguous arrays, and its dependent Python task writes
 `attractor-sweep.svg` plus `plot-summary.json` beneath the configured
-`output/plots` directory. The Python task uses the public verified reader and
-the `plot` section of central `wf_configs/parameters.json`; it has no Rust caller
-wrapper. It consumes the reader's immutable metadata mapping and verifies each
-recording's execution unit, named-state selector, parameter ordinal, and canonical
+`output/plots` directory. The Python task reads only processed manifests and
+arrays plus the `plot` section of central `wf_configs/parameters.json`; it has
+no Rust caller wrapper. It verifies each recording's execution unit,
+named-state selector, parameter ordinal, and canonical
 parameter source before plotting. Project-file regression coverage preserves
 the named state map/selector, central parameter sections, and phase-owned
 two-second `start_interval_ms`; a public

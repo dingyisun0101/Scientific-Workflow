@@ -14,6 +14,7 @@ use super::parameters::ResolvedTask;
 use super::python::PythonTaskDeclaration;
 
 pub(crate) const WORKFLOW_SCHEMA_VERSION: u64 = 1;
+pub(crate) const NPY_PHASE_NAME: &str = "$npy";
 
 /// Effective policy for isolated study replicates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -200,6 +201,7 @@ pub(crate) enum ParsedTask {
         timeout: Option<Duration>,
         threads: usize,
     },
+    Npy,
 }
 
 pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigError> {
@@ -297,11 +299,26 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         validate_identifier(path, &phase_pointer, &name, "phase")?;
         let raw: RawPhase = serde_json::from_value(value)
             .map_err(|error| ConfigError::invalid(path, &phase_pointer, error.to_string()))?;
-        if raw.tasks.is_empty() {
+        let npy_phase = name == NPY_PHASE_NAME;
+        if !npy_phase && raw.tasks.is_empty() {
             return Err(ConfigError::invalid(
                 path,
                 format!("{phase_pointer}/tasks"),
                 "a phase must declare at least one task",
+            ));
+        }
+        if npy_phase && !raw.tasks.is_empty() {
+            return Err(ConfigError::invalid(
+                path,
+                format!("{phase_pointer}/tasks"),
+                "the reserved `$npy` phase synthesizes its task and must not declare `tasks`",
+            ));
+        }
+        if npy_phase && raw.after.is_empty() {
+            return Err(ConfigError::invalid(
+                path,
+                format!("{phase_pointer}/after"),
+                "the reserved `$npy` phase requires at least one prerequisite phase",
             ));
         }
         if raw.max_concurrency == 0 {
@@ -426,6 +443,9 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     ));
                 }
             }
+        }
+        if npy_phase {
+            tasks.push(ParsedTask::Npy);
         }
 
         phases.push(ParsedPhase {
@@ -608,6 +628,7 @@ impl Default for RawReplicatePolicy {
 struct RawPhase {
     #[serde(default)]
     after: Vec<String>,
+    #[serde(default)]
     tasks: Vec<RawTask>,
     #[serde(default = "default_max_concurrency")]
     max_concurrency: usize,

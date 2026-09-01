@@ -1,6 +1,6 @@
 # Prelude API
 
-This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.1 subsystem contract.
 
 `scientific_workflow::prelude::*` is the single ordinary execution-unit
 authoring import. It owns no behavior and importing it performs no IO,

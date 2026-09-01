@@ -1,6 +1,6 @@
 # Persistence API
 
-This guide documents the `scientific-workflow` 0.13.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.1 subsystem contract.
 
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified member-state reconstruction. Config parses optional operational sizing,
@@ -65,7 +65,7 @@ task-NNNNNN/
 ```
 
 `program.json` is atomically replaced from `running` to `complete` or `failed`
-and records `kind` (`program` or `python`), the resolved launcher executable,
+and records `kind` (`program`, `python`, or Workflow's synthesized `npy`), the resolved launcher executable,
 arguments, the authoritative `threads` count, exit code/reason, format name,
 and fixed workspace filenames. Each
 fixed file is synchronized before publication, and each program-status rename
@@ -82,6 +82,11 @@ initial `running` metadata and retained unchanged in either terminal state, so
 failed subprocesses remain reproducible.
 `artifacts/` is the default working directory and remains available for
 temporary or task-scoped results.
+Workflow's reserved `$npy` task is the standard exception to ordinary
+program-owned artifact semantics: its bundled Python module verifies all
+transitive prerequisite member recordings for the same global configuration
+and publishes C-contiguous arrays plus conversion manifests under this
+directory. The raw recordings remain immutable.
 An external program may instead read a project-relative destination from the
 frozen `wf_configs/parameters.json` snapshot and write there directly. The bundled Python
 plotter uses `output/plots`. Such files are program-owned: Persistence does not
