@@ -1,7 +1,7 @@
 # Workflow architecture
 
 This document describes the reviewed architecture shipped by Rust package
-0.13.2 and its recording-v7 integration with Python reader 0.4.1.
+0.13.3 and its recording-v7 integration with Python reader 0.4.2.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what

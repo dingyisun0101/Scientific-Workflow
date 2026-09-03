@@ -1,6 +1,6 @@
 # Error API
 
-This guide documents the `scientific-workflow` 0.13.2 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.3 subsystem contract.
 
 The `error` module owns the single error returned by the crate-level complete
 workflow facade. It composes failures from Study and Runtime without taking

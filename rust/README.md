@@ -135,14 +135,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.2"
+scientific-workflow = "0.13.3"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.13.2
+cargo add scientific-workflow@0.13.3
 cargo add serde --features derive
 ```
 
@@ -165,7 +165,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.13.2", default-features = false }
+scientific-workflow = { version = "0.13.3", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they

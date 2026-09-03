@@ -25,7 +25,7 @@ python -m pip install \
   "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@6c8e7d4#subdirectory=python"
 ```
 
-This guide documents release 0.4.1.
+This guide documents release 0.4.2.
 
 ## Reading a recording
 
@@ -78,7 +78,7 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.4.1 supports only
+Release 0.4.2 supports only
 `scientific-workflow-jsonl` format version 7, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.

@@ -1,7 +1,7 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.13.2 and Python
-reader 0.4.1.
+This map is the release-qualification baseline for Rust 0.13.3 and Python
+reader 0.4.2.
 
 Tests follow subsystem responsibility and supported boundaries. Observation
 binding/session behavior, Config and Study compilation, and persistence write

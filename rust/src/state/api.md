@@ -1,6 +1,6 @@
 # State API
 
-This guide documents the `scientific-workflow` 0.13.2 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.3 subsystem contract.
 
 The `state` subsystem owns validated field layouts, heterogeneous in-memory
 payloads, scientific time, and ordered in-memory state series. Its canonical

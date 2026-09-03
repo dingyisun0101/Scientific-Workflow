@@ -1,6 +1,6 @@
 # Scientific Workflow Recording Protocol v7
 
-Rust 0.13.2 and Python reader 0.4.1 completed a coordinated compatibility
+Rust 0.13.3 and Python reader 0.4.2 completed a coordinated compatibility
 review against this unchanged protocol version. Package support remains
 authoritative in [`compatibility.json`](compatibility.json).
 

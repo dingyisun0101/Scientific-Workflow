@@ -6,6 +6,21 @@ both package versions; see the [compatibility matrix](protocol/compatibility.md)
 
 ## Unreleased
 
+## Rust 0.13.3 and Python reader 0.4.2 — 2026-09-03
+
+- Converts every recorded top-level field into manifest-described NumPy data:
+  fixed-shape numeric fields use C-contiguous arrays, changing numeric shapes
+  use flat data with offsets and per-record shapes, and all other fields retain
+  a lossless canonical-JSON fallback.
+- Discovers generic numeric projections inside structured fields, including
+  typed tensor envelopes, without adding dependencies on downstream scientific
+  crates or relying on NumPy object arrays and pickle.
+- Adds verified single-recording and batch reader APIs that reconstruct fields
+  exclusively from `manifest.json`, checking member manifests, array headers,
+  shapes, offsets, C-contiguity, and SHA-256 checksums before exposing data.
+- Publishes the normative manifest-directed NPY v2 dataset contract and updates
+  the end-to-end attractor example to consume it through the standard reader.
+
 ## Rust 0.13.2 and Python reader 0.4.1 — 2026-09-01
 
 - Makes `$npy` one aggregate task per replicate, covering transitive member
