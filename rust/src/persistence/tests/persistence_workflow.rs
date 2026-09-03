@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::local::*;
 use crate::observation::BoundObservationPlan;
-use physics_in_parallel::prelude::advanced::{AttrsCore, AttrsMeta, Dense, PhysObjAdvanced};
-use physics_in_parallel::prelude::basic::Tensor;
+use physics_in_parallel::prelude::advanced::{AttrsCore, AttrsMeta, PhysObjAdvanced};
+use physics_in_parallel::prelude::basic::{Backend, Tensor};
 use physics_in_parallel::prelude::models::PhysObj;
 use scientific_workflow::prelude::*;
 use serde::{Serialize, Serializer};
@@ -201,9 +201,9 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
     );
     assert!(run_path.join("metadata.json").is_file());
 
-    let mut lattice = Tensor::<u64, Dense>::zeros(&[2, 2]);
+    let mut lattice = Tensor::<u64>::zeros(&[2, 2], Backend::Dense).unwrap();
     for (coordinate, value) in [([0, 0], 1), ([0, 1], 2), ([1, 0], 3), ([1, 1], 4)] {
-        lattice.set(&coordinate, value);
+        lattice.set(&coordinate, value).unwrap();
     }
     let mut live =
         spec.create_empty_state(StateTime::from_iteration_and_physical_time(0, 0.0).unwrap());
@@ -230,8 +230,10 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
 
         if iteration < 3 {
             live.payload_mut::<TrackedVec>("population").unwrap().values[0] += 1.0;
-            let lattice = live.payload_mut::<Tensor<u64, Dense>>("space").unwrap();
-            lattice.set(&[0, 0], lattice.get(&[0, 0]) + 10);
+            let lattice = live.payload_mut::<Tensor<u64>>("space").unwrap();
+            lattice
+                .set(&[0, 0], lattice.get(&[0, 0]).unwrap() + 10)
+                .unwrap();
             *live.payload_mut::<String>("activity").unwrap() =
                 format!("evolved-to-iteration-{} 世界", iteration + 1);
             live.advance_time(Some(0.25)).unwrap();
@@ -349,7 +351,7 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
         .unwrap()
         .with_json_field::<String>("activity")
         .unwrap()
-        .with_json_field::<Tensor<u64, Dense>>("space")
+        .with_json_field::<Tensor<u64>>("space")
         .unwrap();
     assert_eq!(decoders.len(), 3);
     assert!(decoders.has_decoder_for_field("space"));
@@ -409,9 +411,10 @@ fn complete_scientific_workflow_is_consistent_and_observable() {
             .1
             .last_state()
             .unwrap()
-            .payload::<Tensor<u64, Dense>>("space")
+            .payload::<Tensor<u64>>("space")
             .unwrap()
-            .get(&[0, 0]),
+            .get(&[0, 0])
+            .unwrap(),
         31
     );
     println!(

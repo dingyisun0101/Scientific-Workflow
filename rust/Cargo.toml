@@ -41,4 +41,4 @@ thiserror = "2"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-physics_in_parallel = "3.7.0"
+physics_in_parallel = "4.0.0-alpha.2"

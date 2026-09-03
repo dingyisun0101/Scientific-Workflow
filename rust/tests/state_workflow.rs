@@ -29,8 +29,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use physics_in_parallel::prelude::advanced::Dense;
-use physics_in_parallel::prelude::basic::Tensor;
+use physics_in_parallel::prelude::basic::{Backend, Tensor};
 use scientific_workflow::state::StateFieldSchema;
 use scientific_workflow::state::{
     StateError, StateSchemaProvider, StateTime, SystemState, SystemStateSchema,
@@ -316,11 +315,11 @@ fn tensor_state_round_trip_integrates_public_modules() {
     // Empty and unknown fields produce distinct public errors before any
     // tensor is inserted.
     assert!(matches!(
-        state.payload::<Tensor<u64, Dense>>("population"),
+        state.payload::<Tensor<u64>>("population"),
         Err(StateError::MissingPayload { ref field }) if field == "population"
     ));
     assert!(matches!(
-        state.payload::<Tensor<u64, Dense>>("temperature"),
+        state.payload::<Tensor<u64>>("temperature"),
         Err(StateError::UnknownField { ref field }) if field == "temperature"
     ));
 
@@ -342,21 +341,21 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // Construct realistic rank-one and rank-two tensors. Moving these values
     // into SystemState transfers their owned backing allocations.
-    let mut population = Tensor::<u64, Dense>::zeros(&[3]);
-    population.set(&[0], 10);
-    population.set(&[1], 20);
-    population.set(&[2], 30);
+    let mut population = Tensor::<u64>::zeros(&[3], Backend::Dense).unwrap();
+    population.set(&[0], 10).unwrap();
+    population.set(&[1], 20).unwrap();
+    population.set(&[2], 30).unwrap();
 
-    let mut space = Tensor::<u64, Dense>::zeros(&[2, 2]);
-    space.set(&[0, 0], 1);
-    space.set(&[0, 1], 2);
-    space.set(&[1, 0], 3);
-    space.set(&[1, 1], 4);
+    let mut space = Tensor::<u64>::zeros(&[2, 2], Backend::Dense).unwrap();
+    space.set(&[0, 0], 1).unwrap();
+    space.set(&[0, 1], 2).unwrap();
+    space.set(&[1, 0], 3).unwrap();
+    space.set(&[1, 1], 4).unwrap();
 
-    let mut activity = Tensor::<u8, Dense>::zeros(&[3]);
-    activity.set(&[0], 1);
-    activity.set(&[1], 0);
-    activity.set(&[2], 1);
+    let mut activity = Tensor::<u8>::zeros(&[3], Backend::Dense).unwrap();
+    activity.set(&[0], 1).unwrap();
+    activity.set(&[1], 0).unwrap();
+    activity.set(&[2], 1).unwrap();
 
     state
         .initialize_payload("population", population)
@@ -369,7 +368,10 @@ fn tensor_state_round_trip_integrates_public_modules() {
         .expect("activity tensor must initialize its declared slot");
 
     let duplicate_initialization = state
-        .initialize_payload("activity", Tensor::<u8, Dense>::zeros(&[1]))
+        .initialize_payload(
+            "activity",
+            Tensor::<u8>::zeros(&[1], Backend::Dense).unwrap(),
+        )
         .expect_err("initialization must never replace an established payload");
     assert!(matches!(
         duplicate_initialization.error(),
@@ -387,25 +389,25 @@ fn tensor_state_round_trip_integrates_public_modules() {
             actual,
         } if field == "population"
             && *expected == std::any::type_name::<String>()
-            && *actual == std::any::type_name::<Tensor<u64, Dense>>()
+            && *actual == std::any::type_name::<Tensor<u64>>()
     ));
     let (_, rejected) = rejection.into_parts();
     assert_eq!(rejected, "wrong concrete type");
     assert!(
         state
-            .payload_has_type::<Tensor<u64, Dense>>("population")
+            .payload_has_type::<Tensor<u64>>("population")
             .expect("rejected replacement must preserve the tensor")
     );
 
     assert_eq!(state.populated_field_count(), 3);
     assert!(
         state
-            .payload_has_type::<Tensor<u64, Dense>>("population")
+            .payload_has_type::<Tensor<u64>>("population")
             .expect("field must be declared")
     );
     assert_eq!(
         state
-            .payload::<Tensor<u64, Dense>>("space")
+            .payload::<Tensor<u64>>("space")
             .expect("space tensor type must match")
             .shape(),
         &[2, 2]
@@ -413,14 +415,16 @@ fn tensor_state_round_trip_integrates_public_modules() {
 
     // Mutate the original tensor allocation through a typed mutable borrow.
     state
-        .payload_mut::<Tensor<u64, Dense>>("population")
+        .payload_mut::<Tensor<u64>>("population")
         .expect("population tensor type must match")
-        .set(&[1], 21);
+        .set(&[1], 21)
+        .unwrap();
     assert_eq!(
         state
-            .payload::<Tensor<u64, Dense>>("population")
+            .payload::<Tensor<u64>>("population")
             .expect("population tensor must remain available")
-            .get(&[1]),
+            .get(&[1])
+            .unwrap(),
         21
     );
 
@@ -428,38 +432,39 @@ fn tensor_state_round_trip_integrates_public_modules() {
     // coupled kernel. Reversed template order exercises safe slot sorting while
     // the returned tuple preserves caller order.
     {
-        let (activity, population, space) =
-            state
-                .borrow_payloads_mut::<(Tensor<u8, Dense>, Tensor<u64, Dense>, Tensor<u64, Dense>)>(
-                    ("activity", "population", "space"),
-                )
-                .expect("three distinct typed fields must be mutably borrowed together");
-        activity.set(&[1], 1);
-        population.set(&[2], 31);
-        space.set(&[1, 0], 30);
+        let (activity, population, space) = state
+            .borrow_payloads_mut::<(Tensor<u8>, Tensor<u64>, Tensor<u64>)>((
+                "activity",
+                "population",
+                "space",
+            ))
+            .expect("three distinct typed fields must be mutably borrowed together");
+        activity.set(&[1], 1).unwrap();
+        population.set(&[2], 31).unwrap();
+        space.set(&[1, 0], 30).unwrap();
     }
     let (population, activity) = state
-        .borrow_payloads::<(Tensor<u64, Dense>, Tensor<u8, Dense>)>(("population", "activity"))
+        .borrow_payloads::<(Tensor<u64>, Tensor<u8>)>(("population", "activity"))
         .expect("two distinct typed fields must be immutably borrowed together");
-    assert_eq!(population.get(&[2]), 31);
-    assert_eq!(activity.get(&[1]), 1);
+    assert_eq!(population.get(&[2]).unwrap(), 31);
+    assert_eq!(activity.get(&[1]).unwrap(), 1);
 
     let repeated = state
-        .borrow_payloads_mut::<(Tensor<u64, Dense>, Tensor<u64, Dense>)>(("space", "space"))
+        .borrow_payloads_mut::<(Tensor<u64>, Tensor<u64>)>(("space", "space"))
         .expect_err("one coordinated borrow must reject a repeated field");
     assert!(matches!(
         repeated,
         StateError::RepeatedPayloadBorrow { ref field } if field == "space"
     ));
     let tuple_unknown = state
-        .borrow_payloads::<(Tensor<u64, Dense>, Tensor<u64, Dense>)>(("population", "temperature"))
+        .borrow_payloads::<(Tensor<u64>, Tensor<u64>)>(("population", "temperature"))
         .expect_err("tuple preflight must reject an undeclared field");
     assert!(matches!(
         tuple_unknown,
         StateError::UnknownField { ref field } if field == "temperature"
     ));
     let tuple_mismatch = state
-        .borrow_payloads_mut::<(Tensor<u8, Dense>, Tensor<u64, Dense>)>(("population", "space"))
+        .borrow_payloads_mut::<(Tensor<u8>, Tensor<u64>)>(("population", "space"))
         .expect_err("tuple preflight must reject a retained type mismatch");
     assert!(matches!(
         tuple_mismatch,
@@ -467,29 +472,31 @@ fn tensor_state_round_trip_integrates_public_modules() {
     ));
     assert_eq!(
         state
-            .payload::<Tensor<u64, Dense>>("space")
+            .payload::<Tensor<u64>>("space")
             .unwrap()
-            .get(&[1, 0]),
+            .get(&[1, 0])
+            .unwrap(),
         30
     );
 
     // A failed owning request is rejected before the original payload moves.
     assert!(matches!(
-        state.take_payload::<Tensor<u8, Dense>>("population"),
+        state.take_payload::<Tensor<u8>>("population"),
         Err(StateError::TypeMismatch { .. })
     ));
     assert_eq!(
         state
-            .payload::<Tensor<u64, Dense>>("population")
+            .payload::<Tensor<u64>>("population")
             .unwrap()
-            .get(&[1]),
+            .get(&[1])
+            .unwrap(),
         21
     );
 
     // A failed typed borrow must report both exact Rust types and leave the
     // activity tensor unchanged.
     let mismatch = state
-        .payload::<Tensor<u64, Dense>>("activity")
+        .payload::<Tensor<u64>>("activity")
         .expect_err("activity stores a u8 tensor, not a u64 tensor");
     assert!(matches!(
         mismatch,
@@ -498,14 +505,15 @@ fn tensor_state_round_trip_integrates_public_modules() {
             expected,
             actual,
         } if field == "activity"
-            && expected == std::any::type_name::<Tensor<u64, Dense>>()
-            && actual == std::any::type_name::<Tensor<u8, Dense>>()
+            && expected == std::any::type_name::<Tensor<u64>>()
+            && actual == std::any::type_name::<Tensor<u8>>()
     ));
     assert_eq!(
         state
-            .payload::<Tensor<u8, Dense>>("activity")
+            .payload::<Tensor<u8>>("activity")
             .expect("failed borrow must preserve activity tensor")
-            .get(&[2]),
+            .get(&[2])
+            .unwrap(),
         1
     );
 
@@ -513,47 +521,50 @@ fn tensor_state_round_trip_integrates_public_modules() {
     // branch can be mutated independently.
     let mut branch = state.clone();
     branch
-        .payload_mut::<Tensor<u64, Dense>>("space")
+        .payload_mut::<Tensor<u64>>("space")
         .expect("cloned space tensor type must match")
-        .set(&[0, 0], 99);
+        .set(&[0, 0], 99)
+        .unwrap();
     assert_eq!(
         branch
-            .payload::<Tensor<u64, Dense>>("space")
+            .payload::<Tensor<u64>>("space")
             .expect("cloned space tensor must remain available")
-            .get(&[0, 0]),
+            .get(&[0, 0])
+            .unwrap(),
         99
     );
     assert_eq!(
         state
-            .payload::<Tensor<u64, Dense>>("space")
+            .payload::<Tensor<u64>>("space")
             .expect("original space tensor must remain available")
-            .get(&[0, 0]),
+            .get(&[0, 0])
+            .unwrap(),
         1
     );
 
     // Successful takes return the original concrete tensors and empty their
     // slots without invoking the payload Clone implementation.
     let population = state
-        .take_payload::<Tensor<u64, Dense>>("population")
+        .take_payload::<Tensor<u64>>("population")
         .expect("population tensor must move out of the state");
     let space = state
-        .take_payload::<Tensor<u64, Dense>>("space")
+        .take_payload::<Tensor<u64>>("space")
         .expect("space tensor must move out of the state");
     let activity = state
-        .take_payload::<Tensor<u8, Dense>>("activity")
+        .take_payload::<Tensor<u8>>("activity")
         .expect("activity tensor must move out of the state");
 
     assert_eq!(population.shape(), &[3]);
-    assert_eq!(population.get(&[0]), 10);
-    assert_eq!(population.get(&[1]), 21);
-    assert_eq!(population.get(&[2]), 31);
+    assert_eq!(population.get(&[0]).unwrap(), 10);
+    assert_eq!(population.get(&[1]).unwrap(), 21);
+    assert_eq!(population.get(&[2]).unwrap(), 31);
     assert_eq!(space.shape(), &[2, 2]);
-    assert_eq!(space.get(&[1, 1]), 4);
-    assert_eq!(space.get(&[1, 0]), 30);
+    assert_eq!(space.get(&[1, 1]).unwrap(), 4);
+    assert_eq!(space.get(&[1, 0]).unwrap(), 30);
     assert_eq!(activity.shape(), &[3]);
-    assert_eq!(activity.get(&[0]), 1);
-    assert_eq!(activity.get(&[1]), 1);
-    assert_eq!(activity.get(&[2]), 1);
+    assert_eq!(activity.get(&[0]).unwrap(), 1);
+    assert_eq!(activity.get(&[1]).unwrap(), 1);
+    assert_eq!(activity.get(&[2]).unwrap(), 1);
     assert_eq!(state.populated_field_count(), 0);
 
     // Extraction leaves the original slots empty but permanently typed. A
@@ -565,7 +576,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
         retype.error(),
         StateError::TypeMismatch { field, actual, .. }
             if field == "population"
-                && *actual == std::any::type_name::<Tensor<u64, Dense>>()
+                && *actual == std::any::type_name::<Tensor<u64>>()
     ));
     let (_, recovered) = retype.into_parts();
     assert_eq!(recovered, vec![3, 5, 8, 13]);
@@ -652,8 +663,8 @@ fn tensor_state_round_trip_integrates_public_modules() {
         Err(ref error)
             if matches!(error.error(), StateError::TypeMismatch { field, .. } if field == "space")
     ));
-    let mut restored_space = Tensor::<u64, Dense>::zeros(&[1]);
-    restored_space.set(&[0], 7);
+    let mut restored_space = Tensor::<u64>::zeros(&[1], Backend::Dense).unwrap();
+    restored_space.set(&[0], 7).unwrap();
     assert!(
         later
             .insert_payload("space", restored_space)
@@ -661,7 +672,7 @@ fn tensor_state_round_trip_integrates_public_modules() {
             .is_none()
     );
     let blank_tuple = later
-        .borrow_payloads::<(Tensor<u64, Dense>, Tensor<u64, Dense>)>(("space", "population"))
+        .borrow_payloads::<(Tensor<u64>, Tensor<u64>)>(("space", "population"))
         .expect_err("tuple preflight must reject a correctly typed empty field");
     assert!(matches!(
         blank_tuple,
