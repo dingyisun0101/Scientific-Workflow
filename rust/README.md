@@ -156,7 +156,7 @@ optional converter:
 
 ```bash
 python -m pip install \
-  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@6c8e7d4#subdirectory=python"
+  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
 ```
 
 The default `terminal-ui` feature preserves the automatic interactive
