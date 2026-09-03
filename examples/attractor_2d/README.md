@@ -160,7 +160,7 @@ The reserved `$npy` phase needs only its prerequisite:
 
 Workflow synthesizes the conversion task, gives it every transitively
 prerequisite execution-unit recording in the replicate, and writes a
-`scientific-workflow-npy-batch.v1` manifest plus C-contiguous arrays at
+`scientific-workflow-npy-batch.v2` manifest plus C-contiguous arrays at
 `output/<execution>/processed/replicate-000000`. Project authors provide no converter
 script, paths, arguments, or duplicated recording selectors.
 
@@ -182,8 +182,8 @@ standard `WORKFLOW_*` contract.
 
 The plotter retrieves its visual settings from the `plot` section of
 `wf_configs/parameters.json`, obtains `processed_directory` directly from the
-`$npy` dependency workload, reads the processed manifests and memory-mapped
-`.npy` arrays, and produces:
+`$npy` dependency workload, calls `open_npy_batch` to verify the processed
+manifests and memory-mapped `.npy` arrays, and produces:
 
 ```text
 output/plots/

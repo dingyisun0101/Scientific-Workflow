@@ -132,10 +132,11 @@ structural companion is `protocol/recording-v7.schema.json`. Python tests open
 the shared golden fixture and verify that the compatibility manifest matches
 the Python package/version constants. Any wire-format change follows the bump
 checklist in the protocol rather than editing version constants independently.
-`python/tests/test_npy.py` verifies fixed-shape numeric conversion,
-C-contiguity, coordinate arrays, immutable raw recordings, integrity failure
-atomicity, resume validation, and Workflow dependency-batch conversion with
-duplicate member suppression.
+`python/tests/test_npy.py` verifies direct and nested numeric conversion,
+structured JSON fallback, ragged and empty records, C-contiguity, component
+checksums, mandatory manifests, reconstruction, immutable raw recordings,
+integrity-failure atomicity, resume validation, and Workflow dependency-batch
+conversion with duplicate member suppression.
 Runtime unit coverage verifies that `$npy` receives every transitive global
 configuration and that its standard `processed_directory` remains visible to
 each downstream configuration.

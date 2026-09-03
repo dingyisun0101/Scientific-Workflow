@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scientific_workflow_reader.npy import open_npy_batch
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -35,35 +36,23 @@ def _processed_root() -> Path:
 
 
 def _trajectories(root: Path, stream: str) -> list[dict[str, Any]]:
-    batch = _json(root / "manifest.json")
-    if batch.get("format") != "scientific-workflow-npy-batch.v1":
-        raise ValueError("unsupported NPY batch manifest")
-
+    batch = open_npy_batch(root)
     trajectories = []
-    for member in batch["members"]:
-        manifest_path = root / member["manifest"]
-        manifest = _json(manifest_path)
-        descriptor = next(
-            array
-            for array in manifest["arrays"]
-            if array.get("role") == "field"
-            and array.get("stream") == stream
-            and array.get("field") == "point"
-        )
-        points = np.load(
-            manifest_path.parent / descriptor["path"],
-            mmap_mode="r",
-            allow_pickle=False,
-        )
+    for member in batch.members:
+        field = member.field(stream, "point")
+        dataset = field["dataset"]
+        if dataset["storage"] != "fixed":
+            raise ValueError("point field must have fixed numeric storage")
+        points = member.array(dataset["data"])
         if points.ndim != 2 or points.shape[1] != 2 or not points.flags.c_contiguous:
             raise ValueError("point array must be C-contiguous with shape (N, 2)")
-        constants = manifest["user_metadata"]["constants"]
+        constants = member.manifest["user_metadata"]["constants"]
         trajectories.append(
             {
                 "mu": float(constants["mu"]),
                 "omega": float(constants["angular_frequency"]),
                 "points": points,
-                "manifest": str(manifest_path),
+                "manifest": str(member.directory / "manifest.json"),
             }
         )
     return sorted(trajectories, key=lambda item: (item["mu"], item["omega"]))

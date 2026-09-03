@@ -244,8 +244,11 @@ remains a data handoff, not a shell command protocol.
 
 A reserved `$npy` task receives the complete transitive prerequisite phase
 graph across all inferred global configurations in its replicate. It converts
-every unique execution-unit member recording to C-contiguous `.npy` arrays at
-`<execution>/processed/replicate-NNNNNN` and writes a batch manifest there.
+every field in every unique execution-unit member recording to manifest-directed,
+C-contiguous `.npy` data at `<execution>/processed/replicate-NNNNNN` and writes
+a batch manifest there. Numeric fields map directly or use ragged components;
+structured fields retain lossless JSON-byte fallback data and nested numeric
+projections. No representation uses object dtype or pickle.
 Its dependency workload kind is `npy` and includes `processed_directory`, so a
 downstream task never reconstructs the path. Ordinary dependency snapshots
 remain direct and configuration-correlated; the aggregate `$npy` summary is

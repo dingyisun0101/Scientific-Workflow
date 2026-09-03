@@ -130,10 +130,12 @@ test infrastructure, not supported writer APIs.
 ## NumPy conversion
 
 The optional converter verifies one completed recording through the official
-reader and writes fixed-shape numeric JSON fields as C-contiguous `.npy`
-arrays. It also writes iteration arrays, physical-time arrays when present,
-and a `scientific-workflow-npy.v1` manifest describing every array and every
-field omitted because it was nonnumeric or changed shape or dtype.
+reader and converts every field into manifest-directed, C-contiguous `.npy`
+data. Fixed-shape numeric fields map directly. Changing numeric shapes use
+packed data, offsets, and shapes. Structured fields use canonical UTF-8 JSON
+bytes plus offsets as a lossless fallback and expose every stable nested
+numeric value as a fixed or ragged projection. Conversion never writes NumPy
+object arrays and never enables pickle.
 
 ```bash
 scientific-workflow-to-npy path/to/member-recording
@@ -152,10 +154,31 @@ accepts the same recording and `--output` arguments.
 
 Python callers may use
 `scientific_workflow_reader.npy.convert_recording(recording, output=None)`.
+The resulting member directory is valid only with its required
+`manifest.json`. Open and verify it before accessing arrays:
+
+```python
+from scientific_workflow_reader.npy import open_npy_conversion
+
+converted = open_npy_conversion("path/to/processed/member-000000")
+latest = converted.reconstruct("state", "label", 4)
+positions = converted.projection("particles", "particles", "/attributes/r", 4)
+```
+
+`NpyConversion.array()` memory-maps a declared component,
+`field()` returns its representation metadata, `reconstruct()` reads one whole
+field record, and `projection()` reads one nested numeric path. Component
+relationships and paths always come from the manifest, never directory scans
+or file-name inference.
+
 Workflow itself invokes the same module in batch mode for the reserved `$npy`
 phase and publishes one member directory plus a
-`scientific-workflow-npy-batch.v1` manifest at the standard
-`<execution>/processed/replicate-NNNNNN` path.
+`scientific-workflow-npy-batch.v2` manifest at the standard
+`<execution>/processed/replicate-NNNNNN` path. Use
+`open_npy_batch()` to verify that manifest and every referenced member.
+
+The normative converted-data contract is
+[`protocol/npy-v2.md`](../protocol/npy-v2.md).
 
 ## Development
 

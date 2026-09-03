@@ -67,6 +67,8 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   execution intent.
 - [Persistence](rust/src/persistence/api.md): automatic recordings, lifecycle,
   format, verified reconstruction, and the repository-level wire protocol.
+- [NPY v2](protocol/npy-v2.md): manifest-directed fixed, ragged, structured,
+  and fallback NumPy conversion for every recorded field.
 - [Runtime](rust/src/runtime/api.md): execution, scheduling, cancellation,
   per-configuration dependency correlation, program environments, and summaries.
 - [UI](rust/src/ui/api.md): automatic terminal presentation and exit handling.

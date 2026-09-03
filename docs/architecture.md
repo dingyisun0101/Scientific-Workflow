@@ -458,8 +458,11 @@ tasks; Config synthesizes one aggregate standard Python converter task. Runtime
 runs it once per replicate and gives it every execution-unit recording in its
 transitive prerequisite graph across all global configurations. The official
 reader verifies each completed recording before the optional NumPy converter
-atomically publishes fixed-shape numeric arrays and manifests beneath the
-execution-level `processed/replicate-NNNNNN` path.
+atomically publishes manifest-directed C-contiguous arrays beneath the
+execution-level `processed/replicate-NNNNNN` path. Every field receives either
+direct numeric storage or a lossless JSON-byte fallback; stable nested numeric
+values and changing shapes use fixed or ragged projections without object
+dtype or pickle.
 
 ### Study
 
