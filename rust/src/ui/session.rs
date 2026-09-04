@@ -175,6 +175,14 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
                 }
                 terminal.clear_command();
             }
+            Ok(Some(CommandSubmission::Parsed(UiCommand::ForceExit))) => {
+                if !inner.finished.load(Ordering::Acquire) {
+                    inner.cancellation_requested.store(true, Ordering::Release);
+                    lock(&inner.state).request_exit();
+                }
+                drop(terminal);
+                std::process::exit(130);
+            }
             Ok(Some(CommandSubmission::Parsed(UiCommand::Interrupt))) => {
                 if inner.finished.load(Ordering::Acquire) {
                     lock(&inner.state).push_message(

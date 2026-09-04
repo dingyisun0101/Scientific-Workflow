@@ -399,9 +399,9 @@ fn render_command(
     let title = if execution_finished {
         " Command · finished · type exit then Enter "
     } else if exit_requested {
-        " Command · cancelling · type exit to close after cleanup "
+        " Command · cancelling · type exit --force to kill now "
     } else {
-        " Command · type exit then Enter · Ctrl+C cancels "
+        " Command · type exit then Enter · exit --force kills "
     };
     frame.render_widget(
         Paragraph::new(command)

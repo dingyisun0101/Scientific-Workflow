@@ -3,6 +3,7 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum UiCommand {
     Exit,
+    ForceExit,
     Interrupt,
 }
 
@@ -79,6 +80,7 @@ fn parse(input: &str) -> CommandSubmission {
     match input.trim() {
         "" => CommandSubmission::Empty,
         "exit" => CommandSubmission::Parsed(UiCommand::Exit),
+        "exit --force" => CommandSubmission::Parsed(UiCommand::ForceExit),
         unknown => CommandSubmission::Unknown(unknown.to_owned()),
     }
 }
@@ -109,6 +111,10 @@ mod tests {
         assert_eq!(
             parse(" exit \t"),
             CommandSubmission::Parsed(UiCommand::Exit)
+        );
+        assert_eq!(
+            parse(" exit --force \t"),
+            CommandSubmission::Parsed(UiCommand::ForceExit)
         );
         assert_eq!(parse(""), CommandSubmission::Empty);
         assert_eq!(
