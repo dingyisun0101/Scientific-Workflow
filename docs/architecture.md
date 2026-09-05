@@ -1,7 +1,7 @@
 # Workflow architecture
 
 This document describes the reviewed architecture shipped by Rust package
-0.13.6 and its recording-v7/v8 integration with Python companion 0.4.3.
+0.13.7 and its recording-v7/v8 integration with Python companion 0.4.3.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -445,8 +445,13 @@ configuration documents. An execution-unit task may explicitly select one key;
 otherwise Study resolves the unit's `standard_state_schema` provider. Explicit
 selection takes precedence, and omission without a provider is an error. An execution unit key automatically selects its
 same-name parameter section; no per-task parameter path exists. Config expands
-selections deterministically, resolves program paths and Python scripts/environment
-managers once, and creates a deterministic language-neutral snapshot for
+selections deterministically. A `$sweep` recursively expands each alternative,
+concatenates its results in declared order, and combines independent sibling
+axes through the Cartesian product. Literal alternatives contribute one result;
+`$cases` remains a terminal correlated selection. This entire expansion belongs
+to Config and retains the existing global/local scope inference; Study and
+Runtime never construct parameter combinations. Config resolves program paths
+and Python scripts/environment managers once, and creates a deterministic language-neutral snapshot for
 external tasks. Reserved Workflow documents and arbitrary application
 documents use the same lookup graph. Runtime retains only a clone-cheap
 `ConfigSnapshot` byte handle for an active task, not Config's typed lookup and

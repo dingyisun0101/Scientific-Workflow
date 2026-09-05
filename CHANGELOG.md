@@ -4,7 +4,13 @@ This repository coordinates the independently versioned Rust workflow crate
 and Python recording reader. Recording-format versions remain independent of
 both package versions; see the [compatibility matrix](protocol/compatibility.md).
 
-## Unreleased
+## Rust 0.13.7 — 2026-09-05
+
+- Expand each `$sweep` alternative recursively, so one base can accompany the
+  Cartesian product of independent axes within a variation. Preserve flat
+  sweep order, global/local scope, terminal `$cases`, and literal arrays.
+- Reject empty/malformed nested selections before publishing a plan and retain
+  capacity-overflow errors when concatenating expanded alternatives.
 
 ## Rust 0.13.6 — 2026-09-05
 

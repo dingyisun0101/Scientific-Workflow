@@ -1,8 +1,8 @@
 # Scientific Workflow
 
-Rust 0.13.6 updates dependency wiring: examples consume crates.io Workflow,
-the runtime consumes published macros 0.2.1, and integration tests use PiP
-4.1.0-alpha. The Rust API and Python companion 0.4.3 are unchanged.
+Rust 0.13.7 adds recursive sweep alternatives: one base can accompany the
+Cartesian product of independent parameter axes. Existing flat sweeps, runtime
+APIs, recording formats, and Python companion 0.4.3 remain unchanged.
 
 > **BREAKING API UPDATE — 0.13.5 / Python 0.4.3:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python
@@ -23,6 +23,14 @@ executable programs, and declarative JSON into validated, recorded studies.
 > sections now expand the complete study graph; no compatibility alias retains
 > their former local interpretation. Projects still declare
 > `"workflow_schema": 1`.
+
+## Nested sweep alternatives in 0.13.7
+
+Workflow 0.13.7 accepts independent `$sweep` axes within an outer sweep
+alternative. A null base plus a six-by-four parameter grid expands to 25 tasks
+without application-side enumeration. Global/local scope, existing flat sweep
+ordering, and runtime admission policy are unchanged. `$cases` remains terminal.
+See the [Config contract](rust/src/config/api.md#nested-alternatives-and-independent-axes).
 
 ## Start here
 

@@ -1,6 +1,6 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.13.5 and Python
+This map is the release-qualification baseline for Rust 0.13.7 and Python
 reader 0.4.3.
 
 Tests follow subsystem responsibility and supported boundaries. Observation
@@ -163,8 +163,9 @@ runs these checks, validates protocol JSON, inspects publishable crate contents,
 and enforces the four required headings in every first-level subsystem
 `api.md`.
 
-Package inspection must also verify that every first-level module's `api.md`,
-`docs/architecture.md`, and proc-macro support are included where required.
+Package inspection must verify that every first-level module's `api.md` is
+included, proc-macro support resolves from its published dependency, and the
+crate README links to the release's repository-owned `docs/architecture.md`.
 
 The attractor example is an executable integration demonstration, not merely a
 compile fixture. A manual or release validation run should confirm that its six
@@ -239,3 +240,22 @@ qualification results, not a claim of CI or non-Linux coverage.
 The examples use the published Workflow dependency. Commands targeting the local
 Workflow crate use `--manifest-path rust/Cargo.toml` to avoid ambiguity with that
 registry package in the same dependency graph.
+
+Nested sweep expansion is covered by Config's expansion unit tests and
+`nested_local_axes_preserve_one_initialization_per_global_configuration` in
+`rust/src/config/tests/config_workflow.rs`. They verify one literal base plus a
+Cartesian product, deterministic ordering, global/local correlation, a single
+initialization per global configuration, unchanged admission intervals, and
+rejection of malformed nested or hidden literal-array markers.
+
+
+## Release 0.13.7 qualification
+
+The all-feature workspace suite passed 130 tests; the headless runtime and
+integration suite passed 116 tests. Clippy and rustdoc passed with warnings
+denied, all three doctests passed, and the Python 0.4.3 companion passed its
+30 tests. The published-dependency initialization pipeline and six-case attractor
+example completed, including NPY conversion and Python analysis. Package
+verification built the crate against registry dependencies. Nested-selection
+coverage additionally verifies Cartesian composition with sibling axes, literal
+vector choices, and unchanged opaque arrays outside choices.

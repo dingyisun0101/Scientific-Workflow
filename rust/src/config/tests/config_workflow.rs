@@ -334,6 +334,83 @@ fn top_level_sweeps_expand_every_task_while_execution_unit_sweeps_remain_local()
 }
 
 #[test]
+fn nested_local_axes_preserve_one_initialization_per_global_configuration() {
+    let project = TestProject::new(
+        r#"{"phases": {
+            "init": {"tasks": [{"execution_unit": "initialize"}]},
+            "evolve": {"after": ["init"], "start_interval_ms": 60000,
+                       "tasks": [{"execution_unit": "unit"}]}
+        }}"#,
+        &[
+            ("scenario", r#"{"$sweep": [10, 20]}"#),
+            ("initialize", "{}"),
+            (
+                "unit",
+                r#"{"steps": 3, "noise": {"$sweep": [null, {
+                "size": {"$sweep": [2, 4]}, "strength": {"$sweep": [0.1, 0.8]}
+            }]}}"#,
+            ),
+        ],
+    );
+    let first = ProjectSpecification::load(project.path()).unwrap();
+    let second = ProjectSpecification::load(project.path()).unwrap();
+    let init = first
+        .phases()
+        .iter()
+        .find(|phase| phase.name() == "init")
+        .unwrap();
+    assert_eq!(
+        init.tasks()
+            .iter()
+            .map(ResolvedTask::configuration)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    let evolve = first
+        .phases()
+        .iter()
+        .find(|phase| phase.name() == "evolve")
+        .unwrap();
+    assert_eq!(evolve.start_interval(), Duration::from_secs(60));
+    let values = |specification: &ProjectSpecification| {
+        specification
+            .phases()
+            .iter()
+            .find(|phase| phase.name() == "evolve")
+            .unwrap()
+            .tasks()
+            .iter()
+            .map(|task| {
+                (
+                    task.configuration(),
+                    execution_unit_task(task)
+                        .decode::<serde_json::Value>()
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let actual = values(&first);
+    assert_eq!(actual, values(&second));
+    assert_eq!(actual.len(), 10);
+    for (configuration, group) in actual.chunks_exact(5).enumerate() {
+        assert!(group.iter().all(|(index, _)| *index == configuration));
+        assert_eq!(group[0].1, serde_json::json!({"steps": 3, "noise": null}));
+        for (case, (size, strength)) in [(2, 0.1), (2, 0.8), (4, 0.1), (4, 0.8)]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                group[case + 1].1,
+                serde_json::json!({
+                    "steps": 3, "noise": {"size": size, "strength": strength}
+                })
+            );
+        }
+    }
+}
+
+#[test]
 fn reserved_npy_phase_synthesizes_one_aggregate_task() {
     let project = TestProject::new(
         r#"{

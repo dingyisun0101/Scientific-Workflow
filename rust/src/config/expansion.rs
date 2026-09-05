@@ -8,11 +8,20 @@ use super::document::child_pointer;
 use super::error::ConfigError;
 
 pub(crate) fn expand(path: &Path, value: &Value) -> Result<Vec<Value>, ConfigError> {
-    expand_at(path, "/", value)
+    expand_at(path, "/", value, false)
 }
 
-fn expand_at(path: &Path, pointer: &str, value: &Value) -> Result<Vec<Value>, ConfigError> {
+fn expand_at(
+    path: &Path,
+    pointer: &str,
+    value: &Value,
+    in_sweep_choice: bool,
+) -> Result<Vec<Value>, ConfigError> {
     let Value::Object(object) = value else {
+        // Preserve literal arrays while rejecting hidden markers inside a sweep choice.
+        if in_sweep_choice {
+            reject_reserved_markers(path, pointer, value)?;
+        }
         return Ok(vec![value.clone()]);
     };
 
@@ -38,10 +47,23 @@ fn expand_at(path: &Path, pointer: &str, value: &Value) -> Result<Vec<Value>, Co
                 "`$sweep` must contain at least one choice",
             ));
         }
-        for choice in choices {
-            reject_reserved_markers(path, pointer, choice)?;
+        let mut expanded = Vec::new();
+        for (index, choice) in choices.iter().enumerate() {
+            let choice_pointer = format!("{}/$sweep/{index}", normalized_pointer(pointer));
+            let nested = expand_at(path, &choice_pointer, choice, true)?;
+            expanded.len().checked_add(nested.len()).ok_or_else(|| {
+                ConfigError::ExpansionOverflow {
+                    path: path.to_path_buf(),
+                }
+            })?;
+            expanded
+                .try_reserve(nested.len())
+                .map_err(|_| ConfigError::ExpansionOverflow {
+                    path: path.to_path_buf(),
+                })?;
+            expanded.extend(nested);
         }
-        return Ok(choices.clone());
+        return Ok(expanded);
     }
 
     if let Some(cases) = object.get("$cases") {
@@ -57,7 +79,7 @@ fn expand_at(path: &Path, pointer: &str, value: &Value) -> Result<Vec<Value>, Co
                 format!("unknown reserved parameter marker `{key}`"),
             ));
         }
-        let expanded = expand_at(path, &child_pointer(pointer, key), value)?;
+        let expanded = expand_at(path, &child_pointer(pointer, key), value, in_sweep_choice)?;
         combinations = product_insert(path, combinations, key, &expanded)?;
     }
     Ok(combinations.into_iter().map(Value::Object).collect())
@@ -199,7 +221,7 @@ fn reject_reserved_markers(path: &Path, pointer: &str, value: &Value) -> Result<
                     return Err(ConfigError::invalid(
                         path,
                         child_pointer(pointer, key),
-                        "selection markers cannot be nested inside a choice or case",
+                        "selection markers are not allowed in literal choice arrays or correlated cases",
                     ));
                 }
                 reject_reserved_markers(path, &child_pointer(pointer, key), value)?;
@@ -239,4 +261,82 @@ fn flattened_paths(object: &Map<String, Value>) -> Vec<String> {
 
 fn normalized_pointer(pointer: &str) -> &str {
     pointer.strip_suffix('/').unwrap_or(pointer)
+}
+
+#[cfg(test)]
+mod nested_sweep_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn expands_independent_axes_inside_one_alternative_with_one_base() {
+        let input = json!({
+            "fixed_model": {"steps": 1000},
+            "noise": {"$sweep": [null, {
+                "type": "checkerboard",
+                "cell_size": {"$sweep": [[2,2], [4,4], [8,8], [16,16], [32,32], [64,64]]},
+                "minimum": {"$sweep": [0.1, 0.2, 0.4, 0.8]},
+                "maximum": 1.0
+            }]}
+        });
+        let results = expand(Path::new("parameters.json"), &input).unwrap();
+        assert_eq!(results.len(), 25);
+        assert_eq!(results.iter().filter(|v| v["noise"].is_null()).count(), 1);
+        for width in [2, 4, 8, 16, 32, 64] {
+            for strength in [0.1, 0.2, 0.4, 0.8] {
+                assert_eq!(
+                    results
+                        .iter()
+                        .filter(|v| {
+                            v["noise"]["cell_size"] == json!([width, width])
+                                && v["noise"]["minimum"] == json!(strength)
+                        })
+                        .count(),
+                    1
+                );
+            }
+        }
+        assert!(
+            results
+                .iter()
+                .all(|v| v["fixed_model"] == input["fixed_model"])
+        );
+    }
+
+    #[test]
+    fn nested_alternatives_combine_with_siblings_and_keep_arrays_literal() {
+        let literal = json!([{"$sweep": [1, 2]}]);
+        let input = json!({
+            "opaque": literal,
+            "choice": {"$sweep": [null, {"width": {"$sweep": [[2, 2], [4, 4]]}}]},
+            "replicate": {"$sweep": [10, 20]}
+        });
+        let results = expand(Path::new("parameters.json"), &input).unwrap();
+        let expected = [
+            Value::Null,
+            json!({"width": [2, 2]}),
+            json!({"width": [4, 4]}),
+        ]
+        .into_iter()
+        .flat_map(|choice| {
+            let literal = &literal;
+            [10, 20].into_iter().map(move |replicate| {
+                    json!({"opaque": literal, "choice": choice, "replicate": replicate})
+                })
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn rejects_invalid_nested_sweeps_and_markers_hidden_in_literal_arrays() {
+        for input in [
+            json!({"$sweep": [null, {"size": {"$sweep": []}}]}),
+            json!({"$sweep": [null, {"size": {"$sweep": [2], "other": 4}}]}),
+            json!({"$sweep": [[{"$sweep": [2,4]}]]}),
+            json!({"$sweep": [{"$cases": [{"size": {"$sweep": [2, 4]}}]}]}),
+        ] {
+            assert!(expand(Path::new("parameters.json"), &input).is_err());
+        }
+    }
 }

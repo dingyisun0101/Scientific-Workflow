@@ -1,8 +1,8 @@
 # Scientific Workflow Rust crate
 
-Rust 0.13.6 updates dependency wiring: examples consume crates.io Workflow,
-the runtime consumes published macros 0.2.1, and integration tests use PiP
-4.1.0-alpha. The Rust API and Python companion 0.4.3 are unchanged.
+Rust 0.13.7 adds recursive sweep alternatives: one base can accompany the
+Cartesian product of independent parameter axes. Existing flat sweeps, runtime
+APIs, recording formats, and Python companion 0.4.3 remain unchanged.
 
 > **BREAKING API UPDATE — 0.13.5 / Python 0.4.3:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python
@@ -150,14 +150,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.6"
+scientific-workflow = "0.13.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.13.6
+cargo add scientific-workflow@0.13.7
 cargo add serde --features derive
 ```
 
@@ -182,7 +182,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.13.6", default-features = false }
+scientific-workflow = { version = "0.13.7", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they
@@ -801,8 +801,12 @@ arbitrary `wf_configs/parameters.json` namespace once. A top-level section
 whose name is selected by an execution-unit task is inferred as local to that
 unit; every other top-level parameter is shared globally. Global choices clone
 the complete phase graph, and local choices clone only their execution-unit
-task. `$sweep` creates independent Cartesian choices; `$cases` creates
-correlated alternatives; ordinary arrays remain literal. Users do not write a
+task. `$sweep` creates independent Cartesian choices. Since 0.13.7,
+each sweep alternative can itself contain independent sweep axes: an outer
+`[null, {"size":{"$sweep":[2,4]}, "strength":{"$sweep":[0.1,0.8]}}]` choice
+produces one base plus four variants. Expansion preserves declared ordering;
+`$cases` remains a terminal correlated selection, and ordinary arrays remain
+literal. See the [Config contract](src/config/api.md#nested-alternatives-and-independent-axes). Users do not write a
 scope marker, reference, or ordinal. Program arguments are optional opaque strings and executables are
 started directly without a shell. Python-specific `script`, `environment`, and
 `args` stay nested beneath `python`; generic timeout policy remains on the
@@ -920,7 +924,7 @@ See [`src/state/api.md`](src/state/api.md),
 [`src/ui/api.md`](src/ui/api.md),
 [`src/error/api.md`](src/error/api.md),
 [`src/prelude/api.md`](src/prelude/api.md), and the repository
-[`architecture.md`](../docs/architecture.md).
+[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.7/docs/architecture.md).
 
 ## Validation
 

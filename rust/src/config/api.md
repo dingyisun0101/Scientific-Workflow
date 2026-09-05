@@ -287,8 +287,11 @@ expands it locally, and decodes each result as one complete
 whole phase graph, while the `growth` sweep duplicates only `population` tasks.
 Config owns two expansion markers wherever selection is allowed:
 
-- `{"$sweep": [a, b, ...]}` selects independent alternatives at that object
-  position. Multiple sweeps form a deterministic Cartesian product.
+- `{"$sweep": [a, b, ...]}` selects alternatives at that object position.
+  Each alternative is recursively expanded before the results are concatenated.
+  Independent sweeps in an alternative form a deterministic Cartesian product;
+  sibling sweeps outside that alternative then combine with its expanded results.
+  A literal choice, such as `null`, contributes exactly one result.
 - a root or nested object may contain `"$cases": [{...}, {...}]` alongside
   fixed fields. Cases are correlated alternatives and must share the same
   flattened field set without overlapping fixed values. Fixed siblings and
@@ -296,13 +299,47 @@ Config owns two expansion markers wherever selection is allowed:
   the terminal correlated choice at that subtree.
 
 Choices and cases must be nonempty. A `$sweep` object has no siblings.
-Reserved markers cannot occur inside a choice/case, and unknown `$...` keys
-are rejected. Ordinary arrays are literal constants, not implicit sweeps.
-Expansion order is object declaration order, then choice order. Each global
-configuration is internal correlation state, never user-authored syntax. Each
+Unknown `$...` keys are rejected. `$cases` remains terminal: fixed siblings and
+correlated cases cannot contain selection markers. Ordinary arrays are literal
+constants, not implicit sweeps; arrays within a sweep choice cannot conceal
+selection markers. Existing opaque arrays outside choices retain their literal
+interpretation. Expansion follows object declaration order and then outer choice
+order, recursively preserving each choice's expansion order. The first declared
+axis varies slowest. Allocation/capacity overflow while combining or concatenating
+results returns `ConfigError::ExpansionOverflow` before any plan is published.
+Each global configuration is internal correlation state, never user-authored syntax. Each
 concrete local result becomes one internal resolved execution unit-parameter
 value and is decoded as one complete owned constants value during Study
 preflight.
+
+### Nested alternatives and independent axes
+
+A base plus a parameter grid uses one outer alternative and two local axes:
+
+```json
+{
+  "model": {
+    "steps": 1000,
+    "noise": {
+      "$sweep": [
+        null,
+        {
+          "size": {"$sweep": [2, 4, 8, 16, 32, 64]},
+          "strength": {"$sweep": [0.1, 0.2, 0.4, 0.8]}
+        }
+      ]
+    }
+  }
+}
+```
+
+If `model` is an execution-unit key, Config emits 25 local tasks: the null
+base followed by 24 size/strength combinations. A separate initialization
+unit remains one task per global configuration. No caller expands combinations,
+adds duplicate base cases, or authors task ordinals. Previously accepted flat
+sweeps retain the same result order and identities; newly accepted nested sweeps
+require Workflow 0.13.7 or later. Scheduling and admission intervals
+remain Runtime-owned and are unaffected by selection depth.
 
 ### Central configuration snapshot
 
