@@ -34,7 +34,7 @@ dependencies = [
 name = "attractor-2d"
 version = "0.1.0"
 dependencies = [
- "scientific-workflow",
+ "scientific-workflow 0.13.5",
  "serde",
  "serde_json",
 ]
@@ -630,9 +630,9 @@ dependencies = [
 
 [[package]]
 name = "physics_in_parallel"
-version = "4.0.0-alpha.2"
+version = "4.1.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a7f36e5d891743e2fc02f09e6595812533a350c735e0bc2cc8f9294565e66c8"
+checksum = "07b4beb8e943e5777bb0bd4a31f0108fa667e602b59576dd02ca57ecdfc9f41b"
 dependencies = [
  "ahash",
  "erased-serde",
@@ -876,6 +876,28 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "scientific-workflow"
 version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81ffd5cb7f9140627f448b2ffa68ae42e39e8152db36c356171fc63c12e7dee3"
+dependencies = [
+ "crossterm",
+ "erased-serde",
+ "fs2",
+ "inventory",
+ "libc",
+ "ratatui",
+ "rayon",
+ "scientific-workflow-macros 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+ "unicode-width",
+]
+
+[[package]]
+name = "scientific-workflow"
+version = "0.13.6"
 dependencies = [
  "crossterm",
  "erased-serde",
@@ -885,7 +907,7 @@ dependencies = [
  "physics_in_parallel",
  "ratatui",
  "rayon",
- "scientific-workflow-macros",
+ "scientific-workflow-macros 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "sha2",
@@ -897,6 +919,17 @@ dependencies = [
 [[package]]
 name = "scientific-workflow-macros"
 version = "0.2.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "scientific-workflow-macros"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a36e78102796184b9cd89edc098f3c211be94d7aac359acd21121dcdc6ed8a1f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1223,7 +1256,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workflow-dependency-pipeline"
 version = "0.1.0"
 dependencies = [
- "scientific-workflow",
+ "scientific-workflow 0.13.5",
  "serde",
 ]
 

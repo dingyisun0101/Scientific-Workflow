@@ -1,5 +1,9 @@
 # Scientific Workflow Rust crate
 
+Rust 0.13.6 updates dependency wiring: examples consume crates.io Workflow,
+the runtime consumes published macros 0.2.1, and integration tests use PiP
+4.1.0-alpha. The Rust API and Python companion 0.4.3 are unchanged.
+
 > **BREAKING API UPDATE — 0.13.5 / Python 0.4.3:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python
 > imports move to `scientific_workflow`; no old import aliases are provided.
@@ -146,14 +150,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.5"
+scientific-workflow = "0.13.6"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.13.5
+cargo add scientific-workflow@0.13.6
 cargo add serde --features derive
 ```
 
@@ -178,7 +182,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.13.5", default-features = false }
+scientific-workflow = { version = "0.13.6", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they

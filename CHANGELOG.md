@@ -6,6 +6,13 @@ both package versions; see the [compatibility matrix](protocol/compatibility.md)
 
 ## Unreleased
 
+## Rust 0.13.6 — 2026-09-05
+
+- Resolve example Workflow dependencies and runtime macros from crates.io instead
+  of local workspace paths.
+- Update the PiP integration-test dependency to 4.1.0-alpha.
+- Keep runtime APIs, recording formats, macros 0.2.1, and Python 0.4.3 unchanged.
+
 ## Rust 0.13.5 and Python companion 0.4.3 — 2026-09-05
 
 **Breaking changes despite the requested patch increments:** typed initialization

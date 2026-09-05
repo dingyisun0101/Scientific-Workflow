@@ -1,5 +1,9 @@
 # Scientific Workflow
 
+Rust 0.13.6 updates dependency wiring: examples consume crates.io Workflow,
+the runtime consumes published macros 0.2.1, and integration tests use PiP
+4.1.0-alpha. The Rust API and Python companion 0.4.3 are unchanged.
+
 > **BREAKING API UPDATE — 0.13.5 / Python 0.4.3:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python
 > imports move to `scientific_workflow`; no old import aliases are provided.

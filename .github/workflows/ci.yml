@@ -31,15 +31,15 @@ jobs:
       - name: Run dependency pipeline
         run: cargo run -p workflow-dependency-pipeline --locked
       - name: Test headless crate
-        run: cargo test -p scientific-workflow --all-targets --no-default-features --locked
+        run: cargo test --manifest-path rust/Cargo.toml --all-targets --no-default-features --locked
       - name: Document workspace
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --all-features --no-deps --locked
       - name: Test documentation
-        run: cargo test -p scientific-workflow --doc --all-features --locked
+        run: cargo test --manifest-path rust/Cargo.toml --doc --all-features --locked
       - name: Inspect publishable crate
-        run: cargo package -p scientific-workflow --list --locked
+        run: cargo package --manifest-path rust/Cargo.toml --list --locked
       - name: Verify subsystem API guide structure
         shell: bash
         run: |

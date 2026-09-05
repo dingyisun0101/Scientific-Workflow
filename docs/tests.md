@@ -151,9 +151,9 @@ unsupported APIs.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-targets --all-features --locked
-cargo test -p scientific-workflow --all-targets --no-default-features --locked
+cargo test --manifest-path rust/Cargo.toml --all-targets --no-default-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
-cargo test -p scientific-workflow --doc --all-features --locked
+cargo test --manifest-path rust/Cargo.toml --doc --all-features --locked
 PYTHONPATH=python/src python -m unittest discover -s python/tests -v
 ```
 
@@ -235,3 +235,7 @@ The manual Linux PTY check exercised pause/resume and both ordinary and forced
 exit. Both restored terminal attributes; forced exit returned 130, ordinary
 cancellation returned the application error exit status. These are local
 qualification results, not a claim of CI or non-Linux coverage.
+
+The examples use the published Workflow dependency. Commands targeting the local
+Workflow crate use `--manifest-path rust/Cargo.toml` to avoid ambiguity with that
+registry package in the same dependency graph.

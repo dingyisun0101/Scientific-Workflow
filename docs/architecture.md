@@ -1,7 +1,7 @@
 # Workflow architecture
 
 This document describes the reviewed architecture shipped by Rust package
-0.13.5 and its recording-v7/v8 integration with Python companion 0.4.3.
+0.13.6 and its recording-v7/v8 integration with Python companion 0.4.3.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -741,3 +741,10 @@ The standard converter uses spawn workers, a bounded progress queue to its paren
 cooperative control-file acknowledgements, per-batch directory locking, unique
 staging names, and deterministic atomic batch publication. Native numeric pools
 are limited inside each worker. No arbitrary program is SIGSTOP-suspended.
+
+## Published dependency resolution (0.13.6)
+
+Repository examples resolve Workflow from crates.io. The Rust runtime resolves
+macros 0.2.1 from crates.io, while the macros source remains a workspace member
+for its own tests. Integration tests use published PiP 4.1.0-alpha. No subsystem
+API, recording contract, or Python API changes accompany this dependency update.
