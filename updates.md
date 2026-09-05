@@ -562,6 +562,45 @@ parses NPY v1 directly and needs the pre-existing v2 migration; this is not fixe
 by changing a format string alone.
 
 Downstream application source and pre-existing GLV/Simulator edits are preserved.
-Repository-root refactor.md guides will record migration steps and qualification
+Repository-root refactor.md guides record migration steps and qualification
 limits for Dispatcher, OF, GLV, Simulator, Eco Core, and Analysis. Publication
-and final guide delivery are recorded below after remote verification.
+and final guide delivery were verified remotely as recorded below.
+
+
+### Published release and delivery
+
+- Rust scientific-workflow **0.13.5** was published successfully to crates.io.
+- Python scientific-workflow **0.4.3** was published through the coordinated
+  **v0.13.5** Git tag and public GitHub release wheel/source assets with SHA-256
+  checksums. No PyPI publication is claimed.
+- Release source: **ea48a8c**. Batches: **37be064** (API), **edb7445**
+  (runtime/conversion/UI), **ea48a8c** (documentation/qualification), followed by
+  this delivery record. All work remains on **refactor/workflow-0.13.5**;
+  **no merge into main was performed**.
+- [Published release](https://github.com/dingyisun0101/Scientific-Workflow/releases/tag/v0.13.5).
+- [Release CI](https://github.com/dingyisun0101/Scientific-Workflow/actions/runs/33938799301)
+  passed both Rust and Python jobs, including installed-wheel tests, the dependency
+  pipeline, headless tests, Clippy, rustdoc, doctests and API guide structure.
+- Dispatcher and OF defaults were refreshed and read again after publication;
+  their reviewed source SHAs remained d50d873 and 4c3ebeb before guide-only commits.
+
+Guide-only commits were pushed to all six impacted downstream repositories:
+
+| Repository | Branch | Guide commit | Outcome |
+| --- | --- | --- | --- |
+| Dispatcher | sw-version | d4ad11c | 16 tests pass with documented migration; old raw-JSON calls and stale v1 assertion require updates |
+| OF | sw-version | 8a4d3db | 22 Rust tests and real NPY acceptance pass with documented typed/series/boundary migration |
+| GLV | sw-version | a843065 | 42 Rust tests; three Python decoder tests after import migration |
+| Simulator | sw-version | 05870e1 | 43 Rust tests; four Python decoder tests after import migration |
+| Eco Core | main | 37e4307 | 32 Rust tests without source migration |
+| Analysis | sw-version | fea2159 | Read-only audit; existing direct NPY v1 parser needs a separate v2 migration |
+
+Each repository contains **refactor.md at its root**. Downstream application
+sources were not edited; only these guides were committed/pushed. The temporary
+migration experiments remain isolated under /tmp/workflow-downstream. Existing
+GLV and Simulator working-tree changes were preserved and excluded from commits.
+
+All accepted refactor decisions are implemented and published. Remaining work
+belongs to downstream adoption described in those guides, and future non-Linux
+support. Analysis compatibility is explicitly unqualified until its parser is
+migrated and exercised on actual current output.
