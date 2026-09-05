@@ -22,8 +22,10 @@ validation. A failure never returns a partial scientific series.
 ## Installation
 
 ```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
+  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.5#subdirectory=python"
 ```
 
 Python 3.14 or newer is required. The core reader has no runtime dependencies.
@@ -32,7 +34,7 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 
 ```bash
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.5#subdirectory=python"
 ```
 
 This guide documents release 0.4.3.
@@ -88,16 +90,16 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.4.2 supports only
-`scientific-workflow-jsonl` format version 7, positional JSON payload encoding, JSON Lines
+Release 0.4.3 supports
+`scientific-workflow-jsonl` format versions 7 and 8, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
 
 The normative language-neutral contract is the repository's
-[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/recording-v7.md),
+[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/protocol/recording-v7.md),
 with a strict structural JSON Schema and a package
-[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/compatibility.md). This package is the
-v7 reader listed there; it does not expose a supported writer.
+[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/protocol/compatibility.md). This package is the
+v7/v8 reader listed there; it does not expose a supported writer.
 
 The record containers cannot be reassigned and their value mappings are
 read-only. Decoded payload objects retain the type and mutability chosen by
@@ -158,7 +160,7 @@ a sibling directory named `<recording>-npy`. It never writes inside or modifies
 the raw recording. Conversion uses bounded-memory verified iteration, writes a
 private temporary directory, atomically publishes the completed result, and
 resumes an existing result only when its manifest and arrays still match.
-From a source checkout, the dependency-free launcher script is
+From a source checkout, the source-tree launcher script is
 `python/scripts/recording_to_npy.py`; it adds the adjacent package source and
 accepts the same recording and `--output` arguments.
 
@@ -194,7 +196,7 @@ The normative converted-data contract is
 
 ```bash
 cd python
-python -m pip install -e .
+python -m pip install -e ".[npy]"
 python -m unittest discover -s tests -v
 ```
 

@@ -360,11 +360,16 @@ fn parse(bytes: &[u8]) -> Option<Event> {
             if total.is_some_and(|n| completed > n) {
                 return None;
             }
+            let stage = clean(value.get("stage")?.as_str()?);
+            let unit = clean(value.get("unit")?.as_str()?);
+            if stage.trim().is_empty() || unit.trim().is_empty() {
+                return None;
+            }
             Some(Event::Progress {
-                stage: clean(value.get("stage")?.as_str()?),
+                stage,
                 completed,
                 total,
-                unit: clean(value.get("unit")?.as_str()?),
+                unit,
             })
         }
         _ => None,
@@ -416,6 +421,10 @@ mod tests {
     fn frames_reject_bad_versions_bounds_and_control_characters() {
         assert!(parse(br#"{"version":2,"kind":"log","level":"info","message":"x"}"#).is_none());
         assert!(parse(br#"{"version":1,"kind":"progress","stage":"x","completed":2,"total":1,"unit":"records"}"#).is_none());
+        assert!(
+            parse(br#"{"version":1,"kind":"progress","stage":"","completed":0,"unit":"records"}"#)
+                .is_none()
+        );
         match parse(br#"{"version":1,"kind":"log","level":"error","message":"\u001b[31mx"}"#)
             .unwrap()
         {

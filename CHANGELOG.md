@@ -6,6 +6,28 @@ both package versions; see the [compatibility matrix](protocol/compatibility.md)
 
 ## Unreleased
 
+## Rust 0.13.5 and Python companion 0.4.3 — 2026-09-05
+
+**Breaking changes despite the requested patch increments:** typed initialization
+dependencies replace raw JSON access; the Python distribution becomes
+`scientific-workflow`, imported as `scientific_workflow`, with no old-name aliases.
+Python tools require 3.14+ on Linux and a manually installed, activated environment.
+Follow the [migration guide](docs/migration-0.13.5.md) before upgrading.
+
+- Adds typed dependency selection, standard-layout project accessors, cached
+  whole-series NPY views, and opt-in Python logging/progress reporting.
+- Adds true initial/final observations and recording format 8 for that policy;
+  periodic-only recordings remain v7, both readers support v7/v8, and NPY stays v2.
+- Runs bounded converter processes under the shared study resource budget with
+  single-thread native numeric libraries, resumable publication, and pause points.
+- Supervises owned Linux process trees, preserves raw logs, validates bounded
+  live event frames, and treats logging/renderer failures as execution failures.
+- Freezes execution budgets during pause, adds a continuously advancing total
+  wall clock, and shows active groups with bounded, scrollable outcome messages.
+- Adds a complete dependency pipeline example, synchronized subsystem references,
+  installation/migration guides, cross-language tests, and Linux qualification.
+- Leaves `scientific-workflow-macros` at 0.2.1 and project schema at 1.
+
 ## Rust 0.13.3 and Python reader 0.4.2 — 2026-09-03
 
 - Converts every recorded top-level field into manifest-described NumPy data:

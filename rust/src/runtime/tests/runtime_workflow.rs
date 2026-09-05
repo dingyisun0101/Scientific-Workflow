@@ -802,6 +802,24 @@ sleep 0.2
 #[cfg(unix)]
 #[test]
 fn phase_concurrency_respects_start_interval_and_summary_order() {
+    use std::sync::{Arc, Mutex};
+    struct AdmissionObserver(Arc<Mutex<Vec<Instant>>>);
+    impl RuntimeObserver for AdmissionObserver {
+        fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
+            if matches!(event, RuntimeEvent::TaskStarted { .. }) {
+                self.0.lock().unwrap().push(Instant::now());
+            }
+            Ok(())
+        }
+        fn cancellation_requested(&self) -> Result<bool, PresentationFailure> {
+            Ok(false)
+        }
+        fn finish(&self) -> Result<(), PresentationFailure> {
+            Ok(())
+        }
+    }
+    let admissions = Arc::new(Mutex::new(Vec::new()));
+    let observer_admissions = Arc::clone(&admissions);
     let project = Project::new(
         serde_json::json!({
             "threads": 3,
@@ -828,7 +846,10 @@ sleep 0.25
 "#,
     );
 
-    let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+    let summary = execute_with_observer(Study::load(project.path()).unwrap(), || {
+        Ok(AdmissionObserver(observer_admissions))
+    })
+    .unwrap();
     let tasks = summary.replicates()[0].phases()[0].tasks();
     assert_eq!(tasks.len(), 3);
     assert!(tasks[0].output_directory().ends_with("task-000000"));
@@ -836,8 +857,14 @@ sleep 0.25
     assert!(tasks[2].output_directory().ends_with("task-000002"));
 
     let ranges = timing_ranges(project.path(), "task-");
-    assert!(ranges[1].0.duration_since(ranges[0].0).unwrap() >= Duration::from_millis(40));
-    assert!(ranges[2].0.duration_since(ranges[1].0).unwrap() >= Duration::from_millis(40));
+    // The policy spaces admissions; OS scheduling may delay either child shell.
+    let admissions = admissions.lock().unwrap();
+    assert_eq!(admissions.len(), 3);
+    assert!(
+        admissions
+            .windows(2)
+            .all(|pair| pair[1].duration_since(pair[0]) >= Duration::from_millis(60))
+    );
     assert!(ranges[2].0 < ranges[0].1);
 }
 

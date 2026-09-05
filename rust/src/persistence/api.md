@@ -1,6 +1,6 @@
 # Persistence API
 
-This guide documents the `scientific-workflow` 0.13.3 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
 
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified member-state reconstruction. Config parses optional operational sizing,

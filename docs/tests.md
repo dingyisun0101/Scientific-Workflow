@@ -1,7 +1,7 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.13.3 and Python
-reader 0.4.2.
+This map is the release-qualification baseline for Rust 0.13.5 and Python
+reader 0.4.3.
 
 Tests follow subsystem responsibility and supported boundaries. Observation
 binding/session behavior, Config and Study compilation, and persistence write
@@ -208,3 +208,30 @@ processes and double-counts shared pages. These results support retaining the
 explicit shared-budget rule; no undocumented memory/CPU cap is introduced.
 Planning still scales with record/projection counts; large-workload optimization
 and a shared persistence writer pool remain measurement-driven future work.
+
+
+## Release 0.13.5 / 0.4.3 qualification
+
+Linux qualification passed the all-feature workspace suite (126 tests), headless
+crate suite, Clippy with warnings denied, rustdoc with warnings denied, and three
+doctests. The built Python wheel passed all 30 tests from outside the source tree;
+a separate dependency-free environment imported the core, dependencies, project,
+and reporting modules without NumPy. The full dependency pipeline produced the
+expected `[7, 8, 9, 10, 11, 12]` simulation series after v8 initialization.
+
+OF's default `sw-version` was tested in an isolated copy with typed recording
+selection, boundary sampling, renamed Python imports, and its generic series
+implementation replaced by Workflow views: 22 Rust tests and its real PiP NPY
+acceptance test passed, including deterministic fixed/ragged readback. GLV,
+Simulator, and Eco Core pass Rust tests without source changes. GLV and Simulator
+Python decoder tests pass after import migration. Dispatcher requires the typed
+context migration and has an independently stale NPY v1 test expectation; its
+migration guide records the exact validation outcome. After the JSON-access
+bridge and correcting that v1 expectation to v2 in the isolated copy, all 16
+Dispatcher tests passed. The admission-interval test measures Runtime start
+events rather than child shell file timestamps, which include OS scheduling delay.
+
+The manual Linux PTY check exercised pause/resume and both ordinary and forced
+exit. Both restored terminal attributes; forced exit returned 130, ordinary
+cancellation returned the application error exit status. These are local
+qualification results, not a claim of CI or non-Linux coverage.

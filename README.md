@@ -22,6 +22,11 @@ executable programs, and declarative JSON into validated, recorded studies.
 
 ## Start here
 
+- **Start with the [Linux and Python setup guide](docs/setup.md).**
+- Upgrading? Follow the [0.13.5 / 0.4.3 migration guide](docs/migration-0.13.5.md).
+- For typed dependency handoff and whole-series analysis, run the
+  [initialization → simulation → NPY → analysis example](examples/dependency_pipeline/README.md).
+
 - If Workflow, Serde, or Rust traits are new to you, begin with the
   [getting-started guide](rust/getting-started.md). It defines studies, phases,
   tasks, execution units, and members, then builds one minimal runnable project.
@@ -37,11 +42,12 @@ executable programs, and declarative JSON into validated, recorded studies.
 - To consume completed recordings from Python, use the verified
   [Scientific Workflow Reader and standard NumPy converter](python/README.md).
 - To implement or audit a cross-language reader, use the normative
-  [recording v7 protocol](protocol/recording-v7.md) and
+  [recording v7 protocol](protocol/recording-v7.md),
+  [v8 boundary-sampling extension](protocol/recording-v8.md), and
   [compatibility matrix](protocol/compatibility.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
-- For the Rust 0.13.3 and Python reader 0.4.2 release summary, see the
+- For the Rust 0.13.5 and Python companion 0.4.3 release summary, see the
   [changelog](CHANGELOG.md).
 
 ## Repository map

@@ -277,7 +277,26 @@ impl DashboardState {
         ) {
             self.active_groups.clear();
         }
-        if let Some(message) = event_message(event) {
+        if let Some(mut message) = event_message(event) {
+            if let RuntimeEvent::PhaseCompleted { replicate, name }
+            | RuntimeEvent::PhaseFailed {
+                replicate, name, ..
+            }
+            | RuntimeEvent::PhaseCancelled { replicate, name } = event
+            {
+                let mut counts = [0; 6];
+                for task in self
+                    .tasks
+                    .values()
+                    .filter(|t| t.replicate == *replicate && t.phase == *name)
+                {
+                    counts[task.status as usize] += 1;
+                }
+                message.push_str(&format!(
+                    " ({} completed, {} failed, {} cancelled, {} skipped)",
+                    counts[2], counts[3], counts[4], counts[5]
+                ));
+            }
             let level = match event {
                 RuntimeEvent::ProgramLog { level, .. } => *level,
                 RuntimeEvent::TaskFailed { .. }
@@ -611,12 +630,9 @@ mod tests {
         let snapshot = state.snapshot();
         assert_eq!(snapshot.tasks.len(), 1);
         assert_eq!(snapshot.tasks[0].label, "plotter");
-        assert!(
-            snapshot
-                .messages
-                .iter()
-                .any(|m| m.contains("phase simulate completed"))
-        );
+        assert!(snapshot.messages.iter().any(|m| {
+            m.contains("phase simulate completed (0 completed, 0 failed, 0 cancelled, 0 skipped)")
+        }));
         assert_eq!(snapshot.totals.iter().sum::<usize>(), 2);
     }
 

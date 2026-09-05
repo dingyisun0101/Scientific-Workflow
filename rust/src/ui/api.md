@@ -175,4 +175,5 @@ preserve meaning without color. Wrapped messages are selected by display rows,
 with Unicode column widths. History is bounded to 100 messages; complete program
 stdout/stderr logs remain on disk. Program progress counts are not treated as
 scientific-time ETA because member sizes differ. Noninteractive mode prints
-lifecycle and program logs; no terminal input or renderer is started.
+lifecycle and program logs; no terminal input or renderer is started. Terminal
+phase messages include completed, failed, cancelled, and skipped task counts.

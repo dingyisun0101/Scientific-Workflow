@@ -1,3 +1,10 @@
+> **Implementation status, 2026-09-05:** The accepted nine operational decisions
+> and five public API decisions are implemented on `refactor/workflow-0.13.5`.
+> Earlier findings and pending labels below are retained as the decision history.
+> Current release targets are Rust **0.13.5**, Python companion **0.4.3**, macros
+> unchanged **0.2.1**. The user's patch-release instruction supersedes the earlier
+> minor-version proposal. See the final qualification section at the end.
+
 1. scan for possible: architectural, efficiency, and ergo upgrades.
 2. add multiprocessing to npy processing. discuss if we can and should also add progress reporting? at least we need more logging messages. To do that, how to allow rust to accept logs from python?
 3. make sure all python scripts are wrapped so user can directly use them by adding to cargo.toml the online version
@@ -529,3 +536,32 @@ active-environment preservation/probes, owned process-tree cleanup, log/progress
 framing, bounded converter multiprocessing, shared resource allocation, pause-aware
 timers/safe points, combined active-group UI and severity/history/navigation.
 Release qualification, final documentation and downstream migration guides remain.
+
+
+## Final qualification and downstream conclusions
+
+Batch 2 was pushed as edb7445. Batch 3 synchronizes setup, migration, subsystem,
+protocol, example, and release documentation; CI now installs/tests the Python
+3.14 companion and exercises the dependency pipeline.
+
+All-feature Rust tests, headless tests, Clippy, rustdoc, doctests, and the installed
+Python wheel were qualified on Linux. Core imports were checked without NumPy.
+The pause/resume and ordinary/forced-exit PTY checks restored terminal attributes.
+Converter benchmark results are in docs/tests.md. Non-Linux support remains
+explicit future work; no automatic worker memory cap was added without evidence.
+
+Default-branch review used Dispatcher sw-version d50d873 and OF sw-version
+4c3ebeb. Both require migration from raw context dependencies. OF's typed selection,
+initial/final policy, Python namespace and whole-series migration passed 22 Rust
+tests and real fixed/ragged deterministic NPY acceptance in an isolated copy.
+Dispatcher passed 16 tests after the raw_json bridge and correcting its stale
+NPY v1 expectation to v2 in an isolated copy. The v1 mismatch predates this release.
+GLV, Simulator and Eco Core Rust tests passed without source changes. GLV and
+Simulator Python decoder tests passed after import migration. Analysis still
+parses NPY v1 directly and needs the pre-existing v2 migration; this is not fixed
+by changing a format string alone.
+
+Downstream application source and pre-existing GLV/Simulator edits are preserved.
+Repository-root refactor.md guides will record migration steps and qualification
+limits for Dispatcher, OF, GLV, Simulator, Eco Core, and Analysis. Publication
+and final guide delivery are recorded below after remote verification.

@@ -22,7 +22,7 @@ configuration-driven execution unit or program execution, and durable outputs.
 
 ## New to Workflow?
 
-Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/rust/getting-started.md). It
+Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/rust/getting-started.md). It
 explains Serde and deserialization, Rust traits, and the difference between a
 study, phase, task, execution unit, member, and state before presenting a
 minimal runnable project.
@@ -146,14 +146,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.3"
+scientific-workflow = "0.13.5"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.13.3
+cargo add scientific-workflow@0.13.5
 cargo add serde --features derive
 ```
 
@@ -166,8 +166,10 @@ Projects declaring the reserved `$npy` phase also install the coordinated
 optional converter:
 
 ```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.5#subdirectory=python"
 ```
 
 The default `terminal-ui` feature preserves the automatic interactive
@@ -176,7 +178,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.13.3", default-features = false }
+scientific-workflow = { version = "0.13.5", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they
@@ -187,7 +189,7 @@ an embedding choice, not an alternate end-user interface.
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
 into an execution unit's typed `Constants` value. Application code normally
-adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/rust/getting-started.md#why-serde-and-deserialize-appear)
+adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/rust/getting-started.md#why-serde-and-deserialize-appear)
 shows the exact JSON-to-Rust mapping and explains why
 `#[serde(deny_unknown_fields)]` is recommended.
 
@@ -229,7 +231,7 @@ serde = { version = "1", features = ["derive"] }
 
 Adjust the relative path to match the checkout location. Clone the whole
 repository rather than copying `rust/` alone because the crate uses the sibling
-procedural-macro package and the repository also contains its Python reader,
+procedural-macro package and the repository also contains its Python companion,
 example, architecture, and conformance tests. A path dependency follows local
 edits immediately; commit the repository revision separately because
 `Cargo.lock` cannot reproduce uncommitted path contents.
@@ -243,7 +245,7 @@ include:
 - exposing a different public orchestration or execution unit contract;
 - implementing a custom persistence backend, writer lifecycle, or incompatible
   recording format (the current cross-language contract is the repository's
-  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/protocol/recording-v7.md));
+  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/protocol/recording-v7.md));
 - replacing scheduling, cancellation, output-layout, or UI policy;
 - carrying organization-specific changes that cannot be contributed upstream;
   or
@@ -776,8 +778,9 @@ project-relative domain output such as the Python plotter's `output/plots`.
 
 UI is also automatic. No `ui` object or execution unit display fields are required.
 Interactive stdin and stderr select the Ratatui dashboard with inferred task
-rows for only the current phase, progress, timing, lifecycle messages, and the
-`exit` command. The task-panel title carries the replicate and phase once.
+rows for all active phase groups, progress, timing, lifecycle messages, and the
+`exit` command. Completed groups disappear; Messages retain their outcomes.
+Execution clocks freeze during pause; the Study Total time clock continues.
 After success, failure, or cancellation, the interactive dashboard stays open
 so the terminal outcome can be inspected; type exact lowercase `exit` and press
 Enter to close it. `exit` during active work also requests cooperative
@@ -786,8 +789,8 @@ final `exit` is still required. Noninteractive runs never wait for input.
 Redirected execution uses stable plain lifecycle lines. The dashboard and
 plain renderer are the only presentation modes. Failure of the selected mode
 is fatal and returns `RuntimeError::Presentation` rather than silently
-degrading or being reported as cooperative workflow cancellation. All visible
-dashboard/plain behavior remains identical to earlier 0.11.x operation.
+degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/rust/src/ui/api.md)
+details commands, scrolling, and pause boundaries.
 
 Config alone reads `wf_configs/study.json`, every named project state document, and the complete
 arbitrary `wf_configs/parameters.json` namespace once. A top-level section

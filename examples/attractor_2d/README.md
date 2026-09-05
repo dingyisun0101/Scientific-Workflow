@@ -1,7 +1,7 @@
 # Two-dimensional attractor study
 
 This example is the release-qualified end-to-end project for
-`scientific-workflow` 0.13.3 and `scientific-workflow-reader` 0.4.2.
+`scientific-workflow` 0.13.5 and `scientific-workflow` 0.4.3.
 
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all
@@ -199,9 +199,12 @@ paths itself. Its output uses the
 
 ## Run
 
+**Linux only, Python 3.14+. Activate the environment again in every new shell.**
 From the repository root:
 
 ```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
 python -m pip install "./python[npy]"
 cargo run -p attractor-2d
 ```
@@ -209,8 +212,8 @@ cargo run -p attractor-2d
 Workflow creates a unique Rust execution beneath `examples/attractor_2d/output`.
 Python owns its configured `output/plots` destination directly. When stdin and
 stderr are interactive, the automatic Ratatui dashboard shows task rows,
-progress, timing, messages, and an `exit` command. The task section refreshes
-for each phase and shows that phase only; redirected runs use plain lifecycle
+progress, timing, messages, and an `exit` command. The task section shows every active phase group and removes completed
+groups; their outcomes remain in Messages. Redirected runs use plain lifecycle
 lines. The execution unit and plotter do not construct tasks, phases,
 persistence sessions, progress counters, or message channels.
 

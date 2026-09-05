@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "refactor/**"]
   pull_request:
 
 permissions:
@@ -17,12 +17,19 @@ jobs:
         with:
           toolchain: 1.97.0
           components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install Python companion
+        run: python -m pip install "./python[npy]"
       - name: Format
         run: cargo fmt --all -- --check
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Test workspace
         run: cargo test --workspace --all-targets --all-features --locked
+      - name: Run dependency pipeline
+        run: cargo run -p workflow-dependency-pipeline --locked
       - name: Test headless crate
         run: cargo test -p scientific-workflow --all-targets --no-default-features --locked
       - name: Document workspace
@@ -49,12 +56,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.14'
       - name: Validate protocol JSON
         run: |
           python -m json.tool protocol/compatibility.json >/dev/null
           python -m json.tool protocol/recording-v7.schema.json >/dev/null
-      - name: Test Python reader
-        env:
-          PYTHONPATH: python/src
+          python -m json.tool protocol/recording-v8.schema.json >/dev/null
+      - name: Build and install wheel
+        run: |
+          python -m pip install build
+          python -m build python
+          python -m pip install python/dist/*.whl
+          python -c "import scientific_workflow; from scientific_workflow import dependencies, project, reporting"
+          python -m pip install "scientific-workflow[npy]==0.4.3"
+      - name: Test installed Python companion
         run: python -m unittest discover -s python/tests -v

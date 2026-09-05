@@ -5,6 +5,13 @@ project. It assumes basic familiarity with Rust structs and functions, but it
 does not assume familiarity with Serde, traits, Workflow's architecture, or its
 API reference.
 
+> **Linux only. Workflow Python tools require Python 3.14+.** Install the
+> `scientific-workflow[npy]` companion for `$npy`, and **activate its environment
+> before each launch, including every new shell**. Cargo does not install Python.
+> **Keep `wf_configs/study.json` and `wf_configs/parameters.json` at their required
+> paths. Renaming or moving these files is unsupported.** See the
+> [complete setup guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/docs/setup.md).
+
 ## The mental model
 
 Workflow turns project configuration into scheduled work and recorded results:
@@ -134,7 +141,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [dependencies]
-scientific-workflow = "0.13.3"
+scientific-workflow = "0.13.5"
 serde = { version = "1", features = ["derive"] }
 ```
 
