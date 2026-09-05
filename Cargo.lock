@@ -881,6 +881,7 @@ dependencies = [
  "erased-serde",
  "fs2",
  "inventory",
+ "libc",
  "physics_in_parallel",
  "ratatui",
  "rayon",
@@ -890,6 +891,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "time",
+ "unicode-width",
 ]
 
 [[package]]
@@ -1216,6 +1218,14 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workflow-dependency-pipeline"
+version = "0.1.0"
+dependencies = [
+ "scientific-workflow",
+ "serde",
+]
 
 [[package]]
 name = "zerocopy"

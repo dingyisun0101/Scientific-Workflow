@@ -1,6 +1,6 @@
 //! Private event-reduced dashboard state.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -33,6 +33,8 @@ impl TaskStatus {
 
 #[derive(Clone)]
 pub(super) struct TaskSnapshot {
+    pub(super) identity: String,
+    pub(super) program_progress: Option<String>,
     pub(super) replicate: u64,
     pub(super) phase: String,
     pub(super) label: String,
@@ -49,30 +51,54 @@ pub(super) struct TaskSnapshot {
 pub(super) struct DashboardSnapshot {
     pub(super) output: Option<PathBuf>,
     pub(super) replicate_count: u64,
-    pub(super) phase_replicate: Option<u64>,
-    pub(super) phase_name: Option<String>,
     pub(super) tasks: Vec<TaskSnapshot>,
-    pub(super) messages: Vec<String>,
+    pub(super) messages: Vec<Message>,
+    pub(super) totals: [usize; 6],
+    pub(super) now: Instant,
+    pub(super) control_status: &'static str,
     pub(super) exit_requested: bool,
     pub(super) execution_finished: bool,
     pub(super) started: Instant,
 }
 
+#[derive(Clone)]
+pub(super) struct Message {
+    pub(super) sequence: u64,
+    pub(super) level: String,
+    pub(super) text: String,
+}
+impl std::ops::Deref for Message {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
 pub(super) struct DashboardState {
+    control: crate::runtime::RunControl,
+    active_groups: HashSet<(u64, String)>,
+    message_sequence: u64,
     output: Option<PathBuf>,
     replicate_count: u64,
     active_phase: Option<(u64, Box<str>)>,
     tasks: BTreeMap<(u64, Box<str>), TaskSnapshot>,
     task_order: Vec<(u64, Box<str>)>,
-    messages: VecDeque<String>,
+    messages: VecDeque<Message>,
     exit_requested: bool,
     execution_finished: bool,
     started: Instant,
 }
 
 impl DashboardState {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
+        Self::with_control(crate::runtime::RunControl::default())
+    }
+    pub(super) fn with_control(control: crate::runtime::RunControl) -> Self {
         Self {
+            control,
+            active_groups: HashSet::new(),
+            message_sequence: 0,
             output: None,
             replicate_count: 0,
             active_phase: None,
@@ -86,6 +112,7 @@ impl DashboardState {
     }
 
     pub(super) fn apply(&mut self, event: &RuntimeEvent<'_>) {
+        let now = self.control.now();
         match event {
             RuntimeEvent::TaskPlanned {
                 replicate,
@@ -101,6 +128,8 @@ impl DashboardState {
                 self.tasks.insert(
                     key,
                     TaskSnapshot {
+                        identity: (*identity).to_owned(),
+                        program_progress: None,
                         replicate: *replicate,
                         phase: (*phase).to_owned(),
                         label: (*label).to_owned(),
@@ -125,12 +154,19 @@ impl DashboardState {
             }
             RuntimeEvent::PhaseStarted {
                 replicate, name, ..
-            } => self.active_phase = Some((*replicate, Box::from(*name))),
+            } => {
+                self.active_phase = Some((*replicate, Box::from(*name)));
+                self.active_groups.insert((*replicate, (*name).to_owned()));
+            }
+            RuntimeEvent::PhaseCompleted { replicate, name } => {
+                self.active_groups.remove(&(*replicate, (*name).to_owned()));
+            }
             RuntimeEvent::PhaseFailed {
                 replicate, name, ..
             }
             | RuntimeEvent::PhaseCancelled { replicate, name } => {
                 self.skip_pending_in_phase(*replicate, name);
+                self.active_groups.remove(&(*replicate, (*name).to_owned()));
             }
             RuntimeEvent::ReplicateFailed { index, .. }
             | RuntimeEvent::ReplicateCancelled { index } => {
@@ -143,7 +179,7 @@ impl DashboardState {
             } => {
                 if let Some(task) = self.task_mut(*replicate, identity) {
                     task.status = TaskStatus::Running;
-                    task.started = Some(Instant::now());
+                    task.started = Some(now);
                     task.detail.clear();
                 }
             }
@@ -159,6 +195,22 @@ impl DashboardState {
                 }
                 return;
             }
+            RuntimeEvent::ProgramProgress {
+                replicate,
+                identity,
+                stage,
+                completed,
+                total,
+                unit,
+            } => {
+                if let Some(task) = self.task_mut(*replicate, identity) {
+                    task.program_progress = Some(match total {
+                        Some(total) => format!("{stage}: {completed}/{total} {unit}"),
+                        None => format!("{stage}: {completed} {unit}"),
+                    });
+                }
+                return;
+            }
             RuntimeEvent::TaskCompleted {
                 replicate,
                 identity,
@@ -167,7 +219,7 @@ impl DashboardState {
             } => {
                 if let Some(task) = self.task_mut(*replicate, identity) {
                     task.status = TaskStatus::Completed;
-                    task.finished = Some(Instant::now());
+                    task.finished = Some(now);
                     if let Some(iteration) = final_iteration {
                         task.iteration = *iteration;
                     }
@@ -185,7 +237,7 @@ impl DashboardState {
                     } else {
                         TaskStatus::Failed
                     };
-                    task.finished = Some(Instant::now());
+                    task.finished = Some(now);
                     task.detail = (*reason).to_owned();
                 }
             }
@@ -195,7 +247,7 @@ impl DashboardState {
             } => {
                 if let Some(task) = self.task_mut(*replicate, identity) {
                     task.status = TaskStatus::Cancelled;
-                    task.finished = Some(Instant::now());
+                    task.finished = Some(now);
                     task.detail = "cancelled".to_owned();
                 }
             }
@@ -217,8 +269,32 @@ impl DashboardState {
             }
             _ => {}
         }
+        if matches!(
+            event,
+            RuntimeEvent::ExecutionCompleted { .. }
+                | RuntimeEvent::ExecutionFailed { .. }
+                | RuntimeEvent::ExecutionCancelled
+        ) {
+            self.active_groups.clear();
+        }
         if let Some(message) = event_message(event) {
-            self.push_message(message);
+            let level = match event {
+                RuntimeEvent::ProgramLog { level, .. } => *level,
+                RuntimeEvent::TaskFailed { .. }
+                | RuntimeEvent::PhaseFailed { .. }
+                | RuntimeEvent::ReplicateFailed { .. }
+                | RuntimeEvent::ExecutionFailed { .. } => "error",
+                RuntimeEvent::TaskCancelled { .. }
+                | RuntimeEvent::PhaseCancelled { .. }
+                | RuntimeEvent::ExecutionCancelled
+                | RuntimeEvent::ReplicateCancelled { .. } => "warning",
+                RuntimeEvent::TaskCompleted { .. }
+                | RuntimeEvent::PhaseCompleted { .. }
+                | RuntimeEvent::ExecutionCompleted { .. }
+                | RuntimeEvent::ReplicateCompleted { .. } => "success",
+                _ => "info",
+            };
+            self.push_leveled(level, message);
         }
     }
 
@@ -239,31 +315,48 @@ impl DashboardState {
     }
 
     pub(super) fn push_message(&mut self, message: String) {
+        self.push_leveled("info", message);
+    }
+    fn push_leveled(&mut self, level: &str, message: String) {
         if self.messages.len() == MESSAGE_HISTORY {
             self.messages.pop_front();
         }
-        self.messages.push_back(message);
+        self.message_sequence += 1;
+        self.messages.push_back(Message {
+            sequence: self.message_sequence,
+            level: level.into(),
+            text: format!(
+                "[{} +{:.1}s] {}",
+                level.to_uppercase(),
+                self.started.elapsed().as_secs_f64(),
+                message
+                    .chars()
+                    .filter(|c| !c.is_control() || *c == '\n')
+                    .collect::<String>()
+            ),
+        });
     }
 
     pub(super) fn snapshot(&self) -> DashboardSnapshot {
-        let phase_replicate = self.active_phase.as_ref().map(|(replicate, _)| *replicate);
-        let phase_name = self.active_phase.as_ref().map(|(_, name)| name.to_string());
+        let mut totals = [0; 6];
+        for task in self.tasks.values() {
+            totals[task.status as usize] += 1;
+        }
         DashboardSnapshot {
+            totals,
+            now: self.control.now(),
+            control_status: self.control.status(),
             output: self.output.clone(),
             replicate_count: self.replicate_count,
-            phase_replicate,
-            phase_name,
             tasks: self
                 .task_order
                 .iter()
-                .filter_map(|key| self.tasks.get(key).cloned())
+                .filter_map(|key| self.tasks.get(key))
                 .filter(|task| {
-                    self.active_phase
-                        .as_ref()
-                        .is_some_and(|(replicate, phase)| {
-                            task.replicate == *replicate && task.phase == phase.as_ref()
-                        })
+                    self.active_groups
+                        .contains(&(task.replicate, task.phase.clone()))
                 })
+                .cloned()
                 .collect(),
             messages: self.messages.iter().cloned().collect(),
             exit_requested: self.exit_requested,
@@ -306,7 +399,17 @@ impl DashboardState {
 
 pub(super) fn event_message(event: &RuntimeEvent<'_>) -> Option<String> {
     match event {
-        RuntimeEvent::TaskPlanned { .. } | RuntimeEvent::TaskProgress { .. } => None,
+        RuntimeEvent::TaskPlanned { .. }
+        | RuntimeEvent::TaskProgress { .. }
+        | RuntimeEvent::ProgramProgress { .. } => None,
+        RuntimeEvent::ProgramLog {
+            replicate,
+            identity,
+            level,
+            message,
+        } => Some(format!(
+            "{level}: replicate {replicate}: {identity}: {message}"
+        )),
         RuntimeEvent::ExecutionStarted {
             output_directory,
             replicate_count,
@@ -428,8 +531,6 @@ mod tests {
         });
 
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.phase_replicate, Some(0));
-        assert_eq!(snapshot.phase_name.as_deref(), Some("simulate"));
         assert_eq!(snapshot.tasks.len(), 1);
         assert_eq!(snapshot.tasks[0].status, TaskStatus::Running);
         assert_eq!(snapshot.tasks[0].iteration, 25);
@@ -446,7 +547,7 @@ mod tests {
         }
         let snapshot = state.snapshot();
         assert_eq!(snapshot.messages.len(), MESSAGE_HISTORY);
-        assert_eq!(snapshot.messages.first().unwrap(), "message 20");
+        assert!(snapshot.messages.first().unwrap().ends_with("message 20"));
     }
 
     #[test]
@@ -473,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn task_section_switches_to_only_the_newly_started_phase() {
+    fn active_groups_coexist_and_completed_groups_disappear() {
         let mut state = DashboardState::new();
         for (phase, identity) in [("simulate", "simulation"), ("plot", "plotter")] {
             state.apply(&RuntimeEvent::TaskPlanned {
@@ -491,7 +592,6 @@ mod tests {
             task_count: 1,
         });
         let simulation = state.snapshot();
-        assert_eq!(simulation.phase_name.as_deref(), Some("simulate"));
         assert_eq!(simulation.tasks.len(), 1);
         assert_eq!(simulation.tasks[0].label, "simulation");
 
@@ -501,9 +601,23 @@ mod tests {
             task_count: 1,
         });
         let plot = state.snapshot();
-        assert_eq!(plot.phase_name.as_deref(), Some("plot"));
-        assert_eq!(plot.tasks.len(), 1);
-        assert_eq!(plot.tasks[0].label, "plotter");
+        assert_eq!(plot.tasks.len(), 2);
+        assert_eq!(plot.tasks[0].label, "simulation");
+        assert_eq!(plot.tasks[1].label, "plotter");
+        state.apply(&RuntimeEvent::PhaseCompleted {
+            replicate: 0,
+            name: "simulate",
+        });
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert_eq!(snapshot.tasks[0].label, "plotter");
+        assert!(
+            snapshot
+                .messages
+                .iter()
+                .any(|m| m.contains("phase simulate completed"))
+        );
+        assert_eq!(snapshot.totals.iter().sum::<usize>(), 2);
     }
 
     #[test]
@@ -539,8 +653,9 @@ mod tests {
         state.apply(&RuntimeEvent::ExecutionCancelled);
 
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.tasks[0].status, TaskStatus::Cancelled);
-        assert_eq!(snapshot.tasks[1].status, TaskStatus::Skipped);
+        assert!(snapshot.tasks.is_empty());
+        assert_eq!(snapshot.totals[TaskStatus::Cancelled as usize], 1);
+        assert_eq!(snapshot.totals[TaskStatus::Skipped as usize], 1);
         assert!(snapshot.exit_requested);
         assert!(snapshot.execution_finished);
         assert!(

@@ -112,7 +112,7 @@ pub mod prelude;
 pub mod runtime;
 pub mod state;
 pub mod study;
-mod task;
+pub mod task;
 #[cfg(feature = "terminal-ui")]
 mod ui;
 

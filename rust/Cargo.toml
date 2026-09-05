@@ -31,6 +31,7 @@ crossterm = { version = "0.29", optional = true }
 erased-serde = "0.4.10"
 fs2 = "0.4"
 inventory = "0.3"
+libc = "0.2"
 rayon = "1.12"
 ratatui = { version = "0.30.0", default-features = false, features = ["crossterm_0_29"], optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -38,6 +39,7 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "
 sha2 = "0.11"
 scientific-workflow-macros = { version = "0.2.1", path = "../macros" }
 thiserror = "2"
+unicode-width = "0.2"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
 [dev-dependencies]

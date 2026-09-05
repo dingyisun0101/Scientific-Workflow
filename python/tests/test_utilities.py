@@ -28,3 +28,25 @@ class UtilitiesTests(unittest.TestCase):
             self.assertEqual(parameters("analysis", snapshot=snapshot), {"bins": 3})
             with self.assertRaisesRegex(ProjectLayoutError, "wf_configs/study.json"): study_path(root)
             with self.assertRaisesRegex(ProjectLayoutError, "missing"): parameters("missing", snapshot=snapshot)
+
+class ReportingTests(unittest.TestCase):
+    def test_opt_in_logging_is_idempotent_and_frames_validate(self):
+        import io
+        import logging
+        from contextlib import redirect_stderr
+        from scientific_workflow.reporting import install_logging, progress
+        logger = logging.getLogger("workflow.test.reporting")
+        logger.setLevel(logging.INFO)
+        handler = install_logging(logger)
+        try:
+            self.assertIs(handler, install_logging(logger))
+            with redirect_stderr(io.StringIO()) as output:
+                logger.warning("visible")
+                progress("conversion", 1, 2, unit="members")
+            frames = [json.loads(line.removeprefix("@workflow ")) for line in output.getvalue().splitlines()]
+            self.assertEqual([frame["kind"] for frame in frames], ["log", "progress"])
+            self.assertEqual(frames[0]["level"], "warning")
+            with self.assertRaises(ValueError): progress("invalid", 3, 2)
+        finally:
+            logger.removeHandler(handler)
+            handler.close()

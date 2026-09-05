@@ -7,12 +7,14 @@
 //! It accepts only a completed Study and never opens project declarations or
 //! binds execution unit keys itself.
 
+mod control;
 mod error;
 mod event;
 mod execution;
 mod host;
 mod output;
 mod presentation;
+mod program;
 mod resource;
 mod summary;
 
@@ -28,3 +30,8 @@ pub(crate) use presentation::{PresentationFailure, RuntimeObserver};
 pub use summary::{
     MemberRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
 };
+
+pub(crate) use control::RunControl;
+
+#[cfg(feature = "terminal-ui")]
+pub(crate) use program::force_exit;

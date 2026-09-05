@@ -1,6 +1,6 @@
 # UI API
 
-This guide documents the `scientific-workflow` 0.13.3 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
 
 The `ui` subsystem is the sole presentation interface for execution facts
 already known by Runtime. It does not inspect execution units, scientific payloads,
@@ -25,24 +25,22 @@ remain unchanged.
 When both standard input and standard error are terminals, UI enters a
 Crossterm alternate screen and renders a Ratatui dashboard containing:
 
-- a task panel containing only the current replicate/phase's tasks in declared
-  order; each `PhaseStarted` event replaces the previous phase's rows;
-- replicate and phase shown once in the task-panel title rather than repeated
-  in every task row;
-- pending, running, completed, failed, cancelled, and skipped counts;
-- aggregate execution-unit iteration gauges when every `MemberView` target is known;
-- execution-unit spinners when the target is unknown;
-- one-shot spinners while generic programs and Python tasks are running;
-- elapsed time and inferred ETA where enough progress exists;
-- the execution output path;
-- a bounded 100-line lifecycle/error message panel; and
-- the command editor.
+- combined active replicate/phase groups in deterministic plan order;
+- completed groups removed entirely; their outcomes remain in Messages;
+- study-wide pending/running/completed/failed/cancelled/skipped counts;
+- scientific iteration gauges/spinners and standard-program stage/count progress;
+- paused execution elapsed/ETA and an independent **Total time** wall clock;
+- separate study identity/status/count/output rows;
+- severity-colored, text-labeled, timestamped source messages (last 100 retained);
+- task scrolling with PageUp/PageDown and message scrolling with Ctrl-Up/Down;
+- pause, resume, exit, and exit --force commands.
 
 The task table itself contains the task label with a concise kind tag, status,
 progress, and an `elapsed / ETA` timing column. The internal `execution_unit`
 kind is presented as `unit`; configuration and API vocabulary are unchanged.
-Inferred task identities, full subjects, and phase prefixes remain available to
-lifecycle messages and durable summaries but are not repeated in each row.
+Rows identify their replicate/phase; full task identities and output paths remain
+in Messages and durable summaries. Task scroll anchors survive incoming events;
+message scrolling anchors by sequence rather than arrival-relative offsets.
 Runtime lifecycle lines are appended to the message panel instead of scrolling
 the interactive terminal. Scientific payloads are never rendered. When either
 standard stream is not interactive, UI deliberately selects its stable
@@ -100,7 +98,9 @@ These are peer-subsystem contracts, not downstream API. Event strings and
 paths are copied into small UI-owned presentation snapshots as required; UI
 never retains an execution unit, `SystemState`, payload, `Study`, recording writer, or
 runtime summary. The reducer retains all planned-task status internally but
-publishes only the most recently started replicate/phase to the task panel.
+publishes every active group to the task panel, filtering before cloning rows.
+Completed groups have no collapsed or expandable representation. Study counters
+include all planned work, including groups no longer visible.
 Concurrent Runtime workers share one clone-cheap session. A
 mutex protects only dashboard presentation state, and a single bounded-refresh
 thread owns interactive terminal input and drawing.
@@ -160,3 +160,19 @@ concurrent publishers, preserve plain noninteractive diagnostics, support
 cooperative `exit`, restore terminal state on return and while unwinding, and
 return failure of its selected presentation mode as a fatal presentation error
 rather than cancellation or silent degradation.
+
+## Control and rendering details
+
+Pause requests freeze task elapsed/ETA and Runtime budgets immediately. Status
+remains “pausing; waiting for active calls/programs” until Runtime acknowledges
+all active participants. Total time continues through all pauses. Repeated pause
+or resume is idempotent. Cancellation wakes paused participants. Force exit kills
+owned child groups before leaving the process; ordinary exit waits for safe
+scientific cleanup. No public UI/control type is introduced.
+
+Debug is muted, info neutral, warning yellow, error red, and success green; labels
+preserve meaning without color. Wrapped messages are selected by display rows,
+with Unicode column widths. History is bounded to 100 messages; complete program
+stdout/stderr logs remain on disk. Program progress counts are not treated as
+scientific-time ETA because member sizes differ. Noninteractive mode prints
+lifecycle and program logs; no terminal input or renderer is started.

@@ -35,6 +35,7 @@ impl UiFailure {
 
 struct UiSessionInner {
     interactive: bool,
+    control: crate::runtime::RunControl,
     plan: UiPlan,
     state: Mutex<DashboardState>,
     cancellation_requested: AtomicBool,
@@ -65,10 +66,12 @@ impl UiSession {
     /// Selects the Ratatui dashboard for a terminal and plain lines otherwise.
     pub(crate) fn automatic() -> Result<Self, UiFailure> {
         let interactive = terminal::interactive();
+        let control = crate::runtime::RunControl::default();
         let inner = Arc::new(UiSessionInner {
+            control: control.clone(),
             interactive,
             plan: UiPlan::automatic(),
-            state: Mutex::new(DashboardState::new()),
+            state: Mutex::new(DashboardState::with_control(control)),
             cancellation_requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             renderer: Mutex::new(None),
@@ -138,6 +141,9 @@ impl UiSession {
 }
 
 impl RuntimeObserver for UiSession {
+    fn control(&self) -> crate::runtime::RunControl {
+        self.inner.control.clone()
+    }
     fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
         UiSession::publish(self, event).map_err(|source| Box::new(source) as _)
     }
@@ -167,9 +173,25 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
     let mut close_requested = false;
     loop {
         match terminal.poll_command() {
+            Ok(Some(CommandSubmission::Parsed(UiCommand::Pause))) => {
+                if !inner.finished.load(Ordering::Acquire) {
+                    inner.control.pause(true);
+                    lock(&inner.state)
+                        .push_message("workflow: pause requested; execution timers frozen".into());
+                }
+                terminal.clear_command();
+            }
+            Ok(Some(CommandSubmission::Parsed(UiCommand::Resume))) => {
+                if !inner.finished.load(Ordering::Acquire) {
+                    inner.control.pause(false);
+                    lock(&inner.state).push_message("workflow: resumed".into());
+                }
+                terminal.clear_command();
+            }
             Ok(Some(CommandSubmission::Parsed(UiCommand::Exit))) => {
                 close_requested = true;
                 if !inner.finished.load(Ordering::Acquire) {
+                    inner.control.cancel();
                     inner.cancellation_requested.store(true, Ordering::Release);
                     lock(&inner.state).request_exit();
                 }
@@ -177,11 +199,12 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
             }
             Ok(Some(CommandSubmission::Parsed(UiCommand::ForceExit))) => {
                 if !inner.finished.load(Ordering::Acquire) {
+                    inner.control.cancel();
                     inner.cancellation_requested.store(true, Ordering::Release);
                     lock(&inner.state).request_exit();
                 }
                 drop(terminal);
-                std::process::exit(130);
+                crate::runtime::force_exit();
             }
             Ok(Some(CommandSubmission::Parsed(UiCommand::Interrupt))) => {
                 if inner.finished.load(Ordering::Acquire) {
@@ -189,6 +212,7 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
                         "workflow: finished; type exit then Enter to close".to_owned(),
                     );
                 } else {
+                    inner.control.cancel();
                     inner.cancellation_requested.store(true, Ordering::Release);
                     lock(&inner.state).request_interrupt();
                 }

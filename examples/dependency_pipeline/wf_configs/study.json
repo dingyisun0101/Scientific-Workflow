@@ -1,0 +1,11 @@
+{
+  "workflow_schema": 1,
+  "threads": 2,
+  "paths": {"states": {"value": "wf_configs/states/value.json"}},
+  "phases": {
+    "initialize": {"tasks": [{"execution_unit": "initialize", "state": "value"}]},
+    "simulate": {"after": ["initialize"], "tasks": [{"execution_unit": "simulation", "state": "value"}]},
+    "$npy": {"after": ["simulate"]},
+    "analysis": {"after": ["$npy"], "tasks": [{"python": {"script": "scripts/analyze.py", "environment": {"manager": "system"}}}]}
+  }
+}

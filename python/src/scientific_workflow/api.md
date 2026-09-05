@@ -111,7 +111,7 @@ Both require the standard manifest directory, not an individual `.npy` path.
 | `field(stream, field)` | Field representation metadata |
 | `reconstruct(stream, field, record)` | One exact numeric or JSON fallback record |
 | `projection(stream, field, logical_path, record)` | One structured numeric projection record |
-| `coordinates(stream)` | Tuple (iterations, physical_times); missing physical times are NaN |
+| `coordinates(stream)` | Tuple (iterations, physical_times); absent physical times are None |
 | `series(stream, field, logical_path=None)` | Cached FixedSeries or RaggedSeries |
 
 Omit logical_path for wholly numeric fields. Structured fields require an exact
@@ -121,7 +121,7 @@ access does not repeat that complete validation or reconstruct every JSON record
 Callers must not mutate metadata dictionaries or source files after opening.
 
 `NumericSeries = FixedSeries | RaggedSeries`. Both frozen dataclasses expose
-`iterations`, `physical_times`, `len(series)`, and `record(index)`.
+`iterations`, optional `physical_times` (None when absent), `len(series)`, and `record(index)`.
 `FixedSeries.values` is a read-only array with a leading record axis.
 `RaggedSeries.data`, `.offsets`, `.shapes` are read-only components; record()
 slices and reshapes one record in C order, including empty shapes. Indices must
@@ -175,3 +175,47 @@ use Dependencies.load(explicit_snapshot) and parameters(snapshot=explicit_path).
 Underscore-prefixed validators, planners, writers, framing helpers, cache layout,
 worker orchestration and temporary naming are internal. Recording and NPY wire
 schemas are separately versioned contracts; implementation internals are not.
+
+## Reporting reference
+
+`scientific_workflow.reporting.log(message: str, *, level="info")` emits one
+flushed prefixed event to stderr. Levels: debug/info/warning/error/success.
+`progress(stage: str, completed: int, total: int | None = None, *, unit="records")`
+emits counts; nonempty stage/unit and u64 bounds are required. Invalid input or
+frames over 16 KiB raise ValueError before output; stderr write/flush errors
+propagate. Calls serialize threads in one process but do not synchronize unrelated
+processes. Outside Workflow, output remains prefixed stderr lines.
+
+`WorkflowHandler(logging.Handler)` follows standard Handler construction,
+level/filter/formatter/close behavior and overrides emit(record). It maps standard
+logging levels to Workflow severities and formats through the installed formatter.
+`install_logging(logger=None, *, level=logging.INFO) -> WorkflowHandler` attaches
+one handler idempotently to that logger (root when omitted). It sets handler level,
+not logger level; callers retain logging policy. Remove through
+logger.removeHandler(handler) and handler.close(). Imports do not configure logging.
+Each process configures its own logging; converter workers use a bounded queue to
+the parent emitter rather than writing progress directly. See program-events-v1.
+
+## Converter execution and publication
+
+`convert_workflow_dependencies` uses min(WORKFLOW_THREADS, unique recordings),
+with a standalone default of one. Rust supplies/reserves the allowance across
+replicates. Spawn workers own their verified reader and arrays; threadpoolctl
+limits native numeric pools to one thread each. There is no new mandatory public
+argument. Progress reports planning, writing, verification, member reuse/completion,
+and batch totals. Completion order never changes manifest member order.
+
+Linux directory flock serializes competing publishers. Unique temporary paths
+avoid same-process collisions. Failure terminates/joins workers, publishes no
+success batch, and retains individually verified members for retry. Staging
+folders left by abrupt termination are not published data. Successful metadata
+publication uses atomic replacement. Private control checkpoints freeze work at
+record/hash/job boundaries; parent acknowledgement requires all active jobs to
+be paused or complete. Admission stops during pause. Cancel while paused wakes
+and terminates work; raw log draining in Rust continues throughout.
+
+State container detail: StateField(name, description=None) exposes those fields;
+StateRecord(iteration, physical_time, values) exposes them, and create() wraps
+values in a read-only MappingProxyType. StateSeries(stream, fields, records)
+implements len, indexing/slicing, iteration, and an iterations tuple property.
+These frozen containers do not deep-freeze decoded application payloads.

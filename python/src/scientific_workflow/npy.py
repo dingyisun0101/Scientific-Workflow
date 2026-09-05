@@ -11,6 +11,18 @@ import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
+import time
+import fcntl
+from contextlib import contextmanager
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+import multiprocessing
+import queue
+from threadpoolctl import threadpool_limits
+
+from . import _control
+from .reporting import log, progress
+from .dependencies import Dependencies
 from collections.abc import Mapping
 from typing import Any
 
@@ -41,6 +53,41 @@ _SCALAR_DTYPES = {
 JsonPath = tuple[str, ...]
 
 
+_PROGRESS_QUEUE = None
+_LAST_PROGRESS = 0.0
+_THREAD_LIMIT = None
+
+
+def _worker_setup(updates):
+    global _PROGRESS_QUEUE, _THREAD_LIMIT
+    _PROGRESS_QUEUE = updates
+    _THREAD_LIMIT = threadpool_limits(limits=1)
+
+
+def _stage(stage: str, completed: int = 0, total: int | None = None, *, force: bool = False):
+    global _LAST_PROGRESS
+    now = time.monotonic()
+    if not force and now - _LAST_PROGRESS < 0.1:
+        return
+    _LAST_PROGRESS = now
+    if _PROGRESS_QUEUE is None:
+        progress(stage, completed, total)
+    else:
+        try:
+            _PROGRESS_QUEUE.put_nowait((_control._TOKEN, stage, completed, total))
+        except queue.Full:
+            pass  # Display updates are bounded; verified data and logs are unaffected.
+
+
+def _drain_updates(updates):
+    while True:
+        try:
+            token, stage, completed, total = updates.get_nowait()
+        except queue.Empty:
+            return
+        progress(f"member {token}: {stage}", completed, total)
+
+
 class NpyConversionError(ValueError):
     """A recording or converted dataset violates the NPY contract."""
 
@@ -49,6 +96,7 @@ def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
+            _control.checkpoint()
             digest.update(block)
     return "sha256:" + digest.hexdigest()
 
@@ -715,6 +763,7 @@ def _existing(
 
 
 def _stream_plan(reader: Any, stream: str) -> tuple[list[_FieldPlan], bool]:
+    _stage(f"planning {stream}", total=reader.stream_record_count(stream), force=True)
     records = iter(reader.iter_verified_records(stream))
     try:
         first = next(records)
@@ -781,6 +830,7 @@ def _convert_stream(
     observed = 0
     plans_by_name = {plan.name: plan for plan in plans}
     for observed, record in enumerate(reader.iter_verified_records(stream), start=1):
+        _stage(f"writing {stream}", observed, reader.stream_record_count(stream))
         index = observed - 1
         iterations[index] = record.iteration
         if physical_times is not None:
@@ -883,7 +933,7 @@ class FixedSeries:
     """Read-only memory-mapped fixed-shape values and stream coordinates."""
     values: np.ndarray[Any, Any]
     iterations: np.ndarray[Any, Any]
-    physical_times: np.ndarray[Any, Any]
+    physical_times: np.ndarray[Any, Any] | None
 
     def __len__(self) -> int:
         return len(self.values)
@@ -900,7 +950,7 @@ class RaggedSeries:
     offsets: np.ndarray[Any, Any]
     shapes: np.ndarray[Any, Any]
     iterations: np.ndarray[Any, Any]
-    physical_times: np.ndarray[Any, Any]
+    physical_times: np.ndarray[Any, Any] | None
 
     def __len__(self) -> int:
         return len(self.shapes)
@@ -951,13 +1001,16 @@ class NpyConversion:
         value = workflow.get("execution_unit") if isinstance(workflow, Mapping) else None
         return value if isinstance(value, str) else None
 
-    def coordinates(self, stream: str) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
-        """Return (iterations, physical_times); absent physical time is NaN."""
+    def coordinates(self, stream: str) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any] | None]:
+        """Return (iterations, physical_times); absent physical time is None."""
         if stream not in self.stream_names:
             raise NpyConversionError(f"unknown stream {stream!r}")
         result = []
         for role in ("iterations", "physical_times"):
             matches = [a for a in self.manifest["arrays"] if a.get("stream") == stream and a.get("role") == role]
+            if role == "physical_times" and not matches:
+                result.append(None)
+                continue
             if len(matches) != 1:
                 raise NpyConversionError(f"stream {stream!r} requires exactly one {role} array")
             result.append(self.array(matches[0]["path"]))
@@ -1128,7 +1181,34 @@ def open_npy_batch(directory: str | Path) -> NpyBatch:
     return NpyBatch(root, manifest, tuple(members))
 
 
-def convert_recording(
+@contextmanager
+def _publisher(directory: Path):
+    directory.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                _control.checkpoint(force=True)
+                time.sleep(0.01)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def convert_recording(recording_directory: str | Path, output_directory: str | Path | None = None) -> dict[str, object]:
+    """Verify and atomically publish one completed recording; serialize publishers."""
+    recording = Path(recording_directory).expanduser().resolve(strict=True)
+    output = Path(output_directory).expanduser().resolve() if output_directory is not None else recording.with_name(recording.name + "-npy")
+    with _publisher(output.parent):
+        _control.checkpoint(force=True)
+        return _convert_recording(recording, output)
+
+
+def _convert_recording(
     recording_directory: str | Path,
     output_directory: str | Path | None = None,
 ) -> dict[str, object]:
@@ -1150,10 +1230,7 @@ def convert_recording(
             return existing
         raise NpyConversionError(f"conflicting conversion output exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
-    if temporary.exists():
-        shutil.rmtree(temporary)
-    temporary.mkdir()
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent))
     try:
         reader = open_completed_recording(recording)
         arrays: list[dict[str, object]] = []
@@ -1174,87 +1251,144 @@ def convert_recording(
             "arrays": arrays,
         }
         _write_json(temporary / MANIFEST_FILE, manifest)
+        _stage("verification", force=True)
         open_npy_conversion(temporary)
         os.replace(temporary, output)
         return manifest
-    except Exception:
+    except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
 
 
 def _dependency_recordings(dependencies_path: Path) -> list[Path]:
-    try:
-        dependencies = json.loads(dependencies_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise NpyConversionError(
-            f"cannot read Workflow dependencies {dependencies_path}"
-        ) from error
-    if not isinstance(dependencies, list):
-        raise NpyConversionError("Workflow dependencies must be an array")
-    recordings: list[Path] = []
-    seen: set[Path] = set()
-    for phase in dependencies:
-        if not isinstance(phase, dict) or not isinstance(phase.get("tasks"), list):
-            raise NpyConversionError("Workflow dependency phase is malformed")
-        for task in phase["tasks"]:
-            if not isinstance(task, dict):
-                raise NpyConversionError("Workflow dependency task is malformed")
-            workload = task.get("workload")
-            if not isinstance(workload, dict) or workload.get("kind") != "execution_unit":
-                continue
-            members = workload.get("members")
-            if not isinstance(members, list):
-                raise NpyConversionError("execution-unit dependency members must be an array")
-            for member in members:
-                if not isinstance(member, dict) or not isinstance(
-                    member.get("output_directory"), str
-                ):
-                    raise NpyConversionError("execution-unit dependency member is malformed")
-                recording = Path(member["output_directory"]).resolve(strict=True)
-                if recording not in seen:
-                    seen.add(recording)
-                    recordings.append(recording)
+    recordings = list(dict.fromkeys(entry.directory.resolve(strict=True)
+        for entry in Dependencies.load(dependencies_path).recordings()))
     if not recordings:
         raise NpyConversionError("$npy received no completed execution-unit recordings")
     return recordings
 
 
-def convert_workflow_dependencies(
-    dependencies_path: str | Path,
-    output_directory: str | Path,
-) -> dict[str, object]:
-    """Convert every recording visible to Workflow's reserved ``$npy`` phase."""
+def _convert_job(ordinal: int, recording: Path, member_output: Path) -> dict[str, object]:
+    _control._TOKEN = str(ordinal)
+    _control.checkpoint(force=True)
+    reused = member_output.exists()
+    manifest = _convert_recording(recording, member_output)
+    return {
+        "ordinal": ordinal,
+        "source_recording": manifest["source_recording"],
+        "manifest": f"{member_output.name}/{MANIFEST_FILE}",
+        "manifest_checksum": _sha256(member_output / MANIFEST_FILE),
+        "reused": reused,
+    }
+
+
+def convert_workflow_dependencies(dependencies_path: str | Path, output_directory: str | Path) -> dict[str, object]:
+    """Convert prerequisites within WORKFLOW_THREADS; publish in stable order.
+
+    Outside Workflow the default is one worker. Parallelism is by recording.
+    Linux directory locks serialize publishers; completed members survive failure
+    and are verified/reused on retry. No partial success batch is published.
+    """
     dependencies = Path(dependencies_path).expanduser().resolve(strict=True)
     output = Path(output_directory).expanduser().resolve()
-    output.mkdir(parents=True, exist_ok=True)
     recordings = _dependency_recordings(dependencies)
-    members: list[dict[str, object]] = []
-    for ordinal, recording in enumerate(recordings):
-        member_output = output / f"member-{ordinal:06d}"
-        manifest = convert_recording(recording, member_output)
-        members.append(
-            {
-                "ordinal": ordinal,
-                "source_recording": manifest["source_recording"],
-                "manifest": str((member_output / MANIFEST_FILE).relative_to(output)),
-                "manifest_checksum": _sha256(member_output / MANIFEST_FILE),
-            }
-        )
-        print(f"converted {ordinal + 1}/{len(recordings)}: {recording}", flush=True)
-    batch: dict[str, object] = {
-        "format": NPY_BATCH_FORMAT,
-        "members": members,
-    }
-    manifest_path = output / MANIFEST_FILE
-    temporary_manifest = output / f".{MANIFEST_FILE}.tmp-{os.getpid()}"
-    if temporary_manifest.exists():
-        temporary_manifest.unlink()
     try:
-        _write_json(temporary_manifest, batch)
-        os.replace(temporary_manifest, manifest_path)
-    finally:
-        temporary_manifest.unlink(missing_ok=True)
-    return batch
+        allowance = int(os.environ.get("WORKFLOW_THREADS", "1"))
+    except ValueError as error:
+        raise NpyConversionError("WORKFLOW_THREADS must be a positive integer") from error
+    if allowance < 1:
+        raise NpyConversionError("WORKFLOW_THREADS must be positive")
+    workers = min(allowance, len(recordings))
+    started = _control.active_time()
+    log(f"conversion started: {len(recordings)} members, {workers} worker(s)")
+    results = {}
+    with _publisher(output):
+        # Remove stale batch success while retaining individually verified members.
+        (output / MANIFEST_FILE).unlink(missing_ok=True)
+        pool = None
+        updates = None
+        control_path = None
+        parent_ack = None
+        try:
+            if workers == 1:
+                for ordinal, recording in enumerate(recordings):
+                    _control._TOKEN = "parent"
+                    _control.checkpoint(force=True)
+                    log(f"member {ordinal} started: {recording}")
+                    # Keep the parent control token in the serial path.
+                    member_output = output / f"member-{ordinal:06d}"
+                    reused = member_output.exists()
+                    manifest = _convert_recording(recording, member_output)
+                    results[ordinal] = {"ordinal": ordinal, "source_recording": manifest["source_recording"], "manifest": f"{member_output.name}/{MANIFEST_FILE}", "manifest_checksum": _sha256(member_output / MANIFEST_FILE)}
+                    log(f"member {ordinal} {'reused' if reused else 'completed'}: {recording}")
+                    progress("conversion", len(results), len(recordings), unit="members")
+            else:
+                context = multiprocessing.get_context("spawn")
+                updates = context.Queue(maxsize=128)
+                pool = ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_worker_setup, initargs=(updates,))
+                pending = {}
+                next_ordinal = 0
+                while next_ordinal < len(recordings) or pending:
+                    _drain_updates(updates)
+                    control_path, paused, cancelled = _control.state()
+                    if cancelled:
+                        raise InterruptedError("Workflow conversion cancelled")
+                    while not paused and next_ordinal < len(recordings) and len(pending) < workers:
+                        ordinal = next_ordinal
+                        recording = recordings[ordinal]
+                        log(f"member {ordinal} started: {recording}")
+                        future = pool.submit(_convert_job, ordinal, recording, output / f"member-{ordinal:06d}")
+                        pending[future] = ordinal
+                        next_ordinal += 1
+                    done, _ = wait(pending, timeout=0.02, return_when=FIRST_COMPLETED) if pending else ((), ())
+                    for future in done:
+                        ordinal = pending.pop(future)
+                        result = future.result()
+                        reused = result.pop("reused")
+                        results[ordinal] = result
+                        log(f"member {ordinal} {'reused' if reused else 'completed'}: {recordings[ordinal]}")
+                        progress("conversion", len(results), len(recordings), unit="members")
+                    if control_path is not None:
+                        parent_ack = _control.acknowledgement(control_path, "parent")
+                        if paused and all(_control.acknowledgement(control_path, str(n)).exists() for n in pending.values()):
+                            parent_ack.touch()
+                        else:
+                            parent_ack.unlink(missing_ok=True)
+                    if paused and not pending:
+                        time.sleep(0.02)
+                pool.shutdown(wait=True)
+                _drain_updates(updates)
+                pool = None
+            _control._TOKEN = "parent"
+            _control.checkpoint(force=True)
+            batch = {"format": NPY_BATCH_FORMAT, "members": [results[n] for n in range(len(recordings))]}
+            handle, temporary_name = tempfile.mkstemp(prefix=".manifest.tmp-", dir=output)
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                    json.dump(batch, stream, indent=2, sort_keys=True)
+                    stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, output / MANIFEST_FILE)
+            finally:
+                temporary.unlink(missing_ok=True)
+            log(f"conversion complete: {len(results)} members in {_control.active_time() - started:.3f} active seconds", level="success")
+            return batch
+        except BaseException as error:
+            if pool is not None:
+                pool.kill_workers()
+                pool = None
+            log(f"conversion failed: {error}", level="error")
+            raise
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
+            if updates is not None:
+                updates.close()
+                updates.join_thread()
+            if parent_ack is not None:
+                parent_ack.unlink(missing_ok=True)
 
 
 def main() -> None:

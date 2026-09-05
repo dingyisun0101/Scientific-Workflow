@@ -17,7 +17,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use unicode_width::UnicodeWidthChar;
 
 use super::command::{CommandInput, CommandSubmission, EditAction, UiCommand};
 use super::state::{DashboardSnapshot, TaskSnapshot, TaskStatus, event_message};
@@ -43,6 +44,10 @@ pub(super) struct DashboardTerminal {
     command: CommandInput,
     tick: usize,
     lease: TerminalLease,
+    task_offset: usize,
+    task_anchor: Option<(u64, String)>,
+    message_end: Option<u64>,
+    last_message: u64,
 }
 
 impl DashboardTerminal {
@@ -82,6 +87,10 @@ impl DashboardTerminal {
             command: CommandInput::default(),
             tick: 0,
             lease,
+            task_offset: 0,
+            task_anchor: None,
+            message_end: None,
+            last_message: 0,
         })
     }
 
@@ -91,6 +100,33 @@ impl DashboardTerminal {
                 Event::Key(key)
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
+                    if key.code == KeyCode::PageDown {
+                        self.task_offset += 5;
+                        self.task_anchor = None;
+                        continue;
+                    }
+                    if key.code == KeyCode::PageUp {
+                        self.task_offset = self.task_offset.saturating_sub(5);
+                        self.task_anchor = None;
+                        continue;
+                    }
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Up {
+                        self.message_end = Some(
+                            self.message_end
+                                .unwrap_or(self.last_message)
+                                .saturating_sub(3)
+                                .max(1),
+                        );
+                        continue;
+                    }
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Down {
+                        let next = self
+                            .message_end
+                            .unwrap_or(self.last_message)
+                            .saturating_add(3);
+                        self.message_end = (next < self.last_message).then_some(next);
+                        continue;
+                    }
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
@@ -113,6 +149,22 @@ impl DashboardTerminal {
     }
 
     pub(super) fn draw(&mut self, snapshot: &DashboardSnapshot) -> io::Result<()> {
+        if let Some(anchor) = &self.task_anchor
+            && let Some(index) = snapshot
+                .tasks
+                .iter()
+                .position(|task| (task.replicate, &task.identity) == (anchor.0, &anchor.1))
+        {
+            self.task_offset = index;
+        }
+        self.task_offset = self.task_offset.min(snapshot.tasks.len().saturating_sub(1));
+        self.task_anchor = snapshot
+            .tasks
+            .get(self.task_offset)
+            .map(|t| (t.replicate, t.identity.clone()));
+        self.last_message = snapshot.messages.last().map_or(0, |m| m.sequence);
+        let task_offset = self.task_offset;
+        let message_end = self.message_end;
         let tick = self.tick;
         let command = self.command.text();
         let command_cursor = self.command.cursor();
@@ -120,15 +172,15 @@ impl DashboardTerminal {
         self.terminal.draw(|frame| {
             let area = frame.area();
             let [header, tasks, messages, command_area] = Layout::vertical([
-                Constraint::Length(4),
-                Constraint::Min(6),
-                Constraint::Length(9),
+                Constraint::Length(if area.height >= 24 { 6 } else { 5 }),
+                Constraint::Min(4),
+                Constraint::Length(if area.height >= 24 { 9 } else { 5 }),
                 Constraint::Length(3),
             ])
             .areas(area);
             render_header(frame, header, snapshot);
-            render_tasks(frame, tasks, snapshot, tick);
-            render_messages(frame, messages, snapshot);
+            render_tasks(frame, tasks, snapshot, tick, task_offset);
+            render_messages(frame, messages, snapshot, message_end);
             render_command(
                 frame,
                 command_area,
@@ -200,20 +252,29 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(
-                "  running={} pending={} completed={} failed={} cancelled={} skipped={} · elapsed {elapsed}",
-                counts.running,
-                counts.pending,
-                counts.completed,
-                counts.failed,
-                counts.cancelled,
-                counts.skipped,
+                " · Total time {elapsed} · {}",
+                if snapshot.execution_finished {
+                    "finished"
+                } else {
+                    snapshot.control_status
+                }
             )),
         ]),
         Line::from(format!(
-            "replicates={} · phase tasks={} · output={output}",
+            "running={} pending={} completed={} failed={} cancelled={} skipped={}",
+            counts.running,
+            counts.pending,
+            counts.completed,
+            counts.failed,
+            counts.cancelled,
+            counts.skipped
+        )),
+        Line::from(format!(
+            "replicates={} · visible active tasks={}",
             snapshot.replicate_count,
             snapshot.tasks.len()
         )),
+        Line::from(format!("output={output}")),
     ];
     frame.render_widget(
         Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Study ")),
@@ -226,6 +287,7 @@ fn render_tasks(
     area: Rect,
     snapshot: &DashboardSnapshot,
     tick: usize,
+    offset: usize,
 ) {
     let header = Row::new(["task", "status", "progress", "elapsed / ETA"]).style(
         Style::default()
@@ -236,15 +298,16 @@ fn render_tasks(
     let mut rows = snapshot
         .tasks
         .iter()
+        .skip(offset)
         .take(available)
-        .map(|task| task_row(task, tick))
+        .map(|task| task_row(task, tick, snapshot.now))
         .collect::<Vec<_>>();
-    if snapshot.tasks.len() > available && available > 0 {
+    if snapshot.tasks.len().saturating_sub(offset) > available && available > 0 {
         rows.truncate(available.saturating_sub(1));
         rows.push(Row::new([
             Cell::from(format!(
                 "… {} more tasks",
-                snapshot.tasks.len() - rows.len()
+                snapshot.tasks.len() - offset - rows.len()
             )),
             Cell::from(""),
             Cell::from(""),
@@ -271,16 +334,13 @@ fn render_tasks(
 }
 
 fn task_panel_title(snapshot: &DashboardSnapshot) -> String {
-    match (snapshot.phase_replicate, snapshot.phase_name.as_deref()) {
-        (Some(replicate), Some(phase)) => format!(
-            " Tasks · replicate {replicate} · phase {phase} ({}) ",
-            snapshot.tasks.len()
-        ),
-        _ => " Tasks · waiting for phase ".to_owned(),
-    }
+    format!(
+        " Active groups · {} tasks · PgUp/PgDn · outcomes in Messages ",
+        snapshot.tasks.len()
+    )
 }
 
-fn task_row(task: &TaskSnapshot, tick: usize) -> Row<'static> {
+fn task_row(task: &TaskSnapshot, tick: usize, now: Instant) -> Row<'static> {
     let status_style = match task.status {
         TaskStatus::Pending | TaskStatus::Skipped => Style::default().fg(Color::DarkGray),
         TaskStatus::Running => Style::default().fg(Color::Cyan),
@@ -289,14 +349,18 @@ fn task_row(task: &TaskSnapshot, tick: usize) -> Row<'static> {
         TaskStatus::Cancelled => Style::default().fg(Color::Yellow),
     };
     let progress = progress_text(task, tick);
-    let timing = timing_text(task);
+    let timing = timing_text(task, now);
     let task_label = if task.detail.is_empty() {
         format!("{} · {}", task.label, display_kind(&task.kind))
     } else {
         format!("{} · {}", task.label, task.detail)
     };
     Row::new([
-        Cell::from(task_label).style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from(format!(
+            "r{} / {} · {task_label}",
+            task.replicate, task.phase
+        ))
+        .style(Style::default().add_modifier(Modifier::BOLD)),
         Cell::from(task.status.label()).style(status_style),
         Cell::from(progress).style(Style::default().fg(Color::Cyan)),
         Cell::from(timing),
@@ -313,6 +377,9 @@ fn display_kind(kind: &str) -> &str {
 fn progress_text(task: &TaskSnapshot, tick: usize) -> String {
     if task.status == TaskStatus::Pending || task.status == TaskStatus::Skipped {
         return String::new();
+    }
+    if let Some(progress) = &task.program_progress {
+        return progress.clone();
     }
     if task.kind != "execution_unit" {
         return if task.status == TaskStatus::Running {
@@ -345,15 +412,23 @@ fn progress_text(task: &TaskSnapshot, tick: usize) -> String {
     }
 }
 
-fn timing_text(task: &TaskSnapshot) -> String {
+fn timing_text(task: &TaskSnapshot, now: Instant) -> String {
     let Some(started) = task.started else {
         return String::new();
     };
     let elapsed = task
         .finished
-        .unwrap_or_else(Instant::now)
-        .duration_since(started);
-    timing_text_for(elapsed, task.iteration, task.target)
+        .unwrap_or(now)
+        .saturating_duration_since(started);
+    timing_text_for(
+        elapsed,
+        task.iteration,
+        if task.kind == "execution_unit" {
+            task.target
+        } else {
+            None
+        },
+    )
 }
 
 fn timing_text_for(elapsed: Duration, iteration: u64, target: Option<u64>) -> String {
@@ -373,17 +448,59 @@ fn timing_text_for(elapsed: Duration, iteration: u64, target: Option<u64>) -> St
     }
 }
 
-fn render_messages(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &DashboardSnapshot) {
+fn render_messages(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &DashboardSnapshot,
+    end: Option<u64>,
+) {
+    let width = usize::from(area.width.saturating_sub(2)).max(1);
     let visible = usize::from(area.height.saturating_sub(2));
-    let start = snapshot.messages.len().saturating_sub(visible);
-    let text = snapshot.messages[start..]
+    let mut lines = Vec::new();
+    for message in snapshot
+        .messages
         .iter()
-        .map(|message| Line::from(message.clone()))
+        .filter(|m| end.is_none_or(|end| m.sequence <= end))
+    {
+        let color = match message.level.as_str() {
+            "debug" => Color::DarkGray,
+            "warning" => Color::Yellow,
+            "error" => Color::Red,
+            "success" => Color::Green,
+            _ => Color::White,
+        };
+        for source_line in message.text.split('\n') {
+            let mut line = String::new();
+            let mut used = 0;
+            for character in source_line.chars() {
+                let extent = character.width().unwrap_or(0);
+                if used + extent > width && !line.is_empty() {
+                    lines.push(Line::styled(
+                        std::mem::take(&mut line),
+                        Style::default().fg(color),
+                    ));
+                    used = 0;
+                }
+                line.push(character);
+                used += extent;
+            }
+            lines.push(Line::styled(line, Style::default().fg(color)));
+        }
+    }
+    let text = lines
+        .into_iter()
+        .rev()
+        .take(visible)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
         .collect::<Vec<_>>();
     frame.render_widget(
-        Paragraph::new(text)
-            .block(Block::default().borders(Borders::ALL).title(" Messages "))
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Messages · last 100 · Ctrl-Up/Down "),
+        ),
         area,
     );
 }
@@ -399,9 +516,9 @@ fn render_command(
     let title = if execution_finished {
         " Command · finished · type exit then Enter "
     } else if exit_requested {
-        " Command · cancelling · type exit --force to kill now "
+        " Command · cancelling · waiting for process-tree cleanup "
     } else {
-        " Command · type exit then Enter · exit --force kills "
+        " Command · pause / resume / exit / exit --force "
     };
     frame.render_widget(
         Paragraph::new(command)
@@ -428,18 +545,15 @@ struct Counts {
 }
 
 fn counts(snapshot: &DashboardSnapshot) -> Counts {
-    let mut counts = Counts::default();
-    for task in &snapshot.tasks {
-        match task.status {
-            TaskStatus::Pending => counts.pending += 1,
-            TaskStatus::Running => counts.running += 1,
-            TaskStatus::Completed => counts.completed += 1,
-            TaskStatus::Failed => counts.failed += 1,
-            TaskStatus::Cancelled => counts.cancelled += 1,
-            TaskStatus::Skipped => counts.skipped += 1,
-        }
+    let [pending, running, completed, failed, cancelled, skipped] = snapshot.totals;
+    Counts {
+        pending,
+        running,
+        completed,
+        failed,
+        cancelled,
+        skipped,
     }
-    counts
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -468,5 +582,30 @@ mod tests {
     fn execution_unit_uses_concise_display_kind() {
         assert_eq!(display_kind("execution_unit"), "unit");
         assert_eq!(display_kind("program"), "program");
+    }
+}
+
+#[cfg(test)]
+mod rendering_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    #[test]
+    fn narrow_messages_keep_newest_wrapped_message_visible() {
+        let mut state = super::super::state::DashboardState::new();
+        state.push_message("old long message ".repeat(80));
+        state.push_message("newest visible".into());
+        let snapshot = state.snapshot();
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(35, 6)).unwrap();
+        terminal
+            .draw(|frame| render_messages(frame, frame.area(), &snapshot, None))
+            .unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("newest visible"));
     }
 }

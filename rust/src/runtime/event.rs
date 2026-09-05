@@ -70,6 +70,20 @@ pub(crate) enum RuntimeEvent<'a> {
         iteration: u64,
         target_iteration: Option<u64>,
     },
+    ProgramLog {
+        replicate: u64,
+        identity: &'a str,
+        level: &'a str,
+        message: &'a str,
+    },
+    ProgramProgress {
+        replicate: u64,
+        identity: &'a str,
+        stage: &'a str,
+        completed: u64,
+        total: Option<u64>,
+        unit: &'a str,
+    },
     TaskCompleted {
         replicate: u64,
         identity: &'a str,

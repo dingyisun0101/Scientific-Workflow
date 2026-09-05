@@ -180,3 +180,31 @@ the named state map/selector, central parameter sections, and phase-owned
 two-second `start_interval_ms`; a public
 `Study::load` test proves the complete example still passes current effect-free
 preflight.
+
+## Refactor qualification (Rust 0.13.5 / Python 0.4.3)
+
+The runnable `examples/dependency_pipeline` covers the new public Rust imports,
+typed checkpoint handoff, with_json_field, format-8 boundary output, format-7
+periodic output, two-worker NPY conversion and whole-series Python analysis.
+Its expected summary values are 7 through 12 at iterations 0 through 5.
+
+Added Rust coverage: typed missing/ambiguous selection and preserved extensions;
+nonzero/max-iteration boundary sampling; public module visibility; pause-aware
+task and phase timeouts; start-before-progress ordering; live/raw program logs;
+malformed framing; required-log failure via /dev/full; owned descendant cleanup;
+interpreter symlink preservation; active-group visibility/history; narrow wrapped
+message rendering. Existing execution/state/persistence behavior remains covered.
+
+Added Python coverage: dependency/path/config accessors; fixed/ragged series and
+map reuse; standard logging setup; serial/parallel equivalence, deterministic
+ordering, worker failure/retry reuse; concurrent publication; cooperative pause,
+resume, and cancellation; active spawn-worker acknowledgement before parent pause.
+
+`python/benchmarks/conversion.py` is a reproducible Linux smoke benchmark, not a
+universal performance claim. On this validation host, 20,000 records across four
+uneven recordings (32-value vectors) took 1.499 seconds with one worker and 1.041
+seconds with four. Sampled aggregate RSS was 63.5 MiB versus 281.8 MiB. RSS sums
+processes and double-counts shared pages. These results support retaining the
+explicit shared-budget rule; no undocumented memory/CPU cap is introduced.
+Planning still scales with record/projection counts; large-workload optimization
+and a shared persistence writer pool remain measurement-driven future work.

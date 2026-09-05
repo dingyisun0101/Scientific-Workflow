@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import _control
+
 import hashlib
 import json
 import math
@@ -411,7 +413,9 @@ class RecordingReader:
         previous: int | None = None
         for chunk in declaration["chunks"]:
             records, previous = self._read_chunk(declaration, chunk, previous)
-            yield from records
+            for record in records:
+                _control.checkpoint()
+                yield record
 
     def read_all_streams(self) -> tuple[tuple[str, StateSeries], ...]:
         return tuple(

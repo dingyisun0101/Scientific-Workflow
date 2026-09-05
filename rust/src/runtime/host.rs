@@ -4,11 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
 
 use serde_json::{Map, Value};
-use thiserror::Error;
 
 use crate::config::ConfigSnapshot;
 use crate::persistence::{
@@ -156,10 +153,15 @@ impl RuntimeTaskHost {
     }
 
     pub(crate) fn cancellation_requested(&self) -> bool {
-        self.cancellation.load(Ordering::Acquire)
+        self.cancellation.load(Ordering::Acquire) || self.task_presentation.control().cancelled()
+    }
+
+    pub(crate) fn flush_progress(&self) {
+        self.task_presentation.flush();
     }
 
     pub(crate) fn fail(&mut self, reason: &str) {
+        self.flush_progress();
         for persistence in &mut self.persistence {
             if let Some(mut persistence) = persistence.take() {
                 persistence.fail(reason);
@@ -169,6 +171,12 @@ impl RuntimeTaskHost {
 }
 
 impl TaskExecutionHost for RuntimeTaskHost {
+    fn checkpoint(&self) {
+        self.task_presentation
+            .control()
+            .checkpoint(&self.cancellation);
+    }
+
     fn cancellation_requested(&self) -> bool {
         self.cancellation_requested()
     }
@@ -178,7 +186,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
     }
 
     fn execute_program(&mut self, program: ProgramTaskInvocation<'_>) -> TaskResult {
-        let mut persistence = ProgramPersistenceSession::start(
+        let persistence = ProgramPersistenceSession::start(
             self.output_directory.clone(),
             self.environment.config_snapshot.bytes(),
             &self.environment.dependencies_json,
@@ -217,8 +225,8 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .env("RAYON_NUM_THREADS", self.threads.to_string())
             .env_remove("WORKFLOW_TASK_SEED")
             .stdin(Stdio::null())
-            .stdout(Stdio::from(persistence.take_stdout()))
-            .stderr(Stdio::from(persistence.take_stderr()));
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(processed_directory) = &self.environment.processed_directory {
             command.env("WORKFLOW_NPY_OUTPUT", processed_directory);
         } else {
@@ -228,48 +236,13 @@ impl TaskExecutionHost for RuntimeTaskHost {
             command.env("WORKFLOW_TASK_SEED", seed.seed.to_string());
         }
 
-        let mut child = command.spawn().map_err(|source| {
-            persistence.fail(None, &source.to_string());
-            Box::new(ProgramExecutionError::Start {
-                program: program.executable().to_path_buf(),
-                source,
-            }) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        loop {
-            if self.cancellation_requested() {
-                let _ = child.kill();
-                let _ = child.wait();
-                persistence.fail(None, "runtime cancellation requested");
-                return Ok(());
-            }
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => {
-                    persistence.complete(status.code())?;
-                    return Ok(());
-                }
-                Ok(Some(status)) => {
-                    let reason = format!("program exited with status {status}");
-                    persistence.fail(status.code(), &reason);
-                    return Err(ProgramExecutionError::Exit {
-                        program: program.executable().to_path_buf(),
-                        status: status.to_string(),
-                    }
-                    .into());
-                }
-                Ok(None) => thread::sleep(Duration::from_millis(5)),
-                Err(source) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    persistence.fail(None, &source.to_string());
-                    return Err(ProgramExecutionError::Wait {
-                        program: program.executable().to_path_buf(),
-                        source,
-                    }
-                    .into());
-                }
-            }
-        }
+        super::program::execute(
+            command,
+            persistence,
+            &self.cancellation,
+            &self.task_presentation,
+            self.environment.processed_directory.is_some(),
+        )
     }
 
     fn begin_member(&mut self, member: MemberInitialization<'_>) -> TaskResult {
@@ -358,24 +331,6 @@ impl TaskExecutionHost for RuntimeTaskHost {
         self.publish_progress();
         Ok(())
     }
-}
-
-#[derive(Debug, Error)]
-enum ProgramExecutionError {
-    #[error("failed to start program `{program}`")]
-    Start {
-        program: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("program `{program}` failed while waiting for completion")]
-    Wait {
-        program: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("program `{program}` exited unsuccessfully: {status}")]
-    Exit { program: PathBuf, status: String },
 }
 
 impl RuntimeTaskHost {

@@ -328,3 +328,9 @@ new recording-format version and follow its coordinated bump checklist.
 Readers accept formats 7 and 8. Writers retain format 7 for periodic streams and
 use format 8 for initial-and-final sampling; see the repository format-8 protocol.
 All framing, integrity, and ownership contracts remain unchanged.
+
+Program logs remain Persistence-owned files; Runtime drains child pipes into them
+and treats read/write/flush failures as fatal. Process-tree cleanup and pipe-reader
+joins precede resource-lease release. Scientific integrity and record publication
+remain Persistence-owned. File timestamp/durability metadata measures actual
+wall time; paused execution budgets are separately owned by Runtime.

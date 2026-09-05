@@ -9,6 +9,16 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// The selected active Python environment lacks compatible Workflow tools.
+    #[error(
+        "Python prerequisites failed for `{interpreter}`: {reason}. Activate a Python 3.14+ environment with scientific-workflow[npy] 0.4.3 before launching Workflow"
+    )]
+    PythonPrerequisite {
+        /// Selected interpreter, inherited from the active environment.
+        interpreter: PathBuf,
+        /// Probe failure details, including missing imports or incompatible versions.
+        reason: String,
+    },
     /// Runtime could not create the required study-wide compute pool.
     #[error("failed to create the Workflow compute pool with {threads} threads")]
     ComputePool {

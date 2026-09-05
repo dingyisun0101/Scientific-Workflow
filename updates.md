@@ -520,3 +520,12 @@ strict numeric cadence grammar. Format 8 adds that tagged policy. Both readers
 accept 7 and 8; periodic-only writers retain 7. NPY remains version 2.
 
 Implementation and release qualification are in progress on one temporary branch.
+
+### Batch status
+
+Batch 1 pushed: typed dependencies, project accessors, Python namespace/series,
+boundary observations and dual-format reading (37be064). Batch 2 implements
+active-environment preservation/probes, owned process-tree cleanup, log/progress
+framing, bounded converter multiprocessing, shared resource allocation, pause-aware
+timers/safe points, combined active-group UI and severity/history/navigation.
+Release qualification, final documentation and downstream migration guides remain.

@@ -23,6 +23,9 @@ pub(crate) trait TaskExecutionHost {
     /// Reports whether cooperative cancellation has been requested.
     fn cancellation_requested(&self) -> bool;
 
+    /// Waits at an execution-unit safe boundary while Runtime is paused.
+    fn checkpoint(&self) {}
+
     /// Returns initialization facts for an execution-unit task.
     fn initialization_context(&self) -> Option<&InitializationContext>;
 
@@ -152,6 +155,7 @@ where
     U: ExecutionUnit,
 {
     fn execute(&self, host: &mut dyn TaskExecutionHost) -> TaskResult {
+        host.checkpoint();
         if host.cancellation_requested() {
             return Ok(());
         }
@@ -181,6 +185,10 @@ where
             .iter()
             .map(|member| context.metadata_for_member(&member.identity))
             .collect::<Vec<_>>();
+        host.checkpoint();
+        if host.cancellation_requested() {
+            return Ok(());
+        }
         for (index, member) in members.iter().enumerate() {
             let view = required_member(&unit, index)?;
             host.begin_member(MemberInitialization {
@@ -203,6 +211,7 @@ where
         }
 
         while members.iter().any(|member| !member.complete) {
+            host.checkpoint();
             if host.cancellation_requested() {
                 return Ok(());
             }
@@ -278,6 +287,7 @@ impl ProgramDefinition {
 
 impl TaskDefinition for ProgramDefinition {
     fn execute(&self, host: &mut dyn TaskExecutionHost) -> TaskResult {
+        host.checkpoint();
         if host.cancellation_requested() {
             return Ok(());
         }

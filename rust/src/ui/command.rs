@@ -3,6 +3,8 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum UiCommand {
     Exit,
+    Pause,
+    Resume,
     ForceExit,
     Interrupt,
 }
@@ -79,6 +81,8 @@ impl CommandInput {
 fn parse(input: &str) -> CommandSubmission {
     match input.trim() {
         "" => CommandSubmission::Empty,
+        "pause" => CommandSubmission::Parsed(UiCommand::Pause),
+        "resume" => CommandSubmission::Parsed(UiCommand::Resume),
         "exit" => CommandSubmission::Parsed(UiCommand::Exit),
         "exit --force" => CommandSubmission::Parsed(UiCommand::ForceExit),
         unknown => CommandSubmission::Unknown(unknown.to_owned()),

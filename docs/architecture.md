@@ -728,3 +728,16 @@ retain scientific projection names and domain validation.
 
 Boundary sampling uses a real private policy, with format 8 metadata. Both readers
 retain format-7 support; periodic-only recordings continue writing format 7.
+
+## Runtime control and Python execution
+
+Runtime owns RunControl (private pause-aware clock, wakeable parking, activity
+acknowledgements), the process-group registry, task join guards, bounded program
+framing and prerequisites. UI receives the private control handle through the
+Runtime observer port; it never operates scientific state. All task/phase budgets
+and admission delays share that clock; Study Total time remains wall time.
+Persistence owns log files, Runtime owns pipe draining, and Python owns conversion.
+The standard converter uses spawn workers, a bounded progress queue to its parent,
+cooperative control-file acknowledgements, per-batch directory locking, unique
+staging names, and deterministic atomic batch publication. Native numeric pools
+are limited inside each worker. No arbitrary program is SIGSTOP-suspended.

@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-npy = ["numpy>=1.26"]
+npy = ["numpy>=1.26", "threadpoolctl>=3"]
 
 [project.scripts]
 scientific-workflow-to-npy = "scientific_workflow.npy:main"

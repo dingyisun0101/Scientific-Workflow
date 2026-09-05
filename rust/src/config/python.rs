@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::error::ConfigError;
-use super::program::{ResolvedProgramTask, resolve_executable};
+use super::program::{ResolvedProgramTask, resolve_interpreter};
 use super::store::ensure_utf8;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -72,7 +72,7 @@ pub(crate) fn resolve(
             #[cfg(not(unix))]
             let interpreter = environment.join("Scripts/python.exe");
             (
-                resolve_executable(project_root, &interpreter)?,
+                resolve_interpreter(project_root, &interpreter)?,
                 "venv",
                 Vec::<OsString>::new(),
             )
@@ -144,7 +144,7 @@ fn resolve_manager(
     authored: Option<&Path>,
     default: &str,
 ) -> Result<PathBuf, ConfigError> {
-    resolve_executable(project_root, authored.unwrap_or_else(|| Path::new(default)))
+    resolve_interpreter(project_root, authored.unwrap_or_else(|| Path::new(default)))
 }
 
 fn resolve_script(project_root: &Path, authored: &Path) -> Result<PathBuf, ConfigError> {

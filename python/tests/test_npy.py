@@ -290,11 +290,14 @@ class NpyConversionTests(unittest.TestCase):
                             "phase": "simulate",
                             "tasks": [
                                 {
+                                    "identity": "task",
+                                    "output_directory": str(root),
                                     "workload": {
                                         "kind": "execution_unit",
+                                        "execution_unit": "fixture",
                                         "members": [
-                                            {"output_directory": str(first)},
-                                            {"output_directory": str(second)},
+                                            {"identity":"first", "final_iteration":1, "output_directory": str(first)},
+                                            {"identity":"second", "final_iteration":1, "output_directory": str(second)},
                                         ],
                                     }
                                 }
@@ -304,9 +307,12 @@ class NpyConversionTests(unittest.TestCase):
                             "phase": "export",
                             "tasks": [
                                 {
+                                    "identity": "task",
+                                    "output_directory": str(root),
                                     "workload": {
                                         "kind": "execution_unit",
-                                        "members": [{"output_directory": str(first)}],
+                                        "execution_unit": "fixture",
+                                        "members": [{"identity":"first", "final_iteration":1, "output_directory": str(first)}],
                                     }
                                 }
                             ],
@@ -354,3 +360,127 @@ class SeriesTests(unittest.TestCase):
             for index in (-1, True, 2):
                 with self.assertRaises(IndexError): ragged.record(index)
             with self.assertRaises(NpyConversionError): conversion.series("missing", "fixed")
+
+class ParallelBatchTests(unittest.TestCase):
+    def test_serial_parallel_equivalence_failure_and_retry_reuse(self):
+        import os
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = []
+            for n in range(3):
+                source = root / f"source-{n}"
+                shutil.copytree(FIXTURE, source)
+                sources.append(source)
+            deps = root / "deps.json"
+            deps.write_text(json.dumps([{"phase":"run", "tasks":[{"identity":"t", "output_directory":str(root), "workload":{"kind":"execution_unit", "execution_unit":"fixture", "members":[{"identity":str(n), "final_iteration":1, "output_directory":str(source)} for n,source in enumerate(sources)]}}]}]))
+            with patch.dict(os.environ, {"WORKFLOW_THREADS":"1"}):
+                serial = convert_workflow_dependencies(deps, root / "serial")
+            with patch.dict(os.environ, {"WORKFLOW_THREADS":"2"}):
+                parallel = convert_workflow_dependencies(deps, root / "parallel")
+                self.assertEqual(serial, parallel)
+                member = root / "parallel/member-000000/manifest.json"
+                before = member.stat().st_mtime_ns
+                self.assertEqual(convert_workflow_dependencies(deps, root / "parallel"), parallel)
+                self.assertEqual(member.stat().st_mtime_ns, before)
+                bad = sources[1] / "streams/signal/chunk-000000.jsonl"
+                original = bad.read_bytes()
+                bad.write_bytes(original + b"corrupt")
+                with self.assertRaises(Exception): convert_workflow_dependencies(deps, root / "failed")
+                self.assertFalse((root / "failed/manifest.json").exists())
+                bad.write_bytes(original)
+                result = convert_workflow_dependencies(deps, root / "failed")
+                self.assertEqual(result, serial)
+                self.assertEqual(len(open_npy_batch(root / "failed").members), 3)
+
+class ConversionControlTests(unittest.TestCase):
+    def test_pause_acknowledgement_resume_and_cancellation(self):
+        import os
+        import subprocess
+        import sys
+        import time
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "recording"
+            shutil.copytree(FIXTURE, source)
+            deps = root / "deps.json"
+            deps.write_text(json.dumps([{"phase":"run", "tasks":[{"identity":"t", "output_directory":str(root), "workload":{"kind":"execution_unit","execution_unit":"fixture","members":[{"identity":"one","final_iteration":1,"output_directory":str(source)}]}}]}]))
+            control = root / "control.json"
+            def write_control(paused, cancelled):
+                staged = control.with_suffix(".tmp")
+                staged.write_text(json.dumps({"paused":paused,"cancelled":cancelled}))
+                staged.replace(control)
+            for cancelled in (False, True):
+                output = root / f"output-{cancelled}"
+                write_control(True, False)
+                env = {**os.environ, "WORKFLOW_THREADS":"1", "WORKFLOW_CONTROL_PATH":str(control), "WORKFLOW_DEPENDENCIES_PATH":str(deps), "WORKFLOW_NPY_OUTPUT":str(output)}
+                with (root / "stderr.log").open("w") as log:
+                    child = subprocess.Popen([sys.executable,"-m","scientific_workflow.npy","--workflow-dependencies"], env=env, stdout=subprocess.DEVNULL, stderr=log)
+                    try:
+                        ack = control.with_name(control.name + ".parent.paused")
+                        deadline = time.monotonic() + 5
+                        while not ack.exists() and time.monotonic() < deadline and child.poll() is None:
+                            time.sleep(0.01)
+                        self.assertTrue(ack.exists())
+                        self.assertFalse((output / "manifest.json").exists())
+                        write_control(False, cancelled)
+                        code = child.wait(timeout=5)
+                        if cancelled:
+                            self.assertNotEqual(code, 0)
+                            self.assertFalse((output / "manifest.json").exists())
+                        else:
+                            self.assertEqual(code, 0)
+                            self.assertEqual(len(open_npy_batch(output).members), 1)
+                    finally:
+                        if child.poll() is None: child.kill(); child.wait()
+
+    def test_concurrent_same_destination_calls_do_not_conflict(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            shutil.copytree(FIXTURE, source)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(convert_recording, source, root / "same") for _ in range(2)]
+                self.assertEqual(futures[0].result(), futures[1].result())
+            self.assertEqual(open_npy_conversion(root / "same").stream_names, ("signal",))
+
+class ParallelPauseTests(unittest.TestCase):
+    def test_active_spawn_workers_acknowledge_pause_and_cancel_without_success_batch(self):
+        import os
+        import subprocess
+        import sys
+        import time
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = recording_with_fields(root, ["values"], [(n, float(n), [[float(n)] * 32]) for n in range(20000)])
+            second = root / "second"
+            shutil.copytree(source, second)
+            deps = root / "deps.json"
+            deps.write_text(json.dumps([{"phase":"run","tasks":[{"identity":"t","output_directory":str(root),"workload":{"kind":"execution_unit","execution_unit":"fixture","members":[{"identity":str(n),"final_iteration":19999,"output_directory":str(path)} for n,path in enumerate((source, second))]}}]}]))
+            control = root / "control.json"
+            output = root / "output"
+            def write(paused, cancelled):
+                temporary = control.with_suffix(".tmp")
+                temporary.write_text(json.dumps({"paused":paused,"cancelled":cancelled}))
+                temporary.replace(control)
+            write(False, False)
+            env = {**os.environ,"WORKFLOW_THREADS":"2","WORKFLOW_CONTROL_PATH":str(control),"WORKFLOW_DEPENDENCIES_PATH":str(deps),"WORKFLOW_NPY_OUTPUT":str(output)}
+            with (root / "stderr.log").open("w") as log:
+                child = subprocess.Popen([sys.executable,"-m","scientific_workflow.npy","--workflow-dependencies"], env=env, stdout=subprocess.DEVNULL, stderr=log)
+                try:
+                    deadline = time.monotonic() + 8
+                    while not list(output.glob(".member-*.tmp-*")) and time.monotonic() < deadline and child.poll() is None:
+                        time.sleep(0.005)
+                    self.assertIsNone(child.poll())
+                    write(True, False)
+                    ack = control.with_name(control.name + ".parent.paused")
+                    while not ack.exists() and time.monotonic() < deadline and child.poll() is None:
+                        time.sleep(0.01)
+                    self.assertTrue(ack.exists())
+                    self.assertFalse((output / "manifest.json").exists())
+                    write(False, True)
+                    self.assertNotEqual(child.wait(timeout=8), 0)
+                    self.assertFalse((output / "manifest.json").exists())
+                finally:
+                    if child.poll() is None: child.kill(); child.wait()

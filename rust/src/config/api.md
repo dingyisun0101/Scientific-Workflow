@@ -1,6 +1,6 @@
 # Config API
 
-This guide documents the `scientific-workflow` 0.13.3 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by
@@ -472,3 +472,12 @@ rejection, deterministic expansion,
 centralized one-pass parsing, immutable complete-project snapshots, complete
 constants decoding, direct executable and Python-environment resolution,
 contextual errors, and the no-output-before-Study boundary.
+
+## Active Python environment
+
+`$npy` resolves python3 exclusively from inherited PATH and preserves interpreter
+symlink paths so virtual-environment identity is not lost. Explicit Python
+interpreter/environment-manager launch paths also preserve their final symlink;
+script/config paths remain canonicalized. Runtime performs version/import probes
+before scientific work, keeping Study::load subprocess-free. No environment is
+created/installed automatically and no NPY-specific override is added.

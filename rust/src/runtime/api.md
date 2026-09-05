@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.13.3 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -30,7 +30,8 @@ initialization and step runs with that pool installed, so concurrent tasks and
 replicates share one study-wide compute limit instead of creating independent
 model pools. Ambient `RAYON_NUM_THREADS` does not override the manifest.
 The same count also initializes one process-wide permit budget shared by all
-replicate schedulers. External tasks reserve their configured thread count and
+replicate schedulers. External tasks reserve their configured thread count; `$npy` reserves
+`min(study.threads, deduplicated recording count)`. Tasks
 may overlap only while their aggregate reservation fits. External work and
 in-process execution-unit work do not overlap: execution units cannot safely
 shrink the fixed Rayon pool while it is active. This conservative class boundary
@@ -81,7 +82,10 @@ An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. ExecutionUnit cancellation is cooperative
 between steps, so blocking application code inside one step may delay return.
 External programs, including Python interpreters/environment managers, are
-polled and are killed and reaped when cancellation or a timeout is observed.
+polled and own Linux process groups which are terminated, killed after bounded escalation,
+and reaped when cancellation or timeout is observed. Pipe readers are joined
+before resource permits are released. Future macOS/Windows implementations require
+separate qualification; Linux is the only supported platform.
 
 Failure does not overwrite prior output. Execution that fails after output creation
 retains its unique directory and any failed/running recording evidence for
@@ -123,6 +127,9 @@ task has no artificial pre-admission wait. Fail-fast stops further admission
 and requests cancellation of active siblings; finish-all continues admitting
 declared siblings and returns an error after they finish.
 
+Task/phase deadlines and admission delays use one Runtime-owned pause-aware
+clock. It freezes immediately on pause request, including while an in-flight
+call or arbitrary program is still running. Resume never charges that paused time.
 Task deadline classification uses the worker's completion timestamp, rather
 than the later instant at which the polling scheduler joins it. A task that
 completed before its deadline is therefore not retroactively timed out. Phase
@@ -267,6 +274,11 @@ are fixed before output creation.
 
 This non-exhaustive enum reports failures after a valid Study is available:
 
+- `PythonPrerequisite { interpreter: PathBuf, reason: String }`: the active
+  interpreter cannot import the coordinated Python 0.4.3 tools, NumPy and
+  threadpoolctl, or is older than Python 3.14. The error names the selected
+  interpreter and setup remedy. Runtime probes before scientific work and output
+  creation; Study::load performs no subprocess probe.
 - `ComputePool { threads, source }`: Runtime could not create the exact
   study-wide pool before output creation;
 - `ExecutionCancelled`: the interactive `exit` command or Ctrl+C requested
@@ -380,3 +392,38 @@ The program execution port likewise supplies Task's semantic
 representation.
 Paths written to program dependency snapshots are exact UTF-8 values validated
 during Config preflight; Runtime performs no lossy path rendering.
+
+## Pause, program events, and process ownership
+
+`pause` stops admission and freezes the execution clock immediately. Execution
+units park at initialize/step boundaries; accepted persistence records drain.
+The standard converter receives a private atomic control-file channel, checks
+pause/cancel at bounded record/hash/job boundaries, and acknowledges only after
+all active workers are parked or finished. Arbitrary external programs finish
+normally while admission waits. UI distinguishes pausing from fully paused by
+Runtime-owned activity/acknowledgement counts. `resume` wakes waiting units.
+Cancellation wakes paused work; presentation failures also cancel and join task
+workers, including early-return paths. Start publication uses a handshake before
+worker progress can occur. No new public control handles or ExecutionUnit methods
+are required.
+
+`exit --force` restores the terminal, kills every registered owned child process
+group, reaps direct children, then exits 130. The launch/force-exit registry is
+locked across creation/exit to prevent late unowned children. Forced exit can
+leave incomplete scientific recordings; it does not claim successful durability.
+Programs must not deliberately escape their owned process group.
+
+Stdout/stderr are concurrently drained while preserving all bytes in required
+logs. Pipe-read/log-write/flush failures fail the task and trigger cleanup while
+remaining pipe bytes are drained. Prefixed stderr JSON frames follow
+`protocol/program-events-v1.md`: log severity and stage/count progress. Unsupported,
+malformed, oversized or partial frames remain in stderr.log and produce at most
+three warnings per task. They do not fail otherwise successful scientific work.
+Frame memory is bounded to 16 KiB. UI text strips terminal controls and bounds
+message length. Progress updates coalesce at 50ms and final progress is flushed;
+complete raw logs remain available. Failed-process errors identify their log scope.
+
+Standard converter workers use spawn, never fork inherited Rust state. Runtime
+reserves the pool allowance in the shared ResourceBudget; concurrent replicates
+cannot each independently consume the study ceiling. NumPy native pools are
+limited to one thread per worker. No separate user worker-count setting is added.

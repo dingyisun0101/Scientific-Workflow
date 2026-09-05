@@ -1,6 +1,6 @@
 # Task API
 
-This guide documents the `scientific-workflow` 0.13.3 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
 
 Task owns Workflow's uniform scientific execution boundary. A configured
 scientific task selects one registered `ExecutionUnit`, one resolved constants
@@ -338,3 +338,8 @@ Missing/moved required paths fail with the expected path; discovery is not suppo
 Functions do synchronous environment/filesystem reads and return owned results;
 errors return no partial result. They create no files, change no working directory,
 and perform no environment activation or cancellation. There is no ProgramContext.
+
+Runtime parks execution units at private safe boundaries around initialization
+and between complete steps. ExecutionUnit's public contract is unchanged. Task
+publishes its dependency/project accessors through the public `task` module;
+existing crate-root unit-authoring exports remain supported aliases.

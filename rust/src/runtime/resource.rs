@@ -71,6 +71,15 @@ impl ResourceBudget {
     }
 }
 
+impl ResourceLease {
+    pub(super) fn threads(&self) -> Option<usize> {
+        match self.requirement {
+            ResourceRequirement::External { threads } => Some(threads),
+            ResourceRequirement::InProcess => None,
+        }
+    }
+}
+
 impl Drop for ResourceLease {
     fn drop(&mut self) {
         let mut state = self.budget.state();

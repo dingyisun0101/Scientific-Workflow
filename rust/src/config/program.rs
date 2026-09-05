@@ -174,9 +174,10 @@ impl std::fmt::Debug for ResolvedProgramTask {
     }
 }
 
-pub(crate) fn resolve_executable(
+fn resolve_executable_inner(
     project_root: &Path,
     authored: &Path,
+    preserve_link: bool,
 ) -> Result<PathBuf, ConfigError> {
     if authored.as_os_str().is_empty()
         || authored
@@ -219,7 +220,14 @@ pub(crate) fn resolve_executable(
             reason: "resolved program is not an executable regular file".to_owned(),
         });
     }
-    Ok(resolved)
+    Ok(if preserve_link {
+        std::path::absolute(candidate).map_err(|source| ConfigError::InvalidProgram {
+            path: authored.to_path_buf(),
+            reason: source.to_string(),
+        })?
+    } else {
+        resolved
+    })
 }
 
 fn file_subject(path: &Path, fallback: &str) -> Box<str> {
@@ -241,4 +249,43 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable(path: &Path) -> bool {
     path.is_file()
+}
+
+// Interpreter symlink paths identify virtual environments and must be preserved.
+pub(crate) fn resolve_interpreter(root: &Path, authored: &Path) -> Result<PathBuf, ConfigError> {
+    resolve_executable_inner(root, authored, true)
+}
+pub(crate) fn resolve_executable(root: &Path, authored: &Path) -> Result<PathBuf, ConfigError> {
+    resolve_executable_inner(root, authored, false)
+}
+pub(crate) fn resolve_active_python() -> Result<PathBuf, ConfigError> {
+    let candidate = std::env::var_os("PATH").and_then(|value| std::env::split_paths(&value).map(|directory| directory.join("python3")).find(|candidate| is_executable(candidate)))
+        .ok_or_else(|| ConfigError::InvalidProgram { path: PathBuf::from("python3"), reason: "activate the Python 3.14+ environment containing scientific-workflow[npy]; python3 is absent from PATH".into() })?;
+    let path = std::path::absolute(&candidate).map_err(|source| ConfigError::InvalidProgram {
+        path: candidate,
+        reason: source.to_string(),
+    })?;
+    ensure_utf8(&path, "active Python interpreter")?;
+    Ok(path)
+}
+
+#[cfg(all(test, unix))]
+mod interpreter_tests {
+    use super::*;
+    #[test]
+    fn interpreter_keeps_environment_symlink_while_program_resolution_is_canonical() {
+        use std::os::unix::fs::symlink;
+        let root =
+            std::env::temp_dir().join(format!("workflow-python-link-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let link = root.join("python");
+        let _ = std::fs::remove_file(&link);
+        symlink("/bin/sh", &link).unwrap();
+        assert_eq!(resolve_interpreter(&root, &link).unwrap(), link);
+        assert_eq!(
+            resolve_executable(&root, &link).unwrap(),
+            std::fs::canonicalize("/bin/sh").unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

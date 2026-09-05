@@ -840,3 +840,147 @@ sleep 0.25
     assert!(ranges[2].0.duration_since(ranges[1].0).unwrap() >= Duration::from_millis(40));
     assert!(ranges[2].0 < ranges[0].1);
 }
+
+#[test]
+fn pause_freezes_task_and_phase_timeouts_and_start_precedes_progress() {
+    use std::sync::{Arc, Mutex};
+    struct Observer {
+        control: crate::runtime::RunControl,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl RuntimeObserver for Observer {
+        fn control(&self) -> crate::runtime::RunControl {
+            self.control.clone()
+        }
+        fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
+            match event {
+                RuntimeEvent::TaskStarted { .. } => {
+                    self.events.lock().unwrap().push("started");
+                    self.control.pause(true);
+                    let control = self.control.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(120));
+                        control.pause(false);
+                    });
+                }
+                RuntimeEvent::TaskProgress { .. } => {
+                    let mut events = self.events.lock().unwrap();
+                    assert_eq!(events.first(), Some(&"started"));
+                    events.push("progress");
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        fn cancellation_requested(&self) -> Result<bool, PresentationFailure> {
+            Ok(false)
+        }
+        fn finish(&self) -> Result<(), PresentationFailure> {
+            Ok(())
+        }
+    }
+    let mut declaration = execution_unit_study("runtime-slow", Some(80));
+    declaration["phases"]["run"]["timeout_ms"] = 80.into();
+    let project = Project::new(
+        declaration,
+        serde_json::json!({"runtime-slow":{"sleep_ms":5}}),
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed = events.clone();
+    let started = Instant::now();
+    execute_with_observer(Study::load(project.path()).unwrap(), || {
+        Ok(Observer {
+            control: Default::default(),
+            events,
+        })
+    })
+    .unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(120));
+    assert!(observed.lock().unwrap().contains(&"progress"));
+}
+
+#[test]
+#[cfg(unix)]
+fn program_diagnostics_are_live_and_raw_logs_are_preserved() {
+    use std::sync::{Arc, Mutex};
+    struct Observer(Arc<Mutex<Vec<String>>>);
+    impl RuntimeObserver for Observer {
+        fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
+            match event {
+                RuntimeEvent::ProgramLog { message, .. } => {
+                    self.0.lock().unwrap().push(message.into())
+                }
+                RuntimeEvent::TaskCompleted { .. } => {
+                    self.0.lock().unwrap().push("TASK COMPLETE".into())
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        fn cancellation_requested(&self) -> Result<bool, PresentationFailure> {
+            Ok(false)
+        }
+        fn finish(&self) -> Result<(), PresentationFailure> {
+            Ok(())
+        }
+    }
+    let project = Project::new(
+        serde_json::json!({"phases":{"run":{"tasks":[{"program":"diagnostics.sh"}]}}}),
+        serde_json::json!({}),
+    );
+    project.write_executable("diagnostics.sh", "#!/bin/sh\nprintf 'stdout sentinel\\n'\nprintf '%s\\n' '@workflow {\"version\":1,\"kind\":\"log\",\"level\":\"warning\",\"message\":\"live sentinel\"}' >&2\nprintf '%s\\n' '@workflow malformed' >&2\nsleep 0.05\n");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed = events.clone();
+    let summary = execute_with_observer(Study::load(project.path()).unwrap(), || {
+        Ok(Observer(events))
+    })
+    .unwrap();
+    let task = &summary.replicates()[0].phases()[0].tasks()[0];
+    assert_eq!(
+        fs::read_to_string(task.output_directory().join("stdout.log")).unwrap(),
+        "stdout sentinel\n"
+    );
+    let stderr = fs::read_to_string(task.output_directory().join("stderr.log")).unwrap();
+    assert!(stderr.contains("@workflow malformed"));
+    let events = observed.lock().unwrap();
+    assert_eq!(events.first().map(String::as_str), Some("live sentinel"));
+    assert_eq!(events.last().map(String::as_str), Some("TASK COMPLETE"));
+    assert!(events.iter().any(|e| e.contains("malformed")));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn timeout_stops_a_programs_descendant_process() {
+    let project = Project::new(
+        serde_json::json!({"phases":{"run":{"tasks":[{"program":"descendant.sh", "timeout_ms":100}]}}}),
+        serde_json::json!({}),
+    );
+    project.write_executable(
+        "descendant.sh",
+        "#!/bin/sh\nsleep 30 &\necho $! > descendant.pid\nwait\n",
+    );
+    let error = execute(Study::load(project.path()).unwrap()).unwrap_err();
+    assert!(has_task_timeout(&error));
+    let pid = fs::read_to_string(
+        project
+            .execution_directory()
+            .join("replicate-000000/task-000000/artifacts/descendant.pid"),
+    )
+    .unwrap();
+    let status = PathBuf::from(format!("/proc/{}/status", pid.trim()));
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match fs::read_to_string(&status) {
+            Err(_) => break,
+            Ok(text)
+                if text
+                    .lines()
+                    .any(|line| line.starts_with("State:") && line.contains('Z')) =>
+            {
+                break;
+            }
+            _ if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            _ => panic!("descendant remains alive: {}", pid.trim()),
+        }
+    }
+}

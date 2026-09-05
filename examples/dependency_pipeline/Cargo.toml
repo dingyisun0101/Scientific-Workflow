@@ -1,0 +1,9 @@
+[package]
+name = "workflow-dependency-pipeline"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+scientific-workflow = { version = "0.13.5", path = "../../rust" }
+serde = { version = "1", features = ["derive"] }

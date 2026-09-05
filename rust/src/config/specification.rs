@@ -10,7 +10,7 @@ use super::error::ConfigError;
 use super::expansion;
 use super::manifest::{self, ParsedTask, PhaseSpecification, StudyManifest};
 use super::parameters::{ResolvedExecutionUnitParameters, ResolvedTask};
-use super::program::{ResolvedProgramTask, resolve_executable};
+use super::program::{ResolvedProgramTask, resolve_active_python, resolve_executable};
 use super::python;
 use super::store::Config;
 
@@ -198,10 +198,7 @@ impl ProjectSpecification {
                         }
                     }
                     ParsedTask::Npy => {
-                        let program = ResolvedProgramTask::for_npy(resolve_executable(
-                            config.project_root(),
-                            Path::new("python3"),
-                        )?);
+                        let program = ResolvedProgramTask::for_npy(resolve_active_python()?);
                         let snapshot = resolved_parameters
                             .first()
                             .expect("parameter expansion always produces one configuration")

@@ -34,6 +34,7 @@ where
     O: RuntimeObserver,
     F: FnOnce() -> Result<O, PresentationFailure>,
 {
+    super::program::check_prerequisites(&study)?;
     let compute_pool = Arc::new(
         rayon::ThreadPoolBuilder::new()
             .num_threads(study.threads())
@@ -378,7 +379,28 @@ struct ActiveTask {
     task: StudyTask,
     cancellation: Arc<AtomicBool>,
     started: Instant,
-    worker: JoinHandle<TaskWorkerOutcome>,
+    worker: TaskWorker,
+}
+
+struct TaskWorker {
+    handle: Option<JoinHandle<TaskWorkerOutcome>>,
+    cancellation: Arc<AtomicBool>,
+}
+impl TaskWorker {
+    fn is_finished(&self) -> bool {
+        self.handle.as_ref().expect("live worker").is_finished()
+    }
+    fn join(mut self) -> std::thread::Result<TaskWorkerOutcome> {
+        self.handle.take().expect("live worker").join()
+    }
+}
+impl Drop for TaskWorker {
+    fn drop(&mut self) {
+        if let Some(worker) = self.handle.take() {
+            self.cancellation.store(true, Ordering::Release);
+            let _ = worker.join();
+        }
+    }
 }
 
 struct TaskWorkerOutcome {
@@ -449,7 +471,7 @@ fn run_phase_inner(
     phase: &StudyPhase,
     context: &PhaseRuntime<'_>,
 ) -> Result<PhaseRunSummary, RuntimeError> {
-    let phase_started = Instant::now();
+    let phase_started = context.presentation.control.now();
     let mut pending = phase.tasks().iter().cloned().collect::<VecDeque<_>>();
     let mut active = Vec::<ActiveTask>::new();
     let mut completed = Vec::with_capacity(pending.len());
@@ -470,7 +492,12 @@ fn run_phase_inner(
             }
         }
         if let Some(timeout) = phase.timeout()
-            && phase_started.elapsed() >= timeout
+            && context
+                .presentation
+                .control
+                .now()
+                .saturating_duration_since(phase_started)
+                >= timeout
             && (!pending.is_empty() || active.iter().any(|task| !task.worker.is_finished()))
         {
             phase_timed_out = true;
@@ -480,16 +507,40 @@ fn run_phase_inner(
             }
         }
 
-        let may_admit = !phase_timed_out
+        let may_admit = !context.presentation.control.paused()
+            && !phase_timed_out
             && !execution_cancelled
             && (first_error.is_none() || phase.failure_policy() == FailurePolicy::FinishAll);
         while may_admit
+            && !context.presentation.control.paused()
             && active.len() < phase.max_concurrency()
             && !pending.is_empty()
-            && Instant::now() >= next_admission
+            && context.presentation.control.now() >= next_admission
         {
             let task = pending.front().expect("checked nonempty task queue");
-            let requirement = task_resource_requirement(task);
+            let requirement = if task.is_npy() {
+                let bytes = dependency_snapshot(
+                    phase,
+                    context.study.phases(),
+                    context.completed_phases,
+                    task.configuration(),
+                    true,
+                );
+                let raw = serde_json::from_slice(&bytes).expect("Runtime dependency JSON");
+                let deps = crate::task::dependencies::Dependencies::from_json(raw)
+                    .expect("Runtime dependencies");
+                let count = deps
+                    .recordings()
+                    .iter()
+                    .map(|r| r.directory())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
+                ResourceRequirement::External {
+                    threads: context.study.threads().min(count.max(1)),
+                }
+            } else {
+                task_resource_requirement(task)
+            };
             let Some(resource_lease) = context.resource_budget.try_acquire(requirement) else {
                 break;
             };
@@ -505,12 +556,17 @@ fn run_phase_inner(
                     break;
                 }
             }
-            next_admission = Instant::now() + phase.start_interval();
+            next_admission = context.presentation.control.now() + phase.start_interval();
         }
 
         for task in &mut active {
             if let Some(timeout) = task.task.timeout()
-                && task.started.elapsed() >= timeout
+                && context
+                    .presentation
+                    .control
+                    .now()
+                    .saturating_duration_since(task.started)
+                    >= timeout
                 && !task.worker.is_finished()
             {
                 task.cancellation.store(true, Ordering::Release);
@@ -529,7 +585,7 @@ fn run_phase_inner(
                 .worker
                 .join()
                 .unwrap_or_else(|_| TaskWorkerOutcome {
-                    finished: Instant::now(),
+                    finished: context.presentation.control.now(),
                     result: Err(RuntimeError::TaskPanicked {
                         task: identity.clone(),
                     }),
@@ -662,14 +718,24 @@ fn spawn_task(
         configuration: worker_task.configuration(),
         replicate: context.replicate,
         master_seed: context.study.master_seed(),
-        threads: task_effective_threads(&worker_task, context.study.threads()),
+        threads: resource_lease.threads().unwrap_or(context.study.threads()),
         compute_pool: Arc::clone(context.compute_pool),
         presentation: context.presentation.clone(),
     };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
-    let started = Instant::now();
+    let started = context.presentation.control.now();
+    let worker_control = context.presentation.control.clone();
+    let activity = worker_control.activity();
+    let (ready, start) = mpsc::sync_channel::<()>(0);
     let worker = match thread::Builder::new().name(thread_name).spawn(move || {
         let _resource_lease = resource_lease;
+        let _activity = activity;
+        if start.recv().is_err() {
+            return TaskWorkerOutcome {
+                finished: worker_control.now(),
+                result: Err(RuntimeError::ExecutionCancelled),
+            };
+        }
         let identity = worker_task.identity().to_owned();
         let task_kind = worker_task.kind();
         let compute_pool = Arc::clone(&runtime.compute_pool);
@@ -682,7 +748,7 @@ fn spawn_task(
         }))
         .unwrap_or_else(|_| Err(RuntimeError::TaskPanicked { task: identity }));
         TaskWorkerOutcome {
-            finished: Instant::now(),
+            finished: worker_control.now(),
             result,
         }
     }) {
@@ -701,19 +767,27 @@ fn spawn_task(
             return Err(error);
         }
     };
-    context.presentation.publish(RuntimeEvent::TaskStarted {
+    if let Err(error) = context.presentation.publish(RuntimeEvent::TaskStarted {
         replicate: context.replicate,
         phase: phase.name(),
         identity: task.identity(),
         label: task.label(),
         kind: task.kind_name(),
         subject: task.subject(),
-    })?;
+    }) {
+        drop(ready);
+        let _ = worker.join();
+        return Err(error);
+    }
+    let _ = ready.send(());
     Ok(ActiveTask {
         task,
-        cancellation,
+        cancellation: Arc::clone(&cancellation),
         started,
-        worker,
+        worker: TaskWorker {
+            handle: Some(worker),
+            cancellation: Arc::clone(&cancellation),
+        },
     })
 }
 
@@ -723,13 +797,6 @@ fn task_resource_requirement(task: &StudyTask) -> ResourceRequirement {
         TaskKind::Program => ResourceRequirement::External {
             threads: task.program_threads(),
         },
-    }
-}
-
-fn task_effective_threads(task: &StudyTask, study_threads: usize) -> usize {
-    match task.kind() {
-        TaskKind::ExecutionUnit => study_threads,
-        TaskKind::Program => task.program_threads(),
     }
 }
 
@@ -834,6 +901,7 @@ fn run_task(
             });
         }
     }
+    host.flush_progress();
     if host.cancellation_requested() {
         host.fail("runtime cancellation requested");
         return Err(RuntimeError::TaskCancelled {
