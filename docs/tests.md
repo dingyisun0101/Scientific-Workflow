@@ -259,3 +259,8 @@ example completed, including NPY conversion and Python analysis. Package
 verification built the crate against registry dependencies. Nested-selection
 coverage additionally verifies Cartesian composition with sibling axes, literal
 vector choices, and unchanged opaque arrays outside choices.
+
+The two private example crates now explicitly require crates.io Workflow 0.13.7;
+the workspace lockfile resolves that release separately from the local runtime
+under test. The 130-test all-feature workspace suite passed with these updated
+example dependencies. This consumer update does not change the runtime crate.
