@@ -35,3 +35,5 @@ __all__ = [
     "UnknownStreamError",
     "open_completed_recording",
 ]
+
+__version__ = "0.4.3"

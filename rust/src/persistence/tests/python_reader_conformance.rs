@@ -60,7 +60,7 @@ fn repository_python_support_is_available() -> bool {
     fixture().is_dir()
         && invalid_metadata_cases().is_file()
         && PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../python/src/scientific_workflow_reader")
+            .join("../python/src/scientific_workflow")
             .is_dir()
 }
 
@@ -165,21 +165,21 @@ fn rust_and_python_readers_share_one_format_v7_fixture() {
 #[test]
 fn protocol_manifests_match_the_rust_package_and_reader() {
     if !protocol_file("compatibility.json").is_file()
-        || !protocol_file("recording-v7.schema.json").is_file()
+        || !protocol_file("recording-v8.schema.json").is_file()
     {
         return;
     }
     let compatibility: Value =
         serde_json::from_slice(&fs::read(protocol_file("compatibility.json")).unwrap()).unwrap();
     let schema: Value =
-        serde_json::from_slice(&fs::read(protocol_file("recording-v7.schema.json")).unwrap())
+        serde_json::from_slice(&fs::read(protocol_file("recording-v8.schema.json")).unwrap())
             .unwrap();
 
     assert_eq!(
         compatibility["recording"]["format"],
         "scientific-workflow-jsonl"
     );
-    assert_eq!(compatibility["recording"]["version"], 7);
+    assert_eq!(compatibility["recording"]["version"], 8);
     assert_eq!(
         schema["properties"]["format"]["const"],
         compatibility["recording"]["format"]
@@ -198,17 +198,19 @@ fn protocol_manifests_match_the_rust_package_and_reader() {
     );
     assert_eq!(
         compatibility["implementations"]["rust"]["writes"],
-        serde_json::json!([7])
+        serde_json::json!([7, 8])
     );
     assert_eq!(
         compatibility["implementations"]["rust"]["reads"],
-        serde_json::json!([7])
+        serde_json::json!([7, 8])
     );
 
     let reader = StoredStateSeriesReader::open_completed_recording(&fixture(), decoders()).unwrap();
-    assert_eq!(
-        Value::from(reader.format_version()),
-        compatibility["recording"]["version"]
+    assert!(
+        compatibility["implementations"]["rust"]["reads"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from(reader.format_version()))
     );
 }
 

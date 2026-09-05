@@ -84,7 +84,7 @@ and the unit cannot retain it after `initialize` returns.
 
 - `has_master_seed(&self) -> bool` reports whether the optional top-level
   `study.json.seed` exists. Merely inspecting this value records nothing.
-- `dependencies(&self) -> &serde_json::Value` borrows completed summaries from
+- `dependencies(&self) -> &task::dependencies::Dependencies` borrows completed summaries from
   the task's declared dependency phases. When global parameters sweep, Workflow
   includes only upstream task copies belonging to the same resolved global
   configuration.
@@ -310,3 +310,31 @@ shared or parallel member advancement inside `step`. No caller changes.
 `TaskExecutionHost`, program invocation views, contract-error types, and all
 registration inventory details are private mechanisms. Their names, layouts,
 and call ordering are not stable downstream APIs.
+
+## Dependency and project accessors
+
+See [the exhaustive dependency reference](dependencies/api.md) for every export
+under `task::dependencies`.
+
+`task::project` provides focused, standard-layout accessors. **REQUIRED LAYOUT:**
+project declarations remain in `<root>/wf_configs/study.json` and
+`parameters.json`; programs use Runtime's resolved `workflow-config.json` snapshot.
+Missing/moved required paths fail with the expected path; discovery is not supported.
+
+- `project_root() -> Result<PathBuf, ProjectLayoutError>` reads and verifies the
+  directory from WORKFLOW_PROJECT_ROOT.
+- `output_directory() -> Result<PathBuf, ProjectLayoutError>` reads and verifies
+  WORKFLOW_TASK_OUTPUT, the program artifacts directory.
+- `study_path(&Path) -> Result<PathBuf, ProjectLayoutError>` verifies the standard
+  `<root>/wf_configs/study.json` path; does not parse it.
+- `parameters<T: DeserializeOwned>(Option<&str>) -> Result<T, ProjectLayoutError>`
+  reads WORKFLOW_CONFIG_PATH and deserializes all resolved parameters or one exact
+  top-level key. No scientific validation beyond T's deserializer is performed.
+- `parameters_from_snapshot<T>(&Path, Option<&str>)` provides the same operation
+  using an explicit runtime snapshot for standalone use/tests.
+- `ProjectLayoutError`: Error + Send + Sync with a contextual Display and an
+  underlying cause for file/JSON/deserialization failures; fields are private.
+
+Functions do synchronous environment/filesystem reads and return owned results;
+errors return no partial result. They create no files, change no working directory,
+and perform no environment activation or cancellation. There is no ProgramContext.

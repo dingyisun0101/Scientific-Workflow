@@ -92,7 +92,7 @@ impl ResolvedProgramTask {
                 program,
                 args: [
                     OsString::from("-m"),
-                    OsString::from("scientific_workflow_reader.npy"),
+                    OsString::from("scientific_workflow.npy"),
                     OsString::from("--workflow-dependencies"),
                 ]
                 .into(),

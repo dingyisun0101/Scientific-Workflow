@@ -1,6 +1,16 @@
-# Scientific Workflow Reader
+# Scientific Workflow Python utilities
 
-`scientific-workflow-reader` is the official Python reader for completed
+> **BREAKING IMPORT CHANGE — 0.4.3:** use `scientific_workflow`; the old
+> `scientific_workflow_reader` namespace is not provided.
+> **LINUX ONLY. Python 3.14+ REQUIRED.** Activate the environment containing
+> `scientific-workflow[npy]` before every Workflow launch, in every new shell.
+> **REQUIRED LAYOUT:** keep `<study>/wf_configs/study.json` and `parameters.json`.
+> Standard accessors do not discover renamed or relocated files.
+
+[Complete structured API reference](src/scientific_workflow/api.md).
+
+
+`scientific-workflow` is the official Python reader for completed
 Scientific Workflow recordings. It implements the same versioned metadata,
 JSONL framing, lifecycle, schema, ordering, and mandatory chunk-integrity
 contract as Workflow's Rust `StoredStateSeriesReader`.
@@ -13,24 +23,24 @@ validation. A failure never returns a partial scientific series.
 
 ```bash
 python -m pip install \
-  "scientific-workflow-reader @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
+  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
 ```
 
-Python 3.10 or newer is required. The core reader has no runtime dependencies.
+Python 3.14 or newer is required. The core reader has no runtime dependencies.
 Install the optional NumPy converter when a project uses Workflow's reserved
 `$npy` phase or when converting a recording directly:
 
 ```bash
 python -m pip install \
-  "scientific-workflow-reader[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@0a36e88#subdirectory=python"
 ```
 
-This guide documents release 0.4.2.
+This guide documents release 0.4.3.
 
 ## Reading a recording
 
 ```python
-from scientific_workflow_reader import open_completed_recording
+from scientific_workflow import open_completed_recording
 
 reader = open_completed_recording("results/study/recordings/task-000000")
 print(reader.stream_names)
@@ -50,7 +60,7 @@ the storage package depend on NumPy:
 
 ```python
 import numpy as np
-from scientific_workflow_reader import open_completed_recording
+from scientific_workflow import open_completed_recording
 
 reader = open_completed_recording(
     "recording",
@@ -143,7 +153,7 @@ scientific-workflow-to-npy path/to/member-recording --output path/to/processed
 ```
 
 The equivalent module entry point is
-`python -m scientific_workflow_reader.npy`. With no `--output`, conversion uses
+`python -m scientific_workflow.npy`. With no `--output`, conversion uses
 a sibling directory named `<recording>-npy`. It never writes inside or modifies
 the raw recording. Conversion uses bounded-memory verified iteration, writes a
 private temporary directory, atomically publishes the completed result, and
@@ -153,12 +163,12 @@ From a source checkout, the dependency-free launcher script is
 accepts the same recording and `--output` arguments.
 
 Python callers may use
-`scientific_workflow_reader.npy.convert_recording(recording, output=None)`.
+`scientific_workflow.npy.convert_recording(recording, output=None)`.
 The resulting member directory is valid only with its required
 `manifest.json`. Open and verify it before accessing arrays:
 
 ```python
-from scientific_workflow_reader.npy import open_npy_conversion
+from scientific_workflow.npy import open_npy_conversion
 
 converted = open_npy_conversion("path/to/processed/member-000000")
 latest = converted.reconstruct("state", "label", 4)

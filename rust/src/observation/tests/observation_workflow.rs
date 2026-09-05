@@ -224,3 +224,57 @@ fn observation_failures_do_not_advance_any_stream_marker() {
         .reject = false;
     assert_eq!(encoding_session.observe(&encoding_state).unwrap().len(), 1);
 }
+
+#[test]
+fn boundary_sampling_handles_nonzero_start_max_iteration_and_deduplication() {
+    let schema = test_schema();
+    let stream = ObservationStream::all_fields("state")
+        .unwrap()
+        .initial_and_final();
+    let plan =
+        BoundObservationPlan::bind(ObservationPlan::streams([stream]).unwrap(), &schema).unwrap();
+    let mut session = ObservationSession::new(plan.clone());
+    assert_eq!(
+        session.observe(&populated_state(&schema, 5)).unwrap().len(),
+        1
+    );
+    assert!(
+        session
+            .observe(&populated_state(&schema, 6))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        session
+            .observe(&populated_state(&schema, u64::MAX))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        session
+            .observe_final(&populated_state(&schema, u64::MAX))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        session
+            .observe_final(&populated_state(&schema, u64::MAX))
+            .unwrap()
+            .is_empty()
+    );
+    let mut complete = ObservationSession::new(plan);
+    assert_eq!(
+        complete
+            .observe(&populated_state(&schema, 5))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        complete
+            .observe_final(&populated_state(&schema, 5))
+            .unwrap()
+            .is_empty()
+    );
+}

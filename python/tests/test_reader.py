@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scientific_workflow_reader import (
+from scientific_workflow import (
     DecoderError,
     IntegrityError,
     MetadataError,
@@ -26,7 +26,7 @@ INVALID_METADATA_CASES = (
 )
 REPOSITORY_ROOT = Path(__file__).parents[2]
 COMPATIBILITY = REPOSITORY_ROOT / "protocol" / "compatibility.json"
-PROTOCOL_SCHEMA = REPOSITORY_ROOT / "protocol" / "recording-v7.schema.json"
+PROTOCOL_SCHEMA = REPOSITORY_ROOT / "protocol" / "recording-v8.schema.json"
 PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
 
 
@@ -103,10 +103,10 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["format"]["const"], FORMAT_NAME)
         self.assertEqual(schema["properties"]["version"]["const"], FORMAT_VERSION)
         implementation = compatibility["implementations"]["python"]
-        self.assertEqual(implementation["package"], "scientific-workflow-reader")
+        self.assertEqual(implementation["package"], "scientific-workflow")
         self.assertEqual(implementation["version"], package_version)
         self.assertEqual(implementation["writes"], [])
-        self.assertEqual(implementation["reads"], [FORMAT_VERSION])
+        self.assertEqual(implementation["reads"], [7, FORMAT_VERSION])
 
     def test_completed_fixture_reconstructs_exact_series_and_latest_state(self) -> None:
         reader = open_completed_recording(FIXTURE)

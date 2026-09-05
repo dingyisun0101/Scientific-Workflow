@@ -108,6 +108,16 @@ impl ObservationStream {
         Ok(self)
     }
 
+    /// Records the initial state and successful final state, with no intermediate records.
+    ///
+    /// An already-complete initial state is recorded once. This replaces any
+    /// previously selected interval; a later `every_iterations` replaces it.
+    /// Boundary-only metadata requires recording format 8.
+    pub fn initial_and_final(mut self) -> Self {
+        self.sampling = IterationSampling::InitialAndFinal;
+        self
+    }
+
     pub(super) fn name(&self) -> &str {
         &self.name
     }
@@ -179,7 +189,7 @@ impl BoundObservationStream {
     }
 
     /// Returns the positive iteration sampling cadence.
-    pub(crate) fn every_iterations(&self) -> u64 {
+    pub(crate) fn every_iterations(&self) -> Option<u64> {
         self.sampling.get()
     }
 

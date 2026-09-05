@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scientific_workflow_reader.npy import open_npy_batch
+from scientific_workflow.npy import open_npy_batch
 
 
 def _json(path: Path) -> dict[str, Any]:

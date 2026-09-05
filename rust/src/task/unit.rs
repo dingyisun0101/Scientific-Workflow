@@ -27,7 +27,7 @@ pub struct InitializationContext {
     replicate_ordinal: u64,
     task_identity: Box<str>,
     execution_unit_key: Box<str>,
-    dependencies: Value,
+    dependencies: super::dependencies::Dependencies,
     requests: Mutex<BTreeMap<SeedRequest, u64>>,
 }
 
@@ -60,13 +60,14 @@ impl InitializationContext {
             replicate_ordinal,
             task_identity: task_identity.into(),
             execution_unit_key: execution_unit_key.into(),
-            dependencies,
+            dependencies: super::dependencies::Dependencies::from_json(dependencies)
+                .expect("Runtime supplies a validated dependency snapshot"),
             requests: Mutex::new(BTreeMap::new()),
         }
     }
 
     /// Returns completed summaries from the task's declared dependency phases.
-    pub const fn dependencies(&self) -> &Value {
+    pub const fn dependencies(&self) -> &super::dependencies::Dependencies {
         &self.dependencies
     }
 

@@ -9,8 +9,8 @@ import unittest
 
 import numpy as np
 
-from scientific_workflow_reader import IntegrityError
-from scientific_workflow_reader.npy import (
+from scientific_workflow import IntegrityError
+from scientific_workflow.npy import (
     NPY_BATCH_FORMAT,
     NPY_FORMAT,
     NpyConversionError,
@@ -332,3 +332,25 @@ class NpyConversionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class SeriesTests(unittest.TestCase):
+    def test_fixed_and_ragged_views_reuse_maps_and_validate_indices(self):
+        from scientific_workflow.npy import FixedSeries, RaggedSeries
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recording = recording_with_fields(root, ["fixed", "ragged"], [
+                (0, 0.0, [[1., 2.], [3.]]), (2, 0.5, [[4., 5.], [6., 7.]])])
+            convert_recording(recording, root / "processed")
+            conversion = open_npy_conversion(root / "processed")
+            fixed = conversion.series("signal", "fixed")
+            ragged = conversion.series("signal", "ragged")
+            self.assertIsInstance(fixed, FixedSeries)
+            self.assertIsInstance(ragged, RaggedSeries)
+            self.assertIs(conversion.series("signal", "fixed"), fixed)
+            self.assertIs(fixed.iterations, ragged.iterations)
+            np.testing.assert_array_equal(fixed.iterations, [0, 2])
+            np.testing.assert_array_equal(ragged.record(1), [6., 7.])
+            self.assertFalse(fixed.values.flags.writeable)
+            for index in (-1, True, 2):
+                with self.assertRaises(IndexError): ragged.record(index)
+            with self.assertRaises(NpyConversionError): conversion.series("missing", "fixed")

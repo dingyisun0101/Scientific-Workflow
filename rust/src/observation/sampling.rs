@@ -1,27 +1,25 @@
 //! Private validated observation sampling policy.
-
 use std::num::NonZeroU64;
-
-/// Iteration cadence for one validated stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct IterationSampling(NonZeroU64);
-
+pub(super) enum IterationSampling {
+    Iterations(NonZeroU64),
+    InitialAndFinal,
+}
 impl IterationSampling {
-    /// Every iteration is the inference-first default.
-    pub(super) const EVERY: Self = Self(NonZeroU64::MIN);
-
-    /// Creates a positive cadence.
+    pub(super) const EVERY: Self = Self::Iterations(NonZeroU64::MIN);
     pub(super) const fn new(iterations: NonZeroU64) -> Self {
-        Self(iterations)
+        Self::Iterations(iterations)
     }
-
-    /// Returns the positive interval.
-    pub(super) const fn get(self) -> u64 {
-        self.0.get()
+    pub(super) const fn get(self) -> Option<u64> {
+        match self {
+            Self::Iterations(n) => Some(n.get()),
+            Self::InitialAndFinal => None,
+        }
     }
-
-    /// Reports whether an iteration is due.
     pub(super) const fn includes(self, iteration: u64) -> bool {
-        iteration.is_multiple_of(self.get())
+        match self {
+            Self::Iterations(n) => iteration.is_multiple_of(n.get()),
+            Self::InitialAndFinal => false,
+        }
     }
 }

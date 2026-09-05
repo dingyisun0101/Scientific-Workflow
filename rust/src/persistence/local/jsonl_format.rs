@@ -55,7 +55,7 @@ use super::{SamplingInterval, StateStreamLayout, StateStreamStorage};
 pub(crate) const FORMAT_NAME: &str = "scientific-workflow-jsonl";
 
 /// Current metadata and record schema version.
-pub(crate) const FORMAT_VERSION: u32 = 7;
+pub(crate) const FORMAT_VERSION: u32 = 8;
 
 /// Payload encoding supported by the current storage stage.
 pub(crate) const PAYLOAD_ENCODING: &str = "json";
@@ -106,7 +106,14 @@ impl RecordingMetadata {
     ) -> Self {
         Self {
             format: FORMAT_NAME.to_owned(),
-            version: FORMAT_VERSION,
+            version: if streams
+                .iter()
+                .any(|s| matches!(s.sampling_interval, SamplingInterval::InitialAndFinal(_)))
+            {
+                FORMAT_VERSION
+            } else {
+                7
+            },
             status: RecordingStatus::Running,
             timing: RecordingTiming::started(created_at_utc),
             records: RecordFormat::json_lines(),
@@ -129,12 +136,23 @@ impl RecordingMetadata {
                 format!("format must be `{FORMAT_NAME}`, got `{}`", self.format),
             ));
         }
-        if self.version != FORMAT_VERSION {
+        if self.version != 7 && self.version != FORMAT_VERSION {
             return Err(PersistenceError::UnsupportedVersion {
                 path: path.to_path_buf(),
                 found: self.version,
                 supported: FORMAT_VERSION,
             });
+        }
+        if self.version == 7
+            && self
+                .streams
+                .iter()
+                .any(|s| matches!(s.sampling_interval, SamplingInterval::InitialAndFinal(_)))
+        {
+            return Err(invalid_metadata(
+                path,
+                "initial_and_final sampling requires format 8",
+            ));
         }
         self.records.validate(path)?;
         self.time.validate(path)?;

@@ -320,8 +320,10 @@ manual PTY check for the layout changes.
 - **Synchronize the release baseline.** `rust/Cargo.toml` and
   [compatibility.json](protocol/compatibility.json) identify Rust 0.13.4, while
   README installation examples, architecture/test guides, the attractor guide,
-  and the latest changelog entry still identify 0.13.3. Decide whether 0.13.4
-  is the intended upcoming or released baseline and align the affected claims.
+  and the latest changelog entry still identify 0.13.3. The repository's latest
+  commit identifies the 0.13.4 release. Correct stale baseline claims and use
+  the accepted upcoming targets in decision 9 for this feature pass, preserving
+  historical changelog entries.
   The documented Python Git pin was inspected locally and does contain reader
   0.4.2; no pin-version mismatch was found.
 
@@ -425,5 +427,96 @@ and README setup instructions. Discuss remaining policy choices one per turn.
    implement executable/interpreter discovery and filesystem/process adapters
    before adding a support claim. Leave explicit future-platform annotations
    at the relevant implementation boundaries when those files are changed.
-9. **Release versions — pending.** Resolve the 0.13.3/0.13.4 documentation
-   baseline and version the planned changes consistently.
+9. **Release versions — accepted.** Target Rust **0.14.0** and Python reader/
+   converter **0.5.0**. Keep recording format **7**, NPY format **2**, and project
+   configuration schema **1** provided the authored grammar remains compatible.
+   Correct stale 0.13.3 baseline documentation to reflect the repository's
+   0.13.4 release record, preserving historical changelog entries. Describe the
+   new work under **Unreleased** until release preparation is complete. The
+   unchanged registration macro crate does not need an artificial version bump.
+
+All nine policy decisions above are settled. Implementation is still pending.
+
+## Public API review — follow-up recommendations
+
+The user requested a public API assessment after accepting the release targets.
+The following recommendations have been reviewed against current exports but
+are not additional accepted decisions or implemented API changes.
+
+- **Preserve ordinary Rust authoring.** Keep `run(&Path)`, `Study::load`,
+  `runtime::execute(Study)`, `ExecutionUnit`, `InitializationContext`, and
+  `MemberView` signatures. Task's private execution host can enforce pause
+  boundaries before/after steps without new required methods on user units.
+  Document that long initialization/step calls remain cooperative boundaries:
+  freezing execution timers does not instantly suspend an in-progress call.
+
+- **Keep Runtime/UI mechanics private.** Extend crate-private `RuntimeEvent`,
+  `RuntimeObserver`, task hosts, clocks, and process supervision for the agreed
+  behavior. The current requirements do not need public renderer types,
+  scheduler controls, process handles, worker-count parameters, or new
+  `InitializationContext` fields. Existing headless execution has no public
+  pause/control handle; programmatic pause/cancel would be a separate advanced
+  embedding API if requested later.
+
+- **Add a small supported Python reporting API.** Provide an opt-in adapter
+  for standard `logging` and a progress-reporting helper in a documented
+  submodule of the separately installed Python package. Reuse Python's logger
+  levels and handler model rather than inventing a replacement logger
+  ([Python logging](https://docs.python.org/3.14/library/logging.html)). Exact
+  helper names remain design proposals. Ordinary imports must not reconfigure
+  the root logger or require NumPy; CLI entry points can configure their own
+  reporting explicitly. Define behavior outside Workflow, repeated setup,
+  multiprocessing, validation, and reporter failure. Users should not need
+  to manually construct the JSON event framing.
+
+- **Document the program-event contract as an integration API.** The prefixed
+  JSON messages emitted by independently installed Python tools need explicit
+  versioning, levels, progress units/stages, bounds, unknown-message handling,
+  and compatible producer/consumer versions. Rust's in-memory event enum can
+  stay private while the process boundary is supported and documented.
+  Keep this protocol version separate from recording/NPY format versions.
+  Cooperative control for the standard converter can initially remain internal
+  to that coordinated integration; arbitrary programs are not required to
+  adopt new control methods.
+
+- **Expose a useful prerequisite error.** Prefer a dedicated non-exhaustive
+  `RuntimeError` variant for Python prerequisite failure, carrying the selected
+  interpreter as `PathBuf` and actionable failure detail, preserving an
+  underlying error when available. Run checks before scientific tasks start.
+  Avoid requiring Rust callers to parse terminal messages or calling a
+  runtime interpreter-probe failure a JSON configuration error. Existing task
+  and persistence errors can continue to carry log/process failures.
+
+- **Preserve conversion and readback call shapes.** Existing Python
+  `convert_recording`, batch conversion, `open_npy_conversion`, and
+  `open_npy_batch` callers should not acquire mandatory worker or control
+  arguments. The Workflow launcher supplies the assigned compute budget to
+  internal orchestration. Preserve return structures and define standalone
+  behavior explicitly. The Python minimum version changes as already agreed.
+
+- **Treat behavior as part of the public contract.** Update Runtime, Config,
+  Task, and UI API guides for pause-aware timeout semantics, active-environment
+  resolution, Linux support, message history, and failure behavior even where
+  exported signatures remain unchanged. Summary timing getters could be added
+  later if callers need them; the Study panel's total-time clock does not by
+  itself require public timing exports. Synchronize Python documentation and
+  boundary tests with any reporting helpers and error variants actually added.
+
+## Authorized refactor — current decisions
+
+The user authorized implementation, batch pushes, publication with patch increments,
+and downstream validation/guides. This overrides the earlier minor-version targets:
+Rust 0.13.5, Python companion 0.4.3, unchanged macro version 0.2.1.
+
+Accepted API decisions: (1) immutable typed dependencies in second-level
+`task::dependencies`, explicit one/optional/iter and ambiguity errors, raw escape
+hatch; (2) focused accessors assuming the mandatory standard layout, no ProgramContext;
+(3) whole-series NPY views and one `scientific_workflow` Python utility package with
+optional [npy]; (4) initial_and_final observation; (5) exhaustive structured API,
+setup, end-to-end, and migration documentation.
+
+Format consequence: true boundary sampling cannot be represented in format 7's
+strict numeric cadence grammar. Format 8 adds that tagged policy. Both readers
+accept 7 and 8; periodic-only writers retain 7. NPY remains version 2.
+
+Implementation and release qualification are in progress on one temporary branch.

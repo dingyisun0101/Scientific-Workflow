@@ -10,7 +10,9 @@
 
 mod catalog;
 mod definition;
+pub mod dependencies;
 mod execution;
+pub mod project;
 mod result;
 mod unit;
 

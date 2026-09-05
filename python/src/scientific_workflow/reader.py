@@ -23,7 +23,7 @@ from .errors import (
 from .state import StateField, StateRecord, StateSeries
 
 FORMAT_NAME = "scientific-workflow-jsonl"
-FORMAT_VERSION = 7
+FORMAT_VERSION = 8
 METADATA_FILE = "metadata.json"
 
 Decoder = Callable[[Any], Any]
@@ -146,9 +146,9 @@ def _validate_metadata(document: Any, path: Path) -> dict[str, Any]:
     if metadata["format"] != FORMAT_NAME:
         raise MetadataError(f"metadata format must be {FORMAT_NAME!r}")
     version = _uint(metadata["version"], "metadata.version")
-    if version != FORMAT_VERSION:
+    if version not in (7, FORMAT_VERSION):
         raise MetadataError(
-            f"unsupported metadata version {metadata['version']!r}; supported version is 7"
+            f"unsupported metadata version {metadata['version']!r}; supported versions are 7 and 8"
         )
 
     status = _mapping(metadata["status"], "status")
@@ -241,8 +241,13 @@ def _validate_metadata(document: Any, path: Path) -> dict[str, Any]:
         names.add(name)
         directories.add(directory)
         interval = _mapping(stream["sampling_interval"], f"stream {name} interval")
-        _exact_keys(interval, {"iterations"}, set(), f"stream {name} interval")
-        _uint(interval["iterations"], f"stream {name} interval", positive=True)
+        if version == 8 and "initial_and_final" in interval:
+            _exact_keys(interval, {"initial_and_final"}, set(), f"stream {name} interval")
+            if interval["initial_and_final"] is not True:
+                raise MetadataError("initial_and_final must be true")
+        else:
+            _exact_keys(interval, {"iterations"}, set(), f"stream {name} interval")
+            _uint(interval["iterations"], f"stream {name} interval", positive=True)
         storage = _mapping(stream["storage"], f"stream {name} storage")
         _exact_keys(
             storage,
@@ -349,7 +354,7 @@ class RecordingReader:
 
     @property
     def format_version(self) -> int:
-        return FORMAT_VERSION
+        return self._metadata["version"]
 
     @property
     def stream_names(self) -> tuple[str, ...]:

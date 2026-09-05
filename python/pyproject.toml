@@ -3,11 +3,11 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scientific-workflow-reader"
-version = "0.4.2"
-description = "Verified Python reader and optional NumPy converter for Scientific Workflow recordings"
+name = "scientific-workflow"
+version = "0.4.3"
+description = "Python utilities, verified readers, and optional NumPy conversion for Scientific Workflow"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 license = "MIT"
 authors = [{name = "Dingyi Sun"}]
 keywords = ["science", "workflow", "recording", "jsonl", "reproducibility"]
@@ -23,7 +23,7 @@ classifiers = [
 npy = ["numpy>=1.26"]
 
 [project.scripts]
-scientific-workflow-to-npy = "scientific_workflow_reader.npy:main"
+scientific-workflow-to-npy = "scientific_workflow.npy:main"
 
 [project.urls]
 Homepage = "https://github.com/dingyisun0101/Scientific-Workflow"
@@ -33,4 +33,4 @@ Repository = "https://github.com/dingyisun0101/Scientific-Workflow"
 where = ["src"]
 
 [tool.setuptools.package-data]
-scientific_workflow_reader = ["py.typed"]
+scientific_workflow = ["py.typed", "api.md"]

@@ -1,5 +1,16 @@
 # Scientific Workflow Rust crate
 
+> **BREAKING API UPDATE — 0.13.5 / Python 0.4.3:** Despite the patch version,
+> `InitializationContext::dependencies()` now returns typed dependencies. Python
+> imports move to `scientific_workflow`; no old import aliases are provided.
+> Boundary-only recordings require a reader supporting format 8; format 7 remains readable.
+> **LINUX ONLY. Python tools require Python 3.14+.**
+> **REQUIRED LAYOUT:** Keep `<study>/wf_configs/study.json` and `parameters.json`.
+> Accessors assume the documented layout; relocating required files is unsupported.
+> **Activate the environment containing Workflow's Python package and NumPy before
+> every launch, including in each new shell. Cargo does not install Python tools.**
+
+
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
 

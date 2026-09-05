@@ -324,7 +324,7 @@ workflow/
 │   ├── pyproject.toml                 reader package metadata and build policy
 │   ├── README.md / LICENSE            Python reader guide and license
 │   ├── scripts/recording_to_npy.py    source-checkout converter launcher
-│   ├── src/scientific_workflow_reader/
+│   ├── src/scientific_workflow/
 │   │   ├── __init__.py                supported reader exports
 │   │   ├── errors.py                  typed verification/read failures
 │   │   ├── state.py                  read-only field/record/series containers
@@ -713,3 +713,18 @@ conveniences. It owns no behavior or alternative implementation path.
   handles concurrent publishers, restores terminal state on return and while
   unwinding, and reports renderer failure as fatal presentation failure rather
   than cancellation.
+
+## Dependency and Python utility refactor (0.13.5 / 0.4.3)
+
+Task owns `task::dependencies` and standard-layout `task::project` accessors; Runtime
+constructs scoped dependencies from successful summaries. Task types never depend
+on Runtime summaries. Python's `scientific_workflow` companion owns matching
+dependency/project helpers, verified recording access, and optional NPY utilities.
+There is no ProgramContext or automatic environment provisioning.
+
+NPY `FixedSeries` and `RaggedSeries` own references to read-only memory maps and
+coordinates. Conversion objects cache opened component maps and series. Applications
+retain scientific projection names and domain validation.
+
+Boundary sampling uses a real private policy, with format 8 metadata. Both readers
+retain format-7 support; periodic-only recordings continue writing format 7.

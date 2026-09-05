@@ -7,7 +7,7 @@
   {
     "name": "unsupported format version",
     "pointer": "/version",
-    "value": 8
+    "value": 9
   },
   {
     "name": "unsafe stream directory",

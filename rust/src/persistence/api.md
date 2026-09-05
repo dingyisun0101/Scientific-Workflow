@@ -322,3 +322,9 @@ failure evidence, terminal metadata, effective-setting provenance, and the
 verified reader contract. A backend that emits v7 MUST satisfy the normative
 repository protocol; an incompatible layout or semantic change MUST allocate a
 new recording-format version and follow its coordinated bump checklist.
+
+## Format compatibility
+
+Readers accept formats 7 and 8. Writers retain format 7 for periodic streams and
+use format 8 for initial-and-final sampling; see the repository format-8 protocol.
+All framing, integrity, and ownership contracts remain unchanged.

@@ -2,24 +2,33 @@
   "manifest_schema": 1,
   "recording": {
     "format": "scientific-workflow-jsonl",
-    "version": 7
+    "version": 8
   },
   "project_configuration": {
     "workflow_schema": 1,
-    "rust_package_version": "0.13.4"
+    "rust_package_version": "0.13.5"
   },
   "implementations": {
     "rust": {
       "package": "scientific-workflow",
-      "version": "0.13.4",
-      "writes": [7],
-      "reads": [7]
+      "version": "0.13.5",
+      "writes": [
+        7,
+        8
+      ],
+      "reads": [
+        7,
+        8
+      ]
     },
     "python": {
-      "package": "scientific-workflow-reader",
-      "version": "0.4.2",
+      "package": "scientific-workflow",
+      "version": "0.4.3",
       "writes": [],
-      "reads": [7]
+      "reads": [
+        7,
+        8
+      ]
     }
   }
 }

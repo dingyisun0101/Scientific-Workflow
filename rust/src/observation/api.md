@@ -67,7 +67,7 @@ and retains the private bound representation.
 because it distinguishes scientifically meaningful outputs; a filesystem
 directory is not retained because it can be derived. `ObservationStream` is
 `Clone + Debug + Eq` and owns only normalized names, field selections, and a
-positive cadence.
+sampling policy.
 
 - `ObservationStream::all_fields(name)` selects all fields of the future bound schema.
   It returns `EmptyStreamName` when trimming leaves no name.
@@ -80,6 +80,12 @@ positive cadence.
   iteration divisible by the value. Zero returns
   `InvalidSamplingInterval` and leaves the consumed original unavailable in
   the ordinary Rust builder style.
+
+`initial_and_final() -> Self` replaces the cadence with boundary-only sampling.
+It records nonzero initial iterations too, deduplicates an already-final initial
+state, and records no intermediate state. A later `every_iterations(n)` replaces
+this policy. Persistence writes format 8 for recordings containing this policy.
+Failed members never gain a successful final checkpoint.
 
 There is intentionally no public `Sampling`, field-selection, axis, or
 checkpoint type. Selecting all fields makes complete state reconstruction

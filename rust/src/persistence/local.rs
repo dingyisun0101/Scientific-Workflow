@@ -153,15 +153,22 @@ impl RecordingTiming {
 pub(crate) enum SamplingInterval {
     /// Select iteration zero and each iteration divisible by this interval.
     Iterations(NonZeroU64),
+    /// Record only initial and successful final states.
+    InitialAndFinal(bool),
 }
 
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 enum SamplingIntervalInput {
     /// Concise configuration form: `10` means every ten iterations.
     Iterations(NonZeroU64),
     /// Stable tagged form emitted by [`SamplingInterval`]'s serializer.
-    Tagged { iterations: NonZeroU64 },
+    Tagged {
+        iterations: NonZeroU64,
+    },
+    Boundaries {
+        initial_and_final: bool,
+    },
 }
 
 impl<'de> Deserialize<'de> for SamplingInterval {
@@ -174,6 +181,12 @@ impl<'de> Deserialize<'de> for SamplingInterval {
             | SamplingIntervalInput::Tagged {
                 iterations: interval,
             } => Ok(Self::Iterations(interval)),
+            SamplingIntervalInput::Boundaries {
+                initial_and_final: true,
+            } => Ok(Self::InitialAndFinal(true)),
+            SamplingIntervalInput::Boundaries {
+                initial_and_final: false,
+            } => Err(serde::de::Error::custom("initial_and_final must be true")),
         }
     }
 }
@@ -486,8 +499,11 @@ impl PreparedRecording {
         for (index, stream) in descriptor.streams().iter().enumerate() {
             let stream: &BoundObservationStream = stream;
             let directory = format!("stream_{index:04}");
-            let sampling_interval = SamplingInterval::iterations(stream.every_iterations())
-                .expect("bound observation streams contain positive sampling intervals");
+            let sampling_interval = stream
+                .every_iterations()
+                .map_or(SamplingInterval::InitialAndFinal(true), |n| {
+                    SamplingInterval::iterations(n).expect("positive bound interval")
+                });
             let fields = stream
                 .fields()
                 .iter()

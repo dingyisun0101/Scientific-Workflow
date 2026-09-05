@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from .reader import FORMAT_NAME, FORMAT_VERSION, open_completed_recording
+from .reader import FORMAT_NAME, open_completed_recording
 
 NPY_FORMAT = "scientific-workflow-npy.v2"
 NPY_BATCH_FORMAT = "scientific-workflow-npy-batch.v2"
@@ -878,12 +878,50 @@ def _convert_stream(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class FixedSeries:
+    """Read-only memory-mapped fixed-shape values and stream coordinates."""
+    values: np.ndarray[Any, Any]
+    iterations: np.ndarray[Any, Any]
+    physical_times: np.ndarray[Any, Any]
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def record(self, index: int) -> np.ndarray[Any, Any]:
+        _check_record(index, len(self))
+        return self.values[index]
+
+
+@dataclass(frozen=True, slots=True)
+class RaggedSeries:
+    """Read-only flattened values with offsets and per-record logical shapes."""
+    data: np.ndarray[Any, Any]
+    offsets: np.ndarray[Any, Any]
+    shapes: np.ndarray[Any, Any]
+    iterations: np.ndarray[Any, Any]
+    physical_times: np.ndarray[Any, Any]
+
+    def __len__(self) -> int:
+        return len(self.shapes)
+
+    def record(self, index: int) -> np.ndarray[Any, Any]:
+        _check_record(index, len(self))
+        start, stop = int(self.offsets[index]), int(self.offsets[index + 1])
+        return self.data[start:stop].reshape(tuple(int(n) for n in self.shapes[index]), order="C")
+
+
+NumericSeries = FixedSeries | RaggedSeries
+
+
 class NpyConversion:
     """Verified view of one converted member directory and its manifest."""
 
     def __init__(self, directory: Path, manifest: dict[str, Any]) -> None:
         self.directory = directory
         self.manifest = manifest
+        self._arrays: dict[str, np.ndarray[Any, Any]] = {}
+        self._series: dict[tuple[str, str, str | None], NumericSeries] = {}
         self._declared_paths = {
             descriptor["path"]
             for descriptor in manifest["arrays"]
@@ -894,11 +932,64 @@ class NpyConversion:
         """Memory-map one component declared by this conversion manifest."""
         if relative_path not in self._declared_paths:
             raise NpyConversionError(f"array is not declared by manifest: {relative_path!r}")
-        return np.load(
-            _component_path(self.directory, relative_path),
-            mmap_mode="r",
-            allow_pickle=False,
-        )
+        if relative_path not in self._arrays:
+            self._arrays[relative_path] = np.load(
+                _component_path(self.directory, relative_path), mmap_mode="r", allow_pickle=False,
+            )
+        return self._arrays[relative_path]
+
+    @property
+    def stream_names(self) -> tuple[str, ...]:
+        """Declared streams in manifest order."""
+        return tuple(stream["name"] for stream in self.manifest["streams"])
+
+    @property
+    def execution_unit(self) -> str | None:
+        """Workflow execution-unit provenance, when present."""
+        metadata = self.manifest.get("user_metadata", {})
+        workflow = metadata.get("workflow", {}) if isinstance(metadata, Mapping) else {}
+        value = workflow.get("execution_unit") if isinstance(workflow, Mapping) else None
+        return value if isinstance(value, str) else None
+
+    def coordinates(self, stream: str) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
+        """Return (iterations, physical_times); absent physical time is NaN."""
+        if stream not in self.stream_names:
+            raise NpyConversionError(f"unknown stream {stream!r}")
+        result = []
+        for role in ("iterations", "physical_times"):
+            matches = [a for a in self.manifest["arrays"] if a.get("stream") == stream and a.get("role") == role]
+            if len(matches) != 1:
+                raise NpyConversionError(f"stream {stream!r} requires exactly one {role} array")
+            result.append(self.array(matches[0]["path"]))
+        return result[0], result[1]
+
+    def series(self, stream: str, field: str, logical_path: str | None = None) -> NumericSeries:
+        """Return a cached complete numeric series without reconstructing JSON.
+
+        Omit logical_path for a wholly numeric field. Structured fields require
+        an exact projection path. Array components remain read-only memory maps.
+        """
+        key = (stream, field, logical_path)
+        if key in self._series:
+            return self._series[key]
+        metadata = self.field(stream, field)
+        if logical_path is None:
+            if metadata.get("representation") != "numeric":
+                raise NpyConversionError(f"structured field {field!r} requires logical_path")
+            dataset = metadata["dataset"]
+        else:
+            matches = [d for d in metadata.get("projections", []) if d.get("logical_path") == logical_path]
+            if len(matches) != 1:
+                raise NpyConversionError(f"expected exactly one projection {logical_path!r} in {stream!r}/{field!r}")
+            dataset = matches[0]
+        iterations, physical_times = self.coordinates(stream)
+        data = self.array(dataset["data"])
+        if dataset["storage"] == "fixed":
+            result = FixedSeries(data, iterations, physical_times)
+        else:
+            result = RaggedSeries(data, self.array(dataset["offsets"]), self.array(dataset["shapes"]), iterations, physical_times)
+        self._series[key] = result
+        return result
 
     def field(self, stream: str, field: str) -> Mapping[str, object]:
         """Return one field's required representation metadata."""
@@ -1074,7 +1165,7 @@ def convert_recording(
         manifest: dict[str, object] = {
             "format": NPY_FORMAT,
             "source_format": FORMAT_NAME,
-            "source_version": FORMAT_VERSION,
+            "source_version": reader.format_version,
             "source_recording": str(recording),
             "source_metadata_checksum": metadata_checksum,
             "user_metadata": dict(reader.user_metadata),

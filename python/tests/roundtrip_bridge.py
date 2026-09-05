@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scientific_workflow_reader import open_completed_recording
+from scientific_workflow import open_completed_recording
 
 
 def _compact_json(value: Any) -> bytes:

@@ -60,7 +60,10 @@ impl ObservationSession {
             .enumerate()
             .filter(|(index, stream)| {
                 self.last_iterations[*index] != Some(iteration)
-                    && (terminal || stream.includes(iteration))
+                    && (terminal
+                        || stream.includes(iteration)
+                        || (stream.every_iterations().is_none()
+                            && self.last_iterations[*index].is_none()))
             })
             .collect::<Vec<_>>();
         let encoded = selected
