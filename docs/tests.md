@@ -1,7 +1,12 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.13.7 and Python
-reader 0.4.3.
+This map is the release-qualification baseline for Rust 0.13.9 and Python
+companion 0.4.4.
+
+Explicit-phase coverage checks required numeric selection, stable dependency-order
+indices and task identities, completed-program and legacy-unit reuse, chained
+source references, and rejection of missing, failed, changed, or stale inputs
+before creating new execution output.
 
 Tests follow subsystem responsibility and supported boundaries. Observation
 binding/session behavior, Config and Study compilation, and persistence write

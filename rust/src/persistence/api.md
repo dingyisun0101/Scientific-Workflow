@@ -1,6 +1,6 @@
 # Persistence API
 
-This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.9 subsystem contract.
 
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified member-state reconstruction. Config parses optional operational sizing,
@@ -334,3 +334,20 @@ and treats read/write/flush failures as fatal. Process-tree cleanup and pipe-rea
 joins precede resource-lease release. Scientific integrity and record publication
 remain Persistence-owned. File timestamp/durability metadata measures actual
 wall time; paused execution budgets are separately owned by Runtime.
+
+## Completed task reuse
+
+Private `persistence/reuse.rs` owns atomic completed-task receipts and the
+read-only legacy import adapter. Runtime supplies semantic task identities,
+configuration snapshots, and workload results only after phase success.
+Receipts preserve original output paths when a task is reused; they do not copy
+scientific artifacts or reopen any writer. Import compares captured inputs
+(excluding only phase selection and reuse source), validates successful program
+status, and uses `StoredStateSeriesReader::open_completed_recording` to check
+member completion and metadata provenance. Ordinary readers still verify chunk
+contents on consumption. Legacy unit final iterations come from captured
+dependency summaries, never inferred observation cadence. Missing modern
+receipts are failures, not an invitation to fall back to incomplete outputs.
+Receipt IO failures preserve their source error under `RuntimeError::Task`;
+import failures become contextual `RuntimeError::Reuse` errors.
+No public write handle, serialization trait, or recording-format change is added.

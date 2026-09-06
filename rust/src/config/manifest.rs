@@ -60,9 +60,11 @@ pub(crate) enum FailurePolicy {
 }
 
 /// The validated Workflow-owned portion of `wf_configs/study.json`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StudyManifest {
     workflow_schema: u64,
+    active_phases: Box<[usize]>,
+    reuse_from: Option<PathBuf>,
     threads: usize,
     master_seed: Option<u64>,
     replicates: ReplicatePolicy,
@@ -70,28 +72,38 @@ pub(crate) struct StudyManifest {
 }
 
 impl StudyManifest {
+    /// Returns explicitly selected zero-based dependency-order phase indices.
+    pub(crate) fn active_phases(&self) -> &[usize] {
+        &self.active_phases
+    }
+
+    /// Returns the optional canonical source execution for completed prerequisites.
+    pub(crate) fn reuse_from(&self) -> Option<&Path> {
+        self.reuse_from.as_deref()
+    }
+
     /// Returns the validated project-configuration schema generation.
-    pub(crate) const fn workflow_schema(self) -> u64 {
+    pub(crate) const fn workflow_schema(&self) -> u64 {
         self.workflow_schema
     }
 
     /// Returns the required study-wide global compute budget.
-    pub(crate) const fn threads(self) -> usize {
+    pub(crate) const fn threads(&self) -> usize {
         self.threads
     }
 
     /// Returns the optional deterministic seed for the complete study.
-    pub(crate) const fn master_seed(self) -> Option<u64> {
+    pub(crate) const fn master_seed(&self) -> Option<u64> {
         self.master_seed
     }
 
     /// Returns the complete effective replicate policy.
-    pub(crate) const fn replicate_policy(self) -> ReplicatePolicy {
+    pub(crate) const fn replicate_policy(&self) -> ReplicatePolicy {
         self.replicates
     }
 
     /// Returns the complete effective local-persistence settings.
-    pub(crate) const fn persistence(self) -> PersistenceSpecification {
+    pub(crate) const fn persistence(&self) -> PersistenceSpecification {
         self.persistence
     }
 }
@@ -224,6 +236,46 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             "at least one phase must be declared",
         ));
     }
+    let mut selected = HashSet::new();
+    for &index in &raw.active_phases {
+        if index >= raw.phases.len() || !selected.insert(index) {
+            return Err(ConfigError::invalid(
+                path,
+                "/active_phases",
+                "phase indices must be distinct zero-based integers smaller than the phase count",
+            ));
+        }
+    }
+    let reuse_from = raw
+        .reuse_from
+        .map(|authored| {
+            if authored.as_os_str().is_empty() {
+                return Err(ConfigError::invalid(
+                    path,
+                    "/reuse_from",
+                    "source execution must be nonempty",
+                ));
+            }
+            let source = if authored.is_absolute() {
+                authored
+            } else {
+                path.parent()
+                    .and_then(Path::parent)
+                    .expect("study.json is inside wf_configs")
+                    .join(authored)
+            };
+            let source = std::fs::canonicalize(&source)
+                .map_err(|error| ConfigError::invalid(path, "/reuse_from", error.to_string()))?;
+            if !source.is_dir() || source.to_str().is_none() {
+                return Err(ConfigError::invalid(
+                    path,
+                    "/reuse_from",
+                    "source must be a UTF-8 execution directory",
+                ));
+            }
+            Ok(source)
+        })
+        .transpose()?;
     if raw.threads == 0 {
         return Err(ConfigError::invalid(
             path,
@@ -251,6 +303,8 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
 
     let manifest = StudyManifest {
         workflow_schema: raw.workflow_schema,
+        active_phases: raw.active_phases.into_boxed_slice(),
+        reuse_from,
         threads: raw.threads,
         master_seed: raw.seed,
         replicates: ReplicatePolicy {
@@ -565,6 +619,9 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 #[serde(deny_unknown_fields)]
 struct RawStudy {
     workflow_schema: u64,
+    active_phases: Vec<usize>,
+    #[serde(default)]
+    reuse_from: Option<PathBuf>,
     threads: usize,
     #[serde(default)]
     paths: RawPaths,

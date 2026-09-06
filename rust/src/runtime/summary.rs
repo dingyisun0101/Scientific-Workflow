@@ -49,11 +49,17 @@ impl ReplicateRunSummary {
 /// Successful completion facts for one phase.
 #[derive(Clone, Debug)]
 pub struct PhaseRunSummary {
+    pub(crate) reused: bool,
     pub(crate) name: Box<str>,
     pub(crate) tasks: Box<[TaskRunSummary]>,
 }
 
 impl PhaseRunSummary {
+    /// Reports that completed task outputs were reused without executing this phase.
+    pub const fn was_reused(&self) -> bool {
+        self.reused
+    }
+
     /// Returns the stable phase key.
     pub fn name(&self) -> &str {
         &self.name

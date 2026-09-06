@@ -753,3 +753,20 @@ Repository examples resolve Workflow from crates.io. The Rust runtime resolves
 macros 0.2.1 from crates.io, while the macros source remains a workspace member
 for its own tests. Integration tests use published PiP 4.1.0-alpha. No subsystem
 API, recording contract, or Python API changes accompany this dependency update.
+
+## Explicit phase indices and completed prerequisite reuse
+
+Config requires `active_phases`, validates its numeric indices, and canonicalizes
+an optional `reuse_from` execution path. Study calculates one stable dependency
+traversal over the complete declaration graph and exposes each phase's index and
+selection through immutable plan inspection. Skipping phases never renumbers
+task identities, output ordinals, or deterministic seeds.
+
+Private `runtime/reuse.rs` selects inactive ancestors, rejects stale dependency
+combinations, and asks `persistence/reuse.rs` to import matching completed task
+results before creating any execution directory or launching workers. Runtime
+schedules only selected phases and supplies reused summaries through the ordinary
+dependency handoff. Persistence owns successful-phase receipt publication,
+metadata validation, and the compatibility adapter for old program snapshots.
+New receipts reference original source paths, making later reuse independent of
+copying recordings. Neither layer resumes or mutates an old recording.

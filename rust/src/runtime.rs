@@ -16,6 +16,7 @@ mod output;
 mod presentation;
 mod program;
 mod resource;
+mod reuse;
 mod summary;
 
 #[cfg(test)]

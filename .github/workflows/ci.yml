@@ -68,6 +68,6 @@ jobs:
           python -m build python
           python -m pip install python/dist/*.whl
           python -c "import scientific_workflow; from scientific_workflow import dependencies, project, reporting"
-          python -m pip install "scientific-workflow[npy]==0.4.3"
+          python -m pip install "scientific-workflow[npy]==0.4.4"
       - name: Test installed Python companion
         run: python -m unittest discover -s python/tests -v

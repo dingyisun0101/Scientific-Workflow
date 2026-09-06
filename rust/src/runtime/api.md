@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.13.8 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.9 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -163,6 +163,8 @@ index.
 
 ### `runtime::PhaseRunSummary`
 
+- `was_reused() -> bool`: true when this phase imported completed outputs without executing its tasks.
+
 - `name() -> &str`: stable manifest phase key;
 - `tasks() -> &[TaskRunSummary]`: successful tasks restored to deterministic
   Study plan order, independent of concurrent completion order.
@@ -273,6 +275,8 @@ are fixed before output creation.
 ### `runtime::RuntimeError`
 
 This non-exhaustive enum reports failures after a valid Study is available:
+
+- `Reuse { phase: String, path: PathBuf, reason: String }`: required completed outputs are missing, failed, or incompatible; detected before output creation.
 
 - `PythonPrerequisite { interpreter: PathBuf, reason: String }`: the active
   interpreter cannot import the coordinated Python 0.4.4 tools, NumPy and
@@ -427,3 +431,37 @@ Standard converter workers use spawn, never fork inherited Rust state. Runtime
 reserves the pool allowance in the shared ResourceBudget; concurrent replicates
 cannot each independently consume the study ceiling. NumPy native pools are
 limited to one thread per worker. No separate user worker-count setting is added.
+
+### Explicit phase selection
+
+Every `study.json` must contain `"active_phases": [0, 1, ...]`; there is no
+implicit run-all default. Indices are zero-based in deterministic dependency
+order: visit phases in JSON declaration order, recursively visit each `after`
+list in its declared order, then assign each phase its index once. Selecting a
+subset never renumbers phases, expanded tasks, output ordinals, or seed identities.
+The order of indices in the selection does not change execution order. Duplicate,
+negative, non-integer, and out-of-range indices are rejected. An empty list
+explicitly selects no work.
+
+For a six-phase preparation, reference, targets, lattice, export, and conversion
+study, `"active_phases": [3, 4, 5]` starts at lattice. Supply
+`"reuse_from": "output/execution-1234-0"` to reuse completed prerequisites.
+The path names one execution directory and is resolved against the project root;
+absolute paths are also accepted. Each replicate imports the matching source
+replicate. Unselected phases that are not prerequisites are omitted entirely.
+
+Workflow validates the complete graph and constants during Study loading.
+Before creating new output, Runtime requires every imported task to have
+successfully completed with matching captured inputs. Only `active_phases` and
+`reuse_from` may differ between the captured and current study snapshots.
+A reused phase cannot depend on a phase selected to execute again. Missing,
+failed, incompatible, or ambiguous legacy inputs fail without launching work.
+Programs and `$npy` receive the original completed recording/artifact paths.
+Recordings are never appended to or rewritten.
+
+New executions commit private `workflow-result.json` receipts after each
+successful phase, including references for reused tasks, so reuse can be chained.
+Pre-0.13.9 program outputs may be imported from their successful `program.json`
+and captured config. Legacy execution-unit imports additionally require an
+authoritative matching summary in a dependent program's captured dependency
+file; Workflow never guesses a final iteration from sampling cadence.

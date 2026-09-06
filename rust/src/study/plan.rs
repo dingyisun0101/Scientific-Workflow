@@ -1,5 +1,6 @@
 //! Immutable study, phase, and task views.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,7 +38,7 @@ impl Study {
         let project_root = project.project_root().to_path_buf();
         let config = project.config().clone();
         let output_root = project_root.join("output");
-        let manifest: StudyManifest = *project.manifest();
+        let manifest: StudyManifest = project.manifest().clone();
         let workflow_schema = manifest.workflow_schema();
         let threads = manifest.threads();
         let replicate_policy = manifest.replicate_policy();
@@ -49,6 +50,9 @@ impl Study {
         );
         Self {
             inner: Arc::new(StudyInner {
+                active_phases: manifest.active_phases().into(),
+                reuse_from: manifest.reuse_from().map(Path::to_path_buf),
+                phase_order: topological_positions(&phases).into_boxed_slice(),
                 project_root,
                 config,
                 phases,
@@ -83,6 +87,21 @@ impl Study {
     /// expose constants payloads, executable task handles, or mutable policy.
     pub fn plan_summary(&self) -> PlanSummary<'_> {
         PlanSummary { study: self }
+    }
+
+    /// Returns the deterministic dependency traversal of the complete phase graph.
+    pub(crate) fn phase_order(&self) -> &[usize] {
+        &self.inner.phase_order
+    }
+
+    /// Reports explicit selection by dependency-order index.
+    pub(crate) fn phase_is_active(&self, index: usize) -> bool {
+        self.inner.active_phases.contains(&index)
+    }
+
+    /// Returns the explicit completed-output source, if configured.
+    pub(crate) fn reuse_from(&self) -> Option<&Path> {
+        self.inner.reuse_from.as_deref()
     }
 
     /// Returns immutable phases in manifest declaration order.
@@ -122,6 +141,9 @@ impl std::fmt::Debug for Study {
 }
 
 struct StudyInner {
+    active_phases: Box<[usize]>,
+    reuse_from: Option<PathBuf>,
+    phase_order: Box<[usize]>,
     project_root: PathBuf,
     config: Config,
     phases: Box<[StudyPhase]>,
@@ -198,12 +220,17 @@ impl<'a> PlanSummary<'a> {
         self.study.persistence_plan().queue_capacity().get()
     }
 
-    /// Iterates compiled phases in manifest declaration order.
+    /// Iterates every compiled phase in deterministic dependency order.
     pub fn phases(self) -> impl ExactSizeIterator<Item = PhasePlanSummary<'a>> {
         self.study
-            .phases()
+            .phase_order()
             .iter()
-            .map(|phase| PhasePlanSummary { phase })
+            .enumerate()
+            .map(|(index, &position)| PhasePlanSummary {
+                phase: &self.study.phases()[position],
+                index,
+                active: self.study.phase_is_active(index),
+            })
     }
 }
 
@@ -228,6 +255,8 @@ pub enum PlanFailurePolicy {
 /// A read-only view of one compiled phase.
 #[derive(Clone, Copy)]
 pub struct PhasePlanSummary<'a> {
+    index: usize,
+    active: bool,
     phase: &'a StudyPhase,
 }
 
@@ -243,6 +272,16 @@ impl std::fmt::Debug for PhasePlanSummary<'_> {
 }
 
 impl<'a> PhasePlanSummary<'a> {
+    /// Returns the stable zero-based index used by `active_phases`.
+    pub fn index(self) -> usize {
+        self.index
+    }
+
+    /// Reports whether this phase will execute during this invocation.
+    pub fn is_active(self) -> bool {
+        self.active
+    }
+
     /// Returns the stable manifest phase key.
     pub fn name(self) -> &'a str {
         self.phase.name()
@@ -541,4 +580,35 @@ impl std::fmt::Debug for StudyTask {
             .field("subject", &self.subject())
             .finish_non_exhaustive()
     }
+}
+
+fn topological_positions(phases: &[StudyPhase]) -> Vec<usize> {
+    fn visit(
+        index: usize,
+        phases: &[StudyPhase],
+        by_name: &std::collections::HashMap<&str, usize>,
+        visited: &mut [bool],
+        positions: &mut Vec<usize>,
+    ) {
+        if visited[index] {
+            return;
+        }
+        for dependency in phases[index].dependencies() {
+            visit(by_name[dependency], phases, by_name, visited, positions);
+        }
+        visited[index] = true;
+        positions.push(index);
+    }
+
+    let by_name = phases
+        .iter()
+        .enumerate()
+        .map(|(index, phase)| (phase.name(), index))
+        .collect::<HashMap<_, _>>();
+    let mut visited = vec![false; phases.len()];
+    let mut positions = Vec::with_capacity(phases.len());
+    for index in 0..phases.len() {
+        visit(index, phases, &by_name, &mut visited, &mut positions);
+    }
+    positions
 }

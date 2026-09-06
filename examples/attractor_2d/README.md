@@ -1,7 +1,7 @@
 # Two-dimensional attractor study
 
 This example is the release-qualified end-to-end project for
-`scientific-workflow` 0.13.8 and `scientific-workflow` 0.4.4.
+`scientific-workflow` 0.13.9 and `scientific-workflow` 0.4.4.
 
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all

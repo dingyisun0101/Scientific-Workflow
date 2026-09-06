@@ -14,6 +14,7 @@ use super::host::{ProgramSeed, RuntimeTaskEnvironment, RuntimeTaskHost, RuntimeT
 use super::output::{create_execution, create_replicate};
 use super::presentation::{PresentationFailure, RuntimeObserver, RuntimePresentation};
 use super::resource::{ResourceBudget, ResourceLease, ResourceRequirement};
+use super::reuse::{self, ReusedPhases};
 use super::summary::{
     PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
 };
@@ -34,6 +35,7 @@ where
     O: RuntimeObserver,
     F: FnOnce() -> Result<O, PresentationFailure>,
 {
+    let reused = reuse::prepare(&study)?;
     super::program::check_prerequisites(&study)?;
     let compute_pool = Arc::new(
         rayon::ThreadPoolBuilder::new()
@@ -49,8 +51,14 @@ where
     let resource_budget = ResourceBudget::new(study.threads());
     let observer = create_observer().map_err(RuntimeError::presentation_boxed)?;
     let presentation = RuntimePresentation::new(observer);
-    let outcome =
-        execute_with_presentation(study, compute_pool, resource_budget, output, &presentation);
+    let outcome = execute_with_presentation(
+        study,
+        compute_pool,
+        resource_budget,
+        output,
+        &presentation,
+        &reused,
+    );
     let finish = presentation.finish();
     finish?;
     outcome
@@ -62,11 +70,22 @@ fn execute_with_presentation(
     resource_budget: ResourceBudget,
     output: PathBuf,
     presentation: &RuntimePresentation,
+    reused: &ReusedPhases,
 ) -> Result<RunSummary, RuntimeError> {
     let count = study.replicate_policy().count();
-    let task_count_per_replicate = study.phases().iter().map(|phase| phase.tasks().len()).sum();
+    let task_count_per_replicate = study
+        .phase_order()
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| study.phase_is_active(*index))
+        .map(|(_, &position)| study.phases()[position].tasks().len())
+        .sum();
     for replicate in 0..count {
-        for phase in study.phases() {
+        for (phase_index, &position) in study.phase_order().iter().enumerate() {
+            if !study.phase_is_active(phase_index) {
+                continue;
+            }
+            let phase = &study.phases()[position];
             for task in phase.tasks() {
                 presentation.publish(RuntimeEvent::TaskPlanned {
                     replicate,
@@ -96,6 +115,7 @@ fn execute_with_presentation(
                 presentation,
                 &compute_pool,
                 &resource_budget,
+                reused,
             ),
             ReplicateScheduling::Parallel => run_replicates_parallel(
                 &study,
@@ -103,6 +123,7 @@ fn execute_with_presentation(
                 presentation,
                 &compute_pool,
                 &resource_budget,
+                reused,
             ),
         }
     })();
@@ -140,6 +161,7 @@ fn run_replicates_sequential(
     presentation: &RuntimePresentation,
     compute_pool: &Arc<rayon::ThreadPool>,
     resource_budget: &ResourceBudget,
+    reused: &ReusedPhases,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     let mut summaries = Vec::with_capacity(scopes.len());
     let mut first_error = None;
@@ -149,10 +171,13 @@ fn run_replicates_sequential(
             study,
             index,
             scope,
-            presentation,
-            &cancellation,
-            compute_pool,
-            resource_budget,
+            &ReplicateContext {
+                presentation,
+                scheduler_cancellation: &cancellation,
+                compute_pool,
+                resource_budget,
+                reused,
+            },
         ) {
             Ok(summary) => summaries.push(summary),
             Err(source) => {
@@ -178,6 +203,7 @@ fn run_replicates_parallel(
     presentation: &RuntimePresentation,
     compute_pool: &Arc<rayon::ThreadPool>,
     resource_budget: &ResourceBudget,
+    reused: &ReusedPhases,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
     enum WorkerOutcome {
         Finished(Result<ReplicateRunSummary, RuntimeError>),
@@ -190,6 +216,7 @@ fn run_replicates_parallel(
     let mut workers: Vec<(u64, JoinHandle<()>)> = Vec::with_capacity(worker_count);
     for (index, scope) in scopes {
         let study = study.clone();
+        let reused = ReusedPhases::clone(reused);
         let presentation = presentation.clone();
         let outcomes = outcomes.clone();
         let worker_cancellation = Arc::clone(&cancellation);
@@ -203,10 +230,13 @@ fn run_replicates_parallel(
                         &study,
                         index,
                         scope,
-                        &presentation,
-                        &worker_cancellation,
-                        &compute_pool,
-                        &resource_budget,
+                        &ReplicateContext {
+                            presentation: &presentation,
+                            scheduler_cancellation: &worker_cancellation,
+                            compute_pool: &compute_pool,
+                            resource_budget: &resource_budget,
+                            reused: &reused,
+                        },
                     )
                 }))
                 .map_or(WorkerOutcome::Panicked, WorkerOutcome::Finished);
@@ -274,25 +304,23 @@ fn run_replicates_parallel(
     }
 }
 
+struct ReplicateContext<'a> {
+    presentation: &'a RuntimePresentation,
+    scheduler_cancellation: &'a AtomicBool,
+    compute_pool: &'a Arc<rayon::ThreadPool>,
+    resource_budget: &'a ResourceBudget,
+    reused: &'a ReusedPhases,
+}
+
 fn run_replicate(
     study: &Study,
     index: u64,
     scope: PathBuf,
-    presentation: &RuntimePresentation,
-    scheduler_cancellation: &AtomicBool,
-    compute_pool: &Arc<rayon::ThreadPool>,
-    resource_budget: &ResourceBudget,
+    context: &ReplicateContext<'_>,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
+    let presentation = context.presentation;
     presentation.publish(RuntimeEvent::ReplicateStarted { index })?;
-    let result = run_replicate_inner(
-        study,
-        index,
-        scope,
-        presentation,
-        scheduler_cancellation,
-        compute_pool,
-        resource_budget,
-    );
+    let result = run_replicate_inner(study, index, scope, context);
     match &result {
         Ok(_) => presentation.publish(RuntimeEvent::ReplicateCompleted { index })?,
         Err(RuntimeError::ExecutionCancelled) => {
@@ -313,18 +341,28 @@ fn run_replicate_inner(
     study: &Study,
     index: u64,
     scope: PathBuf,
-    presentation: &RuntimePresentation,
-    scheduler_cancellation: &AtomicBool,
-    compute_pool: &Arc<rayon::ThreadPool>,
-    resource_budget: &ResourceBudget,
+    context: &ReplicateContext<'_>,
 ) -> Result<ReplicateRunSummary, RuntimeError> {
-    let positions = topological_positions(study.phases());
-    let mut phases = Vec::with_capacity(positions.len());
-    for position in positions {
+    let ReplicateContext {
+        presentation,
+        scheduler_cancellation,
+        compute_pool,
+        resource_budget,
+        reused,
+    } = *context;
+    let mut phases = Vec::with_capacity(study.phase_order().len());
+    for (phase_index, &position) in study.phase_order().iter().enumerate() {
         if scheduler_cancellation.load(Ordering::Acquire) {
             return Err(RuntimeError::ExecutionCancelled);
         }
         let phase = &study.phases()[position];
+        if !study.phase_is_active(phase_index) {
+            if let Some(summary) = reused.get(&(index, phase_index)) {
+                reuse::persist_phase(phase, summary, &scope)?;
+                phases.push(summary.clone());
+            }
+            continue;
+        }
         let context = PhaseRuntime {
             study,
             replicate_directory: &scope,
@@ -342,37 +380,6 @@ fn run_replicate_inner(
         output_directory: scope,
         phases: phases.into_boxed_slice(),
     })
-}
-
-fn topological_positions(phases: &[StudyPhase]) -> Vec<usize> {
-    fn visit(
-        index: usize,
-        phases: &[StudyPhase],
-        by_name: &HashMap<&str, usize>,
-        visited: &mut [bool],
-        positions: &mut Vec<usize>,
-    ) {
-        if visited[index] {
-            return;
-        }
-        for dependency in phases[index].dependencies() {
-            visit(by_name[dependency], phases, by_name, visited, positions);
-        }
-        visited[index] = true;
-        positions.push(index);
-    }
-
-    let by_name = phases
-        .iter()
-        .enumerate()
-        .map(|(index, phase)| (phase.name(), index))
-        .collect::<HashMap<_, _>>();
-    let mut visited = vec![false; phases.len()];
-    let mut positions = Vec::with_capacity(phases.len());
-    for index in 0..phases.len() {
-        visit(index, phases, &by_name, &mut visited, &mut positions);
-    }
-    positions
 }
 
 struct ActiveTask {
@@ -443,7 +450,10 @@ fn run_phase(
         name: phase.name(),
         task_count: phase.tasks().len(),
     })?;
-    let result = run_phase_inner(phase, context);
+    let result = run_phase_inner(phase, context).and_then(|summary| {
+        reuse::persist_phase(phase, &summary, context.replicate_directory)?;
+        Ok(summary)
+    });
     match &result {
         Ok(_) => context.presentation.publish(RuntimeEvent::PhaseCompleted {
             replicate: context.replicate,
@@ -659,6 +669,7 @@ fn run_phase_inner(
     }
     completed.sort_by_key(|(ordinal, _)| *ordinal);
     Ok(PhaseRunSummary {
+        reused: false,
         name: phase.name().into(),
         tasks: completed
             .into_iter()
@@ -1020,7 +1031,7 @@ fn transitive_dependencies<'a>(
     found
 }
 
-fn dependency_workload(kind: &TaskRunKind) -> serde_json::Value {
+pub(super) fn dependency_workload(kind: &TaskRunKind) -> serde_json::Value {
     match kind {
         TaskRunKind::ExecutionUnit {
             execution_unit,
@@ -1101,6 +1112,7 @@ mod tests {
             phase("plot", &["$npy"]),
         ];
         let completed_simulation = PhaseRunSummary {
+            reused: false,
             name: "simulate".into(),
             tasks: [0, 1]
                 .into_iter()
@@ -1127,6 +1139,7 @@ mod tests {
         assert_eq!(aggregate[0]["tasks"].as_array().unwrap().len(), 2);
 
         let completed_npy = PhaseRunSummary {
+            reused: false,
             name: "$npy".into(),
             tasks: [TaskRunSummary {
                 identity: "npy".into(),

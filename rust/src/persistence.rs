@@ -10,6 +10,7 @@
 
 mod local;
 mod plan;
+pub(crate) mod reuse;
 mod session;
 
 #[cfg(test)]

@@ -33,6 +33,12 @@ impl Project {
             .expect("runtime test study is an object")
             .entry("threads")
             .or_insert(2.into());
+        let phase_count = study["phases"].as_object().unwrap().len();
+        study
+            .as_object_mut()
+            .unwrap()
+            .entry("active_phases")
+            .or_insert_with(|| serde_json::json!((0..phase_count).collect::<Vec<_>>()));
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "scientific-workflow-runtime-{}-{sequence}",
@@ -1010,4 +1016,216 @@ fn timeout_stops_a_programs_descendant_process() {
             _ => panic!("descendant remains alive: {}", pid.trim()),
         }
     }
+}
+
+fn select_phases(project: &Project, active: &[usize], source: Option<&Path>) {
+    let path = project.path().join("wf_configs/study.json");
+    let mut study: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    study["active_phases"] = serde_json::json!(active);
+    if let Some(source) = source {
+        study["reuse_from"] = serde_json::json!(source);
+    } else {
+        study.as_object_mut().unwrap().remove("reuse_from");
+    }
+    fs::write(path, serde_json::to_vec_pretty(&study).unwrap()).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn phase_indices_use_dependency_order_and_reuse_preserves_task_identity_and_paths() {
+    let project = Project::new(
+        serde_json::json!({
+            "active_phases": [0],
+            "phases": {
+                "consume": {"after":["prepare"], "tasks":[{"program":"/bin/true"}]},
+                "prepare": {"tasks":[{"program":"/bin/sh", "args":["-c",
+                    "printf ran >> \"$WORKFLOW_PROJECT_ROOT/starts\"; printf ready > \"$WORKFLOW_TASK_OUTPUT/value\""
+                ]}]}
+            }
+        }),
+        serde_json::json!({}),
+    );
+    let study = Study::load(project.path()).unwrap();
+    let planned = study
+        .plan_summary()
+        .phases()
+        .map(|phase| {
+            (
+                phase.index(),
+                phase.name().to_owned(),
+                phase.is_active(),
+                phase.tasks().next().unwrap().identity().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        (planned[0].0, planned[0].1.as_str(), planned[0].2),
+        (0, "prepare", true)
+    );
+    assert_eq!(
+        (planned[1].0, planned[1].1.as_str(), planned[1].2),
+        (1, "consume", false)
+    );
+    let first = execute(study).unwrap();
+    let original = first.replicates()[0].phases()[0].tasks()[0]
+        .output_directory()
+        .to_path_buf();
+    select_phases(&project, &[1], Some(first.output_directory()));
+    let second = execute(Study::load(project.path()).unwrap()).unwrap();
+    let reused = &second.replicates()[0].phases()[0];
+    assert!(reused.was_reused());
+    assert_eq!(reused.tasks()[0].identity(), planned[0].3);
+    assert_eq!(reused.tasks()[0].output_directory(), original);
+    assert!(!second.replicates()[0].phases()[1].was_reused());
+    assert_eq!(
+        fs::read_to_string(project.path().join("starts")).unwrap(),
+        "ran"
+    );
+    assert_eq!(
+        fs::read_to_string(original.join("artifacts/value")).unwrap(),
+        "ready"
+    );
+    select_phases(&project, &[1], Some(second.output_directory()));
+    let third = execute(Study::load(project.path()).unwrap()).unwrap();
+    assert_eq!(
+        third.replicates()[0].phases()[0].tasks()[0].output_directory(),
+        original
+    );
+    assert_eq!(
+        fs::read_to_string(project.path().join("starts")).unwrap(),
+        "ran"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn reuse_rejects_missing_failed_or_changed_inputs_before_creating_output() {
+    let project = Project::new(
+        serde_json::json!({
+            "active_phases":[1],
+            "phases":{
+                "prepare":{"tasks":[{"program":"/bin/true"}]},
+                "consume":{"after":["prepare"],"tasks":[{"program":"/bin/true"}]}
+            }
+        }),
+        serde_json::json!({"input":1}),
+    );
+    assert!(matches!(
+        execute(Study::load(project.path()).unwrap()),
+        Err(RuntimeError::Reuse { .. })
+    ));
+    assert!(!project.path().join("output").exists());
+    select_phases(&project, &[0], None);
+    let first = execute(Study::load(project.path()).unwrap()).unwrap();
+    select_phases(&project, &[1], Some(first.output_directory()));
+    fs::write(
+        project.path().join("wf_configs/parameters.json"),
+        br#"{"input":2}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        execute(Study::load(project.path()).unwrap()),
+        Err(RuntimeError::Reuse { .. })
+    ));
+    fs::write(
+        project.path().join("wf_configs/parameters.json"),
+        br#"{"input":1}"#,
+    )
+    .unwrap();
+    let metadata = first.replicates()[0].phases()[0].tasks()[0]
+        .output_directory()
+        .join("program.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    value["status"] = "failed".into();
+    fs::write(metadata, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        execute(Study::load(project.path()).unwrap()),
+        Err(RuntimeError::Reuse { .. })
+    ));
+    assert_eq!(
+        fs::read_dir(project.path().join("output")).unwrap().count(),
+        1
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn completed_legacy_unit_results_remain_available_to_new_dependent_programs() {
+    let project = Project::new(
+        serde_json::json!({
+            "paths":{"states":{"value":"wf_configs/states/value.json"}},
+            "phases":{
+                "simulate":{"tasks":[{"execution_unit":"runtime-slow","state":"value"}]},
+                "consume":{"after":["simulate"],"tasks":[{"program":"/bin/true"}]}
+            }
+        }),
+        serde_json::json!({"runtime-slow":{"sleep_ms":0}}),
+    );
+    let first = execute(Study::load(project.path()).unwrap()).unwrap();
+    let phases = first.replicates()[0].phases();
+    for phase in phases {
+        for task in phase.tasks() {
+            fs::remove_file(task.output_directory().join("workflow-result.json")).unwrap();
+        }
+    }
+    let config = phases[1].tasks()[0]
+        .output_directory()
+        .join("workflow-config.json");
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    snapshot["study"]
+        .as_object_mut()
+        .unwrap()
+        .remove("active_phases");
+    fs::write(config, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    select_phases(&project, &[1], Some(first.output_directory()));
+    let second = execute(Study::load(project.path()).unwrap()).unwrap();
+    let reused = &second.replicates()[0].phases()[0];
+    assert!(reused.was_reused());
+    match reused.tasks()[0].kind() {
+        TaskRunKind::ExecutionUnit { members, .. } => {
+            assert_eq!(members.len(), 1);
+            assert_eq!(members[0].final_iteration(), 1);
+            assert_eq!(
+                members[0].output_directory(),
+                phases[0].tasks()[0].output_directory()
+            );
+        }
+        _ => panic!("expected imported execution unit"),
+    }
+    let dependencies = second.replicates()[0].phases()[1].tasks()[0]
+        .output_directory()
+        .join("workflow-dependencies.json");
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(dependencies).unwrap()).unwrap();
+    assert_eq!(
+        value[0]["tasks"][0]["workload"]["members"][0]["final_iteration"],
+        1
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn reuse_cannot_mix_stale_results_with_rerun_prerequisites() {
+    let project = Project::new(
+        serde_json::json!({
+            "phases":{
+                "a":{"tasks":[{"program":"/bin/true"}]},
+                "b":{"after":["a"],"tasks":[{"program":"/bin/true"}]},
+                "c":{"after":["b"],"tasks":[{"program":"/bin/true"}]}
+            }
+        }),
+        serde_json::json!({}),
+    );
+    let first = execute(Study::load(project.path()).unwrap()).unwrap();
+    select_phases(&project, &[0, 2], Some(first.output_directory()));
+    assert!(matches!(
+        execute(Study::load(project.path()).unwrap()),
+        Err(RuntimeError::Reuse { .. })
+    ));
+    assert_eq!(
+        fs::read_dir(project.path().join("output")).unwrap().count(),
+        1
+    );
 }

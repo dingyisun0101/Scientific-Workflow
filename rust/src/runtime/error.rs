@@ -9,6 +9,16 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// A skipped prerequisite has no matching, successfully completed source result.
+    #[error("cannot reuse phase `{phase}` from `{path}`: {reason}")]
+    Reuse {
+        /// Phase whose prerequisite outputs could not be imported.
+        phase: String,
+        /// Explicit source execution or task directory.
+        path: PathBuf,
+        /// Missing, incomplete, or incompatible source evidence.
+        reason: String,
+    },
     /// The selected active Python environment lacks compatible Workflow tools.
     #[error(
         "Python prerequisites failed for `{interpreter}`: {reason}. Activate a Python 3.14+ environment with scientific-workflow[npy] 0.4.4 before launching Workflow"

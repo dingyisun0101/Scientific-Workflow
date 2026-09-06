@@ -178,6 +178,12 @@ impl Project {
         let root = study.as_object_mut().unwrap();
         root.entry("workflow_schema").or_insert(1.into());
         root.entry("threads").or_insert(2.into());
+        let phase_count = root
+            .get("phases")
+            .and_then(serde_json::Value::as_object)
+            .map_or(0, |p| p.len());
+        root.entry("active_phases")
+            .or_insert_with(|| serde_json::json!((0..phase_count).collect::<Vec<_>>()));
         root.entry("paths").or_insert_with(
             || serde_json::json!({"states":{"default":"wf_configs/states/default.json"}}),
         );
@@ -248,7 +254,7 @@ impl Drop for Project {
 }
 
 const STUDY: &str = r#"
-{
+{ "active_phases": [0,1],
   "persistence": {
     "chunk_target_mb": 1,
     "queue_capacity_mb": 2
@@ -325,9 +331,13 @@ fn study_binds_registered_units_and_infers_plan_facts_without_output() {
     assert_eq!(plan.persistence_queue_capacity_bytes(), 2_000_000);
     let phases = plan.phases().collect::<Vec<_>>();
     assert_eq!(phases.len(), 2);
-    assert_eq!(phases[0].name(), "measure");
-    assert_eq!(phases[0].dependencies().collect::<Vec<_>>(), ["simulate"]);
-    let task = phases[0].tasks().next().unwrap();
+    assert_eq!(phases[0].name(), "simulate");
+    assert_eq!(phases[0].index(), 0);
+    assert!(phases[0].is_active());
+    assert_eq!(phases[1].name(), "measure");
+    assert_eq!(phases[1].index(), 1);
+    assert_eq!(phases[1].dependencies().collect::<Vec<_>>(), ["simulate"]);
+    let task = phases[1].tasks().next().unwrap();
     assert_eq!(task.identity(), "measure/000000/counter-000000");
     assert_eq!(task.label(), "counter #0");
     assert_eq!(task.output_ordinal(), 0);
@@ -347,7 +357,7 @@ fn study_binds_registered_units_and_infers_plan_facts_without_output() {
 #[test]
 fn omitted_project_state_uses_the_units_standard_provider_and_records_its_identity() {
     let project = Project::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "phases": {
@@ -376,7 +386,7 @@ fn omitted_project_state_uses_the_units_standard_provider_and_records_its_identi
 #[test]
 fn omitted_project_state_without_a_unit_provider_fails_before_output() {
     let project = Project::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "phases": {
@@ -399,7 +409,7 @@ fn omitted_project_state_without_a_unit_provider_fails_before_output() {
 #[test]
 fn one_provider_identity_cannot_resolve_to_different_documents() {
     let project = Project::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "phases": {
@@ -485,7 +495,7 @@ fn runtime_executes_dependencies_and_records_each_inferred_task() {
 #[test]
 fn one_study_binds_each_execution_unit_task_to_its_selected_named_state() {
     let project = Project::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "paths":{"states":{
             "counter-state":"wf_configs/states/default.json",
             "energy-state":"wf_configs/states/energy.json"
@@ -530,7 +540,7 @@ fn one_study_binds_each_execution_unit_task_to_its_selected_named_state() {
 #[test]
 fn crate_level_run_is_the_complete_ordinary_entry_point() {
     let project = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
         r#"{"initial":1,"steps":1}"#,
     );
     let study = Study::load(project.path()).unwrap();
@@ -543,7 +553,7 @@ fn crate_level_run_is_the_complete_ordinary_entry_point() {
 #[test]
 fn preflight_rejects_invalid_binding_without_output() {
     let missing = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"absent"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"absent"}]}}}"#,
         r#"{"initial":1,"steps":1}"#,
     );
     fs::write(
@@ -558,7 +568,7 @@ fn preflight_rejects_invalid_binding_without_output() {
     assert!(!missing.path().join("output").exists());
 
     let bad_constants = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
         r#"{"initial":"wrong","steps":1}"#,
     );
     assert!(matches!(
@@ -568,7 +578,7 @@ fn preflight_rejects_invalid_binding_without_output() {
     assert!(!bad_constants.path().join("output").exists());
 
     let rejected_by_unit = Project::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
         &format!(r#"{{"initial":{},"steps":1}}"#, u64::MAX),
     );
     assert!(matches!(
@@ -578,7 +588,7 @@ fn preflight_rejects_invalid_binding_without_output() {
     assert!(!rejected_by_unit.path().join("output").exists());
 
     let bad_state = Project::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "paths":{"states":{"broken":"wf_configs/states/broken.json"}},
           "phases":{"only":{"tasks":[{"execution_unit":"counter","state":"broken"}]}}
         }"#,
@@ -605,7 +615,7 @@ fn generic_program_task_receives_captured_config_and_dependency_outputs() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let study_document = r#"
-    {
+    { "active_phases": [0,1],
       "phases": {
         "simulate": {
           "tasks": [{"execution_unit":"counter"}]
@@ -725,7 +735,7 @@ fn global_sweeps_clone_the_phase_graph_and_keep_dependencies_correlated() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let project = Project::new(
-        r#"{
+        r#"{ "active_phases": [0,1],
           "phases": {
             "prepare": {"tasks": [{"program":"prepare.py"}]},
             "consume": {
@@ -806,7 +816,7 @@ fn nested_python_task_runs_without_a_rust_wrapper_or_executable_script() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let study_document = r#"
-    {
+    { "active_phases": [0],
       "phases": {
         "analyze": {
           "tasks": [{

@@ -389,9 +389,11 @@ fn publish_progress(p: &TaskPresentation, event: Event) {
 
 pub(super) fn check_prerequisites(study: &crate::study::Study) -> Result<(), super::RuntimeError> {
     let interpreters = study
-        .phases()
+        .phase_order()
         .iter()
-        .flat_map(|p| p.tasks())
+        .enumerate()
+        .filter(|(index, _)| study.phase_is_active(*index))
+        .flat_map(|(_, &position)| study.phases()[position].tasks())
         .filter(|t| t.is_npy())
         .filter_map(|t| t.program_path())
         .collect::<std::collections::BTreeSet<_>>();

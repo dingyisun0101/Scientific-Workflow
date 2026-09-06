@@ -1,4 +1,5 @@
 {
+  "active_phases": [0,1,2,3],
   "workflow_schema": 1,
   "threads": 2,
   "paths": {"states": {"value": "wf_configs/states/value.json"}},

@@ -1,8 +1,16 @@
 # Scientific Workflow Rust crate
 
-Rust 0.13.8 adds recursive sweep alternatives: one base can accompany the
-Cartesian product of independent parameter axes. Existing flat sweeps, runtime
-APIs, recording formats, and Python companion 0.4.4 remain unchanged.
+> **BREAKING CONFIGURATION UPDATE: Rust 0.13.9 / Python 0.4.4.**
+> Every study now requires an explicit `active_phases` list of zero-based
+> dependency-order indices. This supersedes the implicit run-all behavior of
+> 0.13.8 and earlier; no compatibility default or alias is provided.
+> To run every phase, list every index. To reuse completed prerequisites,
+> provide `reuse_from` alongside the selected indices. Recording formats and
+> the Python companion remain unchanged.
+
+Rust 0.13.9 adds explicit phase-index selection and validated reuse of completed
+prerequisite outputs. Recursive sweeps, task identities, recording formats, and
+Python companion 0.4.4 are retained.
 
 > **BREAKING API UPDATE — 0.13.8 / Python 0.4.4:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python
@@ -26,7 +34,7 @@ configuration-driven execution unit or program execution, and durable outputs.
 
 ## New to Workflow?
 
-Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/rust/getting-started.md). It
+Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.9/rust/getting-started.md). It
 explains Serde and deserialization, Rust traits, and the difference between a
 study, phase, task, execution unit, member, and state before presenting a
 minimal runnable project.
@@ -150,7 +158,7 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.8"
+scientific-workflow = "0.13.9"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -193,7 +201,7 @@ an embedding choice, not an alternate end-user interface.
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
 into an execution unit's typed `Constants` value. Application code normally
-adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/rust/getting-started.md#why-serde-and-deserialize-appear)
+adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.9/rust/getting-started.md#why-serde-and-deserialize-appear)
 shows the exact JSON-to-Rust mapping and explains why
 `#[serde(deny_unknown_fields)]` is recommended.
 
@@ -249,7 +257,7 @@ include:
 - exposing a different public orchestration or execution unit contract;
 - implementing a custom persistence backend, writer lifecycle, or incompatible
   recording format (the current cross-language contract is the repository's
-  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/protocol/recording-v7.md));
+  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.9/protocol/recording-v7.md));
 - replacing scheduling, cancellation, output-layout, or UI policy;
 - carrying organization-specific changes that cannot be contributed upstream;
   or
@@ -713,6 +721,7 @@ omission.
 
 ```json
 {
+  "active_phases": [0,1],
   "workflow_schema": 1,
   "threads": 16,
   "seed": 42,
@@ -793,7 +802,7 @@ final `exit` is still required. Noninteractive runs never wait for input.
 Redirected execution uses stable plain lifecycle lines. The dashboard and
 plain renderer are the only presentation modes. Failure of the selected mode
 is fatal and returns `RuntimeError::Presentation` rather than silently
-degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/rust/src/ui/api.md)
+degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.9/rust/src/ui/api.md)
 details commands, scrolling, and pause boundaries.
 
 Config alone reads `wf_configs/study.json`, every named project state document, and the complete
@@ -924,7 +933,7 @@ See [`src/state/api.md`](src/state/api.md),
 [`src/ui/api.md`](src/ui/api.md),
 [`src/error/api.md`](src/error/api.md),
 [`src/prelude/api.md`](src/prelude/api.md), and the repository
-[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/docs/architecture.md).
+[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.9/docs/architecture.md).
 
 ## Validation
 
@@ -937,3 +946,37 @@ cargo test --workspace --all-targets --all-features --locked
 cargo test -p scientific-workflow --all-targets --no-default-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```
+
+### Explicit phase selection
+
+Every `study.json` must contain `"active_phases": [0, 1, ...]`; there is no
+implicit run-all default. Indices are zero-based in deterministic dependency
+order: visit phases in JSON declaration order, recursively visit each `after`
+list in its declared order, then assign each phase its index once. Selecting a
+subset never renumbers phases, expanded tasks, output ordinals, or seed identities.
+The order of indices in the selection does not change execution order. Duplicate,
+negative, non-integer, and out-of-range indices are rejected. An empty list
+explicitly selects no work.
+
+For a six-phase preparation, reference, targets, lattice, export, and conversion
+study, `"active_phases": [3, 4, 5]` starts at lattice. Supply
+`"reuse_from": "output/execution-1234-0"` to reuse completed prerequisites.
+The path names one execution directory and is resolved against the project root;
+absolute paths are also accepted. Each replicate imports the matching source
+replicate. Unselected phases that are not prerequisites are omitted entirely.
+
+Workflow validates the complete graph and constants during Study loading.
+Before creating new output, Runtime requires every imported task to have
+successfully completed with matching captured inputs. Only `active_phases` and
+`reuse_from` may differ between the captured and current study snapshots.
+A reused phase cannot depend on a phase selected to execute again. Missing,
+failed, incompatible, or ambiguous legacy inputs fail without launching work.
+Programs and `$npy` receive the original completed recording/artifact paths.
+Recordings are never appended to or rewritten.
+
+New executions commit private `workflow-result.json` receipts after each
+successful phase, including references for reused tasks, so reuse can be chained.
+Pre-0.13.9 program outputs may be imported from their successful `program.json`
+and captured config. Legacy execution-unit imports additionally require an
+authoritative matching summary in a dependent program's captured dependency
+file; Workflow never guesses a final iteration from sampling cadence.

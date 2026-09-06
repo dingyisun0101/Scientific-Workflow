@@ -1,6 +1,6 @@
 # Study API
 
-This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.9 subsystem contract.
 
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
 Config to capture one project root and fully resolve its declarations, retains
@@ -90,7 +90,7 @@ the borrowed Study. It is `Clone + Copy + Debug` and exposes:
   diagnostics do not accidentally publish the master value;
 - `persistence_chunk_target_bytes() -> u64` and
   `persistence_queue_capacity_bytes() -> u64`; and
-- `phases()`, an exact-size declaration-order iterator of
+- `phases()`, an exact-size dependency-order iterator of
   `PhasePlanSummary<'a>`.
 
 `PlanReplicateScheduling` is the closed `Sequential | Parallel` vocabulary.
@@ -226,3 +226,14 @@ already-resolved program/Python tasks, infer deterministic identities and
 roots, retain immutable execution intent, and expose no mutable lifecycle to
 applications. Runtime must be able to execute the retained snapshot after
 project JSON changes without rereading it.
+
+## Phase selection inspection
+
+`PlanSummary::phases()` visits the complete graph in deterministic dependency
+order, including inactive phases. `PhasePlanSummary::index() -> usize` returns
+the zero-based `active_phases` index and `is_active() -> bool` reports selection.
+Both borrow the immutable Study through the existing copyable view, perform no
+IO or allocation, and are safe to share with the owning Study. Task identities
+and output ordinals retain their original declaration-based values. Study keeps
+the canonical optional reuse source as private intent; Runtime and Persistence
+validate completed source outputs before execution creates new directories.

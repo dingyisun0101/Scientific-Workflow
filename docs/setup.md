@@ -24,11 +24,11 @@ python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install \
-  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.8#subdirectory=python'
-cargo add scientific-workflow@0.13.8
+  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.9#subdirectory=python'
+cargo add scientific-workflow@0.13.9
 ```
 
-The tag contains Rust 0.13.8 and Python companion 0.4.4. Without `$npy` or NumPy
+The tag contains Rust 0.13.9 and Python companion 0.4.4. Without `$npy` or NumPy
 readback, omit `[npy]` to install the dependency-free Python core. Cargo only
 installs Rust dependencies. **Workflow does not create, activate, or populate a
 Python environment. You must install the Python package yourself.**

@@ -1,5 +1,15 @@
 # Changelog
 
+## Rust 0.13.9 - explicit phase indices
+
+Breaking configuration update: every study requires `active_phases`, with no
+implicit run-all default. Indices follow deterministic dependency order and do
+not change task identities. Optional `reuse_from` imports completed prerequisite
+outputs after checking captured inputs and completion metadata, including
+legacy outputs backed by program snapshots. New task receipts permit chained
+reuse. Plan inspection exposes index/selection and phase summaries expose reuse.
+Python remains 0.4.4 and recording formats remain unchanged.
+
 This repository coordinates the independently versioned Rust workflow crate
 and Python recording reader. Recording-format versions remain independent of
 both package versions; see the [compatibility matrix](protocol/compatibility.md).

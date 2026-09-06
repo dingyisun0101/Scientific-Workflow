@@ -19,6 +19,12 @@ impl TestProject {
         let root = study.as_object_mut().unwrap();
         root.entry("workflow_schema").or_insert(1.into());
         root.entry("threads").or_insert(2.into());
+        let phase_count = root
+            .get("phases")
+            .and_then(serde_json::Value::as_object)
+            .map_or(0, |p| p.len());
+        root.entry("active_phases")
+            .or_insert_with(|| serde_json::json!((0..phase_count).collect::<Vec<_>>()));
         root.entry("paths").or_insert_with(
             || serde_json::json!({"states":{"default":"wf_configs/states/default.json"}}),
         );
@@ -94,7 +100,7 @@ impl Drop for TestProject {
 }
 
 fn manifest() -> &'static str {
-    r#"{
+    r#"{ "active_phases": [0,1],
       "seed": 8675309,
       "replicates": {
         "count": 3,
@@ -152,7 +158,7 @@ fn program_task(task: &ResolvedTask) -> &ResolvedProgramTask {
 #[test]
 fn execution_unit_state_and_state_paths_may_be_omitted_for_later_provider_resolution() {
     let project = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "phases": {
@@ -288,7 +294,7 @@ fn one_project_root_compiles_every_document_into_a_resolved_specification() {
 #[test]
 fn top_level_sweeps_expand_every_task_while_execution_unit_sweeps_remain_local() {
     let project = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "phases": {
             "simulate": {
               "tasks": [{"execution_unit":"unit"}]
@@ -336,7 +342,7 @@ fn top_level_sweeps_expand_every_task_while_execution_unit_sweeps_remain_local()
 #[test]
 fn nested_local_axes_preserve_one_initialization_per_global_configuration() {
     let project = TestProject::new(
-        r#"{"phases": {
+        r#"{ "active_phases": [0,1],"phases": {
             "init": {"tasks": [{"execution_unit": "initialize"}]},
             "evolve": {"after": ["init"], "start_interval_ms": 60000,
                        "tasks": [{"execution_unit": "unit"}]}
@@ -413,7 +419,7 @@ fn nested_local_axes_preserve_one_initialization_per_global_configuration() {
 #[test]
 fn reserved_npy_phase_synthesizes_one_aggregate_task() {
     let project = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0,1],
           "phases": {
             "simulate": {"tasks": [{"execution_unit":"unit"}]},
             "$npy": {"after": ["simulate"]}
@@ -453,7 +459,7 @@ fn reserved_npy_phase_rejects_authored_tasks_and_missing_prerequisites() {
     ] {
         let source = format!(
             r#"{{
-              "workflow_schema":1,
+              "workflow_schema":1, "active_phases":[0],
               "threads":2,
               "phases":{{{phase}}}
             }}"#
@@ -470,7 +476,7 @@ fn reserved_npy_phase_rejects_authored_tasks_and_missing_prerequisites() {
 #[test]
 fn study_threads_are_required_and_positive() {
     let missing = TestProject::new_raw(
-        r#"{"workflow_schema":1,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"workflow_schema":1,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     assert!(matches!(
@@ -480,7 +486,7 @@ fn study_threads_are_required_and_positive() {
     ));
 
     let zero = TestProject::new_raw(
-        r#"{"workflow_schema":1,"threads":0,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"workflow_schema":1,"threads":0,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     assert!(matches!(
@@ -492,7 +498,7 @@ fn study_threads_are_required_and_positive() {
 #[test]
 fn workflow_configuration_schema_is_required_and_rejects_unknown_generations() {
     let missing = TestProject::new_raw(
-        r#"{"threads":2,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"threads":2,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     assert!(matches!(
@@ -502,7 +508,7 @@ fn workflow_configuration_schema_is_required_and_rejects_unknown_generations() {
     ));
 
     let future = TestProject::new_raw(
-        r#"{"workflow_schema":2,"threads":2,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"workflow_schema":2,"threads":2,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     assert!(matches!(
@@ -516,7 +522,7 @@ fn workflow_configuration_schema_is_required_and_rejects_unknown_generations() {
 #[test]
 fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
@@ -530,7 +536,7 @@ fn state_schema_is_parsed_once_by_config_then_semantically_validated_by_state() 
 #[test]
 fn named_state_paths_are_resolved_once_and_selected_explicitly_by_execution_unit_tasks() {
     let project = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "paths": {
             "states": {
               "population": "wf_configs/population.json",
@@ -581,7 +587,7 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_execution_unit
     );
 
     let unknown = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "paths":{"states":{"known":"wf_configs/states/default.json"}},
           "phases":{"only":{"tasks":[{"execution_unit":"unit","state":"missing"}]}}
         }"#,
@@ -594,7 +600,7 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_execution_unit
     ));
 
     let missing_selector = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "paths":{"states":{"known":"wf_configs/states/default.json"}},
@@ -612,7 +618,7 @@ fn named_state_paths_are_resolved_once_and_selected_explicitly_by_execution_unit
 #[test]
 fn correlated_cases_become_complete_typed_constant_values() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[(
             "unit",
             r#"{
@@ -646,7 +652,7 @@ fn correlated_cases_become_complete_typed_constant_values() {
 #[test]
 fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields() {
     let duplicate = TestProject::new_raw(
-        r#"{"paths":{"states":{}},"phases":{"one":{"tasks":[],"tasks":[]}}}"#,
+        r#"{ "active_phases": [0],"paths":{"states":{}},"phases":{"one":{"tasks":[],"tasks":[]}}}"#,
         &[],
     );
     assert!(matches!(
@@ -655,7 +661,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let unknown = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x","mystery":true}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"one":{"tasks":[{"execution_unit":"x","mystery":true}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -664,7 +670,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let removed_model_field = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "paths":{"states":{"default":"wf_configs/states/default.json"}},
@@ -679,7 +685,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let invalid_persistence = TestProject::new(
-        r#"{"persistence":{"chunk_target_mb":0},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
+        r#"{ "active_phases": [0],"persistence":{"chunk_target_mb":0},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -688,7 +694,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let legacy_chunk_bytes = TestProject::new(
-        r#"{"persistence":{"chunk_target_bytes":1048576},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
+        r#"{ "active_phases": [0],"persistence":{"chunk_target_bytes":1048576},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -697,7 +703,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let legacy_queue_bytes = TestProject::new(
-        r#"{"persistence":{"queue_capacity_bytes":1048576},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
+        r#"{ "active_phases": [0],"persistence":{"queue_capacity_bytes":1048576},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -706,7 +712,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let overflowing_chunk_mb = TestProject::new(
-        r#"{"persistence":{"chunk_target_mb":18446744073709551615},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
+        r#"{ "active_phases": [0],"persistence":{"chunk_target_mb":18446744073709551615},"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -716,7 +722,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
     ));
 
     let duplicate_parameters = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", r#"{"value":1,"value":2}"#)],
     );
     assert!(matches!(
@@ -728,7 +734,7 @@ fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields
 #[test]
 fn workflow_project_root_requires_reserved_wf_configs_documents() {
     let legacy_layout = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     fs::rename(
@@ -742,7 +748,7 @@ fn workflow_project_root_requires_reserved_wf_configs_documents() {
     ));
 
     let missing_study = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     fs::rename(
@@ -756,7 +762,7 @@ fn workflow_project_root_requires_reserved_wf_configs_documents() {
     ));
 
     let missing_parameters = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     fs::remove_file(missing_parameters.path().join("wf_configs/parameters.json")).unwrap();
@@ -769,7 +775,7 @@ fn workflow_project_root_requires_reserved_wf_configs_documents() {
 #[test]
 fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
     let project = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "paths":{"states":{"outside":"state.json"}},
@@ -789,7 +795,7 @@ fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
     ));
 
     let absolute = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     let manifest_path = absolute.path().join("wf_configs/study.json");
@@ -812,7 +818,7 @@ fn state_documents_may_be_anywhere_beneath_wf_configs_but_not_outside_it() {
 #[test]
 fn removed_per_task_input_paths_are_rejected() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x","input":"inputs/x.json"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"one":{"tasks":[{"execution_unit":"x","input":"inputs/x.json"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -824,7 +830,7 @@ fn removed_per_task_input_paths_are_rejected() {
 #[test]
 fn every_execution_unit_key_requires_its_canonical_parameter_section() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"execution_unit":"missing"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"one":{"tasks":[{"execution_unit":"missing"}]}}}"#,
         &[("another_unit", "{}")],
     );
     assert!(matches!(
@@ -837,7 +843,7 @@ fn every_execution_unit_key_requires_its_canonical_parameter_section() {
 #[test]
 fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     let missing = TestProject::new(
-        r#"{"phases":{"one":{"after":["absent"],"tasks":[{"execution_unit":"x"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"one":{"after":["absent"],"tasks":[{"execution_unit":"x"}]}}}"#,
         &[("x", "{}")],
     );
     assert!(matches!(
@@ -846,7 +852,7 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     ));
 
     let cycle = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0,1],
           "phases": {
             "one": {"after":["two"],"tasks":[{"execution_unit":"x"}]},
             "two": {"after":["one"],"tasks":[{"execution_unit":"x"}]}
@@ -860,7 +866,7 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
     ));
 
     let mixed = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"one":{"tasks":[{"execution_unit":"x"}]}}}"#,
         &[(
             "x",
             r#"{"choice":{"$sweep":[1,2]},"$cases":[{"value":1},{"value":2}]}"#,
@@ -875,7 +881,7 @@ fn dependency_and_selection_grammar_fail_before_a_specification_is_published() {
 #[test]
 fn typed_decode_errors_retain_execution_unit_source_and_combination() {
     let project = TestProject::new(
-        r#"{"phases":{"one":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"one":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", r#"{"steps":"wrong"}"#)],
     );
     let specification = ProjectSpecification::load(project.path()).unwrap();
@@ -897,7 +903,7 @@ fn typed_decode_errors_retain_execution_unit_source_and_combination() {
 #[test]
 fn central_config_captures_all_project_parameters_in_one_namespace() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[
             ("unit", r#"{"steps":1}"#),
             ("plot", r#"{"title":"Captured configuration","dpi":160}"#),
@@ -924,7 +930,7 @@ fn central_config_captures_all_project_parameters_in_one_namespace() {
 #[test]
 fn invalid_unreferenced_json_is_rejected_because_config_manages_all_documents() {
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
         &[("unit", "{}")],
     );
     fs::write(
@@ -940,7 +946,10 @@ fn invalid_unreferenced_json_is_rejected_because_config_manages_all_documents() 
 
 #[test]
 fn diagnostics_escape_authored_json_pointer_keys() {
-    let phase = TestProject::new(r#"{"phases":{"bad/name~":{"tasks":[]}}}"#, &[]);
+    let phase = TestProject::new(
+        r#"{ "active_phases": [0],"phases":{"bad/name~":{"tasks":[]}}}"#,
+        &[],
+    );
     assert!(matches!(
         ProjectSpecification::load(phase.path()),
         Err(ConfigError::InvalidDocument { pointer, .. })
@@ -948,7 +957,7 @@ fn diagnostics_escape_authored_json_pointer_keys() {
     ));
 
     let parameters = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"execution_unit":"a/b~c"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"a/b~c"}]}}}"#,
         &[("different", "{}")],
     );
     assert!(matches!(
@@ -966,7 +975,7 @@ fn empty_and_overlapping_expansion_markers_are_rejected() {
         r#"{"$unknown":[1,2]}"#,
     ] {
         let project = TestProject::new(
-            r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+            r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
             &[("unit", source)],
         );
         assert!(matches!(
@@ -982,7 +991,7 @@ fn json_file_symlinks_preserve_authored_keys_and_enforce_containment() {
     use std::os::unix::fs::symlink;
 
     let contained = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "paths":{"states":{"alias":"wf_configs/alias.json"}},
           "phases":{"only":{"tasks":[{"execution_unit":"unit","state":"alias"}]}}
         }"#,
@@ -1007,7 +1016,7 @@ fn json_file_symlinks_preserve_authored_keys_and_enforce_containment() {
     );
 
     let escaping = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
         &[],
     );
     fs::write(escaping.path().join("outside.json"), "{}").unwrap();
@@ -1028,7 +1037,7 @@ fn non_utf8_config_document_paths_are_rejected_without_lossy_snapshot_keys() {
     use std::os::unix::ffi::OsStringExt as _;
 
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
         &[],
     );
     let name = std::ffi::OsString::from_vec(b"invalid-\xff.json".to_vec());
@@ -1045,7 +1054,7 @@ fn non_utf8_project_roots_are_rejected_before_json_provenance_is_built() {
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 
     let mut project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"program":"missing"}]}}}"#,
         &[],
     );
     let mut renamed = project.path().as_os_str().as_bytes().to_vec();
@@ -1066,7 +1075,7 @@ fn program_resolution_rejects_a_regular_file_without_execute_permission() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let project = TestProject::new(
-        r#"{"phases":{"only":{"tasks":[{"program":"scripts/analyze"}]}}}"#,
+        r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"program":"scripts/analyze"}]}}}"#,
         &[],
     );
     fs::create_dir_all(project.path().join("scripts")).unwrap();
@@ -1085,7 +1094,7 @@ fn program_resolution_rejects_a_regular_file_without_execute_permission() {
 #[test]
 fn program_seed_requests_require_the_master_seed_and_are_retained_semantically() {
     let project = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "seed": 42,
@@ -1103,7 +1112,7 @@ fn program_seed_requests_require_the_master_seed_and_are_retained_semantically()
     );
 
     let missing_master = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "phases":{"only":{"tasks":[{
@@ -1121,7 +1130,7 @@ fn program_seed_requests_require_the_master_seed_and_are_retained_semantically()
     ));
 
     let invalid_purpose = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "seed": 42,
@@ -1143,7 +1152,7 @@ fn program_seed_requests_require_the_master_seed_and_are_retained_semantically()
 #[test]
 fn external_thread_requests_are_validated_and_retained() {
     let project = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 4,
           "phases":{"only":{"tasks":[
@@ -1166,6 +1175,7 @@ fn external_thread_requests_are_validated_and_retained() {
             r#"{{
               "workflow_schema": 1,
               "threads": 2,
+              "active_phases": [0],
               "phases":{{"only":{{"tasks":[{{
                 "program":"/bin/true","resources":{resources}
               }}]}}}}
@@ -1179,7 +1189,7 @@ fn external_thread_requests_are_validated_and_retained() {
     }
 
     let execution_unit = TestProject::new_raw(
-        r#"{
+        r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
           "phases":{"only":{"tasks":[{
@@ -1201,7 +1211,7 @@ fn nested_python_task_resolves_its_mamba_environment_during_loading() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let project = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "phases": {
             "analyze": {
               "tasks": [{
@@ -1261,7 +1271,7 @@ fn every_supported_explicit_python_environment_is_lowered_during_loading() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let project = TestProject::new(
-        r#"{
+        r#"{ "active_phases": [0],
           "phases":{"analyze":{"tasks":[
             {"python":{"script":"scripts/analyze.py","environment":{"manager":"venv","path":"env"}}},
             {"python":{"script":"scripts/analyze.py","environment":{"manager":"conda","name":"DSES","executable":"tools/conda"}}},
@@ -1305,4 +1315,24 @@ fn every_supported_explicit_python_environment_is_lowered_during_loading() {
     assert_eq!(programs[2].args()[1], "--project");
     assert_eq!(programs[3].args()[0], "--directory");
     assert_eq!(programs[3].args()[2], "run");
+}
+
+#[test]
+fn active_phase_indices_are_required_explicit_and_bounded() {
+    for (selection, reason) in [
+        ("", "missing field `active_phases`"),
+        ("\"active_phases\":[0,0],", "distinct"),
+        ("\"active_phases\":[1],", "phase count"),
+        ("\"active_phases\":[-1],", "invalid"),
+        ("\"active_phases\":[\"simulate\"],", "invalid"),
+    ] {
+        let source = format!(
+            r#"{{"workflow_schema":1,"threads":2,{selection}"phases":{{"simulate":{{"tasks":[{{"execution_unit":"unit"}}]}}}}}}"#
+        );
+        let project = TestProject::new_raw(&source, &[("unit", "{}")]);
+        let error = ProjectSpecification::load(project.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(reason), "{error}");
+    }
 }
