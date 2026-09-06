@@ -21,6 +21,8 @@ validation. A failure never returns a partial scientific series.
 
 ## Installation
 
+Use the online [Python environment setup guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/docs/setup.md) before the commands below.
+
 ```bash
 python3.14 -m venv .venv
 source .venv/bin/activate

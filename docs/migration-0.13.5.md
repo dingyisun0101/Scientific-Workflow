@@ -7,7 +7,7 @@ There are no compatibility aliases for the old Python package or namespace.
 
 ## 1. Upgrade and activate the environment
 
-Follow [Linux setup](setup.md). Update every direct Rust dependency and application
+Follow [Linux setup](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/docs/setup.md). Update every direct Rust dependency and application
 lockfile to 0.13.5. Replace the Python distribution `scientific-workflow-reader`
 with `scientific-workflow` 0.4.3 and keep `[npy]` where conversion/readback is used.
 Replace `scientific_workflow_reader` imports with `scientific_workflow`. Git users

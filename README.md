@@ -34,7 +34,7 @@ See the [Config contract](rust/src/config/api.md#nested-alternatives-and-indepen
 
 ## Start here
 
-- **Start with the [Linux and Python setup guide](docs/setup.md).**
+- **Start with the [Linux and Python setup guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/docs/setup.md).**
 - Upgrading? Follow the [0.13.5 / 0.4.3 migration guide](docs/migration-0.13.5.md).
 - For typed dependency handoff and whole-series analysis, run the
   [initialization → simulation → NPY → analysis example](examples/dependency_pipeline/README.md).
