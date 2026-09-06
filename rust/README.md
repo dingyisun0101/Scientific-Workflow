@@ -1,10 +1,10 @@
 # Scientific Workflow Rust crate
 
-Rust 0.13.7 adds recursive sweep alternatives: one base can accompany the
+Rust 0.13.8 adds recursive sweep alternatives: one base can accompany the
 Cartesian product of independent parameter axes. Existing flat sweeps, runtime
-APIs, recording formats, and Python companion 0.4.3 remain unchanged.
+APIs, recording formats, and Python companion 0.4.4 remain unchanged.
 
-> **BREAKING API UPDATE — 0.13.5 / Python 0.4.3:** Despite the patch version,
+> **BREAKING API UPDATE — 0.13.8 / Python 0.4.4:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python
 > imports move to `scientific_workflow`; no old import aliases are provided.
 > Boundary-only recordings require a reader supporting format 8; format 7 remains readable.
@@ -26,7 +26,7 @@ configuration-driven execution unit or program execution, and durable outputs.
 
 ## New to Workflow?
 
-Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/rust/getting-started.md). It
+Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/rust/getting-started.md). It
 explains Serde and deserialization, Rust traits, and the difference between a
 study, phase, task, execution unit, member, and state before presenting a
 minimal runnable project.
@@ -150,14 +150,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.7"
+scientific-workflow = "0.13.8"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.13.7
+cargo add scientific-workflow@0.13.8
 cargo add serde --features derive
 ```
 
@@ -173,7 +173,7 @@ optional converter:
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.5#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.8#subdirectory=python"
 ```
 
 The default `terminal-ui` feature preserves the automatic interactive
@@ -182,7 +182,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.13.7", default-features = false }
+scientific-workflow = { version = "0.13.8", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they
@@ -193,7 +193,7 @@ an embedding choice, not an alternate end-user interface.
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
 into an execution unit's typed `Constants` value. Application code normally
-adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/rust/getting-started.md#why-serde-and-deserialize-appear)
+adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/rust/getting-started.md#why-serde-and-deserialize-appear)
 shows the exact JSON-to-Rust mapping and explains why
 `#[serde(deny_unknown_fields)]` is recommended.
 
@@ -249,7 +249,7 @@ include:
 - exposing a different public orchestration or execution unit contract;
 - implementing a custom persistence backend, writer lifecycle, or incompatible
   recording format (the current cross-language contract is the repository's
-  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/protocol/recording-v7.md));
+  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/protocol/recording-v7.md));
 - replacing scheduling, cancellation, output-layout, or UI policy;
 - carrying organization-specific changes that cannot be contributed upstream;
   or
@@ -793,7 +793,7 @@ final `exit` is still required. Noninteractive runs never wait for input.
 Redirected execution uses stable plain lifecycle lines. The dashboard and
 plain renderer are the only presentation modes. Failure of the selected mode
 is fatal and returns `RuntimeError::Presentation` rather than silently
-degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/rust/src/ui/api.md)
+degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/rust/src/ui/api.md)
 details commands, scrolling, and pause boundaries.
 
 Config alone reads `wf_configs/study.json`, every named project state document, and the complete
@@ -801,7 +801,7 @@ arbitrary `wf_configs/parameters.json` namespace once. A top-level section
 whose name is selected by an execution-unit task is inferred as local to that
 unit; every other top-level parameter is shared globally. Global choices clone
 the complete phase graph, and local choices clone only their execution-unit
-task. `$sweep` creates independent Cartesian choices. Since 0.13.7,
+task. `$sweep` creates independent Cartesian choices. Since 0.13.8,
 each sweep alternative can itself contain independent sweep axes: an outer
 `[null, {"size":{"$sweep":[2,4]}, "strength":{"$sweep":[0.1,0.8]}}]` choice
 produces one base plus four variants. Expansion preserves declared ordering;
@@ -924,7 +924,7 @@ See [`src/state/api.md`](src/state/api.md),
 [`src/ui/api.md`](src/ui/api.md),
 [`src/error/api.md`](src/error/api.md),
 [`src/prelude/api.md`](src/prelude/api.md), and the repository
-[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.7/docs/architecture.md).
+[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/docs/architecture.md).
 
 ## Validation
 

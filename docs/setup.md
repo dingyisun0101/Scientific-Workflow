@@ -24,11 +24,11 @@ python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install \
-  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.5#subdirectory=python'
-cargo add scientific-workflow@0.13.5
+  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.8#subdirectory=python'
+cargo add scientific-workflow@0.13.8
 ```
 
-The tag contains Rust 0.13.5 and Python companion 0.4.3. Without `$npy` or NumPy
+The tag contains Rust 0.13.8 and Python companion 0.4.4. Without `$npy` or NumPy
 readback, omit `[npy]` to install the dependency-free Python core. Cargo only
 installs Rust dependencies. **Workflow does not create, activate, or populate a
 Python environment. You must install the Python package yourself.**
@@ -42,7 +42,7 @@ cargo run --release
 ```
 
 `$npy` selects `python3` from the active `PATH`, preserving virtual-environment
-identity. Preflight verifies Python 3.14+, companion 0.4.3, NumPy, and threadpoolctl
+identity. Preflight verifies Python 3.14+, companion 0.4.4, NumPy, and threadpoolctl
 before scientific work begins. A project-local `python3` does not override this
 selection. An explicitly configured generic Python program retains its separate
 interpreter configuration. See [Config](../rust/src/config/api.md).
@@ -80,7 +80,7 @@ for progress and standard logging. Imports do not configure the root logger.
 ## Troubleshooting and reference
 
 - Prerequisite error: activate the correct environment and repeat the import
-  command above; verify `python3` resolves inside it and reports 0.4.3.
+  command above; verify `python3` resolves inside it and reports 0.4.4.
 - Missing dependency: check phase prerequisites and selector filters.
   Ambiguous dependency: add phase/task/member filters; `.optional()` also rejects
   multiple matches. Do not silently choose the first result.

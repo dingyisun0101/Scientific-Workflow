@@ -1,10 +1,10 @@
 # Scientific Workflow
 
-Rust 0.13.7 adds recursive sweep alternatives: one base can accompany the
+Rust 0.13.8 adds recursive sweep alternatives: one base can accompany the
 Cartesian product of independent parameter axes. Existing flat sweeps, runtime
-APIs, recording formats, and Python companion 0.4.3 remain unchanged.
+APIs, recording formats, and Python companion 0.4.4 remain unchanged.
 
-> **BREAKING API UPDATE — 0.13.5 / Python 0.4.3:** Despite the patch version,
+> **BREAKING API UPDATE — 0.13.8 / Python 0.4.4:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python
 > imports move to `scientific_workflow`; no old import aliases are provided.
 > Boundary-only recordings require a reader supporting format 8; format 7 remains readable.
@@ -24,9 +24,9 @@ executable programs, and declarative JSON into validated, recorded studies.
 > their former local interpretation. Projects still declare
 > `"workflow_schema": 1`.
 
-## Nested sweep alternatives in 0.13.7
+## Nested sweep alternatives in 0.13.8
 
-Workflow 0.13.7 accepts independent `$sweep` axes within an outer sweep
+Workflow 0.13.8 accepts independent `$sweep` axes within an outer sweep
 alternative. A null base plus a six-by-four parameter grid expands to 25 tasks
 without application-side enumeration. Global/local scope, existing flat sweep
 ordering, and runtime admission policy are unchanged. `$cases` remains terminal.
@@ -59,7 +59,7 @@ See the [Config contract](rust/src/config/api.md#nested-alternatives-and-indepen
   [compatibility matrix](protocol/compatibility.md).
 - To find the tests for a behavior or run the required checks, use the
   [test map](docs/tests.md).
-- For the Rust 0.13.5 and Python companion 0.4.3 release summary, see the
+- For the Rust 0.13.8 and Python companion 0.4.4 release summary, see the
   [changelog](CHANGELOG.md).
 
 ## Repository map

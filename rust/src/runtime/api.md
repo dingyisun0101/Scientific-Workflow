@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.8 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -275,7 +275,7 @@ are fixed before output creation.
 This non-exhaustive enum reports failures after a valid Study is available:
 
 - `PythonPrerequisite { interpreter: PathBuf, reason: String }`: the active
-  interpreter cannot import the coordinated Python 0.4.3 tools, NumPy and
+  interpreter cannot import the coordinated Python 0.4.4 tools, NumPy and
   threadpoolctl, or is older than Python 3.14. The error names the selected
   interpreter and setup remedy. Runtime probes before scientific work and output
   creation; Study::load performs no subprocess probe.

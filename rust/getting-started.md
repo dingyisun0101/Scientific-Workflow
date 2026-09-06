@@ -10,7 +10,7 @@ API reference.
 > before each launch, including every new shell**. Cargo does not install Python.
 > **Keep `wf_configs/study.json` and `wf_configs/parameters.json` at their required
 > paths. Renaming or moving these files is unsupported.** See the
-> [complete setup guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.5/docs/setup.md).
+> [complete setup guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/docs/setup.md).
 
 ## The mental model
 
@@ -141,7 +141,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [dependencies]
-scientific-workflow = "0.13.5"
+scientific-workflow = "0.13.8"
 serde = { version = "1", features = ["derive"] }
 ```
 

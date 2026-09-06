@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 from pathlib import Path
 import re
 import shutil
@@ -56,6 +57,17 @@ JsonPath = tuple[str, ...]
 _PROGRESS_QUEUE = None
 _LAST_PROGRESS = 0.0
 _THREAD_LIMIT = None
+
+
+def _worker_context() -> multiprocessing.context.BaseContext:
+    if os.name == "posix" and sys.platform.startswith("linux"):
+        default = "fork"
+    else:
+        default = "spawn"
+    requested = os.environ.get("WORKFLOW_NPY_CONTEXT", default).strip().lower()
+    if requested in {"fork", "spawn", "forkserver"}:
+        return multiprocessing.get_context(requested)
+    return multiprocessing.get_context(default)
 
 
 def _worker_setup(updates):
@@ -356,9 +368,11 @@ def _descriptor(
     stream: str,
     field: str | None,
     role: str,
+    array: np.ndarray[Any, Any] | None = None,
     logical_path: JsonPath | None = None,
 ) -> dict[str, object]:
-    array = np.load(path, mmap_mode="r", allow_pickle=False)
+    if array is None:
+        array = np.load(path, mmap_mode="r", allow_pickle=False)
     if not array.flags.c_contiguous:
         raise NpyConversionError(f"array is not C-contiguous: {path}")
     return {
@@ -446,6 +460,7 @@ class _NumericWriter:
                 stream=stream,
                 field=field,
                 role=role,
+                array=self.data,
                 logical_path=self.plan.logical_path,
             )
         ]
@@ -465,6 +480,7 @@ class _NumericWriter:
                     stream=stream,
                     field=field,
                     role=f"{role}_offsets",
+                    array=self.offsets,
                     logical_path=self.plan.logical_path,
                 )
             )
@@ -478,6 +494,7 @@ class _NumericWriter:
                     stream=stream,
                     field=field,
                     role=f"{role}_shapes",
+                    array=self.shapes,
                     logical_path=self.plan.logical_path,
                 )
             )
@@ -516,6 +533,7 @@ class _JsonWriter:
                 stream=stream,
                 field=field,
                 role="json_data",
+                array=self.data,
             ),
             _descriptor(
                 root,
@@ -523,6 +541,7 @@ class _JsonWriter:
                 stream=stream,
                 field=field,
                 role="json_offsets",
+                array=self.offsets,
             ),
         ]
         return (
@@ -742,7 +761,9 @@ def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
 
 
 def _existing(
-    output: Path, recording: Path, metadata_checksum: str
+    output: Path,
+    recording: Path,
+    metadata_checksum: str,
 ) -> dict[str, object] | None:
     manifest_path = output / MANIFEST_FILE
     if not manifest_path.is_file():
@@ -762,8 +783,9 @@ def _existing(
     return document
 
 
-def _stream_plan(reader: Any, stream: str) -> tuple[list[_FieldPlan], bool]:
-    _stage(f"planning {stream}", total=reader.stream_record_count(stream), force=True)
+def _stream_plan(reader: Any, stream: str) -> tuple[list[_FieldPlan], bool, int]:
+    count = reader.stream_record_count(stream)
+    _stage(f"planning {stream}", total=count, force=True)
     records = iter(reader.iter_verified_records(stream))
     try:
         first = next(records)
@@ -780,7 +802,7 @@ def _stream_plan(reader: Any, stream: str) -> tuple[list[_FieldPlan], bool]:
             )
         for field, value in record.values.items():
             scans[field].observe(value)
-    return [scan.finish() for scan in scans.values()], physical_time
+    return [scan.finish() for scan in scans.values()], physical_time, count
 
 
 def _empty_array(plan: _NumericPlan, index: int) -> np.ndarray[Any, Any]:
@@ -793,8 +815,7 @@ def _convert_stream(
     stream_index: int,
     temporary: Path,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
-    plans, has_physical_time = _stream_plan(reader, stream)
-    count = reader.stream_record_count(stream)
+    plans, has_physical_time, count = _stream_plan(reader, stream)
     prefix = f"{stream_index:04d}-{_safe_name(stream)}"
 
     numeric_writers: dict[str, _NumericWriter] = {}
@@ -830,7 +851,7 @@ def _convert_stream(
     observed = 0
     plans_by_name = {plan.name: plan for plan in plans}
     for observed, record in enumerate(reader.iter_verified_records(stream), start=1):
-        _stage(f"writing {stream}", observed, reader.stream_record_count(stream))
+        _stage(f"writing {stream}", observed, count)
         index = observed - 1
         iterations[index] = record.iteration
         if physical_times is not None:
@@ -867,6 +888,7 @@ def _convert_stream(
             stream=stream,
             field=None,
             role="iterations",
+            array=iterations,
         )
     ]
     if physical_times is not None:
@@ -878,6 +900,7 @@ def _convert_stream(
                 stream=stream,
                 field=None,
                 role="physical_times",
+                array=physical_times,
             )
         )
 
@@ -885,7 +908,10 @@ def _convert_stream(
     for plan in plans:
         if plan.direct is not None:
             dataset, field_descriptors = numeric_writers[plan.name].finish(
-                temporary, stream=stream, field=plan.name, role="field_data"
+                temporary,
+                stream=stream,
+                field=plan.name,
+                role="field_data",
             )
             descriptors.extend(field_descriptors)
             fields.append(
@@ -1299,6 +1325,7 @@ def convert_workflow_dependencies(dependencies_path: str | Path, output_director
     if allowance < 1:
         raise NpyConversionError("WORKFLOW_THREADS must be positive")
     workers = min(allowance, len(recordings))
+    context = _worker_context()
     started = _control.active_time()
     log(f"conversion started: {len(recordings)} members, {workers} worker(s)")
     results = {}
@@ -1323,7 +1350,6 @@ def convert_workflow_dependencies(dependencies_path: str | Path, output_director
                     log(f"member {ordinal} {'reused' if reused else 'completed'}: {recording}")
                     progress("conversion", len(results), len(recordings), unit="members")
             else:
-                context = multiprocessing.get_context("spawn")
                 updates = context.Queue(maxsize=128)
                 pool = ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_worker_setup, initargs=(updates,))
                 pending = {}

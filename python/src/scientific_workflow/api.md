@@ -1,7 +1,7 @@
 # Python companion API
 
 Python distribution/import: `scientific-workflow` / `scientific_workflow`, version
-0.4.3. Python 3.14+; Linux is the supported execution platform. The base package
+0.4.4. Python 3.14+; Linux is the supported execution platform. The base package
 has no runtime dependencies; `[npy]` installs NumPy. Imports have no environment,
 logging, working-directory, subprocess, or output-creation side effects.
 
