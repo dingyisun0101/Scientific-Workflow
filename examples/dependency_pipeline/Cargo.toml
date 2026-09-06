@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-scientific-workflow = "0.13.8"
+scientific-workflow = { path = "../../rust" }
 serde = { version = "1", features = ["derive"] }
