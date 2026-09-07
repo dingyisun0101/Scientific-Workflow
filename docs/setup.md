@@ -20,15 +20,14 @@ for the manifest grammar and a first Rust execution unit.
 ## Install the coordinated release
 
 ```sh
-python3.14 -m venv .venv
-source .venv/bin/activate
+# Activate your existing Python 3.14+ environment first.
 python -m pip install --upgrade pip
 python -m pip install \
-  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.9#subdirectory=python'
-cargo add scientific-workflow@0.13.9
+  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.10#subdirectory=python'
+cargo add scientific-workflow@0.13.10
 ```
 
-The tag contains Rust 0.13.9 and Python companion 0.4.4. Without `$npy` or NumPy
+The tag contains Rust 0.13.10 and Python companion 0.4.5. Without `$npy` or NumPy
 readback, omit `[npy]` to install the dependency-free Python core. Cargo only
 installs Rust dependencies. **Workflow does not create, activate, or populate a
 Python environment. You must install the Python package yourself.**
@@ -36,13 +35,13 @@ Python environment. You must install the Python package yourself.**
 **ACTIVATE THE ENVIRONMENT BEFORE EVERY LAUNCH, INCLUDING EVERY NEW SHELL:**
 
 ```sh
-source .venv/bin/activate
+# Activate the same existing Python environment; do not stack environments.
 python3 -c 'import sys, scientific_workflow, numpy, threadpoolctl; print(sys.executable, scientific_workflow.__version__)'
 cargo run --release
 ```
 
 `$npy` selects `python3` from the active `PATH`, preserving virtual-environment
-identity. Preflight verifies Python 3.14+, companion 0.4.4, NumPy, and threadpoolctl
+identity. Preflight verifies Python 3.14+, companion 0.4.5, NumPy, and threadpoolctl
 before scientific work begins. A project-local `python3` does not override this
 selection. An explicitly configured generic Python program retains its separate
 interpreter configuration. See [Config](../rust/src/config/api.md).
@@ -80,7 +79,7 @@ for progress and standard logging. Imports do not configure the root logger.
 ## Troubleshooting and reference
 
 - Prerequisite error: activate the correct environment and repeat the import
-  command above; verify `python3` resolves inside it and reports 0.4.4.
+  command above; verify `python3` resolves inside it and reports 0.4.5.
 - Missing dependency: check phase prerequisites and selector filters.
   Ambiguous dependency: add phase/task/member filters; `.optional()` also rejects
   multiple matches. Do not silently choose the first result.
@@ -96,3 +95,28 @@ Continue with the [complete Python API](../python/src/scientific_workflow/api.md
 [typed Rust dependencies](../rust/src/task/dependencies/api.md),
 [worked pipeline](../examples/dependency_pipeline/README.md), and
 [migration instructions](migration-0.13.5.md).
+
+## Stream exclusions in NumPy conversion
+
+```json
+"$npy": {
+  "after": ["evolve"],
+  "exclude_streams": ["checkpoint"]
+}
+```
+
+Only the reserved `$npy` phase accepts `exclude_streams`. Omission or an empty
+list converts all streams. Entries must be distinct, nonempty strings without
+surrounding whitespace. Matching is exact and case-sensitive; names absent from
+a particular recording have no effect. Exclusions apply to all prerequisite
+members, including transitive prerequisites. Excluded chunks are not read or
+verified; recording metadata and all included chunks remain verified. Raw
+recordings, checkpoint production, member identities, and phase indices do not
+change. If every stream is excluded, a valid metadata-only member dataset is
+published.
+
+Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
+v2 manifests without this field mean no exclusions. Reuse requires identical
+filters and source metadata; use a different output directory for a different
+selection. Serial and parallel conversion have the same filtering semantics.
+No shell interpretation or glob matching is performed.

@@ -27,7 +27,7 @@ Use the online [Python environment setup guide](https://github.com/dingyisun0101
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.8#subdirectory=python"
+  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.10#subdirectory=python"
 ```
 
 Python 3.14 or newer is required. The core reader has no runtime dependencies.
@@ -36,10 +36,10 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 
 ```bash
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.8#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.10#subdirectory=python"
 ```
 
-This guide documents release 0.4.4.
+This guide documents release 0.4.5.
 
 ## Reading a recording
 
@@ -92,7 +92,7 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.4.4 supports
+Release 0.4.5 supports
 `scientific-workflow-jsonl` format versions 7 and 8, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
@@ -144,7 +144,7 @@ test infrastructure, not supported writer APIs.
 ## NumPy conversion
 
 The optional converter verifies one completed recording through the official
-reader and converts every field into manifest-directed, C-contiguous `.npy`
+reader and converts every field of each selected stream into manifest-directed, C-contiguous `.npy`
 data. Fixed-shape numeric fields map directly. Changing numeric shapes use
 packed data, offsets, and shapes. Structured fields use canonical UTF-8 JSON
 bytes plus offsets as a lossless fallback and expose every stable nested
@@ -205,3 +205,34 @@ python -m unittest discover -s tests -v
 ## License
 
 Licensed under the MIT License.
+
+## Stream exclusions in NumPy conversion
+
+```json
+"$npy": {
+  "after": ["evolve"],
+  "exclude_streams": ["checkpoint"]
+}
+```
+
+Only the reserved `$npy` phase accepts `exclude_streams`. Omission or an empty
+list converts all streams. Entries must be distinct, nonempty strings without
+surrounding whitespace. Matching is exact and case-sensitive; names absent from
+a particular recording have no effect. Exclusions apply to all prerequisite
+members, including transitive prerequisites. Excluded chunks are not read or
+verified; recording metadata and all included chunks remain verified. Raw
+recordings, checkpoint production, member identities, and phase indices do not
+change. If every stream is excluded, a valid metadata-only member dataset is
+published.
+
+Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
+v2 manifests without this field mean no exclusions. Reuse requires identical
+filters and source metadata; use a different output directory for a different
+selection. Serial and parallel conversion have the same filtering semantics.
+No shell interpretation or glob matching is performed.
+
+Standalone equivalent:
+
+```sh
+scientific-workflow-to-npy path/to/member-recording --exclude-stream checkpoint
+```

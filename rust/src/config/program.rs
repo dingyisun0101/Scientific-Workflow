@@ -86,7 +86,7 @@ impl ResolvedProgramTask {
         }
     }
 
-    pub(crate) fn for_npy(program: PathBuf) -> Self {
+    pub(crate) fn for_npy(program: PathBuf, exclude_streams: &[Box<str>]) -> Self {
         Self {
             inner: Arc::new(ResolvedProgramTaskInner {
                 program,
@@ -95,7 +95,13 @@ impl ResolvedProgramTask {
                     OsString::from("scientific_workflow.npy"),
                     OsString::from("--workflow-dependencies"),
                 ]
-                .into(),
+                .into_iter()
+                .chain(
+                    exclude_streams
+                        .iter()
+                        .map(|name| OsString::from(format!("--exclude-stream={name}"))),
+                )
+                .collect(),
                 timeout: None,
                 seed_purpose: None,
                 threads: 1,

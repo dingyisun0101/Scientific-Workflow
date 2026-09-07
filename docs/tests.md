@@ -269,3 +269,12 @@ The two private example crates now explicitly require crates.io Workflow 0.13.7;
 the workspace lockfile resolves that release separately from the local runtime
 under test. The 130-test all-feature workspace suite passed with these updated
 example dependencies. This consumer update does not change the runtime crate.
+## 0.13.10 / 0.4.5 regressions
+
+Runtime tests cover twelve-member clocks, early completion, and unknown targets.
+UI rendering tests cover complete counters at widths 35, 80, 99, 100, and 173,
+plus explicitly omitted counters when even the numbers cannot fit. Config tests
+cover valid exclusions, unsafe argument interpretation, duplicate/invalid names,
+and rejection on ordinary phases. Python tests cover mixed streams, skipped
+corrupt excluded chunks, all-excluded datasets, unknown names, invalid lists,
+CLI forwarding, serial/parallel parity, and filter-aware retries.

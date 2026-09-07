@@ -1,6 +1,6 @@
 # UI API
 
-This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.10 subsystem contract.
 
 The `ui` subsystem is the sole presentation interface for execution facts
 already known by Runtime. It does not inspect execution units, scientific payloads,
@@ -177,3 +177,14 @@ stdout/stderr logs remain on disk. Program progress counts are not treated as
 scientific-time ETA because member sizes differ. Noninteractive mode prints
 lifecycle and program logs; no terminal input or renderer is started. Terminal
 phase messages include completed, failed, cancelled, and skipped task counts.
+## Ensemble counters and narrow terminals
+
+Scientific task progress uses Runtime's maximum member iteration and target,
+never the sum across members. A lockstep ensemble capped at 36000 displays a
+36000 target irrespective of member count. Unknown targets remain unknown; ETA
+uses the same clock.
+
+The table reserves space for complete numeric counters before task labels and
+timing columns. Numbers precede the bar, whose length shrinks to fit. On a
+terminal too narrow for the counter itself, dots explicitly omit the value
+rather than presenting a truncated integer. Presentation never changes execution.

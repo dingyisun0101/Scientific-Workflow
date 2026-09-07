@@ -335,17 +335,46 @@ impl TaskExecutionHost for RuntimeTaskHost {
 
 impl RuntimeTaskHost {
     fn publish_progress(&self) {
-        let iteration = self
-            .member_iterations
-            .iter()
-            .copied()
-            .fold(0_u64, u64::saturating_add);
-        let target = self
-            .member_targets
-            .iter()
-            .copied()
-            .collect::<Option<Vec<_>>>()
-            .map(|targets| targets.into_iter().fold(0_u64, u64::saturating_add));
+        let (iteration, target) = ensemble_progress(&self.member_iterations, &self.member_targets);
         self.task_presentation.progress(iteration, target);
+    }
+}
+
+fn ensemble_progress(iterations: &[u64], targets: &[Option<u64>]) -> (u64, Option<u64>) {
+    let iteration = iterations.iter().copied().max().unwrap_or(0);
+    let target = targets
+        .iter()
+        .copied()
+        .collect::<Option<Vec<_>>>()
+        .and_then(|targets| targets.into_iter().max());
+    (iteration, target)
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::ensemble_progress;
+
+    #[test]
+    fn ensemble_clock_is_not_multiplied_by_member_count() {
+        assert_eq!(
+            ensemble_progress(&[100; 12], &[Some(36_000); 12]),
+            (100, Some(36_000))
+        );
+    }
+
+    #[test]
+    fn early_finished_members_do_not_hold_back_the_clock() {
+        assert_eq!(
+            ensemble_progress(&[10, 100], &[Some(10), Some(36_000)]),
+            (100, Some(36_000))
+        );
+    }
+
+    #[test]
+    fn unknown_targets_remain_unknown() {
+        assert_eq!(
+            ensemble_progress(&[10, 100], &[Some(36_000), None]),
+            (100, None)
+        );
     }
 }

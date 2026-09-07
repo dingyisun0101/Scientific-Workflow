@@ -74,7 +74,9 @@ impl ProjectSpecification {
                 ParsedTask::ExecutionUnit { execution_unit, .. } => {
                     Some(execution_unit.to_string())
                 }
-                ParsedTask::Program { .. } | ParsedTask::Python { .. } | ParsedTask::Npy => None,
+                ParsedTask::Program { .. } | ParsedTask::Python { .. } | ParsedTask::Npy { .. } => {
+                    None
+                }
             })
             .collect::<BTreeSet<_>>();
         let shared = parameter_sections
@@ -197,8 +199,11 @@ impl ProjectSpecification {
                             });
                         }
                     }
-                    ParsedTask::Npy => {
-                        let program = ResolvedProgramTask::for_npy(resolve_active_python()?);
+                    ParsedTask::Npy { exclude_streams } => {
+                        let program = ResolvedProgramTask::for_npy(
+                            resolve_active_python()?,
+                            &exclude_streams,
+                        );
                         let snapshot = resolved_parameters
                             .first()
                             .expect("parameter expansion always produces one configuration")

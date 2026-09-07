@@ -213,7 +213,9 @@ pub(crate) enum ParsedTask {
         timeout: Option<Duration>,
         threads: usize,
     },
-    Npy,
+    Npy {
+        exclude_streams: Box<[Box<str>]>,
+    },
 }
 
 pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigError> {
@@ -351,9 +353,33 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
     for (name, value) in raw.phases {
         let phase_pointer = child_pointer("/phases", &name);
         validate_identifier(path, &phase_pointer, &name, "phase")?;
+        let exclusions_authored = value.get("exclude_streams").is_some();
         let raw: RawPhase = serde_json::from_value(value)
             .map_err(|error| ConfigError::invalid(path, &phase_pointer, error.to_string()))?;
         let npy_phase = name == NPY_PHASE_NAME;
+        if exclusions_authored && !npy_phase {
+            return Err(ConfigError::invalid(
+                path,
+                format!("{phase_pointer}/exclude_streams"),
+                "exclude_streams is valid only on the reserved `$npy` phase",
+            ));
+        }
+        let mut excluded = HashSet::new();
+        for stream in &raw.exclude_streams {
+            validate_identifier(
+                path,
+                &format!("{phase_pointer}/exclude_streams"),
+                stream,
+                "excluded stream",
+            )?;
+            if !excluded.insert(stream) {
+                return Err(ConfigError::invalid(
+                    path,
+                    format!("{phase_pointer}/exclude_streams"),
+                    "excluded stream names must be distinct",
+                ));
+            }
+        }
         if !npy_phase && raw.tasks.is_empty() {
             return Err(ConfigError::invalid(
                 path,
@@ -499,7 +525,13 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             }
         }
         if npy_phase {
-            tasks.push(ParsedTask::Npy);
+            tasks.push(ParsedTask::Npy {
+                exclude_streams: raw
+                    .exclude_streams
+                    .into_iter()
+                    .map(String::into_boxed_str)
+                    .collect(),
+            });
         }
 
         phases.push(ParsedPhase {
@@ -683,6 +715,8 @@ impl Default for RawReplicatePolicy {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPhase {
+    #[serde(default)]
+    exclude_streams: Vec<String>,
     #[serde(default)]
     after: Vec<String>,
     #[serde(default)]

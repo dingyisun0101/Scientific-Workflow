@@ -295,12 +295,13 @@ fn render_tasks(
             .add_modifier(Modifier::BOLD),
     );
     let available = usize::from(area.height.saturating_sub(3));
+    let widths = task_columns(area.width, &snapshot.tasks);
     let mut rows = snapshot
         .tasks
         .iter()
         .skip(offset)
         .take(available)
-        .map(|task| task_row(task, tick, snapshot.now))
+        .map(|task| task_row(task, tick, snapshot.now, usize::from(widths[2])))
         .collect::<Vec<_>>();
     if snapshot.tasks.len().saturating_sub(offset) > available && available > 0 {
         rows.truncate(available.saturating_sub(1));
@@ -314,22 +315,14 @@ fn render_tasks(
             Cell::from(""),
         ]));
     }
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Percentage(37),
-            Constraint::Length(12),
-            Constraint::Percentage(32),
-            Constraint::Length(TIMING_WIDTH),
-        ],
-    )
-    .header(header)
-    .column_spacing(1)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(task_panel_title(snapshot)),
-    );
+    let table = Table::new(rows, widths.map(Constraint::Length))
+        .header(header)
+        .column_spacing(1)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(task_panel_title(snapshot)),
+        );
     frame.render_widget(table, area);
 }
 
@@ -340,7 +333,40 @@ fn task_panel_title(snapshot: &DashboardSnapshot) -> String {
     )
 }
 
-fn task_row(task: &TaskSnapshot, tick: usize, now: Instant) -> Row<'static> {
+fn task_columns(width: u16, tasks: &[TaskSnapshot]) -> [u16; 4] {
+    // Reserve borders and three separators, then protect the complete counter.
+    let available = width.saturating_sub(5);
+    let required = tasks
+        .iter()
+        .filter(|task| task.kind == "execution_unit")
+        .map(|task| progress_count(task).len())
+        .max()
+        .unwrap_or(0);
+    let progress = u16::try_from(
+        (usize::from(available) * 32 / 100)
+            .max(required)
+            .min(usize::from(available)),
+    )
+    .expect("progress width is bounded by the terminal area");
+    let remaining = available - progress;
+    let status = remaining.min(12);
+    let remaining = remaining - status;
+    let timing = if remaining >= TIMING_WIDTH + 8 {
+        TIMING_WIDTH
+    } else {
+        0
+    };
+    [remaining - timing, status, progress, timing]
+}
+
+fn progress_count(task: &TaskSnapshot) -> String {
+    match task.target {
+        Some(target) => format!("{}/{target}", task.iteration),
+        None => task.iteration.to_string(),
+    }
+}
+
+fn task_row(task: &TaskSnapshot, tick: usize, now: Instant, progress_width: usize) -> Row<'static> {
     let status_style = match task.status {
         TaskStatus::Pending | TaskStatus::Skipped => Style::default().fg(Color::DarkGray),
         TaskStatus::Running => Style::default().fg(Color::Cyan),
@@ -348,7 +374,7 @@ fn task_row(task: &TaskSnapshot, tick: usize, now: Instant) -> Row<'static> {
         TaskStatus::Failed => Style::default().fg(Color::Red),
         TaskStatus::Cancelled => Style::default().fg(Color::Yellow),
     };
-    let progress = progress_text(task, tick);
+    let progress = progress_text(task, tick, progress_width);
     let timing = timing_text(task, now);
     let task_label = if task.detail.is_empty() {
         format!("{} · {}", task.label, display_kind(&task.kind))
@@ -374,7 +400,7 @@ fn display_kind(kind: &str) -> &str {
     }
 }
 
-fn progress_text(task: &TaskSnapshot, tick: usize) -> String {
+fn progress_text(task: &TaskSnapshot, tick: usize, width: usize) -> String {
     if task.status == TaskStatus::Pending || task.status == TaskStatus::Skipped {
         return String::new();
     }
@@ -388,27 +414,28 @@ fn progress_text(task: &TaskSnapshot, tick: usize) -> String {
             task.kind.clone()
         };
     }
+    let count = progress_count(task);
+    if count.len() > width {
+        // A visibly omitted value is safer than a clipped, incorrect integer.
+        return ".".repeat(width.min(3));
+    }
+    let bar_width = width.saturating_sub(count.len() + 1).min(16);
     match task.target {
-        Some(target) => {
+        Some(target) if bar_width > 0 => {
             let ratio = if target == 0 {
                 1.0
             } else {
                 (task.iteration as f64 / target as f64).clamp(0.0, 1.0)
             };
-            let filled = (ratio * 16.0).round() as usize;
+            let filled = (ratio * bar_width as f64).round() as usize;
             format!(
-                "{}{} {}/{}",
-                "█".repeat(filled),
-                "░".repeat(16 - filled),
-                task.iteration,
-                target
+                "{count} {}{}",
+                "\u{2588}".repeat(filled),
+                "\u{2591}".repeat(bar_width - filled),
             )
         }
-        None => format!(
-            "{} iteration {}",
-            SPINNER[tick % SPINNER.len()],
-            task.iteration
-        ),
+        None if bar_width > 0 => format!("{count} {}", SPINNER[tick % SPINNER.len()]),
+        _ => count,
     }
 }
 
@@ -607,5 +634,64 @@ mod rendering_tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.contains("newest visible"));
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn task(iteration: u64, target: u64) -> TaskSnapshot {
+        TaskSnapshot {
+            identity: "ensemble".into(),
+            program_progress: None,
+            replicate: 0,
+            phase: "evolve".into(),
+            label: "ensemble".into(),
+            kind: "execution_unit".into(),
+            status: TaskStatus::Running,
+            iteration,
+            target: Some(target),
+            started: Some(Instant::now()),
+            finished: None,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn counters_survive_narrow_tables_without_losing_digits() {
+        for width in [35, 80, 99, 100, 173] {
+            for (iteration, target) in [(100, 36_000), (1104, 432_000)] {
+                let mut snapshot = super::super::state::DashboardState::new().snapshot();
+                snapshot.tasks = vec![task(iteration, target)];
+                let mut terminal = Terminal::new(TestBackend::new(width, 5)).unwrap();
+                terminal
+                    .draw(|frame| render_tasks(frame, frame.area(), &snapshot, 0, 0))
+                    .unwrap();
+                let row: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .skip(usize::from(width) * 2)
+                    .take(usize::from(width))
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(
+                    row.contains(&format!("{iteration}/{target}")),
+                    "width={width}: {row}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn very_narrow_cells_omit_instead_of_misrepresenting_counters() {
+        let task = task(u64::MAX, u64::MAX);
+        assert_eq!(progress_text(&task, 0, 8), "...");
+        assert_eq!(progress_text(&task, 0, 2), "..");
+        assert_eq!(progress_text(&task, 0, 0), "");
+        assert!(progress_text(&task, 0, 60).starts_with(&progress_count(&task)));
     }
 }

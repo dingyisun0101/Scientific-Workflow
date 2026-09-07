@@ -132,7 +132,7 @@ is read-only and has no cancellation or publication effects.
 
 ## Advanced API
 
-`convert_recording(recording_directory, output_directory=None)` verifies and
+`convert_recording(recording_directory, output_directory=None, *, exclude_streams=())` verifies and
 converts a completed recording, returning its manifest. Default output is the
 recording sibling suffixed `-npy`. Conflicts fail; verified matching output is
 reused. Successful publication is atomic after complete validation. Source files
@@ -140,7 +140,7 @@ must remain immutable. NPY_FORMAT and NPY_BATCH_FORMAT remain v2;
 MANIFEST_FILE is `manifest.json`. NpyConversionError(ValueError) reports storage
 contract failures; recording errors and I/O failures retain their own types.
 
-`convert_workflow_dependencies(dependencies_path, output_directory)` converts
+`convert_workflow_dependencies(dependencies_path, output_directory, *, exclude_streams=())` converts
 completed prerequisite recordings and publishes a batch in stable source order.
 The installed CLI `scientific-workflow-to-npy` and `python -m
 scientific_workflow.npy` call `main()`. Consult `--help` for CLI flags; public
@@ -219,3 +219,37 @@ StateRecord(iteration, physical_time, values) exposes them, and create() wraps
 values in a read-only MappingProxyType. StateSeries(stream, fields, records)
 implements len, indexing/slicing, iteration, and an iterations tuple property.
 These frozen containers do not deep-freeze decoded application payloads.
+
+## Stream exclusions in NumPy conversion
+
+```json
+"$npy": {
+  "after": ["evolve"],
+  "exclude_streams": ["checkpoint"]
+}
+```
+
+Only the reserved `$npy` phase accepts `exclude_streams`. Omission or an empty
+list converts all streams. Entries must be distinct, nonempty strings without
+surrounding whitespace. Matching is exact and case-sensitive; names absent from
+a particular recording have no effect. Exclusions apply to all prerequisite
+members, including transitive prerequisites. Excluded chunks are not read or
+verified; recording metadata and all included chunks remain verified. Raw
+recordings, checkpoint production, member identities, and phase indices do not
+change. If every stream is excluded, a valid metadata-only member dataset is
+published.
+
+Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
+v2 manifests without this field mean no exclusions. Reuse requires identical
+filters and source metadata; use a different output directory for a different
+selection. Serial and parallel conversion have the same filtering semantics.
+No shell interpretation or glob matching is performed.
+
+The advanced functions `convert_recording(recording_directory, output_directory=None,
+*, exclude_streams=())` and `convert_workflow_dependencies(dependencies_path,
+output_directory, *, exclude_streams=())` accept an iterable of exact stream
+names, consume it before I/O, validate its entries, and retain no caller-owned
+mutable collection. Invalid arguments raise `NpyConversionError`. Their returned
+manifests include the canonical selection. The CLI accepts repeated
+`--exclude-stream NAME` arguments in direct and Workflow batch modes. Readers
+reject manifests that include an excluded stream or disagree with batch filters.

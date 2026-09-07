@@ -24,7 +24,7 @@ from threadpoolctl import threadpool_limits
 from . import _control
 from .reporting import log, progress
 from .dependencies import Dependencies
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -102,6 +102,26 @@ def _drain_updates(updates):
 
 class NpyConversionError(ValueError):
     """A recording or converted dataset violates the NPY contract."""
+
+
+def _normalize_exclusions(names: Iterable[str]) -> tuple[str, ...]:
+    if isinstance(names, (str, bytes)) or not isinstance(names, Iterable):
+        raise NpyConversionError("exclude_streams must be an iterable of stream names")
+    result: set[str] = set()
+    for name in names:
+        if not isinstance(name, str) or not name or name.strip() != name:
+            raise NpyConversionError("excluded stream names must be nonempty strings without surrounding whitespace")
+        if name in result:
+            raise NpyConversionError(f"duplicate excluded stream name: {name!r}")
+        result.add(name)
+    return tuple(sorted(result))
+
+
+def _manifest_exclusions(document: Mapping[str, object]) -> tuple[str, ...]:
+    names = document.get("exclude_streams", [])
+    if not isinstance(names, list):
+        raise NpyConversionError("manifest exclude_streams must be an array")
+    return _normalize_exclusions(names)
 
 
 def _sha256(path: Path) -> str:
@@ -694,6 +714,7 @@ def _validate_json_fallback(
 
 
 def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
+    excluded = _manifest_exclusions(document)
     arrays = document.get("arrays")
     streams = document.get("streams")
     if not isinstance(arrays, list) or not isinstance(streams, list):
@@ -712,6 +733,8 @@ def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
         fields = stream.get("fields")
         if not isinstance(name, str) or not name or name in stream_names:
             raise NpyConversionError("converted stream names must be unique nonempty strings")
+        if name in excluded:
+            raise NpyConversionError(f"excluded stream is present in converted output: {name!r}")
         stream_names.add(name)
         if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
             raise NpyConversionError("converted stream record count must be positive")
@@ -764,6 +787,7 @@ def _existing(
     output: Path,
     recording: Path,
     metadata_checksum: str,
+    exclude_streams: tuple[str, ...],
 ) -> dict[str, object] | None:
     manifest_path = output / MANIFEST_FILE
     if not manifest_path.is_file():
@@ -774,6 +798,7 @@ def _existing(
             document.get("format") != NPY_FORMAT
             or document.get("source_recording") != str(recording)
             or document.get("source_metadata_checksum") != metadata_checksum
+            or _manifest_exclusions(document) != exclude_streams
         ):
             return None
         _validate_arrays(output, document)
@@ -1184,6 +1209,7 @@ def open_npy_batch(directory: str | Path) -> NpyBatch:
         raise NpyConversionError(
             f"unsupported NPY batch format: {manifest.get('format')!r}"
         )
+    excluded = _manifest_exclusions(manifest)
     entries = manifest.get("members")
     if not isinstance(entries, list) or not entries:
         raise NpyConversionError("NPY batch members must be a nonempty array")
@@ -1203,6 +1229,8 @@ def open_npy_batch(directory: str | Path) -> NpyBatch:
         member = open_npy_conversion(path.parent)
         if member.manifest.get("source_recording") != entry.get("source_recording"):
             raise NpyConversionError("NPY batch member source recording mismatch")
+        if _manifest_exclusions(member.manifest) != excluded:
+            raise NpyConversionError("NPY batch member stream exclusions mismatch")
         members.append(member)
     return NpyBatch(root, manifest, tuple(members))
 
@@ -1225,18 +1253,30 @@ def _publisher(directory: Path):
         os.close(descriptor)
 
 
-def convert_recording(recording_directory: str | Path, output_directory: str | Path | None = None) -> dict[str, object]:
-    """Verify and atomically publish one completed recording; serialize publishers."""
+def convert_recording(
+    recording_directory: str | Path,
+    output_directory: str | Path | None = None,
+    *,
+    exclude_streams: Iterable[str] = (),
+) -> dict[str, object]:
+    """Publish selected streams atomically; exclusions use exact stream names.
+
+    Missing names are ignored. Excluded chunks are not read or verified. The
+    recording metadata and every included stream are still verified. Reuse
+    requires the same exclusions; excluding every stream publishes metadata only.
+    """
+    excluded = _normalize_exclusions(exclude_streams)
     recording = Path(recording_directory).expanduser().resolve(strict=True)
     output = Path(output_directory).expanduser().resolve() if output_directory is not None else recording.with_name(recording.name + "-npy")
     with _publisher(output.parent):
         _control.checkpoint(force=True)
-        return _convert_recording(recording, output)
+        return _convert_recording(recording, output, excluded)
 
 
 def _convert_recording(
     recording_directory: str | Path,
     output_directory: str | Path | None = None,
+    exclude_streams: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Verify and convert one completed recording into C-contiguous NPY data."""
     recording = Path(recording_directory).expanduser().resolve(strict=True)
@@ -1251,7 +1291,7 @@ def _convert_recording(
         raise NpyConversionError("conversion output must be outside the raw recording")
     metadata_checksum = _sha256(recording / "metadata.json")
     if output.exists():
-        existing = _existing(output, recording, metadata_checksum)
+        existing = _existing(output, recording, metadata_checksum, exclude_streams)
         if existing is not None:
             return existing
         raise NpyConversionError(f"conflicting conversion output exists: {output}")
@@ -1262,6 +1302,8 @@ def _convert_recording(
         arrays: list[dict[str, object]] = []
         streams: list[dict[str, object]] = []
         for index, stream in enumerate(reader.stream_names):
+            if stream in exclude_streams:
+                continue
             converted, summary = _convert_stream(reader, stream, index, temporary)
             arrays.extend(converted)
             streams.append(summary)
@@ -1271,6 +1313,7 @@ def _convert_recording(
             "source_version": reader.format_version,
             "source_recording": str(recording),
             "source_metadata_checksum": metadata_checksum,
+            "exclude_streams": list(exclude_streams),
             "user_metadata": dict(reader.user_metadata),
             "terminal_metadata": dict(reader.terminal_metadata),
             "streams": streams,
@@ -1294,11 +1337,11 @@ def _dependency_recordings(dependencies_path: Path) -> list[Path]:
     return recordings
 
 
-def _convert_job(ordinal: int, recording: Path, member_output: Path) -> dict[str, object]:
+def _convert_job(ordinal: int, recording: Path, member_output: Path, exclude_streams: tuple[str, ...]) -> dict[str, object]:
     _control._TOKEN = str(ordinal)
     _control.checkpoint(force=True)
     reused = member_output.exists()
-    manifest = _convert_recording(recording, member_output)
+    manifest = _convert_recording(recording, member_output, exclude_streams)
     return {
         "ordinal": ordinal,
         "source_recording": manifest["source_recording"],
@@ -1308,13 +1351,21 @@ def _convert_job(ordinal: int, recording: Path, member_output: Path) -> dict[str
     }
 
 
-def convert_workflow_dependencies(dependencies_path: str | Path, output_directory: str | Path) -> dict[str, object]:
+def convert_workflow_dependencies(
+    dependencies_path: str | Path,
+    output_directory: str | Path,
+    *,
+    exclude_streams: Iterable[str] = (),
+) -> dict[str, object]:
     """Convert prerequisites within WORKFLOW_THREADS; publish in stable order.
 
     Outside Workflow the default is one worker. Parallelism is by recording.
     Linux directory locks serialize publishers; completed members survive failure
     and are verified/reused on retry. No partial success batch is published.
+    Exact-name exclusions apply uniformly to every member and are part of reuse
+    identity. Missing names are ignored; excluded chunks are never converted.
     """
+    excluded = _normalize_exclusions(exclude_streams)
     dependencies = Path(dependencies_path).expanduser().resolve(strict=True)
     output = Path(output_directory).expanduser().resolve()
     recordings = _dependency_recordings(dependencies)
@@ -1330,6 +1381,9 @@ def convert_workflow_dependencies(dependencies_path: str | Path, output_director
     log(f"conversion started: {len(recordings)} members, {workers} worker(s)")
     results = {}
     with _publisher(output):
+        batch_path = output / MANIFEST_FILE
+        if batch_path.is_file() and _manifest_exclusions(_read_json(batch_path)) != excluded:
+            raise NpyConversionError("conflicting stream exclusions for existing NPY batch")
         # Remove stale batch success while retaining individually verified members.
         (output / MANIFEST_FILE).unlink(missing_ok=True)
         pool = None
@@ -1345,7 +1399,7 @@ def convert_workflow_dependencies(dependencies_path: str | Path, output_director
                     # Keep the parent control token in the serial path.
                     member_output = output / f"member-{ordinal:06d}"
                     reused = member_output.exists()
-                    manifest = _convert_recording(recording, member_output)
+                    manifest = _convert_recording(recording, member_output, excluded)
                     results[ordinal] = {"ordinal": ordinal, "source_recording": manifest["source_recording"], "manifest": f"{member_output.name}/{MANIFEST_FILE}", "manifest_checksum": _sha256(member_output / MANIFEST_FILE)}
                     log(f"member {ordinal} {'reused' if reused else 'completed'}: {recording}")
                     progress("conversion", len(results), len(recordings), unit="members")
@@ -1363,7 +1417,7 @@ def convert_workflow_dependencies(dependencies_path: str | Path, output_director
                         ordinal = next_ordinal
                         recording = recordings[ordinal]
                         log(f"member {ordinal} started: {recording}")
-                        future = pool.submit(_convert_job, ordinal, recording, output / f"member-{ordinal:06d}")
+                        future = pool.submit(_convert_job, ordinal, recording, output / f"member-{ordinal:06d}", excluded)
                         pending[future] = ordinal
                         next_ordinal += 1
                     done, _ = wait(pending, timeout=0.02, return_when=FIRST_COMPLETED) if pending else ((), ())
@@ -1387,7 +1441,7 @@ def convert_workflow_dependencies(dependencies_path: str | Path, output_director
                 pool = None
             _control._TOKEN = "parent"
             _control.checkpoint(force=True)
-            batch = {"format": NPY_BATCH_FORMAT, "members": [results[n] for n in range(len(recordings))]}
+            batch = {"format": NPY_BATCH_FORMAT, "exclude_streams": list(excluded), "members": [results[n] for n in range(len(recordings))]}
             handle, temporary_name = tempfile.mkstemp(prefix=".manifest.tmp-", dir=output)
             temporary = Path(temporary_name)
             try:
@@ -1423,6 +1477,7 @@ def main() -> None:
     )
     parser.add_argument("recording", type=Path, nargs="?")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--exclude-stream", action="append", default=[], metavar="NAME", help="exclude an exact stream name; repeat for multiple streams")
     parser.add_argument("--workflow-dependencies", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if arguments.workflow_dependencies:
@@ -1433,11 +1488,11 @@ def main() -> None:
             output_directory = os.environ["WORKFLOW_NPY_OUTPUT"]
         except KeyError as error:
             parser.error(f"missing required Workflow environment variable {error.args[0]}")
-        convert_workflow_dependencies(dependencies_path, output_directory)
+        convert_workflow_dependencies(dependencies_path, output_directory, exclude_streams=arguments.exclude_stream)
         return
     if arguments.recording is None:
         parser.error("recording is required")
-    manifest = convert_recording(arguments.recording, arguments.output)
+    manifest = convert_recording(arguments.recording, arguments.output, exclude_streams=arguments.exclude_stream)
     print(
         f"converted {manifest['source_recording']} into "
         f"{arguments.output or Path(arguments.recording).with_name(Path(arguments.recording).name + '-npy')}",

@@ -36,4 +36,4 @@ __all__ = [
     "open_completed_recording",
 ]
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"

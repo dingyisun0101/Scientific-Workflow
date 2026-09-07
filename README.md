@@ -8,9 +8,10 @@
 > provide `reuse_from` alongside the selected indices. Recording formats and
 > the Python companion remain unchanged.
 
-Rust 0.13.9 adds explicit phase-index selection and validated reuse of completed
-prerequisite outputs. Recursive sweeps, task identities, recording formats, and
-Python companion 0.4.4 are retained.
+Rust 0.13.10 and Python 0.4.5 correct ensemble progress to the maximum member
+iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["checkpoint"]}`.
+The UI preserves complete numeric counters at narrow widths. Stream exclusions
+affect conversion only; raw recordings and scientific stepping are unchanged.
 
 > **BREAKING API UPDATE — 0.13.8 / Python 0.4.4:** Despite the patch version,
 > `InitializationContext::dependencies()` now returns typed dependencies. Python

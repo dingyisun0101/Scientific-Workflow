@@ -1336,3 +1336,52 @@ fn active_phase_indices_are_required_explicit_and_bounded() {
         assert!(error.contains(reason), "{error}");
     }
 }
+
+#[test]
+fn reserved_npy_stream_exclusions_are_lowered_without_shell_interpretation() {
+    let project = TestProject::new(
+        r#"{"phases":{"simulate":{"tasks":[{"execution_unit":"unit"}]},"$npy":{"after":["simulate"],"exclude_streams":["checkpoint","--literal"]}}}"#,
+        &[("unit", "{}")],
+    );
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    let task = program_task(&specification.phases()[1].tasks()[0]);
+    let args = task
+        .args()
+        .iter()
+        .map(|arg| arg.to_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        args,
+        [
+            "-m",
+            "scientific_workflow.npy",
+            "--workflow-dependencies",
+            "--exclude-stream=checkpoint",
+            "--exclude-stream=--literal"
+        ]
+    );
+}
+
+#[test]
+fn stream_exclusions_require_a_valid_list_on_the_reserved_npy_phase() {
+    for exclusions in [
+        serde_json::json!([""]),
+        serde_json::json!([" checkpoint"]),
+        serde_json::json!(["checkpoint", "checkpoint"]),
+        serde_json::json!([1]),
+        serde_json::Value::Null,
+        serde_json::json!("checkpoint"),
+    ] {
+        let study = serde_json::json!({"phases":{
+            "simulate":{"tasks":[{"execution_unit":"unit"}]},
+            "$npy":{"after":["simulate"],"exclude_streams":exclusions}
+        }});
+        let project = TestProject::new(&study.to_string(), &[("unit", "{}")]);
+        assert!(ProjectSpecification::load(project.path()).is_err());
+    }
+    let project = TestProject::new(
+        r#"{"phases":{"simulate":{"tasks":[{"execution_unit":"unit"}],"exclude_streams":[]}}}"#,
+        &[("unit", "{}")],
+    );
+    assert!(ProjectSpecification::load(project.path()).is_err());
+}

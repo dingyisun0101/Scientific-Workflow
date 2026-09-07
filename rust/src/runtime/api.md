@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.13.9 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.10 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -279,7 +279,7 @@ This non-exhaustive enum reports failures after a valid Study is available:
 - `Reuse { phase: String, path: PathBuf, reason: String }`: required completed outputs are missing, failed, or incompatible; detected before output creation.
 
 - `PythonPrerequisite { interpreter: PathBuf, reason: String }`: the active
-  interpreter cannot import the coordinated Python 0.4.4 tools, NumPy and
+  interpreter cannot import the coordinated Python 0.4.5 tools, NumPy and
   threadpoolctl, or is older than Python 3.14. The error names the selected
   interpreter and setup remedy. Runtime probes before scientific work and output
   creation; Study::load performs no subprocess probe.
@@ -465,3 +465,17 @@ Pre-0.13.9 program outputs may be imported from their successful `program.json`
 and captured config. Legacy execution-unit imports additionally require an
 authoritative matching summary in a dependent program's captured dependency
 file; Workflow never guesses a final iteration from sampling cadence.
+## Ensemble progress and filtered conversion
+
+Runtime reports the maximum current member iteration and maximum declared target,
+not summed member-work. If any target is unknown, the task target stays unknown.
+For a lockstep ensemble, twelve members at 100 of 36000 steps report 100/36000.
+Early-completed members do not hold back the clock. Completion events already
+use the maximum final member iteration. ETA uses this same task clock; member
+recordings and completion policies are unchanged.
+
+The reserved `$npy` phase passes exact stream exclusions as repeated
+`--exclude-stream=NAME` arguments to Python 0.4.5. Filtering affects conversion
+only. All included data retains ordinary validation, locking, cancellation,
+worker limits, and atomic publication. Filter identity is checked before reusing
+member outputs or an existing batch; different filters never silently reuse data.

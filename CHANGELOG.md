@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.10 / Python 0.4.5
+
+- Correct live ensemble progress to maximum member iteration/target, consistent
+  with completion; preserve unknown targets and scientific execution semantics.
+- Prevent narrow terminal tables from silently clipping iteration digits.
+- Add exact-name `$npy.exclude_streams`, Python `exclude_streams=`, and repeatable
+  CLI `--exclude-stream`; excluded chunks are not read or converted.
+- Record filters in NPY v2 manifests and reject mismatched conversion reuse.
+- Keep recording formats 7/8 and NPY v2, with regression tests and synchronized
+  configuration, runtime, UI, Python, setup, and protocol documentation.
+
+
 ## Rust 0.13.9 - explicit phase indices
 
 Breaking configuration update: every study requires `active_phases`, with no

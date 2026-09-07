@@ -141,7 +141,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [dependencies]
-scientific-workflow = "0.13.9"
+scientific-workflow = "0.13.10"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -308,3 +308,28 @@ Pre-0.13.9 program outputs may be imported from their successful `program.json`
 and captured config. Legacy execution-unit imports additionally require an
 authoritative matching summary in a dependent program's captured dependency
 file; Workflow never guesses a final iteration from sampling cadence.
+
+## Stream exclusions in NumPy conversion
+
+```json
+"$npy": {
+  "after": ["evolve"],
+  "exclude_streams": ["checkpoint"]
+}
+```
+
+Only the reserved `$npy` phase accepts `exclude_streams`. Omission or an empty
+list converts all streams. Entries must be distinct, nonempty strings without
+surrounding whitespace. Matching is exact and case-sensitive; names absent from
+a particular recording have no effect. Exclusions apply to all prerequisite
+members, including transitive prerequisites. Excluded chunks are not read or
+verified; recording metadata and all included chunks remain verified. Raw
+recordings, checkpoint production, member identities, and phase indices do not
+change. If every stream is excluded, a valid metadata-only member dataset is
+published.
+
+Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
+v2 manifests without this field mean no exclusions. Reuse requires identical
+filters and source metadata; use a different output directory for a different
+selection. Serial and parallel conversion have the same filtering semantics.
+No shell interpretation or glob matching is performed.

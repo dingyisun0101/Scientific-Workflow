@@ -2,8 +2,8 @@
 
 ## Scope
 
-The standard `$npy` phase converts every field in each completed execution-unit
-member recording into a manifest-directed collection of C-contiguous `.npy`
+The standard `$npy` phase converts every field of each selected stream in a completed
+execution-unit member recording into a manifest-directed collection of C-contiguous `.npy`
 files. A converted member directory is one atomic dataset. Loose array files
 without its `manifest.json` are not a supported interchange unit.
 
@@ -104,3 +104,28 @@ The member format identifier is `scientific-workflow-npy.v2`; the batch format
 identifier is `scientific-workflow-npy-batch.v2`. Readers fail closed on other
 versions. Raw recording compatibility remains governed separately by the
 recording protocol.
+
+## Stream exclusions in NumPy conversion
+
+```json
+"$npy": {
+  "after": ["evolve"],
+  "exclude_streams": ["checkpoint"]
+}
+```
+
+Only the reserved `$npy` phase accepts `exclude_streams`. Omission or an empty
+list converts all streams. Entries must be distinct, nonempty strings without
+surrounding whitespace. Matching is exact and case-sensitive; names absent from
+a particular recording have no effect. Exclusions apply to all prerequisite
+members, including transitive prerequisites. Excluded chunks are not read or
+verified; recording metadata and all included chunks remain verified. Raw
+recordings, checkpoint production, member identities, and phase indices do not
+change. If every stream is excluded, a valid metadata-only member dataset is
+published.
+
+Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
+v2 manifests without this field mean no exclusions. Reuse requires identical
+filters and source metadata; use a different output directory for a different
+selection. Serial and parallel conversion have the same filtering semantics.
+No shell interpretation or glob matching is performed.

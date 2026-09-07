@@ -770,3 +770,16 @@ dependency handoff. Persistence owns successful-phase receipt publication,
 metadata validation, and the compatibility adapter for old program snapshots.
 New receipts reference original source paths, making later reuse independent of
 copying recordings. Neither layer resumes or mutates an old recording.
+## Progress clocks and conversion selection (0.13.10 / 0.4.5)
+
+Runtime derives a task clock from maximum member iteration and target, never
+member-work totals; UI only presents that clock. Final task progress remains the
+maximum terminal member iteration. Narrow-table layout protects numeric values
+before rendering a variable-width bar.
+
+Config owns validation and lowering of `$npy.exclude_streams`; Runtime transports
+the resulting arguments without reading recordings. Python owns exact-name
+selection before any stream planning or chunk reads. Selection is immutable
+conversion provenance in member and batch manifests, part of retry compatibility,
+and identical in serial and parallel workers. Recording and NPY format identifiers
+are unchanged; absent v2 selection metadata means no exclusions.

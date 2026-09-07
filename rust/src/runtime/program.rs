@@ -398,7 +398,7 @@ pub(super) fn check_prerequisites(study: &crate::study::Study) -> Result<(), sup
         .filter_map(|t| t.program_path())
         .collect::<std::collections::BTreeSet<_>>();
     for interpreter in interpreters {
-        let probe = "import sys; assert sys.version_info >= (3,14), 'Python 3.14+ required'; import scientific_workflow, numpy, threadpoolctl; assert scientific_workflow.__version__ == '0.4.4', 'install scientific-workflow[npy] 0.4.4'; from scientific_workflow.npy import convert_workflow_dependencies";
+        let probe = "import sys; assert sys.version_info >= (3,14), 'Python 3.14+ required'; import scientific_workflow, numpy, threadpoolctl; assert scientific_workflow.__version__ == '0.4.5', 'install scientific-workflow[npy] 0.4.5'; from scientific_workflow.npy import convert_workflow_dependencies";
         let output = Command::new(interpreter)
             .args(["-c", probe])
             .output()

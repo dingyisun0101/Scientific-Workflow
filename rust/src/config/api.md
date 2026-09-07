@@ -1,6 +1,6 @@
 # Config API
 
-This guide documents the `scientific-workflow` 0.13.9 subsystem contract.
+This guide documents the `scientific-workflow` 0.13.10 subsystem contract.
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by
@@ -555,3 +555,28 @@ interpreter/environment-manager launch paths also preserve their final symlink;
 script/config paths remain canonicalized. Runtime performs version/import probes
 before scientific work, keeping Study::load subprocess-free. No environment is
 created/installed automatically and no NPY-specific override is added.
+
+## Stream exclusions in NumPy conversion
+
+```json
+"$npy": {
+  "after": ["evolve"],
+  "exclude_streams": ["checkpoint"]
+}
+```
+
+Only the reserved `$npy` phase accepts `exclude_streams`. Omission or an empty
+list converts all streams. Entries must be distinct, nonempty strings without
+surrounding whitespace. Matching is exact and case-sensitive; names absent from
+a particular recording have no effect. Exclusions apply to all prerequisite
+members, including transitive prerequisites. Excluded chunks are not read or
+verified; recording metadata and all included chunks remain verified. Raw
+recordings, checkpoint production, member identities, and phase indices do not
+change. If every stream is excluded, a valid metadata-only member dataset is
+published.
+
+Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
+v2 manifests without this field mean no exclusions. Reuse requires identical
+filters and source metadata; use a different output directory for a different
+selection. Serial and parallel conversion have the same filtering semantics.
+No shell interpretation or glob matching is performed.
