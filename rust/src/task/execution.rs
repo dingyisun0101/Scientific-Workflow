@@ -10,7 +10,7 @@ use crate::config::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
 use crate::observation::BoundObservationPlan;
 use crate::state::{SystemState, SystemStateSchema};
 
-use super::result::TaskResult;
+use super::TaskResult;
 use super::unit::{ExecutionUnit, InitializationContext, MemberView};
 
 /// The runtime-owned services a task may use while executing.

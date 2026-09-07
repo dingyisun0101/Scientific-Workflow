@@ -2,19 +2,96 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::time::Duration;
 
 use serde_json::Value;
 
 use super::document::{StateSchemaDocument, child_pointer};
 use super::error::ConfigError;
 use super::expansion;
-use super::manifest::{self, ParsedTask, PhaseSpecification, StudyManifest};
-use super::parameters::{ResolvedExecutionUnitParameters, ResolvedTask};
+use super::manifest::{self, FailurePolicy, ParsedTask, StudyManifest};
+use super::parameters::ResolvedExecutionUnitParameters;
 use super::program::{ResolvedProgramTask, resolve_active_python, resolve_executable};
 use super::python;
 use super::store::Config;
 
 const PARAMETERS: &str = "parameters.json";
+
+/// One centrally resolved generic task declaration.
+#[derive(Clone, Debug)]
+pub(crate) enum ResolvedTask {
+    ExecutionUnit {
+        active: bool,
+        configuration: usize,
+        snapshot: super::store::ConfigSnapshot,
+        parameters: ResolvedExecutionUnitParameters,
+        state: Option<Box<str>>,
+        threads: Option<usize>,
+    },
+    Program {
+        configuration: usize,
+        snapshot: super::store::ConfigSnapshot,
+        program: ResolvedProgramTask,
+    },
+}
+
+impl ResolvedTask {
+    pub(crate) const fn configuration(&self) -> usize {
+        match self {
+            Self::ExecutionUnit { configuration, .. } | Self::Program { configuration, .. } => {
+                *configuration
+            }
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> &super::store::ConfigSnapshot {
+        match self {
+            Self::ExecutionUnit { snapshot, .. } | Self::Program { snapshot, .. } => snapshot,
+        }
+    }
+}
+
+/// One validated phase with resolved generic tasks and effective policy.
+#[derive(Clone, Debug)]
+pub(crate) struct PhaseSpecification {
+    pub(crate) name: Box<str>,
+    pub(crate) dependencies: Box<[Box<str>]>,
+    pub(crate) tasks: Box<[ResolvedTask]>,
+    pub(crate) max_concurrency: usize,
+    pub(crate) start_interval: Duration,
+    pub(crate) timeout: Option<Duration>,
+    pub(crate) failure_policy: FailurePolicy,
+}
+
+impl PhaseSpecification {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn dependencies(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.dependencies.iter().map(Box::as_ref)
+    }
+
+    pub(crate) fn tasks(&self) -> &[ResolvedTask] {
+        &self.tasks
+    }
+
+    pub(crate) const fn max_concurrency(&self) -> usize {
+        self.max_concurrency
+    }
+
+    pub(crate) const fn start_interval(&self) -> Duration {
+        self.start_interval
+    }
+
+    pub(crate) const fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
+
+    pub(crate) const fn failure_policy(&self) -> FailurePolicy {
+        self.failure_policy
+    }
+}
 
 /// A complete immutable project declaration compiled from one project root.
 #[derive(Debug)]
@@ -96,7 +173,7 @@ impl ProjectSpecification {
                 }
             }
             let value = Value::Object(resolved);
-            let snapshot = config.snapshot_with_parameters(&value);
+            let snapshot = config.snapshot_with_parameters(&value, parsed.manifest.active_phases());
             resolved_parameters.push((value, snapshot));
         }
 
@@ -107,6 +184,7 @@ impl ProjectSpecification {
                 match task {
                     ParsedTask::ExecutionUnit {
                         execution_unit,
+                        active,
                         state,
                         timeout,
                         threads,
@@ -145,6 +223,7 @@ impl ProjectSpecification {
                                     }
                                 })?;
                                 tasks.push(ResolvedTask::ExecutionUnit {
+                                    active,
                                     configuration,
                                     snapshot: snapshot.clone(),
                                     parameters: ResolvedExecutionUnitParameters::new(

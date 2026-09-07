@@ -244,6 +244,10 @@ project JSON changes without rereading it.
 `PlanSummary::phases()` visits the complete graph in deterministic dependency
 order, including inactive phases. `PhasePlanSummary::index() -> usize` returns
 the zero-based `active_phases` index and `is_active() -> bool` reports selection.
+Omitted `active_phases` selects the complete graph. Each task view also exposes
+`is_active() -> bool`, the effective conjunction of phase selection and the
+optional execution-unit `active` flag. Inactive units remain compiled with
+stable identities and output ordinals.
 Both borrow the immutable Study through the existing copyable view, perform no
 IO or allocation, and are safe to share with the owning Study. Task identities
 and output ordinals retain their original declaration-based values. Study keeps

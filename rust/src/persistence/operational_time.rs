@@ -1,4 +1,4 @@
-//! Internal wall-clock formatting and monotonic-duration helpers.
+//! Persistence-owned wall-clock formatting and monotonic-duration helpers.
 //!
 //! Scientific coordinates live in [`crate::state::StateTime`].
 //! This module exists only for operational workflow timing: it obtains a UTC

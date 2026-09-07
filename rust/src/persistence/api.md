@@ -344,8 +344,9 @@ wall time; paused execution budgets are separately owned by Runtime.
 
 ## Completed task reuse
 
-Private `persistence/reuse.rs` owns atomic completed-task receipts and the
-read-only legacy import adapter. Runtime supplies semantic task identities,
+Runtime's private `reuse` subsystem owns atomic completed-task receipts and the
+read-only legacy import adapter. Persistence supplies its verified recording and
+program-workspace readers. Runtime supplies semantic task identities,
 configuration snapshots, and workload results only after phase success.
 Receipts preserve original output paths when a task is reused; they do not copy
 scientific artifacts or reopen any writer. Import compares captured inputs

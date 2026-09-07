@@ -96,7 +96,8 @@ Runtime and UI meet through crate-visible boundaries owned by Runtime:
 - `RuntimePresentation` is Runtime's clone-cheap adapter handle; and
 - `TaskPresentation` publishes iteration/target facts for one inferred task.
 
-UI owns `UiPlan`, `UiSession`, and `UiFailure`. `UiSession` implements the
+UI owns `UiSession` and `UiFailure`; its refresh cadence is a private session
+constant. `UiSession` implements the
 Runtime-owned observer port and converts no execution outcome itself.
 
 An explicit `default-features = false` build omits the complete `ui` module and

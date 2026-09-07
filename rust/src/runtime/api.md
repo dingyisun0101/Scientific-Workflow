@@ -439,20 +439,27 @@ message length. Progress updates coalesce at 50ms and final progress is flushed;
 complete raw logs remain available. Failed-process errors identify their log scope.
 
 Standard converter workers use spawn, never fork inherited Rust state. Runtime
-reserves the pool allowance in the shared ResourceBudget; concurrent replicates
+reserves the pool allowance through the shared resource coordinator and the
+task's lifetime lease; concurrent replicates
 cannot each independently consume the study ceiling. NumPy native pools are
 limited to one thread per worker. No separate user worker-count setting is added.
 
-### Explicit phase selection
+### Optional phase and execution-unit selection
 
-Every `study.json` must contain `"active_phases": [0, 1, ...]`; there is no
-implicit run-all default. Indices are zero-based in deterministic dependency
+Omitting `active_phases` selects every phase. To select a subset, set
+`"active_phases": [0, 1, ...]`. Indices are zero-based in deterministic dependency
 order: visit phases in JSON declaration order, recursively visit each `after`
 list in its declared order, then assign each phase its index once. Selecting a
 subset never renumbers phases, expanded tasks, output ordinals, or seed identities.
 The order of indices in the selection does not change execution order. Duplicate,
 negative, non-integer, and out-of-range indices are rejected. An empty list
 explicitly selects no work.
+
+Runtime admits only execution-unit tasks whose effective selection is active:
+both their phase and their optional task-level `active` flag must be active.
+Inactive units retain compiled identity but create no task output and are not
+reuse candidates. A selected phase containing only inactive units completes
+successfully with an empty task summary.
 
 For a six-phase preparation, reference, targets, lattice, export, and conversion
 study, `"active_phases": [3, 4, 5]` starts at lattice. Supply

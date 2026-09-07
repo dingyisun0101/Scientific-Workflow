@@ -1,8 +1,7 @@
 //! Private automatic member-recording and program-workspace sessions.
 
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -10,6 +9,7 @@ use serde_json::{Map, Value};
 use crate::observation::BoundObservationPlan;
 use crate::state::SystemState;
 
+use super::fs::{create_new_file, sync_directory, write_new};
 use super::local::{PersistenceError, StateStreamStorage, SystemStateWriter};
 use super::plan::PersistencePlan;
 
@@ -193,8 +193,8 @@ impl ProgramPersistenceSession {
         )?;
         let stdout_path = directory.join("stdout.log");
         let stderr_path = directory.join("stderr.log");
-        let stdout = create_file(&stdout_path, "create program standard-output log")?;
-        let stderr = create_file(&stderr_path, "create program standard-error log")?;
+        let stdout = create_new_file(&stdout_path, "create program standard-output log")?;
+        let stderr = create_new_file(&stderr_path, "create program standard-error log")?;
 
         sync_directory(&directory, "synchronize prepared program workspace entries")?;
 
@@ -314,39 +314,6 @@ fn create_directory(path: &Path) -> Result<(), PersistenceError> {
             }
         }
     })
-}
-
-fn create_file(path: &Path, operation: &'static str) -> Result<File, PersistenceError> {
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
-        .map_err(|source| PersistenceError::Io {
-            operation,
-            path: path.to_path_buf(),
-            source,
-        })
-}
-
-fn write_new(path: &Path, bytes: &[u8], operation: &'static str) -> Result<(), PersistenceError> {
-    let mut file = create_file(path, operation)?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|source| PersistenceError::Io {
-            operation,
-            path: path.to_path_buf(),
-            source,
-        })
-}
-
-fn sync_directory(path: &Path, operation: &'static str) -> Result<(), PersistenceError> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| PersistenceError::Io {
-            operation,
-            path: path.to_path_buf(),
-            source,
-        })
 }
 
 impl PersistenceSession {

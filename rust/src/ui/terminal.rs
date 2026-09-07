@@ -317,7 +317,7 @@ fn render_tasks(
 
 fn task_panel_title(snapshot: &DashboardSnapshot) -> String {
     format!(
-        " Active groups · {} tasks · PgUp/PgDn · outcomes in Messages ",
+        " Active groups · {} tasks · PgUp/PgDn · full outcomes in log.txt ",
         snapshot.tasks.len()
     )
 }

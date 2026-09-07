@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::observation::ObservationPlan;
 use crate::state::{StateSchemaProvider, SystemState, SystemStateSchema};
 
-use super::result::UnitResult;
+use super::UnitResult;
 
 pub(crate) const SEED_DERIVATION_ALGORITHM: &str = "scientific-workflow.seed.v1";
 

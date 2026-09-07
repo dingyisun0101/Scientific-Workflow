@@ -24,10 +24,12 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::Write as _;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+
+use crate::persistence::fs::sync_directory;
 use std::thread::{self, JoinHandle};
 
 use sha2::{Digest, Sha256};
@@ -593,17 +595,6 @@ fn create_output_directory(path: &Path) -> Result<(), PersistenceError> {
             source,
         }),
     }
-}
-
-/// Synchronizes a directory entry transition with stable error context.
-fn sync_directory(path: &Path, operation: &'static str) -> Result<(), PersistenceError> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| PersistenceError::Io {
-            operation,
-            path: path.to_path_buf(),
-            source,
-        })
 }
 
 /// Validates queue lifecycle while retaining authoritative worker failures.

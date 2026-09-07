@@ -8,9 +8,7 @@
 mod encoding;
 mod error;
 mod plan;
-mod sampling;
 mod session;
-mod state_observation;
 mod stream;
 
 #[cfg(test)]

@@ -6,7 +6,6 @@
 
 mod command;
 mod live_log;
-mod plan;
 mod session;
 mod state;
 mod terminal;

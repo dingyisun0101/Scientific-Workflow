@@ -8,10 +8,10 @@ use crate::config::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
 use crate::observation::BoundObservationPlan;
 use crate::state::SystemStateSchema;
 
+use super::TaskResult;
 use super::execution::{
     ExecutionUnitDefinition, ProgramDefinition, TaskDefinition, TaskExecutionHost,
 };
-use super::result::TaskResult;
 use super::unit::ExecutionUnit;
 
 /// A reusable type-erased workload definition.

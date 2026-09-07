@@ -43,6 +43,8 @@ See the [Config contract](rust/src/config/api.md#nested-alternatives-and-indepen
   [Hopf model implementing the execution-unit contract](examples/attractor_2d/src/hopf_model.rs).
 - To understand subsystem boundaries and dependency direction, read the
   [architecture guide](docs/architecture.md).
+- Coding agents should follow the [agent guide](docs/agent-guide.md) to prefer
+  strict project JSON and documented APIs over changes to Workflow itself.
 - To consume completed recordings from Python, use the verified
   [Scientific Workflow Reader and standard NumPy converter](python/README.md).
 - To implement or audit a cross-language reader, use the normative
@@ -101,16 +103,21 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
 > This crate is pre-1.0 test software. Public API behavior may change through
 > coordinated refactor releases.
 
-### Explicit phase selection
+### Optional phase and execution-unit selection
 
-Every `study.json` must contain `"active_phases": [0, 1, ...]`; there is no
-implicit run-all default. Indices are zero-based in deterministic dependency
+Omitting `active_phases` selects every phase. To select a subset, set
+`"active_phases": [0, 1, ...]`. Indices are zero-based in deterministic dependency
 order: visit phases in JSON declaration order, recursively visit each `after`
 list in its declared order, then assign each phase its index once. Selecting a
 subset never renumbers phases, expanded tasks, output ordinals, or seed identities.
 The order of indices in the selection does not change execution order. Duplicate,
 negative, non-integer, and out-of-range indices are rejected. An empty list
 explicitly selects no work.
+
+Within a selected phase, an execution-unit task may set `"active": false`.
+Inactive units remain compiled and visible in plan inspection with their stable
+identities and output ordinals, but Runtime neither runs nor reuses them. The
+field defaults to `true` and is invalid on program, Python, and `$npy` tasks.
 
 For a six-phase preparation, reference, targets, lattice, export, and conversion
 study, `"active_phases": [3, 4, 5]` starts at lattice. Supply

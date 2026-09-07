@@ -12,12 +12,12 @@ use crate::config::{ResolvedExecutionUnitParameters, ResolvedProgramTask};
 use crate::observation::{BoundObservationPlan, ObservationPlan};
 use crate::state::{StateTime, SystemState, SystemStateSchema, schema_from_json_value};
 
+use super::TaskResult;
 use super::catalog::{ExecutionUnitCatalog, ExecutionUnitCatalogError, ExecutionUnitRegistration};
 use super::execution::{
     ExecutionUnitDefinition, MemberInitialization, ProgramDefinition, ProgramTaskInvocation,
     TaskDefinition, TaskExecutionHost,
 };
-use super::result::TaskResult;
 use super::unit::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView};
 
 fn completion(complete: bool) -> Option<MemberCompletion<'static>> {

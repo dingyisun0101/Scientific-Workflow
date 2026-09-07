@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::persistence::reuse::{self, TaskReuseExpectation};
+mod receipt;
+
 use crate::study::{Study, StudyPhase};
+use receipt::TaskReuseExpectation;
 
 use super::RuntimeError;
 use super::execution::dependency_workload;
@@ -75,7 +77,7 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
     let mut reused = ReusedPhases::new();
     for replicate in 0..study.replicate_policy().count() {
         let directory = source.join(format!("replicate-{replicate:06}"));
-        let legacy = reuse::legacy_results(&directory).map_err(|error| RuntimeError::Reuse {
+        let legacy = receipt::legacy_results(&directory).map_err(|error| RuntimeError::Reuse {
             phase: study.phases()[*skipped[0].1].name().to_owned(),
             path: directory.clone(),
             reason: error.to_string(),
@@ -85,8 +87,9 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
             let mut predecessors = HashSet::new();
             ancestors(phase, study, &mut predecessors);
             let npy_filter_is_input = phase.name() == "$npy" || predecessors.contains("$npy");
-            let mut tasks = Vec::with_capacity(phase.tasks().len());
-            for task in phase.tasks() {
+            let active_tasks = phase.tasks().iter().filter(|task| task.is_active());
+            let mut tasks = Vec::new();
+            for task in active_tasks {
                 let path = directory.join(format!("task-{:06}", task.output_ordinal()));
                 let snapshot = task.config_snapshot();
                 let provenance = task.execution_unit_provenance();
@@ -110,7 +113,7 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
                         task.kind_name()
                     },
                 };
-                let result = reuse::load_result(&path, &expected, &legacy)
+                let result = receipt::load_result(&path, &expected, &legacy)
                     .and_then(|result| {
                         let workload: StoredWorkload = serde_json::from_value(result.workload)?;
                         Ok(TaskRunSummary {
@@ -145,9 +148,14 @@ pub(super) fn persist_phase(
     summary: &PhaseRunSummary,
     replicate: &Path,
 ) -> Result<(), RuntimeError> {
-    for (task, result) in phase.tasks().iter().zip(summary.tasks()) {
+    for (task, result) in phase
+        .tasks()
+        .iter()
+        .filter(|task| task.is_active())
+        .zip(summary.tasks())
+    {
         let directory = replicate.join(format!("task-{:06}", task.output_ordinal()));
-        reuse::write_result(
+        receipt::write_result(
             &directory,
             task.identity(),
             task.configuration(),

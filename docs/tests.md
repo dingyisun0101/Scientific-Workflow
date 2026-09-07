@@ -92,7 +92,8 @@ public.
   timeout lifecycle, panic-to-failed-recording cleanup, parallel replicate
   fail-fast cancellation, parallel finish-all completion, phase-level failure
   policies, start-interval/concurrency admission, deterministic task order,
-  and distinct sequential/parallel replicate admission. It also runs a
+  distinct sequential/parallel replicate admission, and execution-unit
+  `active: false` remaining planned without creating task output. It also runs a
   two-member execution unit end to end and verifies independent recordings,
   member provenance, final iterations, and `MemberRunSummary` paths. Study execution tests
   retain topology and program/Python handoff coverage; successful program
@@ -141,7 +142,9 @@ structural companion is `protocol/recording-v7.schema.json`. Python tests open
 the shared golden fixture and verify that the compatibility manifest matches
 the Python package/version constants. Any wire-format change follows the bump
 checklist in the protocol rather than editing version constants independently.
-`python/tests/test_npy.py` verifies direct and nested numeric conversion,
+`python/tests/test_npy.py` verifies the split `scientific_workflow.npy`
+format/planning/writing/workflow/CLI package through its stable public namespace,
+including direct and nested numeric conversion,
 structured JSON fallback, ragged and empty records, C-contiguity, component
 checksums, mandatory manifests, reconstruction, immutable raw recordings,
 integrity-failure atomicity, resume validation, and Workflow dependency-batch

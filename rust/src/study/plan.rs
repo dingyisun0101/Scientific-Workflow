@@ -340,10 +340,10 @@ impl<'a> PhasePlanSummary<'a> {
 
     /// Iterates compiled tasks in deterministic plan order.
     pub fn tasks(self) -> impl ExactSizeIterator<Item = TaskPlanSummary<'a>> {
-        self.phase
-            .tasks()
-            .iter()
-            .map(|task| TaskPlanSummary { task })
+        self.phase.tasks().iter().map(move |task| TaskPlanSummary {
+            task,
+            active: self.active && task.is_active(),
+        })
     }
 }
 
@@ -351,6 +351,7 @@ impl<'a> PhasePlanSummary<'a> {
 #[derive(Clone, Copy)]
 pub struct TaskPlanSummary<'a> {
     task: &'a StudyTask,
+    active: bool,
 }
 
 impl std::fmt::Debug for TaskPlanSummary<'_> {
@@ -359,6 +360,7 @@ impl std::fmt::Debug for TaskPlanSummary<'_> {
             .debug_struct("TaskPlanSummary")
             .field("identity", &self.identity())
             .field("label", &self.label())
+            .field("active", &self.is_active())
             .field("kind", &self.kind())
             .finish_non_exhaustive()
     }
@@ -378,6 +380,11 @@ impl<'a> TaskPlanSummary<'a> {
     /// Returns the global deterministic output ordinal.
     pub fn output_ordinal(self) -> u64 {
         self.task.output_ordinal()
+    }
+
+    /// Reports whether this task is selected within an active phase.
+    pub fn is_active(self) -> bool {
+        self.active
     }
 
     /// Returns the optional task-specific timeout.
@@ -514,6 +521,7 @@ impl StudyPhase {
 /// One generic execution-unit or program task compiled from project configuration.
 #[derive(Clone)]
 pub(crate) struct StudyTask {
+    pub(crate) active: bool,
     pub(crate) identity: Box<str>,
     pub(crate) label: Box<str>,
     pub(crate) output_ordinal: u64,
@@ -524,6 +532,11 @@ pub(crate) struct StudyTask {
 }
 
 impl StudyTask {
+    /// Reports whether this task is selected within an active phase.
+    pub(crate) const fn is_active(&self) -> bool {
+        self.active
+    }
+
     /// Returns the inferred stable identity within this study plan.
     pub(crate) fn identity(&self) -> &str {
         &self.identity

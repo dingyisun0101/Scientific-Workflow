@@ -13,7 +13,6 @@ mod definition;
 pub mod dependencies;
 mod execution;
 pub mod project;
-mod result;
 mod unit;
 
 #[cfg(test)]
@@ -27,7 +26,8 @@ pub(crate) use definition::{ExecutionUnitTaskProvenance, Task, TaskKind};
 pub(crate) use execution::{
     MemberInitialization, ProgramTaskInvocation, TaskDefinition, TaskExecutionHost,
 };
-pub(crate) use result::TaskResult;
-pub use result::UnitResult;
+/// Result returned by execution-unit construction and steps.
+pub type UnitResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
+pub(crate) type TaskResult<T = ()> = UnitResult<T>;
 pub use unit::{ExecutionUnit, InitializationContext, MemberCompletion, MemberView, SeedError};
 pub(crate) use unit::{SEED_DERIVATION_ALGORITHM, derive_program_seed};

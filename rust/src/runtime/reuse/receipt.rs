@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{JsonPayloadDecoderRegistry, StoredStateSeriesReader};
+use crate::persistence::{JsonPayloadDecoderRegistry, StoredStateSeriesReader};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
@@ -54,6 +54,15 @@ fn comparable(mut snapshot: Value, npy_filter_is_input: bool) -> Value {
     if let Some(study) = snapshot.get_mut("study").and_then(Value::as_object_mut) {
         study.remove("active_phases");
         study.remove("reuse_from");
+        if let Some(phases) = study.get_mut("phases").and_then(Value::as_object_mut) {
+            for phase in phases.values_mut().filter_map(Value::as_object_mut) {
+                if let Some(tasks) = phase.get_mut("tasks").and_then(Value::as_array_mut) {
+                    for task in tasks.iter_mut().filter_map(Value::as_object_mut) {
+                        task.remove("active");
+                    }
+                }
+            }
+        }
         // Conversion selection cannot change an upstream recording or artifact.
         // Retain it for NPY itself and every phase consuming its output.
         if !npy_filter_is_input
@@ -400,6 +409,7 @@ mod tests {
         let mut resumed = original.clone();
         resumed["study"]["active_phases"] = json!([1, 2]);
         resumed["study"]["reuse_from"] = json!("output/execution-previous");
+        resumed["study"]["phases"]["evolve"]["tasks"][0]["active"] = json!(true);
         for npy_filter_is_input in [false, true] {
             assert_eq!(
                 comparable(original.clone(), npy_filter_is_input),

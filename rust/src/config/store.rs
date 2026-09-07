@@ -158,12 +158,17 @@ impl Config {
     }
 
     /// Builds a language-neutral snapshot with one resolved parameters document.
-    pub(crate) fn snapshot_with_parameters(&self, parameters: &Value) -> ConfigSnapshot {
+    pub(crate) fn snapshot_with_parameters(
+        &self,
+        parameters: &Value,
+        active_phases: &[usize],
+    ) -> ConfigSnapshot {
         ConfigSnapshot {
             bytes: Arc::from(snapshot_json_with_parameters(
                 &self.inner.study,
                 &self.inner.documents,
                 parameters,
+                active_phases,
             )),
             parameters: Arc::new(parameters.clone()),
         }
@@ -214,8 +219,18 @@ fn snapshot_json_with_parameters(
     study: &Value,
     documents: &BTreeMap<PathBuf, ConfigDocument>,
     parameters: &Value,
+    active_phases: &[usize],
 ) -> Box<[u8]> {
-    snapshot_json_inner(study, documents, parameters)
+    let mut study = study.clone();
+    study
+        .as_object_mut()
+        .expect("validated study root is an object")
+        .insert(
+            "active_phases".to_owned(),
+            serde_json::to_value(active_phases)
+                .expect("effective phase indices are JSON-compatible"),
+        );
+    snapshot_json_inner(&study, documents, parameters)
 }
 
 fn snapshot_json_inner(

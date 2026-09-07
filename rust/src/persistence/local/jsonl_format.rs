@@ -45,7 +45,7 @@ use std::path::{Component, Path};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::clock::is_utc_rfc3339;
+use super::super::operational_time::is_utc_rfc3339;
 use crate::state::StateTime;
 
 use super::error::PersistenceError;

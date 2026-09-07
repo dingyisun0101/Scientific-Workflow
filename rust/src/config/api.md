@@ -50,7 +50,7 @@ no state-schema file or `paths` object.
 ### `wf_configs/study.json`
 
 The root object has required `workflow_schema`, positive-integer `threads`,
-strict `compute`, `active_phases`, and nonempty `phases` fields, plus optional `reuse_from`, `paths`,
+strict `compute` and nonempty `phases` fields, plus optional `active_phases`, `reuse_from`, `paths`,
 `seed`, `replicates`, and `persistence`. `workflow_schema` is independent of the crate version;
 this release accepts exactly generation `1` and rejects missing or unknown
 generations before assembly:
@@ -146,8 +146,9 @@ Unknown properties are rejected at every Workflow-owned level.
   admitted immediately. Phase and task `timeout_ms` are optional nonnegative
   millisecond counts.
 - each task is exactly one of:
-  - an execution-unit task with nonblank `execution_unit`, optional nonblank
-    `state`, optional `timeout_ms`, and mode-dependent `resources`; or
+  - an execution-unit task with nonblank `execution_unit`, optional `active`
+    (default `true`), optional nonblank `state`, optional `timeout_ms`, and
+    mode-dependent `resources`; or
   - a program task with required `program`, optional `args`, optional `seed`,
     optional `resources`, and optional `timeout_ms`, for example
     `{"program":"bin/analyze","args":["--publication"],"resources":{"threads":4}}`; or
@@ -403,16 +404,21 @@ persistence session exists yet. Later edits on disk do not affect the retained
 Study or an execution made from it.
 
 
-### Explicit phase selection
+### Optional phase and execution-unit selection
 
-Every `study.json` must contain `"active_phases": [0, 1, ...]`; there is no
-implicit run-all default. Indices are zero-based in deterministic dependency
+Omitting `active_phases` selects every phase. To select a subset, set
+`"active_phases": [0, 1, ...]`. Indices are zero-based in deterministic dependency
 order: visit phases in JSON declaration order, recursively visit each `after`
 list in its declared order, then assign each phase its index once. Selecting a
 subset never renumbers phases, expanded tasks, output ordinals, or seed identities.
 The order of indices in the selection does not change execution order. Duplicate,
 negative, non-integer, and out-of-range indices are rejected. An empty list
 explicitly selects no work.
+
+Within a selected phase, `"active": false` suppresses one execution-unit task
+without removing it from compilation. It keeps its stable identity and output
+ordinal, appears inactive in plan inspection, and is neither run nor reused.
+`active` defaults to `true` and is rejected on program, Python, and `$npy` tasks.
 
 For a six-phase preparation, reference, targets, lattice, export, and conversion
 study, `"active_phases": [3, 4, 5]` starts at lattice. Supply

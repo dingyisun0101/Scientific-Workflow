@@ -10,7 +10,6 @@ use serde_json::{Map, Value};
 
 use super::document::child_pointer;
 use super::error::ConfigError;
-use super::parameters::ResolvedTask;
 use super::python::PythonTaskDeclaration;
 
 pub(crate) const WORKFLOW_SCHEMA_VERSION: u64 = 1;
@@ -82,7 +81,7 @@ pub(crate) struct StudyManifest {
 }
 
 impl StudyManifest {
-    /// Returns explicitly selected zero-based dependency-order phase indices.
+    /// Returns effective zero-based dependency-order phase indices.
     pub(crate) fn active_phases(&self) -> &[usize] {
         &self.active_phases
     }
@@ -142,55 +141,6 @@ impl PersistenceSpecification {
     }
 }
 
-/// One validated phase with resolved generic tasks and effective policy.
-#[derive(Clone, Debug)]
-pub(crate) struct PhaseSpecification {
-    pub(crate) name: Box<str>,
-    pub(crate) dependencies: Box<[Box<str>]>,
-    pub(crate) tasks: Box<[ResolvedTask]>,
-    pub(crate) max_concurrency: usize,
-    pub(crate) start_interval: Duration,
-    pub(crate) timeout: Option<Duration>,
-    pub(crate) failure_policy: FailurePolicy,
-}
-
-impl PhaseSpecification {
-    /// Returns the manifest phase key.
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Iterates dependency phase keys in declaration order.
-    pub(crate) fn dependencies(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.dependencies.iter().map(Box::as_ref)
-    }
-
-    /// Returns resolved tasks in deterministic execution order.
-    pub(crate) fn tasks(&self) -> &[ResolvedTask] {
-        &self.tasks
-    }
-
-    /// Returns the positive effective maximum number of active tasks.
-    pub(crate) const fn max_concurrency(&self) -> usize {
-        self.max_concurrency
-    }
-
-    /// Returns the effective interval between task admissions.
-    pub(crate) const fn start_interval(&self) -> Duration {
-        self.start_interval
-    }
-
-    /// Returns the optional effective phase timeout.
-    pub(crate) const fn timeout(&self) -> Option<Duration> {
-        self.timeout
-    }
-
-    /// Returns the effective sibling-task failure policy.
-    pub(crate) const fn failure_policy(&self) -> FailurePolicy {
-        self.failure_policy
-    }
-}
-
 pub(crate) struct ParsedManifest {
     pub(crate) manifest: StudyManifest,
     pub(crate) state_paths: BTreeMap<Box<str>, PathBuf>,
@@ -212,6 +162,7 @@ pub(crate) struct ParsedPhase {
 pub(crate) enum ParsedTask {
     ExecutionUnit {
         execution_unit: Box<str>,
+        active: bool,
         state: Option<Box<str>>,
         timeout: Option<Duration>,
         threads: Option<usize>,
@@ -254,8 +205,11 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             "at least one phase must be declared",
         ));
     }
+    let active_phases = raw
+        .active_phases
+        .unwrap_or_else(|| (0..raw.phases.len()).collect());
     let mut selected = HashSet::new();
-    for &index in &raw.active_phases {
+    for &index in &active_phases {
         if index >= raw.phases.len() || !selected.insert(index) {
             return Err(ConfigError::invalid(
                 path,
@@ -321,7 +275,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
 
     let manifest = StudyManifest {
         workflow_schema: raw.workflow_schema,
-        active_phases: raw.active_phases.into_boxed_slice(),
+        active_phases: active_phases.into_boxed_slice(),
         reuse_from,
         threads: raw.threads,
         compute_mode: raw.compute.mode.into(),
@@ -524,12 +478,13 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     }
                     tasks.push(ParsedTask::ExecutionUnit {
                         execution_unit: execution_unit.into_boxed_str(),
+                        active: task.active.unwrap_or(true),
                         state: task.state.map(String::into_boxed_str),
                         timeout,
                         threads,
                     });
                 }
-                (None, Some(program), None) if task.state.is_none() => {
+                (None, Some(program), None) if task.state.is_none() && task.active.is_none() => {
                     validate_task_threads(path, &pointer, requested_threads, manifest.threads())?;
                     if program.as_os_str().is_empty() {
                         return Err(ConfigError::invalid(
@@ -546,7 +501,9 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                         threads: requested_threads,
                     });
                 }
-                (None, None, Some(declaration)) if task.state.is_none() && task.args.is_empty() => {
+                (None, None, Some(declaration))
+                    if task.state.is_none() && task.args.is_empty() && task.active.is_none() =>
+                {
                     validate_task_threads(path, &pointer, requested_threads, manifest.threads())?;
                     tasks.push(ParsedTask::Python {
                         declaration,
@@ -559,7 +516,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit, top-level `args` only for a program, and `seed` only for a program or Python task",
+                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `active` and `state` are valid only for an execution unit, top-level `args` only for a program, and `seed` only for a program or Python task",
                     ));
                 }
             }
@@ -691,7 +648,8 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 #[serde(deny_unknown_fields)]
 struct RawStudy {
     workflow_schema: u64,
-    active_phases: Vec<usize>,
+    #[serde(default)]
+    active_phases: Option<Vec<usize>>,
     #[serde(default)]
     reuse_from: Option<PathBuf>,
     threads: usize,
@@ -803,6 +761,8 @@ const fn default_max_concurrency() -> usize {
 struct RawTask {
     #[serde(default)]
     execution_unit: Option<String>,
+    #[serde(default)]
+    active: Option<bool>,
     #[serde(default)]
     state: Option<String>,
     #[serde(default)]

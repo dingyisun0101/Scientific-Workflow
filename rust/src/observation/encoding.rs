@@ -6,10 +6,9 @@ use std::fmt;
 use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 
-use crate::state::{StateObservationAccess, StateTime};
+use crate::state::{StateObservationAccess, StateTime, SystemState};
 
 use super::error::ObservationError;
-use super::state_observation::StateObservation;
 use super::stream::BoundObservationStream;
 
 /// An owned encoded scientific observation ready for a persistence backend.
@@ -38,23 +37,22 @@ impl fmt::Debug for EncodedObservation {
 }
 
 pub(super) fn encode(
-    observation: StateObservation<'_>,
+    state: &SystemState,
     stream: &BoundObservationStream,
 ) -> Result<EncodedObservation, ObservationError> {
-    let time = observation.time();
+    let time = state.time();
     let payloads = stream
         .fields()
         .iter()
         .map(|field| {
-            observation
-                .state()
-                .serializable_payload(field.name())
-                .map_err(|source| ObservationError::StateAccess {
+            state.serializable_payload(field.name()).map_err(|source| {
+                ObservationError::StateAccess {
                     stream: stream.name().to_owned(),
                     iteration: time.iteration(),
                     field: field.name().to_owned(),
                     source,
-                })
+                }
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
 

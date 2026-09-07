@@ -8,9 +8,10 @@
 //! captured logs, launcher provenance, and an artifact directory. The module
 //! root exposes verified state-recording readers, never write-session construction.
 
+mod fs;
 mod local;
+mod operational_time;
 mod plan;
-pub(crate) mod reuse;
 mod session;
 
 #[cfg(test)]

@@ -220,19 +220,16 @@ workflow/
 │   ├── README.md                     complete Rust user procedure
 │   ├── src/
 │   │   ├── lib.rs                    module declarations; run/macro/error exports
-│   │   ├── clock.rs                  private UTC formatting and duration conversion
 │   │   ├── composition.rs            feature-selected Runtime observer composition
-│   │   ├── error.rs                  private facade-error implementation
+│   │   ├── error.rs                  WorkflowError composition
 │   │   ├── error/api.md              complete facade-error contract
-│   │   ├── error/workflow.rs         WorkflowError composition
 │   │   ├── prelude.rs                ordinary authoring aggregation
 │   │   ├── prelude/api.md            exhaustive prelude export contract
 │   │   │
 │   │   ├── state.rs                  state public root and peer exports
 │   │   ├── state/api.md              exhaustive state API and examples
 │   │   ├── state/error.rs            schema/state/time/series error enums
-│   │   ├── state/field.rs            immutable field metadata
-│   │   ├── state/schema.rs           Path loader and schema semantic authority
+│   │   ├── state/schema.rs           field metadata, Path loader, and schema authority
 │   │   ├── state/state.rs            heterogeneous payload owner and tuple borrows
 │   │   ├── state/time.rs             StateTime and checked advancement
 │   │   ├── state/series.rs           ordered in-memory SystemState collection
@@ -242,17 +239,14 @@ workflow/
 │   │   ├── observation/api.md        exhaustive declaration API and example
 │   │   ├── observation/error.rs      declaration/binding/encoding errors
 │   │   ├── observation/plan.rs       public plan + private schema-bound plan
-│   │   ├── observation/stream.rs     public stream + private bound stream
-│   │   ├── observation/sampling.rs   private cadence decision
-│   │   ├── observation/state_observation.rs checked borrowed state view
+│   │   ├── observation/stream.rs     public/bound streams and cadence decisions
 │   │   ├── observation/encoding.rs   canonical owned encoded records
 │   │   ├── observation/session.rs    cadence state and final-state deduplication
 │   │   └── observation/tests/observation_workflow.rs internal binding/session tests
 │   │   │
-│   │   ├── task.rs                   private task internals and root re-exports
+│   │   ├── task.rs                   task result aliases, internals, and root re-exports
 │   │   ├── task/api.md               exhaustive execution-unit contract and example
 │   │   ├── task/unit.rs              ExecutionUnit and borrowed MemberView contract
-│   │   ├── task/result.rs            boxed application error alias
 │   │   ├── task/catalog.rs           linked registrations and sorted validation
 │   │   ├── task/definition.rs        type-erased execution unit/program execution definitions
 │   │   ├── task/execution.rs         host port and execution unit invariant enforcement
@@ -284,16 +278,19 @@ workflow/
 │   │   ├── runtime/event.rs          Runtime-owned lifecycle fact vocabulary
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
 │   │   ├── runtime/presentation.rs   observer port and task progress publisher
-│   │   ├── runtime/host.rs           execution unit/program execution and persistence adapter
-│   │   ├── runtime/compute.rs        private fair task-pool coordinator and leases
-│   │   ├── runtime/resource.rs       process-wide task/thread admission ledger
-│   │   ├── runtime/execution.rs      Study-only replicate/phase/task schedulers
+│   │   ├── runtime/execution/mod.rs  execution and replicate orchestration
+│   │   ├── runtime/execution/phase.rs phase admission, cancellation, and worker scheduling
+│   │   ├── runtime/execution/task.rs task execution, host, and persistence adapter
+│   │   ├── runtime/resources.rs      unified task resource coordinator and lease
+│   │   ├── runtime/resources/admission.rs private process-wide admission ledger
+│   │   ├── runtime/resources/compute.rs private fair task-pool allocator
+│   │   ├── runtime/reuse/mod.rs      prerequisite reuse planning and persistence
+│   │   ├── runtime/reuse/receipt.rs  private completed-task receipt compatibility
 │   │   ├── runtime/summary.rs        successful immutable RunSummary tree
 │   │   └── runtime/tests/runtime_workflow.rs private scheduler/lifecycle tests
 │   │   │
 │   │   ├── ui.rs                     default-feature private UI root
 │   │   ├── ui/api.md                 automatic presentation contract
-│   │   ├── ui/plan.rs                private UI-owned inferred refresh policy
 │   │   ├── ui/command.rs             former command editor and exact exit parser
 │   │   ├── ui/live_log.rs            synchronous execution log.txt message sink
 │   │   ├── ui/state.rs               event-reduced rows/messages/status snapshot
@@ -303,6 +300,8 @@ workflow/
 │   │   │
 │   │   ├── persistence.rs            public completed-recording read root
 │   │   ├── persistence/api.md        complete settings/read/error contract
+│   │   ├── persistence/fs.rs         shared durable file and directory primitives
+│   │   ├── persistence/operational_time.rs UTC formatting and duration conversion
 │   │   ├── persistence/plan.rs       private effective operational settings
 │   │   ├── persistence/session.rs    member recording/program workspace lifecycle
 │   │   ├── persistence/local.rs      private local recording coordinator/lease
@@ -333,7 +332,12 @@ workflow/
 │   │   ├── errors.py                  typed verification/read failures
 │   │   ├── state.py                  read-only field/record/series containers
 │   │   ├── reader.py                  format-v7/v8 validation and reconstruction
-│   │   ├── npy.py                     verified C-contiguous NPY conversion
+│   │   ├── npy/                       stable NPY namespace
+│   │   │   ├── format.py              validation and read-only converted views
+│   │   │   ├── planning.py            numeric-layout discovery and plans
+│   │   │   ├── writing.py             array writers and stream conversion
+│   │   │   ├── workflow.py            atomic recording/batch conversion
+│   │   │   └── cli.py / __main__.py   command-line boundary
 │   │   └── py.typed                   typing marker
 │   └── tests/
 │       ├── test_reader.py             reader/integrity behavior
@@ -777,18 +781,20 @@ API, recording contract, or Python API changes accompany this dependency update.
 
 ## Explicit phase indices and completed prerequisite reuse
 
-Config requires `active_phases`, validates its numeric indices, and canonicalizes
+Config defaults omitted `active_phases` to the complete graph, validates supplied
+numeric indices, accepts an optional execution-unit `active` flag, and canonicalizes
 an optional `reuse_from` execution path. Study calculates one stable dependency
 traversal over the complete declaration graph and exposes each phase's index and
-selection through immutable plan inspection. Skipping phases never renumbers
+each task's effective selection through immutable plan inspection. Skipping
+phases or units never renumbers
 task identities, output ordinals, or deterministic seeds.
 
-Private `runtime/reuse.rs` selects inactive ancestors, rejects stale dependency
-combinations, and asks `persistence/reuse.rs` to import matching completed task
-results before creating any execution directory or launching workers. Runtime
+Private `runtime/reuse/` selects inactive ancestors, rejects stale dependency
+combinations, and imports matching completed task results before creating any
+execution directory or launching workers. Runtime
 schedules only selected phases and supplies reused summaries through the ordinary
-dependency handoff. Persistence owns successful-phase receipt publication,
-metadata validation, and the compatibility adapter for old program snapshots.
+dependency handoff. Runtime owns successful-phase receipt publication and reuse
+compatibility; Persistence supplies verified recording/workspace readers.
 New receipts reference original source paths, making later reuse independent of
 copying recordings. Neither layer resumes or mutates an old recording.
 ## Progress clocks and conversion selection (0.13.10 / 0.4.5)

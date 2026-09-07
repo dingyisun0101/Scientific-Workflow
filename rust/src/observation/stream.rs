@@ -6,7 +6,34 @@ use std::num::NonZeroU64;
 use crate::state::{StateFieldSchema, SystemStateSchema};
 
 use super::error::ObservationError;
-use super::sampling::IterationSampling;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IterationSampling {
+    Iterations(NonZeroU64),
+    InitialAndFinal,
+}
+
+impl IterationSampling {
+    const EVERY: Self = Self::Iterations(NonZeroU64::MIN);
+
+    const fn new(iterations: NonZeroU64) -> Self {
+        Self::Iterations(iterations)
+    }
+
+    const fn get(self) -> Option<u64> {
+        match self {
+            Self::Iterations(iterations) => Some(iterations.get()),
+            Self::InitialAndFinal => None,
+        }
+    }
+
+    const fn includes(self, iteration: u64) -> bool {
+        match self {
+            Self::Iterations(interval) => iteration.is_multiple_of(interval.get()),
+            Self::InitialAndFinal => false,
+        }
+    }
+}
 
 /// One application-defined scientific observation stream.
 #[derive(Clone, Debug, Eq, PartialEq)]

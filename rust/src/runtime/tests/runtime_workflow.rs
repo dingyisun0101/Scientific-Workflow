@@ -469,9 +469,12 @@ fn execution_units_run_inside_the_required_study_pool() {
         metadata["terminal_metadata"]["compute"]["allocations"][0]["threads"],
         3
     );
-    let live_log = fs::read_to_string(summary.output_directory().join("log.txt")).unwrap();
-    assert!(live_log.contains("workflow: started"));
-    assert!(live_log.contains("workflow: completed"));
+    #[cfg(feature = "terminal-ui")]
+    {
+        let live_log = fs::read_to_string(summary.output_directory().join("log.txt")).unwrap();
+        assert!(live_log.contains("workflow: started"));
+        assert!(live_log.contains("workflow: completed"));
+    }
 }
 
 #[test]
@@ -540,6 +543,36 @@ fn completion_timestamp_controls_task_timeout_classification() {
         timeout
     ));
     assert!(task_exceeded_timeout(started, started + timeout, timeout));
+}
+
+#[test]
+fn inactive_execution_units_remain_planned_but_are_not_run() {
+    let mut declaration = execution_unit_study("runtime-slow", None);
+    declaration["phases"]["run"]["tasks"][0]["active"] = false.into();
+    let project = Project::new(
+        declaration,
+        serde_json::json!({"runtime-slow": {"sleep_ms": 0}}),
+    );
+    let study = Study::load(project.path()).unwrap();
+    let planned = study
+        .plan_summary()
+        .phases()
+        .next()
+        .unwrap()
+        .tasks()
+        .next()
+        .unwrap();
+    assert!(!planned.is_active());
+    assert_eq!(planned.output_ordinal(), 0);
+
+    let summary = execute(study).unwrap();
+    assert!(summary.replicates()[0].phases()[0].tasks().is_empty());
+    assert!(
+        !summary.replicates()[0]
+            .output_directory()
+            .join("task-000000")
+            .exists()
+    );
 }
 
 #[test]

@@ -1,5 +1,6 @@
-//! Runtime adapter from task observation boundaries to automatic persistence.
+//! Task execution, hosting, and persistence adaptation.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -13,14 +14,198 @@ use crate::persistence::{
     ProgramPersistenceSession,
 };
 use crate::state::SystemState;
+use crate::study::StudyTask;
 use crate::task::{
-    InitializationContext, MemberInitialization, ProgramTaskInvocation, TaskExecutionHost,
-    TaskResult,
+    InitializationContext, MemberInitialization, ProgramTaskInvocation, SEED_DERIVATION_ALGORITHM,
+    TaskExecutionHost, TaskKind, TaskResult, derive_program_seed,
 };
 
-use super::compute::ComputeLease;
-use super::presentation::TaskPresentation;
-use super::summary::MemberRunSummary;
+use super::super::error::RuntimeError;
+use super::super::presentation::{RuntimePresentation, TaskPresentation};
+use super::super::resources::TaskResourceLease;
+use super::super::summary::{MemberRunSummary, TaskRunKind, TaskRunSummary};
+
+pub(super) struct TaskRuntime {
+    pub(super) persistence_plan: PersistencePlan,
+    pub(super) config_snapshot: ConfigSnapshot,
+    pub(super) project_root: PathBuf,
+    pub(super) replicate_directory: PathBuf,
+    pub(super) dependencies_json: Box<[u8]>,
+    pub(super) processed_directory: Option<PathBuf>,
+    pub(super) configuration: usize,
+    pub(super) replicate: u64,
+    pub(super) master_seed: Option<u64>,
+    pub(super) threads: usize,
+    pub(super) resources: TaskResourceLease,
+    pub(super) presentation: RuntimePresentation,
+}
+
+pub(super) fn run_task(
+    task: StudyTask,
+    runtime: TaskRuntime,
+    cancellation: Arc<AtomicBool>,
+    output_directory: PathBuf,
+) -> Result<TaskRunSummary, RuntimeError> {
+    let processed_directory = runtime.processed_directory.clone();
+    let mut resources = runtime.resources;
+    if task.kind() == TaskKind::ExecutionUnit {
+        resources
+            .activate_compute(runtime.replicate, task.output_ordinal())
+            .map_err(|source| RuntimeError::Task {
+                task: task.identity().to_owned(),
+                source: Box::new(source),
+            })?;
+    }
+    let program_seed = task.program_seed_purpose().map(|purpose| {
+        let master_seed = runtime
+            .master_seed
+            .expect("Config rejects a program seed request without a master seed");
+        let seed = derive_program_seed(
+            master_seed,
+            runtime.replicate,
+            task.identity(),
+            task.kind_name(),
+            purpose,
+        );
+        ProgramSeed::new(
+            seed,
+            serde_json::json!({
+                "algorithm": SEED_DERIVATION_ALGORITHM,
+                "master_seed": master_seed,
+                "requests": [{
+                    "scope": "task",
+                    "purpose": purpose,
+                    "seed": seed
+                }]
+            }),
+        )
+    });
+    let initialization_context = task.execution_unit().map(|execution_unit_key| {
+        let dependencies = serde_json::from_slice(&runtime.dependencies_json)
+            .expect("Runtime's dependency snapshot is valid JSON");
+        InitializationContext::with_dependencies(
+            runtime.master_seed,
+            runtime.replicate,
+            task.identity(),
+            execution_unit_key,
+            dependencies,
+        )
+    });
+    let provenance = task.execution_unit_provenance().map(|provenance| {
+        let mut parameters = runtime.config_snapshot.parameters().clone();
+        parameters
+            .as_object_mut()
+            .expect("parameters.json root is an object")
+            .insert(
+                provenance.execution_unit().to_owned(),
+                provenance.constants().clone(),
+            );
+        MemberRecordingProvenance::new(
+            task.identity(),
+            provenance.execution_unit(),
+            provenance.state(),
+            provenance.parameter_ordinal(),
+            provenance.parameter_source(),
+            provenance.constants().clone(),
+            runtime.threads,
+        )
+        .with_parameters(parameters)
+    });
+    let environment = RuntimeTaskEnvironment::new(
+        runtime.config_snapshot,
+        runtime.project_root,
+        runtime.replicate_directory,
+        runtime.dependencies_json,
+        runtime.processed_directory,
+    );
+    let mut host = RuntimeTaskHost::new(
+        runtime.persistence_plan,
+        cancellation,
+        output_directory,
+        RuntimeTaskLaunch::new(
+            provenance,
+            initialization_context,
+            program_seed,
+            runtime.threads,
+            runtime
+                .presentation
+                .task(runtime.replicate, task.identity()),
+            environment,
+            resources,
+        ),
+    );
+    match catch_unwind(AssertUnwindSafe(|| task.definition().execute(&mut host))) {
+        Ok(Ok(())) => {}
+        Ok(Err(source)) => {
+            host.fail(&source.to_string());
+            return Err(RuntimeError::Task {
+                task: task.identity().to_owned(),
+                source,
+            });
+        }
+        Err(payload) => {
+            let reason = panic_reason(payload.as_ref());
+            host.fail(&format!("task panicked: {reason}"));
+            return Err(RuntimeError::TaskPanicked {
+                task: task.identity().to_owned(),
+            });
+        }
+    }
+    host.flush_progress();
+    if host.cancellation_requested() {
+        host.fail("runtime cancellation requested");
+        return Err(RuntimeError::TaskCancelled {
+            task: task.identity().to_owned(),
+        });
+    }
+    let kind = match task.kind() {
+        TaskKind::ExecutionUnit => TaskRunKind::ExecutionUnit {
+            execution_unit: task
+                .execution_unit()
+                .expect("execution-unit task retains its registration key")
+                .into(),
+            members: host.member_summaries(),
+        },
+        TaskKind::Program if task.is_npy() => TaskRunKind::Npy {
+            launcher: task
+                .program_path()
+                .expect("NPY task retains its resolved Python launcher")
+                .to_path_buf(),
+            processed_directory: processed_directory
+                .expect("an NPY task retains its standard processed directory"),
+        },
+        TaskKind::Program => TaskRunKind::Program {
+            executable: task
+                .program_path()
+                .expect("program task retains its resolved invocation")
+                .to_path_buf(),
+            python_script: task.python_script().map(Path::to_path_buf),
+        },
+    };
+    Ok(TaskRunSummary {
+        identity: task.identity().into(),
+        kind,
+        output_directory: host.output_directory().to_path_buf(),
+        configuration: runtime.configuration,
+    })
+}
+
+fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
+    const MAX_CHARS: usize = 1_024;
+
+    let message = payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_owned());
+    let mut characters = message.chars();
+    let bounded = characters.by_ref().take(MAX_CHARS).collect::<String>();
+    if characters.next().is_some() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    }
+}
 
 pub(crate) struct RuntimeTaskHost {
     persistence_plan: PersistencePlan,
@@ -37,7 +222,7 @@ pub(crate) struct RuntimeTaskHost {
     member_directories: Vec<Option<PathBuf>>,
     task_presentation: TaskPresentation,
     environment: RuntimeTaskEnvironment,
-    compute: Option<ComputeLease>,
+    resources: TaskResourceLease,
 }
 
 pub(crate) struct ProgramSeed {
@@ -52,7 +237,7 @@ pub(crate) struct RuntimeTaskLaunch {
     threads: usize,
     task_presentation: TaskPresentation,
     environment: RuntimeTaskEnvironment,
-    compute: Option<ComputeLease>,
+    resources: TaskResourceLease,
 }
 
 impl RuntimeTaskLaunch {
@@ -63,7 +248,7 @@ impl RuntimeTaskLaunch {
         threads: usize,
         task_presentation: TaskPresentation,
         environment: RuntimeTaskEnvironment,
-        compute: Option<ComputeLease>,
+        resources: TaskResourceLease,
     ) -> Self {
         Self {
             provenance,
@@ -72,7 +257,7 @@ impl RuntimeTaskLaunch {
             threads,
             task_presentation,
             environment,
-            compute,
+            resources,
         }
     }
 }
@@ -131,7 +316,7 @@ impl RuntimeTaskHost {
             member_directories: Vec::new(),
             task_presentation: launch.task_presentation,
             environment: launch.environment,
-            compute: launch.compute,
+            resources: launch.resources,
         }
     }
 
@@ -168,7 +353,7 @@ impl RuntimeTaskHost {
 
     pub(crate) fn fail(&mut self, reason: &str) {
         self.flush_progress();
-        let compute = self.compute.as_ref().map(ComputeLease::provenance);
+        let compute = self.resources.compute_provenance();
         for persistence in &mut self.persistence {
             if let Some(mut persistence) = persistence.take() {
                 persistence.fail(reason, compute.clone());
@@ -179,10 +364,7 @@ impl RuntimeTaskHost {
 
 impl TaskExecutionHost for RuntimeTaskHost {
     fn compute(&self, operation: &mut (dyn FnMut() -> TaskResult + Send)) -> TaskResult {
-        self.compute
-            .as_ref()
-            .expect("execution-unit tasks retain a compute lease")
-            .run(operation)
+        self.resources.run(operation)
     }
 
     fn checkpoint(&self) {
@@ -250,7 +432,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
             command.env("WORKFLOW_TASK_SEED", seed.seed.to_string());
         }
 
-        super::program::execute(
+        super::super::program::execute(
             command,
             persistence,
             &self.cancellation,
@@ -276,7 +458,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .clone()
             .with_member(index, identity)
             .with_seed_derivation(seed_derivation)
-            .with_compute(self.compute.as_ref().map(ComputeLease::provenance));
+            .with_compute(self.resources.compute_provenance());
         if self.persistence.is_empty() {
             self.persistence.resize_with(member_count, || None);
             self.member_iterations.resize(member_count, 0);
@@ -342,7 +524,7 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .complete(
                 state,
                 completion_reason,
-                self.compute.as_ref().map(ComputeLease::provenance),
+                self.resources.compute_provenance(),
             )?;
         self.persistence[index] = None;
         self.member_iterations[index] = state.time().iteration();

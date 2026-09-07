@@ -7,16 +7,14 @@
 //! It accepts only a completed Study and never opens project declarations or
 //! binds execution unit keys itself.
 
-mod compute;
 mod control;
 mod error;
 mod event;
 mod execution;
-mod host;
 mod output;
 mod presentation;
 mod program;
-mod resource;
+mod resources;
 mod reuse;
 mod summary;
 

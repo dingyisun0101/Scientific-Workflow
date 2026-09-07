@@ -3,7 +3,6 @@
 use super::encoding::EncodedObservation;
 use super::error::ObservationError;
 use super::plan::BoundObservationPlan;
-use super::state_observation::StateObservation;
 
 /// Applies one bound observation plan across an ordered state sequence.
 pub(crate) struct ObservationSession {
@@ -52,7 +51,13 @@ impl ObservationSession {
             }
         }
 
-        let observation = StateObservation::new(&self.descriptor, state)?;
+        if !self
+            .descriptor
+            .schema()
+            .shares_schema_instance(state.schema())
+        {
+            return Err(ObservationError::SchemaMismatch { iteration });
+        }
         let selected = self
             .descriptor
             .streams()
@@ -68,7 +73,7 @@ impl ObservationSession {
             .collect::<Vec<_>>();
         let encoded = selected
             .iter()
-            .map(|(_, stream)| observation.encode_stream(stream))
+            .map(|(_, stream)| super::encoding::encode(state, stream))
             .collect::<Result<Vec<_>, _>>()?;
         for (index, _) in selected {
             self.last_iterations[index] = Some(iteration);

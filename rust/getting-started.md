@@ -280,16 +280,20 @@ recording beneath `output/` automatically.
 - Read the [architecture guide](../docs/architecture.md) when you need subsystem
   ownership, dependency direction, or implementation and replacement details.
 
-### Explicit phase selection
+### Optional phase and execution-unit selection
 
-Every `study.json` must contain `"active_phases": [0, 1, ...]`; there is no
-implicit run-all default. Indices are zero-based in deterministic dependency
+Omitting `active_phases` selects every phase. To select a subset, set
+`"active_phases": [0, 1, ...]`. Indices are zero-based in deterministic dependency
 order: visit phases in JSON declaration order, recursively visit each `after`
 list in its declared order, then assign each phase its index once. Selecting a
 subset never renumbers phases, expanded tasks, output ordinals, or seed identities.
 The order of indices in the selection does not change execution order. Duplicate,
 negative, non-integer, and out-of-range indices are rejected. An empty list
 explicitly selects no work.
+
+An execution-unit task inside a selected phase may set `"active": false` to
+remain in the compiled plan without running. The field defaults to `true` and
+is invalid on program, Python, and `$npy` tasks.
 
 For a six-phase preparation, reference, targets, lattice, export, and conversion
 study, `"active_phases": [3, 4, 5]` starts at lattice. Supply

@@ -61,7 +61,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::clock::{duration_nanoseconds, utc_now_rfc3339};
+use super::operational_time::{duration_nanoseconds, utc_now_rfc3339};
 use crate::observation::{
     BoundObservationPlan, BoundObservationStream, EncodedObservation, ObservationSession,
 };

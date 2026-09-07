@@ -101,7 +101,6 @@
 
 extern crate self as scientific_workflow;
 
-mod clock;
 mod composition;
 mod error;
 

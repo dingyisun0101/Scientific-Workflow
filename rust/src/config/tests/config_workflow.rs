@@ -1372,9 +1372,15 @@ fn every_supported_explicit_python_environment_is_lowered_during_loading() {
 }
 
 #[test]
-fn active_phase_indices_are_required_explicit_and_bounded() {
+fn active_phase_indices_default_to_all_phases_and_remain_bounded() {
+    let project = TestProject::new_raw(
+        r#"{"workflow_schema":1,"threads":2,"phases":{"prepare":{"tasks":[{"execution_unit":"unit"}]},"simulate":{"after":["prepare"],"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
+    );
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    assert_eq!(specification.manifest().active_phases(), [0, 1]);
+
     for (selection, reason) in [
-        ("", "missing field `active_phases`"),
         ("\"active_phases\":[0,0],", "distinct"),
         ("\"active_phases\":[1],", "phase count"),
         ("\"active_phases\":[-1],", "invalid"),
@@ -1388,6 +1394,39 @@ fn active_phase_indices_are_required_explicit_and_bounded() {
             .unwrap_err()
             .to_string();
         assert!(error.contains(reason), "{error}");
+    }
+}
+
+#[test]
+fn active_is_an_optional_execution_unit_only_switch() {
+    let project = TestProject::new_raw(
+        r#"{"workflow_schema":1,"threads":2,"phases":{"simulate":{"tasks":[{"execution_unit":"unit","active":false},{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
+    );
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    assert!(matches!(
+        &specification.phases()[0].tasks(),
+        [
+            ResolvedTask::ExecutionUnit { active: false, .. },
+            ResolvedTask::ExecutionUnit { active: true, .. }
+        ]
+    ));
+
+    for declaration in [
+        r#"{"program":"/bin/true","active":false}"#,
+        r#"{"python":{"script":"scripts/analyze.py","environment":{"manager":"venv","path":"env"}},"active":false}"#,
+    ] {
+        let source = format!(
+            r#"{{"workflow_schema":1,"threads":2,"phases":{{"simulate":{{"tasks":[{declaration}]}}}}}}"#
+        );
+        let project = TestProject::new_raw(&source, &[]);
+        let error = ProjectSpecification::load(project.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("valid only for an execution unit"),
+            "{error}"
+        );
     }
 }
 

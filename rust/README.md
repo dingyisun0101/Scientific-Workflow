@@ -948,16 +948,20 @@ cargo test -p scientific-workflow --all-targets --no-default-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```
 
-### Explicit phase selection
+### Optional phase and execution-unit selection
 
-Every `study.json` must contain `"active_phases": [0, 1, ...]`; there is no
-implicit run-all default. Indices are zero-based in deterministic dependency
+Omitting `active_phases` selects every phase. To select a subset, set
+`"active_phases": [0, 1, ...]`. Indices are zero-based in deterministic dependency
 order: visit phases in JSON declaration order, recursively visit each `after`
 list in its declared order, then assign each phase its index once. Selecting a
 subset never renumbers phases, expanded tasks, output ordinals, or seed identities.
 The order of indices in the selection does not change execution order. Duplicate,
 negative, non-integer, and out-of-range indices are rejected. An empty list
 explicitly selects no work.
+
+Within a selected phase, an execution-unit task may set `"active": false`.
+Inactive units retain their compiled identities and output ordinals but are not
+run or reused. `active` defaults to `true` and is invalid on other task kinds.
 
 For a six-phase preparation, reference, targets, lattice, export, and conversion
 study, `"active_phases": [3, 4, 5]` starts at lattice. Supply

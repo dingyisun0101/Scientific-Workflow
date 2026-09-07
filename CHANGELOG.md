@@ -16,6 +16,14 @@
 - Add a dashboard Usage section for CPU, RAM, and execution-filesystem disk
   occupation. Remove Alt-Up/Down message scrolling and synchronously mirror
   complete timestamped UI messages to `<execution>/log.txt` in real time.
+- Make `active_phases` optional with a run-all default, and add optional
+  execution-unit task `active` flags. Inactive units remain in compiled plan
+  inspection without running, reuse, output, or identity renumbering.
+- Consolidate runtime admission and compute allocation behind one task lease,
+  separate execution/phase/task runtime ownership, move reuse policy under
+  Runtime, and split the stable Python NPY namespace by responsibility.
+- Add `docs/agent-guide.md` for strict JSON authoring, API discovery, and
+  downstream-first changes.
 
 ## 0.13.11 / Python 0.4.5 unchanged
 

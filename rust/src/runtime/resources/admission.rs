@@ -1,9 +1,9 @@
-//! Process-wide compute permits shared by every replicate scheduler.
+//! Process-wide task admission shared by every replicate scheduler.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Clone)]
-pub(super) struct ResourceBudget {
+pub(crate) struct ResourceBudget {
     inner: Arc<BudgetInner>,
 }
 
@@ -20,19 +20,19 @@ struct BudgetState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ResourceRequirement {
+pub(crate) enum ResourceRequirement {
     AutoInProcess,
     IsolatedInProcess { threads: usize },
     External { threads: usize },
 }
 
-pub(super) struct ResourceLease {
+pub(crate) struct ResourceLease {
     budget: ResourceBudget,
     requirement: ResourceRequirement,
 }
 
 impl ResourceBudget {
-    pub(super) fn new(total: usize) -> Self {
+    pub(crate) fn new(total: usize) -> Self {
         debug_assert!(total > 0);
         Self {
             inner: Arc::new(BudgetInner {
@@ -42,7 +42,7 @@ impl ResourceBudget {
         }
     }
 
-    pub(super) fn try_acquire(&self, requirement: ResourceRequirement) -> Option<ResourceLease> {
+    pub(crate) fn try_acquire(&self, requirement: ResourceRequirement) -> Option<ResourceLease> {
         let mut state = self.state();
         let available = self.inner.total - state.external_threads;
         let admitted = match requirement {
@@ -84,16 +84,6 @@ impl ResourceBudget {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
-
-impl ResourceLease {
-    pub(super) fn threads(&self) -> Option<usize> {
-        match self.requirement {
-            ResourceRequirement::IsolatedInProcess { threads }
-            | ResourceRequirement::External { threads } => Some(threads),
-            ResourceRequirement::AutoInProcess => None,
-        }
     }
 }
 
@@ -190,6 +180,6 @@ mod tests {
                 .try_acquire(ResourceRequirement::IsolatedInProcess { threads: 2 })
                 .is_none()
         );
-        assert_eq!(fixed.threads(), Some(3));
+        drop(fixed);
     }
 }

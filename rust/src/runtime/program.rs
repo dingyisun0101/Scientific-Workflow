@@ -394,6 +394,7 @@ pub(super) fn check_prerequisites(study: &crate::study::Study) -> Result<(), sup
         .enumerate()
         .filter(|(index, _)| study.phase_is_active(*index))
         .flat_map(|(_, &position)| study.phases()[position].tasks())
+        .filter(|task| task.is_active())
         .filter(|t| t.is_npy())
         .filter_map(|t| t.program_path())
         .collect::<std::collections::BTreeSet<_>>();

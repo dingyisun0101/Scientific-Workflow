@@ -133,6 +133,10 @@ pub(crate) fn compile(
             };
             let identity = format!("{}/{output_ordinal:06}/{identity_suffix}", phase.name());
             tasks.push(StudyTask {
+                active: match resolved {
+                    ResolvedTask::ExecutionUnit { active, .. } => *active,
+                    ResolvedTask::Program { .. } => true,
+                },
                 identity: identity.into_boxed_str(),
                 label: label.into_boxed_str(),
                 output_ordinal,

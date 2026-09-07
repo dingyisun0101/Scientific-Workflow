@@ -8,8 +8,8 @@ use crate::config::ResolvedExecutionUnitParameters;
 use crate::observation::BoundObservationPlan;
 use crate::state::{StateSchemaProvider, SystemStateSchema};
 
+use super::TaskResult;
 use super::definition::Task;
-use super::result::TaskResult;
 use super::unit::ExecutionUnit;
 
 /// One immutable association between a manifest execution-unit key and compiled Rust behavior.

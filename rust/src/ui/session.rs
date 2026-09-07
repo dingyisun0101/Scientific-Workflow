@@ -3,15 +3,17 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use thiserror::Error;
 
 use super::command::{CommandSubmission, UiCommand};
 use super::live_log::LiveLog;
-use super::plan::UiPlan;
 use super::state::DashboardState;
 use super::terminal::{self, DashboardTerminal};
 use crate::runtime::{PresentationFailure, RuntimeEvent, RuntimeObserver};
+
+const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Clone-cheap, thread-safe UI session shared by Runtime workers.
 #[derive(Clone)]
@@ -37,7 +39,6 @@ impl UiFailure {
 struct UiSessionInner {
     interactive: bool,
     control: crate::runtime::RunControl,
-    plan: UiPlan,
     state: Mutex<DashboardState>,
     live_log: Mutex<LiveLog>,
     cancellation_requested: AtomicBool,
@@ -72,7 +73,6 @@ impl UiSession {
         let inner = Arc::new(UiSessionInner {
             control: control.clone(),
             interactive,
-            plan: UiPlan::automatic(),
             state: Mutex::new(DashboardState::with_control(control)),
             live_log: Mutex::new(LiveLog::default()),
             cancellation_requested: AtomicBool::new(false),
@@ -275,7 +275,7 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
         if renderer_should_close(inner.finished.load(Ordering::Acquire), close_requested) {
             break;
         }
-        thread::sleep(inner.plan.refresh_interval());
+        thread::sleep(REFRESH_INTERVAL);
     }
 }
 

@@ -53,3 +53,8 @@ Plan inspection now reports `PlanSummary::compute_mode()` as
 `PlanComputeMode`, and `PlannedTaskKind::ExecutionUnit` includes optional
 `threads` (`None` in auto, `Some` in isolated). Completed and failed member
 metadata records compute mode and allocation history.
+
+The same release makes phase selection optional: omitting `active_phases` now
+selects every phase. An execution-unit task may set `"active": false` to stay
+in the compiled plan while being excluded from execution and reuse. The task
+flag defaults to `true` and is invalid on program, Python, and `$npy` tasks.
