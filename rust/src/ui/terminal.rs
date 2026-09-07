@@ -110,7 +110,7 @@ impl DashboardTerminal {
                         self.task_anchor = None;
                         continue;
                     }
-                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Up {
+                    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Up {
                         self.message_end = Some(
                             self.message_end
                                 .unwrap_or(self.last_message)
@@ -119,7 +119,7 @@ impl DashboardTerminal {
                         );
                         continue;
                     }
-                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Down {
+                    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Down {
                         let next = self
                             .message_end
                             .unwrap_or(self.last_message)
@@ -243,6 +243,11 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
         .output
         .as_deref()
         .map_or_else(|| "planning".to_owned(), |path| path.display().to_string());
+    let phase = if snapshot.phase_count == 0 {
+        "phase=-/-".to_owned()
+    } else {
+        format!("phase={}/{}", snapshot.current_phase, snapshot.phase_count)
+    };
     let text = vec![
         Line::from(vec![
             Span::styled(
@@ -274,6 +279,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
             snapshot.replicate_count,
             snapshot.tasks.len()
         )),
+        Line::from(format!("{phase}")),
         Line::from(format!("output={output}")),
     ];
     frame.render_widget(
@@ -526,7 +532,7 @@ fn render_messages(
         Paragraph::new(text).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Messages · last 100 · Ctrl-Up/Down "),
+                .title(" Messages · last 100 · Alt-Up/Down "),
         ),
         area,
     );

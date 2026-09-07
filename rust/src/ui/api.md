@@ -30,9 +30,9 @@ Crossterm alternate screen and renders a Ratatui dashboard containing:
 - study-wide pending/running/completed/failed/cancelled/skipped counts;
 - scientific iteration gauges/spinners and standard-program stage/count progress;
 - paused execution elapsed/ETA and an independent **Total time** wall clock;
-- separate study identity/status/count/output rows;
+- separate study identity/status/count/phase/output rows;
 - severity-colored, text-labeled, timestamped source messages (last 100 retained);
-- task scrolling with PageUp/PageDown and message scrolling with Ctrl-Up/Down;
+- task scrolling with PageUp/PageDown and message scrolling with Alt-Up/Down;
 - pause, resume, exit, and exit --force commands.
 
 The task table itself contains the task label with a concise kind tag, status,

@@ -51,6 +51,8 @@ pub(super) struct TaskSnapshot {
 pub(super) struct DashboardSnapshot {
     pub(super) output: Option<PathBuf>,
     pub(super) replicate_count: u64,
+    pub(super) current_phase: usize,
+    pub(super) phase_count: usize,
     pub(super) tasks: Vec<TaskSnapshot>,
     pub(super) messages: Vec<Message>,
     pub(super) totals: [usize; 6],
@@ -81,6 +83,7 @@ pub(super) struct DashboardState {
     output: Option<PathBuf>,
     replicate_count: u64,
     active_phase: Option<(u64, Box<str>)>,
+    phase_plan: Vec<Box<str>>,
     tasks: BTreeMap<(u64, Box<str>), TaskSnapshot>,
     task_order: Vec<(u64, Box<str>)>,
     messages: VecDeque<Message>,
@@ -102,6 +105,7 @@ impl DashboardState {
             output: None,
             replicate_count: 0,
             active_phase: None,
+            phase_plan: Vec::new(),
             tasks: BTreeMap::new(),
             task_order: Vec::new(),
             messages: VecDeque::with_capacity(MESSAGE_HISTORY),
@@ -122,6 +126,9 @@ impl DashboardState {
                 kind,
             } => {
                 let key = (*replicate, Box::<str>::from(*identity));
+                if !self.phase_plan.iter().any(|planned| planned.as_ref() == *phase) {
+                    self.phase_plan.push(phase.to_string().into_boxed_str());
+                }
                 if !self.tasks.contains_key(&key) {
                     self.task_order.push(key.clone());
                 }
@@ -358,11 +365,20 @@ impl DashboardState {
 
     pub(super) fn snapshot(&self) -> DashboardSnapshot {
         let mut totals = [0; 6];
+        let phase_count = self.phase_plan.len();
+        let current_phase = self.active_phase.as_ref().and_then(|(_, phase)| {
+            self.phase_plan
+                .iter()
+                .position(|name| name.as_ref() == phase.as_ref())
+                .map(|index| index + 1)
+        });
         for task in self.tasks.values() {
             totals[task.status as usize] += 1;
         }
         DashboardSnapshot {
             totals,
+            current_phase: current_phase.unwrap_or(0),
+            phase_count,
             now: self.control.now(),
             control_status: self.control.status(),
             output: self.output.clone(),

@@ -61,7 +61,7 @@ The dashboard combines active phase groups in plan order. **Completed, failed,
 and cancelled groups disappear. Inspect Messages for their outcomes and counts.**
 The global summary counts every planned task. Messages retain the latest 100
 entries; full program stdout/stderr logs remain in the program task directory.
-Page Up/Down scroll tasks, Ctrl+Up/Down scroll messages. Severity appears in text
+Page Up/Down scroll tasks, Alt+Up/Down scroll messages. Severity appears in text
 and color. See [UI controls](../rust/src/ui/api.md) for pause and exit keys.
 
 Pause freezes execution timers and timeout budgets immediately. Rust work parks
