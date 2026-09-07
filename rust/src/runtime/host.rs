@@ -18,6 +18,7 @@ use crate::task::{
     TaskResult,
 };
 
+use super::compute::ComputeLease;
 use super::presentation::TaskPresentation;
 use super::summary::MemberRunSummary;
 
@@ -36,6 +37,7 @@ pub(crate) struct RuntimeTaskHost {
     member_directories: Vec<Option<PathBuf>>,
     task_presentation: TaskPresentation,
     environment: RuntimeTaskEnvironment,
+    compute: Option<ComputeLease>,
 }
 
 pub(crate) struct ProgramSeed {
@@ -50,6 +52,7 @@ pub(crate) struct RuntimeTaskLaunch {
     threads: usize,
     task_presentation: TaskPresentation,
     environment: RuntimeTaskEnvironment,
+    compute: Option<ComputeLease>,
 }
 
 impl RuntimeTaskLaunch {
@@ -60,6 +63,7 @@ impl RuntimeTaskLaunch {
         threads: usize,
         task_presentation: TaskPresentation,
         environment: RuntimeTaskEnvironment,
+        compute: Option<ComputeLease>,
     ) -> Self {
         Self {
             provenance,
@@ -68,6 +72,7 @@ impl RuntimeTaskLaunch {
             threads,
             task_presentation,
             environment,
+            compute,
         }
     }
 }
@@ -126,6 +131,7 @@ impl RuntimeTaskHost {
             member_directories: Vec::new(),
             task_presentation: launch.task_presentation,
             environment: launch.environment,
+            compute: launch.compute,
         }
     }
 
@@ -162,15 +168,23 @@ impl RuntimeTaskHost {
 
     pub(crate) fn fail(&mut self, reason: &str) {
         self.flush_progress();
+        let compute = self.compute.as_ref().map(ComputeLease::provenance);
         for persistence in &mut self.persistence {
             if let Some(mut persistence) = persistence.take() {
-                persistence.fail(reason);
+                persistence.fail(reason, compute.clone());
             }
         }
     }
 }
 
 impl TaskExecutionHost for RuntimeTaskHost {
+    fn compute(&self, operation: &mut (dyn FnMut() -> TaskResult + Send)) -> TaskResult {
+        self.compute
+            .as_ref()
+            .expect("execution-unit tasks retain a compute lease")
+            .run(operation)
+    }
+
     fn checkpoint(&self) {
         self.task_presentation
             .control()
@@ -261,7 +275,8 @@ impl TaskExecutionHost for RuntimeTaskHost {
             .expect("an execution-unit task retains recording provenance")
             .clone()
             .with_member(index, identity)
-            .with_seed_derivation(seed_derivation);
+            .with_seed_derivation(seed_derivation)
+            .with_compute(self.compute.as_ref().map(ComputeLease::provenance));
         if self.persistence.is_empty() {
             self.persistence.resize_with(member_count, || None);
             self.member_iterations.resize(member_count, 0);
@@ -324,7 +339,11 @@ impl TaskExecutionHost for RuntimeTaskHost {
         self.persistence[index]
             .as_mut()
             .expect("begin_member precedes final observation")
-            .complete(state, completion_reason)?;
+            .complete(
+                state,
+                completion_reason,
+                self.compute.as_ref().map(ComputeLease::provenance),
+            )?;
         self.persistence[index] = None;
         self.member_iterations[index] = state.time().iteration();
         self.member_targets[index] = target_iteration;

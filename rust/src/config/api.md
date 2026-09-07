@@ -1,6 +1,6 @@
 # Config API
 
-This guide documents the `scientific-workflow` 0.13.11 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.0 subsystem contract.
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by
@@ -50,7 +50,7 @@ no state-schema file or `paths` object.
 ### `wf_configs/study.json`
 
 The root object has required `workflow_schema`, positive-integer `threads`,
-`active_phases`, and nonempty `phases` fields, plus optional `reuse_from`, `paths`,
+strict `compute`, `active_phases`, and nonempty `phases` fields, plus optional `reuse_from`, `paths`,
 `seed`, `replicates`, and `persistence`. `workflow_schema` is independent of the crate version;
 this release accepts exactly generation `1` and rejects missing or unknown
 generations before assembly:
@@ -60,6 +60,7 @@ generations before assembly:
   "active_phases": [0],
   "workflow_schema": 1,
   "threads": 16,
+  "compute": {"mode": "auto"},
   "seed": 42,
   "paths": {
     "states": {
@@ -97,9 +98,17 @@ Unknown properties are rejected at every Workflow-owned level.
   tasks. An omitted or unsupported generation is never interpreted as the
   current grammar implicitly.
 - `threads` is the required positive global compute budget. There is no
-  default, host-CPU inference, or environment override. Runtime gives its one
-  shared execution-unit pool exactly this many workers and admits external
-  tasks only while enough global permits are available.
+  default, host-CPU inference, or environment override. Runtime never permits
+  working tasks to exceed this process-wide ceiling.
+- `compute` is required and is the strict object `{"mode":"auto"}` or
+  `{"mode":"isolated"}`. In `auto`, Runtime divides `threads` as equally as
+  possible among execution-unit tasks that are working, excluding pending
+  tasks, and may change each task's private Rayon-pool size between
+  initialization/step calls. Each selected unit must declare
+  `ExecutionUnit::THREAD_COUNT_INVARIANT = true`. In `isolated`, every
+  execution-unit task must declare `resources.threads`; that task keeps its
+  fixed private pool for its complete lifetime. Unknown modes and fields are
+  rejected. Neither mode reads `RAYON_NUM_THREADS`.
 - `seed` is an optional unsigned 64-bit master seed. Config parses it once;
   Runtime uses it only to derive explicitly requested task-scoped values. It
   places execution-unit derivation behind the immutable initialization context
@@ -138,7 +147,7 @@ Unknown properties are rejected at every Workflow-owned level.
   millisecond counts.
 - each task is exactly one of:
   - an execution-unit task with nonblank `execution_unit`, optional nonblank
-    `state`, and optional `timeout_ms`; or
+    `state`, optional `timeout_ms`, and mode-dependent `resources`; or
   - a program task with required `program`, optional `args`, optional `seed`,
     optional `resources`, and optional `timeout_ms`, for example
     `{"program":"bin/analyze","args":["--publication"],"resources":{"threads":4}}`; or
@@ -151,12 +160,13 @@ Unknown properties are rejected at every Workflow-owned level.
   this reserved phase. Runtime runs that task once per replicate and supplies
   all transitively prerequisite execution-unit recordings across every global
   configuration; the converter ignores prerequisite program workspaces.
-- `resources` is the strict object `{"threads":N}`. It is valid only for a
-  program or Python task, defaults to one thread when omitted, and must request
-  a positive count no greater than top-level `threads`. The resolved count is
-  both the number of global permits held for the child's lifetime and the
-  value supplied to its thread-count environment variables. Execution units
-  do not accept this field because all of them share the one global Rayon pool.
+- `resources` is the strict object `{"threads":N}` with a positive count no
+  greater than top-level `threads`. For program and Python tasks it defaults
+  to one, reserves global permits for the child's lifetime, and supplies the
+  child's thread-count environment variables. For execution-unit tasks it is
+  forbidden in `auto` and required in `isolated`, where it fixes the size of
+  that task's private Rayon pool. Runtime admits isolated tasks only when the
+  sum of their fixed allocations fits the global budget.
 - A program/Python seed request is the strict object
   `{"seed":{"purpose":"target-initial-conditions"}}`. `purpose` must be
   nonempty and have no surrounding whitespace. The request requires the
@@ -360,6 +370,7 @@ snapshot through Runtime:
   "study": {
     "workflow_schema": 1,
     "threads": 16,
+    "compute": {"mode": "auto"},
     "paths": {"states": {"population": "wf_configs/states/population.json"}},
     "phases": {"simulate": {"tasks": [{"execution_unit":"population","state":"population"}]}}
   },
@@ -514,6 +525,7 @@ Python task:
   "active_phases": [0,1],
   "workflow_schema": 1,
   "threads": 16,
+  "compute": {"mode": "auto"},
   "paths": {"states": {"population":"wf_configs/states/population.json"}},
   "phases": {
     "simulate": {

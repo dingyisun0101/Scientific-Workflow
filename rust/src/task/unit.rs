@@ -372,6 +372,13 @@ pub trait ExecutionUnit: Send + Sized + 'static {
     /// One complete set of constants supplied by Config.
     type Constants: DeserializeOwned + 'static;
 
+    /// Declares whether changing Rayon worker counts between coordinated steps
+    /// preserves this unit's scientific result.
+    ///
+    /// Automatic compute allocation requires an explicit `true`; the default
+    /// keeps fixed-width numerical units out of dynamically rebalanced runs.
+    const THREAD_COUNT_INVARIANT: bool = false;
+
     /// Returns the standard static schema supplied for this unit, if any.
     ///
     /// Study uses this provider only when the task omits an explicit project

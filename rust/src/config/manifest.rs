@@ -16,6 +16,15 @@ use super::python::PythonTaskDeclaration;
 pub(crate) const WORKFLOW_SCHEMA_VERSION: u64 = 1;
 pub(crate) const NPY_PHASE_NAME: &str = "$npy";
 
+/// Effective allocation policy for linked execution-unit compute.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ComputeMode {
+    /// Rebalance the study-wide budget equally across working invariant units.
+    Auto,
+    /// Give every working unit its authored fixed thread allocation.
+    Isolated,
+}
+
 /// Effective policy for isolated study replicates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ReplicatePolicy {
@@ -66,6 +75,7 @@ pub(crate) struct StudyManifest {
     active_phases: Box<[usize]>,
     reuse_from: Option<PathBuf>,
     threads: usize,
+    compute_mode: ComputeMode,
     master_seed: Option<u64>,
     replicates: ReplicatePolicy,
     persistence: PersistenceSpecification,
@@ -90,6 +100,11 @@ impl StudyManifest {
     /// Returns the required study-wide global compute budget.
     pub(crate) const fn threads(&self) -> usize {
         self.threads
+    }
+
+    /// Returns the execution-unit compute allocation policy.
+    pub(crate) const fn compute_mode(&self) -> ComputeMode {
+        self.compute_mode
     }
 
     /// Returns the optional deterministic seed for the complete study.
@@ -199,6 +214,7 @@ pub(crate) enum ParsedTask {
         execution_unit: Box<str>,
         state: Option<Box<str>>,
         timeout: Option<Duration>,
+        threads: Option<usize>,
     },
     Program {
         program: PathBuf,
@@ -308,6 +324,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         active_phases: raw.active_phases.into_boxed_slice(),
         reuse_from,
         threads: raw.threads,
+        compute_mode: raw.compute.mode.into(),
         master_seed: raw.seed,
         replicates: ReplicatePolicy {
             count: raw.replicates.count,
@@ -470,9 +487,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                 .transpose()?;
             match (task.execution_unit, task.program, task.python) {
                 (Some(execution_unit), None, None)
-                    if task.args.is_empty()
-                        && seed_purpose.is_none()
-                        && task.resources.is_none() =>
+                    if task.args.is_empty() && seed_purpose.is_none() =>
                 {
                     validate_identifier(
                         path,
@@ -483,10 +498,35 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     if let Some(state) = task.state.as_deref() {
                         validate_identifier(path, &format!("{pointer}/state"), state, "state")?;
                     }
+                    let threads = task.resources.map(|resources| resources.threads.get());
+                    match manifest.compute_mode() {
+                        ComputeMode::Auto if threads.is_some() => {
+                            return Err(ConfigError::invalid(
+                                path,
+                                format!("{pointer}/resources"),
+                                "automatic compute allocation does not accept a fixed task thread count",
+                            ));
+                        }
+                        ComputeMode::Isolated if threads.is_none() => {
+                            return Err(ConfigError::invalid(
+                                path,
+                                format!("{pointer}/resources"),
+                                "isolated compute allocation requires resources.threads on every execution-unit task",
+                            ));
+                        }
+                        ComputeMode::Isolated => validate_task_threads(
+                            path,
+                            &pointer,
+                            threads.expect("checked isolated allocation"),
+                            manifest.threads(),
+                        )?,
+                        ComputeMode::Auto => {}
+                    }
                     tasks.push(ParsedTask::ExecutionUnit {
                         execution_unit: execution_unit.into_boxed_str(),
                         state: task.state.map(String::into_boxed_str),
                         timeout,
+                        threads,
                     });
                 }
                 (None, Some(program), None) if task.state.is_none() => {
@@ -519,7 +559,7 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
                     return Err(ConfigError::invalid(
                         path,
                         pointer,
-                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit, top-level `args` only for a program, and `seed` and `resources` only for a program or Python task",
+                        "a task must declare exactly `execution_unit`, `program`, or `python`; optional `state` is valid only for an execution unit, top-level `args` only for a program, and `seed` only for a program or Python task",
                     ));
                 }
             }
@@ -655,6 +695,7 @@ struct RawStudy {
     #[serde(default)]
     reuse_from: Option<PathBuf>,
     threads: usize,
+    compute: RawCompute,
     #[serde(default)]
     paths: RawPaths,
     #[serde(default)]
@@ -664,6 +705,28 @@ struct RawStudy {
     #[serde(default)]
     persistence: RawPersistence,
     phases: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCompute {
+    mode: RawComputeMode,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RawComputeMode {
+    Auto,
+    Isolated,
+}
+
+impl From<RawComputeMode> for ComputeMode {
+    fn from(value: RawComputeMode) -> Self {
+        match value {
+            RawComputeMode::Auto => Self::Auto,
+            RawComputeMode::Isolated => Self::Isolated,
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]

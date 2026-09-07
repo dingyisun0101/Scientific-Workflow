@@ -19,6 +19,7 @@ pub(crate) enum ResolvedTask {
         snapshot: ConfigSnapshot,
         parameters: ResolvedExecutionUnitParameters,
         state: Option<Box<str>>,
+        threads: Option<usize>,
     },
     Program {
         configuration: usize,

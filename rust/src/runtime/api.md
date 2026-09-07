@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.13.10 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.0 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -24,18 +24,23 @@ beneath the inferred `<project-root>/output`, creates one isolated directory
 per replicate, executes all phases and tasks, and completes each member's
 recording or each program workspace.
 
-Before creating output, Runtime constructs exactly one owned Rayon pool with
-the required top-level `study.json.threads` worker count. Every execution-unit
-initialization and step runs with that pool installed, so concurrent tasks and
-replicates share one study-wide compute limit instead of creating independent
-model pools. Ambient `RAYON_NUM_THREADS` does not override the manifest.
-The same count also initializes one process-wide permit budget shared by all
-replicate schedulers. External tasks reserve their configured thread count; `$npy` reserves
-`min(study.threads, deduplicated recording count)`. Tasks
-may overlap only while their aggregate reservation fits. External work and
-in-process execution-unit work do not overlap: execution units cannot safely
-shrink the fixed Rayon pool while it is active. This conservative class boundary
-keeps the authored global ceiling exact.
+Runtime gives each working execution-unit task a private Rayon pool governed
+by required top-level `study.json.compute.mode`. In `auto`, the coordinator
+divides `study.json.threads` as equally as possible among registered working
+tasks; pending tasks receive no allocation. Starts and finishes request a
+rebalance, active initialization/step calls finish, and new pools are installed
+before the next call. Stable replicate/task order receives any indivisible
+remainder. In `isolated`, each task keeps its authored `resources.threads`
+pool. Dedicated pools prevent one long-lived ensemble from occupying another
+ensemble's workers. Ambient `RAYON_NUM_THREADS` does not override either mode.
+
+The global count also initializes one process-wide permit budget shared by all
+replicate schedulers. Auto mode admits at most one execution-unit task per
+global thread; isolated tasks are admitted only while their fixed allocations
+fit. External tasks reserve their configured thread count; `$npy` reserves
+`min(study.threads, deduplicated recording count)`. External work and
+in-process execution-unit work do not overlap, keeping the authored global
+ceiling exact.
 
 For each task, Runtime derives the destination and constructs private
 persistence sessions. A standalone unit opens one member recording; an ensemble
@@ -283,8 +288,6 @@ This non-exhaustive enum reports failures after a valid Study is available:
   threadpoolctl, or is older than Python 3.14. The error names the selected
   interpreter and setup remedy. Runtime probes before scientific work and output
   creation; Study::load performs no subprocess probe.
-- `ComputePool { threads, source }`: Runtime could not create the exact
-  study-wide pool before output creation;
 - `ExecutionCancelled`: the interactive `exit` command or Ctrl+C requested
   cooperative cancellation;
 - `Presentation { source }`: the selected automatic presentation adapter could
@@ -293,7 +296,7 @@ This non-exhaustive enum reports failures after a valid Study is available:
 - `OutputScope { path, source }`: unique execution or replicate directory could
   not be created;
 - `Task { task, source }`: execution unit, program, state, observation, config decode,
-  or persistence operation failed during invocation;
+  compute-pool allocation, or persistence operation failed during invocation;
 - `TaskPanicked { task }`: task execution unwound; Runtime marks any active
   member recording failed with a bounded diagnostic before returning the stable
   existing error shape;
@@ -359,7 +362,8 @@ for replicate in summary.replicates() {
 
 Scheduler polling, worker thread names, active task handles, atomic cancellation
 flags, completion channels/timestamps, bounded panic-payload formatting,
-task output ordinals, `RuntimeTaskHost`,
+task output ordinals, the compute coordinator/leases/rebalancing barrier,
+task-private Rayon pool construction, `RuntimeTaskHost`,
 execution unit/program task environments, child-process polling, `PersistenceSession`,
 Runtime-owned observer/event/task-presentation contracts, UI session, backend ownership, and
 topological-position calculation are private.
@@ -374,6 +378,9 @@ and Workflow identity/source facts under a separate `workflow` object. The
 workflow object names the selected registration, `parameter_ordinal`, canonical
 `parameter_source`, resolved `parameters`, and the explicitly selected `state` key; the effective
 object also records `member_index` and `member_identity` for every execution unit;
+`workflow.compute` records the selected mode and creation-time allocation
+history, while terminal metadata records the complete allocation history as
+ordered `{epoch, threads}` entries;
 backend and byte settings are recorded under
 `workflow.persistence`. The user-authored `chunk_target_mb` and
 `queue_capacity_mb` have already been converted, so provenance deliberately

@@ -20,6 +20,11 @@ use super::unit::{ExecutionUnit, InitializationContext, MemberView};
 /// module deliberately exposes no user callback for formatting messages,
 /// choosing channels, managing storage, or mutating lifecycle state.
 pub(crate) trait TaskExecutionHost {
+    /// Runs one initialization or step call inside this task's current compute pool.
+    fn compute(&self, operation: &mut (dyn FnMut() -> TaskResult + Send)) -> TaskResult {
+        operation()
+    }
+
     /// Reports whether cooperative cancellation has been requested.
     fn cancellation_requested(&self) -> bool;
 
@@ -160,13 +165,18 @@ where
             return Ok(());
         }
 
-        let constants: U::Constants = self.parameters.decode()?;
         let schema = self.schema.clone();
 
         let context = host
             .initialization_context()
             .expect("an execution-unit task retains an initialization context");
-        let mut unit = U::initialize(constants, &schema, context)?;
+        let mut initialized = None;
+        host.compute(&mut || {
+            let constants: U::Constants = self.parameters.decode()?;
+            initialized = Some(U::initialize(constants, &schema, context)?);
+            Ok(())
+        })?;
+        let mut unit = initialized.expect("successful initialization returns a unit");
         let member_count = unit.member_count();
         if member_count == 0 {
             return Err(MemberContractError::EmptyExecutionUnit.into());
@@ -216,7 +226,7 @@ where
                 return Ok(());
             }
 
-            unit.step()?;
+            host.compute(&mut || unit.step())?;
             if unit.member_count() != member_count {
                 return Err(MemberContractError::MemberCountChanged {
                     previous: member_count,

@@ -63,6 +63,18 @@ pub enum StudyError {
         execution_unit: String,
     },
 
+    /// Automatic allocation selected an execution unit that does not permit
+    /// thread-count changes between steps.
+    #[error(
+        "execution unit `{execution_unit}` in phase `{phase}` does not declare thread-count-invariant execution required by automatic compute allocation"
+    )]
+    AutoComputeRequiresInvariantUnit {
+        /// Phase containing the incompatible unit.
+        phase: String,
+        /// Registered execution-unit key.
+        execution_unit: String,
+    },
+
     /// A task omitted its state and its execution unit supplies no standard provider.
     #[error(
         "execution unit `{execution_unit}` in phase `{phase}` requires an explicit project state because it has no standard state-schema provider"

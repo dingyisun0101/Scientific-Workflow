@@ -31,6 +31,7 @@ pub(crate) struct MemberRecordingProvenance {
     member_index: Option<usize>,
     member_identity: Option<Box<str>>,
     seed_derivation: Option<Value>,
+    compute: Option<Value>,
 }
 
 impl MemberRecordingProvenance {
@@ -55,6 +56,7 @@ impl MemberRecordingProvenance {
             member_index: None,
             member_identity: None,
             seed_derivation: None,
+            compute: None,
         }
     }
 
@@ -71,6 +73,11 @@ impl MemberRecordingProvenance {
 
     pub(crate) fn with_seed_derivation(mut self, seed_derivation: Option<Value>) -> Self {
         self.seed_derivation = seed_derivation;
+        self
+    }
+
+    pub(crate) fn with_compute(mut self, compute: Option<Value>) -> Self {
+        self.compute = compute;
         self
     }
 
@@ -123,6 +130,9 @@ impl MemberRecordingProvenance {
         ]);
         if let Some(seed_derivation) = self.seed_derivation {
             workflow.insert("seed_derivation".to_owned(), seed_derivation);
+        }
+        if let Some(compute) = self.compute {
+            workflow.insert("compute".to_owned(), compute);
         }
         Map::from_iter([
             ("constants".to_owned(), self.constants),
@@ -380,6 +390,7 @@ impl PersistenceSession {
         &mut self,
         state: &SystemState,
         completion_reason: Option<Map<String, Value>>,
+        compute: Option<Value>,
     ) -> Result<(), PersistenceError> {
         let mut terminal_metadata = Map::new();
         if let Some(completion_reason) = completion_reason {
@@ -388,6 +399,9 @@ impl PersistenceSession {
                 Value::Object(completion_reason),
             );
         }
+        if let Some(compute) = compute {
+            terminal_metadata.insert("compute".to_owned(), compute);
+        }
         self.writer
             .take()
             .expect("active persistence session owns its backend")
@@ -395,9 +409,14 @@ impl PersistenceSession {
         Ok(())
     }
 
-    pub(crate) fn fail(&mut self, reason: &str) {
+    pub(crate) fn fail(&mut self, reason: &str, compute: Option<Value>) {
         if let Some(writer) = self.writer.take() {
-            let _ = writer.mark_recording_failed(reason.to_owned());
+            let mut terminal_metadata = Map::new();
+            if let Some(compute) = compute {
+                terminal_metadata.insert("compute".to_owned(), compute);
+            }
+            let _ = writer
+                .mark_recording_failed_with_terminal_metadata(reason.to_owned(), terminal_metadata);
         }
     }
 }

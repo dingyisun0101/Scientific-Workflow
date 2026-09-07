@@ -1,12 +1,12 @@
 # Scientific Workflow Rust crate
 
-> **BREAKING CONFIGURATION UPDATE: Rust 0.13.9 / Python 0.4.4.**
-> Every study now requires an explicit `active_phases` list of zero-based
-> dependency-order indices. This supersedes the implicit run-all behavior of
-> 0.13.8 and earlier; no compatibility default or alias is provided.
-> To run every phase, list every index. To reuse completed prerequisites,
-> provide `reuse_from` alongside the selected indices. Recording formats and
-> the Python companion remain unchanged.
+> **BREAKING COMPUTE UPDATE: Rust 0.14.0 / Python 0.4.5 unchanged.**
+> Every study now requires `compute.mode`, and automatic allocation requires
+> each linked execution unit to declare `THREAD_COUNT_INVARIANT = true`.
+> This supersedes the single shared Rayon pool used by Rust 0.13.x. There is
+> no compatibility default or alias: choose `auto` for equal dynamic shares
+> among working tasks or `isolated` for fixed per-task `resources.threads`.
+> Recording formats and the Python companion remain unchanged.
 
 Rust 0.13.11 and Python 0.4.5 correct ensemble progress to the maximum member
 iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["checkpoint"]}`.
@@ -17,6 +17,9 @@ affect conversion only; raw recordings and scientific stepping are unchanged.
 
 Scientific Workflow is an inference-first library for typed scientific state,
 configuration-driven execution unit or program execution, and durable outputs.
+
+Existing 0.13.x projects should follow the
+[0.14.0 compute migration guide](../docs/migration-0.14.0.md) before updating.
 
 
 ## New to Workflow?
@@ -576,6 +579,8 @@ struct PopulationUnit {
 
 #[scientific_workflow::execution_unit("population")]
 impl ExecutionUnit for PopulationUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = Constants;
 
     fn initialize(
@@ -711,6 +716,7 @@ omission.
   "active_phases": [0,1],
   "workflow_schema": 1,
   "threads": 16,
+  "compute": {"mode": "auto"},
   "seed": 42,
   "paths": {
     "states": {
@@ -743,12 +749,14 @@ omission.
 ```
 
 The top-level positive `threads` field is required and is the global compute
-budget. Workflow creates one shared pool of that size for all Rust execution
-units. Program/Python tasks optionally declare `resources.threads`, defaulting
-to one; Runtime admits them against one shared permit ledger and supplies the
-reserved value as `WORKFLOW_THREADS` and `RAYON_NUM_THREADS`. External tasks do
-not overlap execution-unit tasks, so the fixed pool cannot oversubscribe the
-authored ceiling. Environment variables cannot override the manifest. The
+budget. Required `compute.mode` selects `auto`, which divides that budget
+equally among working thread-count-invariant execution units, or `isolated`,
+which requires fixed per-task `resources.threads`. Every working unit gets a
+private Rayon pool; pending units get no automatic share. Program/Python tasks
+optionally declare `resources.threads`, defaulting to one; Runtime admits them
+against the same global ceiling and supplies the reserved value as
+`WORKFLOW_THREADS` and `RAYON_NUM_THREADS`. External tasks do not overlap
+execution-unit tasks. Environment variables cannot override the manifest. The
 top-level `seed` is optional for deterministic projects. A stochastic
 execution unit requests purpose-named derived seeds through its
 `InitializationContext`; an external program or Python task declares one
@@ -861,6 +869,8 @@ hook to that upstream API:
 
 ```rust,ignore
 impl ExecutionUnit for GlvUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = GlvConstants;
 
     fn standard_state_schema() -> Option<StateSchemaProvider> {

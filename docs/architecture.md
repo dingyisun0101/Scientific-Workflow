@@ -1,7 +1,7 @@
 # Workflow architecture
 
-This document describes the reviewed architecture shipped by Rust package
-0.13.7 and its recording-v7/v8 integration with Python companion 0.4.3.
+This document describes the reviewed architecture for Rust package 0.14.0 and
+its recording-v7/v8 integration with Python companion 0.4.5.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -19,7 +19,7 @@ programs plus project JSON:
 │   └── <units>.rs              registered ExecutionUnit implementations
 ├── scripts/                     optional executable and `.py` task programs
 └── wf_configs/                 required Workflow configuration root
-    ├── study.json              required schema generation, threads, phases/tasks, policy
+    ├── study.json              required schema, compute mode, threads, phases/tasks, policy
     ├── parameters.json         every custom-project parameter namespace
     └── states/                 recommended, optional schema grouping
         ├── population.json
@@ -285,6 +285,8 @@ workflow/
 │   │   ├── runtime/output.rs         private unique execution/replicate directories
 │   │   ├── runtime/presentation.rs   observer port and task progress publisher
 │   │   ├── runtime/host.rs           execution unit/program execution and persistence adapter
+│   │   ├── runtime/compute.rs        private fair task-pool coordinator and leases
+│   │   ├── runtime/resource.rs       process-wide task/thread admission ledger
 │   │   ├── runtime/execution.rs      Study-only replicate/phase/task schedulers
 │   │   ├── runtime/summary.rs        successful immutable RunSummary tree
 │   │   └── runtime/tests/runtime_workflow.rs private scheduler/lifecycle tests
@@ -431,10 +433,13 @@ correlation index is private runtime state, not project syntax.
 The required top-level `study.json.workflow_schema` is the independently
 versioned authored-configuration contract. The required positive top-level
 `study.json.threads` is the authoritative global compute budget. It has no
-inferred or environment-derived fallback. Program/Python tasks may declare a
-positive `resources.threads` request no greater than that budget; omission
-means one. Execution units have no per-task override because they share the
-fixed pool.
+inferred or environment-derived fallback. Required `study.json.compute.mode`
+selects `auto` or `isolated`. Automatic allocation divides the budget equally
+among working execution-unit tasks and excludes pending tasks; execution-unit
+`resources` is forbidden. Isolated allocation requires a positive
+`resources.threads` request on every execution-unit task. Program/Python tasks
+may declare the same positive request no greater than the budget; omission
+means one.
 The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
 intent; neither layer draws random values. Program/Python tasks may declare a
@@ -474,7 +479,8 @@ dtype or pickle.
 `Study::load(&Path)` performs all cross-domain checks before output: every
 named state's semantics, every execution unit task's explicit lookup or static
 provider resolution, linked registration
-validation, execution unit-key resolution, constants decoding, and
+validation, execution unit-key resolution, automatic-mode thread-invariance
+validation, constants decoding, and
 observation/task-schema binding over Config's already-resolved generic program
 and Python tasks. It retains
 the central Config and infers stable identities, labels, the output root, and
@@ -489,16 +495,21 @@ semantic provenance facts without exposing Config or Task descriptors.
 
 The crate-level `run(&Path)` loads a Study and passes it to
 `runtime::execute(Study)`. Runtime has no project-root or loading
-entry point: it consumes only complete immutable intent. Runtime alone creates
-one owned Rayon pool containing exactly `Study::threads()` workers before any
-output. Every execution-unit task installs its complete initialization/step
-lifecycle in that shared pool, so task and replicate concurrency cannot multiply
-the model-worker budget. One permit ledger shared across every replicate also
-limits external tasks to an aggregate of `Study::threads()`. External tasks
+entry point: it consumes only complete immutable intent. A private compute
+coordinator owns one task-private Rayon pool per working execution unit. In
+automatic mode it divides `Study::threads()` equally across registered working
+tasks, waits for every active initialization/step call at a rebalancing
+barrier, and replaces pools before their next call. Starts and finishes trigger
+rebalancing; pending tasks are unregistered and receive no share. Stable
+replicate/task order receives indivisible remainder threads. In isolated mode,
+each admitted task keeps its authored fixed pool. This prevents shared-pool
+starvation while preserving the global model-worker budget. One permit ledger
+shared across every replicate also limits external tasks to an aggregate of
+`Study::threads()`. External tasks
 reserve their effective `resources.threads` count and receive that value as
 `WORKFLOW_THREADS` and `RAYON_NUM_THREADS`. External tasks may overlap each
-other when their aggregate fits, but do not overlap execution-unit tasks
-because the active fixed Rayon pool cannot be resized safely. Runtime then creates
+other when their aggregate fits, but do not overlap execution-unit tasks.
+Runtime then creates
 `output/execution-<pid>-<sequence>`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
 topologically schedules generic tasks, applies concurrency/start intervals and
@@ -526,7 +537,10 @@ writes and commits immutable JSONL chunks plus one authoritative
 `metadata.json` lifecycle. There is no writer builder, per-stream storage
 override, public flush, resume/continuation path, or completion handle.
 Persistence alone converts execution-unit provenance and effective policy into exact
-durable metadata, including the current local-backend field.
+durable metadata, including the current local-backend field. Creation metadata
+captures the compute mode and initial allocation history; successful terminal
+metadata captures the complete ordered allocation history so automatic
+rebalancing remains auditable without changing recording formats 7 or 8.
 
 Users author every persistence size as a positive integer decimal MB, with one
 MB equal to 1,000,000 bytes. The `wf_configs/study.json` fields are

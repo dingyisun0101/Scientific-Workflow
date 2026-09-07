@@ -1,6 +1,6 @@
 # Persistence API
 
-This guide documents the `scientific-workflow` 0.13.9 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.0 subsystem contract.
 
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified member-state reconstruction. Config parses optional operational sizing,
@@ -108,7 +108,13 @@ Stable numeric indices—not application identities—form paths. Each recording
 `user_metadata.workflow` object retains `member_index` and `member_identity`
 alongside the registered key, resolved state provenance, parameter provenance,
 the resolved project `parameters`, the authoritative `threads` count, and effective
-persistence plan. If the unit successfully requested Workflow-derived seeds,
+persistence plan. `workflow.compute` contains the selected `auto` or `isolated`
+mode and the allocation history known when recording begins. On successful
+completion, `terminal_metadata.compute` contains the final ordered allocation
+history as `{epoch, threads}` objects, making every automatic rebalance or
+fixed isolated allocation auditable without changing recording format. Failed
+recordings retain the history known when failure is terminalized. If the
+unit successfully requested Workflow-derived seeds,
 the same object contains `seed_derivation`: its versioned `algorithm`, authored
 `master_seed`, and deterministic `requests` array. Each entry stores `scope`,
 `purpose`, the actual `seed`, and `member_identity` for member-scoped requests.
@@ -150,8 +156,9 @@ Inspection and reconstruction methods:
   provenance, including stable execution-unit member identity/index and any
   applicable actual seed derivations;
 - `terminal_metadata()` borrows completion-time metadata. A structured
-  execution-unit completion reason appears as `completion_reason`; reasonless
-  completion leaves this object empty;
+  execution-unit completion reason appears as `completion_reason`; successful
+  Workflow 0.14 recordings also include the final `compute` allocation
+  history;
 - `recording_timing() -> &RecordingTiming` returns verified host timing;
 - `stream_record_count(stream)` and `stream_encoded_bytes(stream)` compute
   checked metadata aggregates;

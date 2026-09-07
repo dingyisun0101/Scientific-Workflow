@@ -90,6 +90,8 @@ inspect, and advance it.
 
 ```rust,ignore
 impl ExecutionUnit for PopulationUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = Constants;
 
     // initialize, member_count, member, and step fulfill the contract.
@@ -165,6 +167,8 @@ struct PopulationUnit {
 
 #[scientific_workflow::execution_unit("population")]
 impl ExecutionUnit for PopulationUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = Constants;
 
     fn initialize(
@@ -239,6 +243,7 @@ fn main() -> Result<(), WorkflowError> {
   "active_phases": [0],
   "workflow_schema": 1,
   "threads": 1,
+  "compute": {"mode": "auto"},
   "paths": {
     "states": {
       "population": "wf_configs/states/population.json"

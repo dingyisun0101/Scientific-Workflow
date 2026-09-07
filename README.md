@@ -1,12 +1,12 @@
 # Scientific Workflow
 
-> **BREAKING CONFIGURATION UPDATE: Rust 0.13.9 / Python 0.4.4.**
-> Every study now requires an explicit `active_phases` list of zero-based
-> dependency-order indices. This supersedes the implicit run-all behavior of
-> 0.13.8 and earlier; no compatibility default or alias is provided.
-> To run every phase, list every index. To reuse completed prerequisites,
-> provide `reuse_from` alongside the selected indices. Recording formats and
-> the Python companion remain unchanged.
+> **BREAKING COMPUTE UPDATE: Rust 0.14.0 / Python 0.4.5 unchanged.**
+> Every study now requires `compute.mode`, and automatic allocation requires
+> each linked execution unit to declare `THREAD_COUNT_INVARIANT = true`.
+> This supersedes the single shared Rayon pool used by Rust 0.13.x. There is
+> no compatibility default or alias: choose `auto` for equal dynamic shares
+> among working tasks or `isolated` for fixed per-task `resources.threads`.
+> Recording formats and the Python companion remain unchanged.
 
 Rust 0.13.11 and Python 0.4.5 correct ensemble progress to the maximum member
 iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["checkpoint"]}`.
@@ -27,7 +27,7 @@ See the [Config contract](rust/src/config/api.md#nested-alternatives-and-indepen
 ## Start here
 
 - **Start with the [Linux and Python setup guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/main/docs/setup.md).**
-- Upgrading? Follow the [0.13.5 / 0.4.3 migration guide](docs/migration-0.13.5.md).
+- Upgrading from Rust 0.13.x? Follow the [0.14.0 compute migration guide](docs/migration-0.14.0.md).
 - For typed dependency handoff and whole-series analysis, run the
   [initialization → simulation → NPY → analysis example](examples/dependency_pipeline/README.md).
 

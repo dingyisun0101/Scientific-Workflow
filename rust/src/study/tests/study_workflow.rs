@@ -79,6 +79,8 @@ impl ExecutionUnit for ConflictingProviderUnit {
 
 #[scientific_workflow::execution_unit("energy")]
 impl ExecutionUnit for EnergyUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = EnergyConstants;
 
     fn initialize(
@@ -115,6 +117,8 @@ impl ExecutionUnit for EnergyUnit {
 
 #[scientific_workflow::execution_unit("counter")]
 impl ExecutionUnit for CounterUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = CounterConstants;
 
     fn standard_state_schema() -> Option<StateSchemaProvider> {
@@ -178,6 +182,8 @@ impl Project {
         let root = study.as_object_mut().unwrap();
         root.entry("workflow_schema").or_insert(1.into());
         root.entry("threads").or_insert(2.into());
+        root.entry("compute")
+            .or_insert_with(|| serde_json::json!({"mode": "auto"}));
         let phase_count = root
             .get("phases")
             .and_then(serde_json::Value::as_object)
@@ -231,13 +237,23 @@ impl Project {
     }
 
     fn new_raw(study: &str, parameters: &str) -> Self {
+        let mut study: serde_json::Value = serde_json::from_str(study).unwrap();
+        study
+            .as_object_mut()
+            .unwrap()
+            .entry("compute")
+            .or_insert_with(|| serde_json::json!({"mode": "auto"}));
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "scientific-workflow-study-{}-{sequence}",
             std::process::id()
         ));
         fs::create_dir_all(root.join("wf_configs")).unwrap();
-        fs::write(root.join("wf_configs/study.json"), study).unwrap();
+        fs::write(
+            root.join("wf_configs/study.json"),
+            serde_json::to_vec_pretty(&study).unwrap(),
+        )
+        .unwrap();
         fs::write(root.join("wf_configs/parameters.json"), parameters).unwrap();
         Self(root)
     }
@@ -316,6 +332,7 @@ fn study_binds_registered_units_and_infers_plan_facts_without_output() {
 
     let plan = study.plan_summary();
     assert_eq!(plan.workflow_schema(), 1);
+    assert_eq!(plan.compute_mode(), super::PlanComputeMode::Auto);
     assert_eq!(plan.threads(), 2);
     assert_eq!(plan.replicate_count(), 1);
     assert_eq!(
@@ -350,6 +367,7 @@ fn study_binds_registered_units_and_infers_plan_facts_without_output() {
             state: "default",
             parameter_ordinal: 0,
             parameter_source,
+            ..
         } if parameter_source.ends_with("wf_configs/parameters.json")
     ));
 }
@@ -412,11 +430,12 @@ fn one_provider_identity_cannot_resolve_to_different_documents() {
         r#"{ "active_phases": [0],
           "workflow_schema": 1,
           "threads": 2,
+          "compute": {"mode":"isolated"},
           "phases": {
             "simulate": {
               "tasks": [
-                {"execution_unit":"counter"},
-                {"execution_unit":"conflicting-provider"}
+                {"execution_unit":"counter","resources":{"threads":1}},
+                {"execution_unit":"conflicting-provider","resources":{"threads":1}}
               ]
             }
           }
@@ -432,6 +451,28 @@ fn one_provider_identity_cannot_resolve_to_different_documents() {
         Err(StudyError::InvalidStateSchemaProvider { provider, reason })
             if provider == "test.counter-state.v1"
                 && reason.contains("different JSON documents")
+    ));
+    assert!(!project.path().join("output").exists());
+}
+
+#[test]
+fn automatic_compute_rejects_units_without_the_thread_count_invariant_contract() {
+    let project = Project::new_raw(
+        r#"{ "active_phases": [0],
+          "workflow_schema": 1,
+          "threads": 2,
+          "compute": {"mode":"auto"},
+          "phases": {"simulate": {"tasks": [
+            {"execution_unit":"conflicting-provider"}
+          ]}}
+        }"#,
+        r#"{"conflicting-provider":{"initial":0,"steps":0}}"#,
+    );
+
+    assert!(matches!(
+        Study::load(project.path()),
+        Err(StudyError::AutoComputeRequiresInvariantUnit { phase, execution_unit })
+            if phase == "simulate" && execution_unit == "conflicting-provider"
     ));
     assert!(!project.path().join("output").exists());
 }

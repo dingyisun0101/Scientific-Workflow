@@ -51,6 +51,7 @@ mod unix {
             "workflow_schema": 1,
             "active_phases": [0],
             "threads": 2,
+            "compute": {"mode": "auto"},
             "seed": 1101,
             "phases": {
                 "10_prepare": {"tasks": [{

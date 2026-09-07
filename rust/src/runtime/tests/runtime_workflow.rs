@@ -33,6 +33,11 @@ impl Project {
             .expect("runtime test study is an object")
             .entry("threads")
             .or_insert(2.into());
+        study
+            .as_object_mut()
+            .expect("runtime test study is an object")
+            .entry("compute")
+            .or_insert_with(|| serde_json::json!({"mode": "auto"}));
         let phase_count = study["phases"].as_object().unwrap().len();
         study
             .as_object_mut()
@@ -103,6 +108,8 @@ struct PanicAfterBeginUnit {
 
 #[scientific_workflow::execution_unit("runtime-panic-after-begin")]
 impl ExecutionUnit for PanicAfterBeginUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = PanicConstants;
 
     fn initialize(
@@ -141,6 +148,8 @@ struct SlowUnit {
 
 #[scientific_workflow::execution_unit("runtime-slow")]
 impl ExecutionUnit for SlowUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = SlowConstants;
 
     fn initialize(
@@ -196,6 +205,8 @@ struct ThreadPoolUnit {
 
 #[scientific_workflow::execution_unit("runtime-thread-pool")]
 impl ExecutionUnit for ThreadPoolUnit {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = ThreadPoolConstants;
 
     fn initialize(
@@ -248,6 +259,8 @@ fn ensure_thread_count(expected: usize) -> UnitResult {
 
 #[scientific_workflow::execution_unit("runtime-ensemble")]
 impl ExecutionUnit for RuntimeEnsemble {
+    const THREAD_COUNT_INVARIANT: bool = true;
+
     type Constants = PanicConstants;
 
     fn initialize(
@@ -436,6 +449,37 @@ fn execution_units_run_inside_the_required_study_pool() {
     let project = Project::new(
         study,
         serde_json::json!({"runtime-thread-pool": {"expected_threads": 3}}),
+    );
+
+    let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+    let TaskRunKind::ExecutionUnit { members, .. } =
+        summary.replicates()[0].phases()[0].tasks()[0].kind()
+    else {
+        panic!("expected execution-unit summary");
+    };
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &fs::read(members[0].output_directory().join("metadata.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        metadata["user_metadata"]["workflow"]["compute"]["mode"],
+        "auto"
+    );
+    assert_eq!(
+        metadata["terminal_metadata"]["compute"]["allocations"][0]["threads"],
+        3
+    );
+}
+
+#[test]
+fn isolated_execution_units_use_their_fixed_task_pool() {
+    let mut study = execution_unit_study("runtime-thread-pool", None);
+    study["threads"] = 4.into();
+    study["compute"] = serde_json::json!({"mode": "isolated"});
+    study["phases"]["run"]["tasks"][0]["resources"] = serde_json::json!({"threads": 2});
+    let project = Project::new(
+        study,
+        serde_json::json!({"runtime-thread-pool": {"expected_threads": 2}}),
     );
 
     execute(Study::load(project.path()).unwrap()).unwrap();

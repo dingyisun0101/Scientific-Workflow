@@ -223,7 +223,7 @@ fn private_member_sessions_terminalize_initial_and_final_observation_failures() 
     let mut oversized_final = populated_state(&schema, 1);
     *oversized_final.payload_mut::<String>("activity").unwrap() = "x".repeat(4_096);
     assert!(matches!(
-        session.complete(&oversized_final, None),
+        session.complete(&oversized_final, None, None),
         Err(PersistenceError::RecordTooLarge { .. })
     ));
     let final_metadata: Value =

@@ -19,6 +19,8 @@ impl TestProject {
         let root = study.as_object_mut().unwrap();
         root.entry("workflow_schema").or_insert(1.into());
         root.entry("threads").or_insert(2.into());
+        root.entry("compute")
+            .or_insert_with(|| serde_json::json!({"mode": "auto"}));
         let phase_count = root
             .get("phases")
             .and_then(serde_json::Value::as_object)
@@ -54,7 +56,17 @@ impl TestProject {
     }
 
     fn new_raw(study: &str, parameter_sections: &[(&str, &str)]) -> Self {
-        Self::write(study, parameter_sections)
+        let Ok(mut document) = serde_json::from_str::<serde_json::Value>(study) else {
+            return Self::write(study, parameter_sections);
+        };
+        if let Some(root) = document.as_object_mut() {
+            root.entry("compute")
+                .or_insert_with(|| serde_json::json!({"mode": "auto"}));
+        }
+        Self::write(
+            &serde_json::to_string_pretty(&document).unwrap(),
+            parameter_sections,
+        )
     }
 
     fn write(study: &str, parameter_sections: &[(&str, &str)]) -> Self {
@@ -496,6 +508,47 @@ fn study_threads_are_required_and_positive() {
 }
 
 #[test]
+fn compute_mode_is_required_and_controls_execution_unit_thread_declarations() {
+    let missing = TestProject::write(
+        r#"{"workflow_schema":1,"threads":2,"active_phases":[0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(missing.path()),
+        Err(ConfigError::InvalidDocument { reason, .. })
+            if reason.contains("missing field `compute`")
+    ));
+
+    let missing_isolated_threads = TestProject::new_raw(
+        r#"{"workflow_schema":1,"threads":2,"compute":{"mode":"isolated"},"active_phases":[0],"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", "{}")],
+    );
+    assert!(matches!(
+        ProjectSpecification::load(missing_isolated_threads.path()),
+        Err(ConfigError::InvalidDocument { pointer, reason, .. })
+            if pointer == "/phases/only/tasks/0/resources"
+                && reason.contains("isolated compute allocation requires")
+    ));
+
+    let isolated = TestProject::new_raw(
+        r#"{"workflow_schema":1,"threads":4,"compute":{"mode":"isolated"},"active_phases":[0],"phases":{"only":{"tasks":[{"execution_unit":"unit","resources":{"threads":3}}]}}}"#,
+        &[("unit", "{}")],
+    );
+    let specification = ProjectSpecification::load(isolated.path()).unwrap();
+    assert_eq!(
+        specification.manifest().compute_mode(),
+        ComputeMode::Isolated
+    );
+    assert!(matches!(
+        &specification.phases()[0].tasks()[0],
+        ResolvedTask::ExecutionUnit {
+            threads: Some(3),
+            ..
+        }
+    ));
+}
+
+#[test]
 fn workflow_configuration_schema_is_required_and_rejects_unknown_generations() {
     let missing = TestProject::new_raw(
         r#"{ "active_phases": [0],"threads":2,"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
@@ -651,8 +704,8 @@ fn correlated_cases_become_complete_typed_constant_values() {
 
 #[test]
 fn project_documents_are_strict_and_workflow_owned_objects_reject_unknown_fields() {
-    let duplicate = TestProject::new_raw(
-        r#"{ "active_phases": [0],"paths":{"states":{}},"phases":{"one":{"tasks":[],"tasks":[]}}}"#,
+    let duplicate = TestProject::write(
+        r#"{ "workflow_schema":1,"threads":2,"compute":{"mode":"auto"},"active_phases": [0],"paths":{"states":{}},"phases":{"one":{"tasks":[],"tasks":[]}}}"#,
         &[],
     );
     assert!(matches!(
@@ -1201,7 +1254,8 @@ fn external_thread_requests_are_validated_and_retained() {
     assert!(matches!(
         ProjectSpecification::load(execution_unit.path()),
         Err(ConfigError::InvalidDocument { pointer, reason, .. })
-            if pointer == "/phases/only/tasks/0" && reason.contains("only for a program or Python")
+            if pointer == "/phases/only/tasks/0/resources"
+                && reason.contains("automatic compute allocation")
     ));
 }
 

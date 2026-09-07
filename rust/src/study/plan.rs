@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::{
-    Config, ConfigSnapshot, FailurePolicy, PersistenceSpecification, ProjectSpecification,
-    ReplicatePolicy, ReplicateScheduling, StudyManifest,
+    ComputeMode, Config, ConfigSnapshot, FailurePolicy, PersistenceSpecification,
+    ProjectSpecification, ReplicatePolicy, ReplicateScheduling, StudyManifest,
 };
 use crate::persistence::PersistencePlan;
 use crate::task::{
@@ -41,6 +41,7 @@ impl Study {
         let manifest: StudyManifest = project.manifest().clone();
         let workflow_schema = manifest.workflow_schema();
         let threads = manifest.threads();
+        let compute_mode = manifest.compute_mode();
         let replicate_policy = manifest.replicate_policy();
         let master_seed = manifest.master_seed();
         let persistence: PersistenceSpecification = manifest.persistence();
@@ -59,6 +60,7 @@ impl Study {
                 output_root,
                 workflow_schema,
                 threads,
+                compute_mode,
                 master_seed,
                 replicate_policy,
                 persistence_plan,
@@ -79,6 +81,10 @@ impl Study {
     /// Returns the required study-wide global compute budget.
     pub fn threads(&self) -> usize {
         self.inner.threads
+    }
+
+    pub(crate) fn compute_mode(&self) -> ComputeMode {
+        self.inner.compute_mode
     }
 
     /// Returns a read-only view of the fully compiled deterministic plan.
@@ -133,6 +139,7 @@ impl std::fmt::Debug for Study {
             .field("project_root", &self.project_root())
             .field("output_root", &self.output_root())
             .field("threads", &self.threads())
+            .field("compute_mode", &self.plan_summary().compute_mode())
             .field("config", &self.inner.config)
             .field("persistence", &self.persistence_plan())
             .field("phases", &self.phases().len())
@@ -150,6 +157,7 @@ struct StudyInner {
     output_root: PathBuf,
     workflow_schema: u64,
     threads: usize,
+    compute_mode: ComputeMode,
     master_seed: Option<u64>,
     replicate_policy: ReplicatePolicy,
     persistence_plan: PersistencePlan,
@@ -167,6 +175,7 @@ impl std::fmt::Debug for PlanSummary<'_> {
             .debug_struct("PlanSummary")
             .field("workflow_schema", &self.workflow_schema())
             .field("threads", &self.threads())
+            .field("compute_mode", &self.compute_mode())
             .field("replicate_count", &self.replicate_count())
             .field("phases", &self.study.phases().len())
             .finish_non_exhaustive()
@@ -182,6 +191,14 @@ impl<'a> PlanSummary<'a> {
     /// Returns the study-wide authored global compute budget.
     pub fn threads(self) -> usize {
         self.study.threads()
+    }
+
+    /// Returns the global execution-unit compute allocation mode.
+    pub fn compute_mode(self) -> PlanComputeMode {
+        match self.study.compute_mode() {
+            ComputeMode::Auto => PlanComputeMode::Auto,
+            ComputeMode::Isolated => PlanComputeMode::Isolated,
+        }
     }
 
     /// Returns the positive number of isolated replicates.
@@ -241,6 +258,15 @@ pub enum PlanReplicateScheduling {
     Sequential,
     /// Admit eligible replicates concurrently.
     Parallel,
+}
+
+/// Global execution-unit compute allocation mode reported by [`PlanSummary`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlanComputeMode {
+    /// Equal dynamic allocations across working invariant units.
+    Auto,
+    /// Fixed authored per-task allocations.
+    Isolated,
 }
 
 /// An effective fail-fast or finish-all decision in a compiled plan.
@@ -372,6 +398,7 @@ impl<'a> TaskPlanSummary<'a> {
                 state: provenance.state(),
                 parameter_ordinal: provenance.parameter_ordinal(),
                 parameter_source: provenance.parameter_source(),
+                threads: self.task.threads,
             }
         } else if let Some(script) = self.task.python_script() {
             PlannedTaskKind::Python {
@@ -407,6 +434,8 @@ pub enum PlannedTaskKind<'a> {
         parameter_ordinal: u64,
         /// Canonical source of the selected parameter namespace.
         parameter_source: &'a Path,
+        /// Fixed thread allocation in isolated mode; absent in automatic mode.
+        threads: Option<usize>,
     },
     /// A directly invoked external executable.
     Program {
@@ -491,6 +520,7 @@ pub(crate) struct StudyTask {
     pub(crate) configuration: usize,
     pub(crate) config_snapshot: ConfigSnapshot,
     pub(crate) task: Task,
+    pub(crate) threads: Option<usize>,
 }
 
 impl StudyTask {
@@ -563,6 +593,10 @@ impl StudyTask {
         self.task
             .program_threads()
             .expect("a compiled program task retains its positive thread request")
+    }
+
+    pub(crate) const fn execution_unit_threads(&self) -> Option<usize> {
+        self.threads
     }
 
     pub(crate) fn is_npy(&self) -> bool {

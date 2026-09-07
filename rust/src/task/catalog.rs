@@ -27,6 +27,7 @@ pub struct ExecutionUnitRegistration {
         &SystemStateSchema,
     ) -> TaskResult<BoundObservationPlan>,
     standard_state_schema: fn() -> Option<StateSchemaProvider>,
+    thread_count_invariant: bool,
 }
 
 impl ExecutionUnitRegistration {
@@ -45,6 +46,7 @@ impl ExecutionUnitRegistration {
             make_task: Task::for_execution_unit::<U>,
             preflight: preflight_execution_unit::<U>,
             standard_state_schema: U::standard_state_schema,
+            thread_count_invariant: U::THREAD_COUNT_INVARIANT,
         }
     }
 
@@ -68,6 +70,10 @@ impl ExecutionUnitRegistration {
 
     pub(crate) fn standard_state_schema(self) -> Option<StateSchemaProvider> {
         (self.standard_state_schema)()
+    }
+
+    pub(crate) const fn thread_count_invariant(self) -> bool {
+        self.thread_count_invariant
     }
 }
 

@@ -109,6 +109,7 @@ impl ProjectSpecification {
                         execution_unit,
                         state,
                         timeout,
+                        threads,
                     } => {
                         if let Some(state) = state.as_deref()
                             && !state_schemas.contains_key(state)
@@ -154,6 +155,7 @@ impl ProjectSpecification {
                                         timeout,
                                     ),
                                     state: state.clone(),
+                                    threads,
                                 });
                             }
                         }

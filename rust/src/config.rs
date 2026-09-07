@@ -24,7 +24,7 @@ mod config_workflow_tests;
 pub(crate) use document::StateSchemaDocument;
 pub use error::ConfigError;
 pub(crate) use manifest::{
-    FailurePolicy, PersistenceSpecification, PhaseSpecification, ReplicatePolicy,
+    ComputeMode, FailurePolicy, PersistenceSpecification, PhaseSpecification, ReplicatePolicy,
     ReplicateScheduling, StudyManifest,
 };
 pub(crate) use parameters::{ResolvedExecutionUnitParameters, ResolvedTask};

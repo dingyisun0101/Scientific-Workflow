@@ -8,6 +8,7 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::compute::ComputeCoordinator;
 use super::error::RuntimeError;
 use super::event::RuntimeEvent;
 use super::host::{ProgramSeed, RuntimeTaskEnvironment, RuntimeTaskHost, RuntimeTaskLaunch};
@@ -37,23 +38,14 @@ where
 {
     let reused = reuse::prepare(&study)?;
     super::program::check_prerequisites(&study)?;
-    let compute_pool = Arc::new(
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(study.threads())
-            .thread_name(|index| format!("workflow-compute-{index}"))
-            .build()
-            .map_err(|source| RuntimeError::ComputePool {
-                threads: study.threads(),
-                source,
-            })?,
-    );
+    let compute = ComputeCoordinator::new(study.threads(), study.compute_mode());
     let output = create_execution(study.output_root())?;
     let resource_budget = ResourceBudget::new(study.threads());
     let observer = create_observer().map_err(RuntimeError::presentation_boxed)?;
     let presentation = RuntimePresentation::new(observer);
     let outcome = execute_with_presentation(
         study,
-        compute_pool,
+        compute,
         resource_budget,
         output,
         &presentation,
@@ -66,7 +58,7 @@ where
 
 fn execute_with_presentation(
     study: Study,
-    compute_pool: Arc<rayon::ThreadPool>,
+    compute: ComputeCoordinator,
     resource_budget: ResourceBudget,
     output: PathBuf,
     presentation: &RuntimePresentation,
@@ -113,7 +105,7 @@ fn execute_with_presentation(
                 &study,
                 scopes,
                 presentation,
-                &compute_pool,
+                &compute,
                 &resource_budget,
                 reused,
             ),
@@ -121,7 +113,7 @@ fn execute_with_presentation(
                 &study,
                 scopes,
                 presentation,
-                &compute_pool,
+                &compute,
                 &resource_budget,
                 reused,
             ),
@@ -159,7 +151,7 @@ fn run_replicates_sequential(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
     presentation: &RuntimePresentation,
-    compute_pool: &Arc<rayon::ThreadPool>,
+    compute: &ComputeCoordinator,
     resource_budget: &ResourceBudget,
     reused: &ReusedPhases,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
@@ -174,7 +166,7 @@ fn run_replicates_sequential(
             &ReplicateContext {
                 presentation,
                 scheduler_cancellation: &cancellation,
-                compute_pool,
+                compute,
                 resource_budget,
                 reused,
             },
@@ -201,7 +193,7 @@ fn run_replicates_parallel(
     study: &Study,
     scopes: Vec<(u64, PathBuf)>,
     presentation: &RuntimePresentation,
-    compute_pool: &Arc<rayon::ThreadPool>,
+    compute: &ComputeCoordinator,
     resource_budget: &ResourceBudget,
     reused: &ReusedPhases,
 ) -> Result<Vec<ReplicateRunSummary>, RuntimeError> {
@@ -220,7 +212,7 @@ fn run_replicates_parallel(
         let presentation = presentation.clone();
         let outcomes = outcomes.clone();
         let worker_cancellation = Arc::clone(&cancellation);
-        let compute_pool = Arc::clone(compute_pool);
+        let compute = compute.clone();
         let resource_budget = resource_budget.clone();
         let worker = match thread::Builder::new()
             .name(format!("workflow-replicate-{index}"))
@@ -233,7 +225,7 @@ fn run_replicates_parallel(
                         &ReplicateContext {
                             presentation: &presentation,
                             scheduler_cancellation: &worker_cancellation,
-                            compute_pool: &compute_pool,
+                            compute: &compute,
                             resource_budget: &resource_budget,
                             reused: &reused,
                         },
@@ -307,7 +299,7 @@ fn run_replicates_parallel(
 struct ReplicateContext<'a> {
     presentation: &'a RuntimePresentation,
     scheduler_cancellation: &'a AtomicBool,
-    compute_pool: &'a Arc<rayon::ThreadPool>,
+    compute: &'a ComputeCoordinator,
     resource_budget: &'a ResourceBudget,
     reused: &'a ReusedPhases,
 }
@@ -346,7 +338,7 @@ fn run_replicate_inner(
     let ReplicateContext {
         presentation,
         scheduler_cancellation,
-        compute_pool,
+        compute,
         resource_budget,
         reused,
     } = *context;
@@ -370,7 +362,7 @@ fn run_replicate_inner(
             replicate: index,
             presentation,
             scheduler_cancellation,
-            compute_pool,
+            compute,
             resource_budget,
         };
         phases.push(run_phase(phase, &context)?);
@@ -422,7 +414,7 @@ struct PhaseRuntime<'a> {
     replicate: u64,
     presentation: &'a RuntimePresentation,
     scheduler_cancellation: &'a AtomicBool,
-    compute_pool: &'a Arc<rayon::ThreadPool>,
+    compute: &'a ComputeCoordinator,
     resource_budget: &'a ResourceBudget,
 }
 
@@ -437,8 +429,13 @@ struct TaskRuntime {
     replicate: u64,
     master_seed: Option<u64>,
     threads: usize,
-    compute_pool: Arc<rayon::ThreadPool>,
+    compute: Option<ComputeRequest>,
     presentation: RuntimePresentation,
+}
+
+struct ComputeRequest {
+    coordinator: ComputeCoordinator,
+    fixed_threads: Option<usize>,
 }
 
 fn run_phase(
@@ -549,7 +546,7 @@ fn run_phase_inner(
                     threads: context.study.threads().min(count.max(1)),
                 }
             } else {
-                task_resource_requirement(task)
+                task_resource_requirement(task, context.study.compute_mode())
             };
             let Some(resource_lease) = context.resource_budget.try_acquire(requirement) else {
                 break;
@@ -730,7 +727,14 @@ fn spawn_task(
         replicate: context.replicate,
         master_seed: context.study.master_seed(),
         threads: resource_lease.threads().unwrap_or(context.study.threads()),
-        compute_pool: Arc::clone(context.compute_pool),
+        compute: if worker_task.kind() == TaskKind::ExecutionUnit {
+            Some(ComputeRequest {
+                coordinator: context.compute.clone(),
+                fixed_threads: worker_task.execution_unit_threads(),
+            })
+        } else {
+            None
+        },
         presentation: context.presentation.clone(),
     };
     let thread_name = format!("workflow-task-{:06}", worker_task.output_ordinal());
@@ -748,14 +752,8 @@ fn spawn_task(
             };
         }
         let identity = worker_task.identity().to_owned();
-        let task_kind = worker_task.kind();
-        let compute_pool = Arc::clone(&runtime.compute_pool);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let execute = || run_task(worker_task, runtime, worker_cancellation, output_directory);
-            match task_kind {
-                TaskKind::ExecutionUnit => compute_pool.install(execute),
-                TaskKind::Program => execute(),
-            }
+            run_task(worker_task, runtime, worker_cancellation, output_directory)
         }))
         .unwrap_or_else(|_| Err(RuntimeError::TaskPanicked { task: identity }));
         TaskWorkerOutcome {
@@ -802,9 +800,19 @@ fn spawn_task(
     })
 }
 
-fn task_resource_requirement(task: &StudyTask) -> ResourceRequirement {
+fn task_resource_requirement(
+    task: &StudyTask,
+    compute_mode: crate::config::ComputeMode,
+) -> ResourceRequirement {
     match task.kind() {
-        TaskKind::ExecutionUnit => ResourceRequirement::InProcess,
+        TaskKind::ExecutionUnit => match compute_mode {
+            crate::config::ComputeMode::Auto => ResourceRequirement::AutoInProcess,
+            crate::config::ComputeMode::Isolated => ResourceRequirement::IsolatedInProcess {
+                threads: task
+                    .execution_unit_threads()
+                    .expect("isolated execution unit retains its thread request"),
+            },
+        },
         TaskKind::Program => ResourceRequirement::External {
             threads: task.program_threads(),
         },
@@ -818,6 +826,23 @@ fn run_task(
     output_directory: PathBuf,
 ) -> Result<TaskRunSummary, RuntimeError> {
     let processed_directory = runtime.processed_directory.clone();
+    let compute = runtime
+        .compute
+        .as_ref()
+        .map(|request| {
+            request
+                .coordinator
+                .register(
+                    runtime.replicate,
+                    task.output_ordinal(),
+                    request.fixed_threads,
+                )
+                .map_err(|source| RuntimeError::Task {
+                    task: task.identity().to_owned(),
+                    source: Box::new(source),
+                })
+        })
+        .transpose()?;
     let program_seed = task.program_seed_purpose().map(|purpose| {
         let master_seed = runtime
             .master_seed
@@ -893,6 +918,7 @@ fn run_task(
                 .presentation
                 .task(runtime.replicate, task.identity()),
             environment,
+            compute,
         ),
     );
     match catch_unwind(AssertUnwindSafe(|| task.definition().execute(&mut host))) {

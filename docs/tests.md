@@ -1,7 +1,7 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.13.9 and Python
-companion 0.4.4.
+This map is the release-qualification baseline for Rust 0.14.0 and Python
+companion 0.4.5.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
 indices and task identities, completed-program and legacy-unit reuse, chained
@@ -288,3 +288,16 @@ workflow, adds and changes downstream NPY filters, chains completed upstream
 reuse, preserves original receipts, and rejects changed scientific inputs before
 creating another execution. Dispatcher separately exercises the same transition
 with completed GLV and target-generation outputs plus actual filtered NPY export.
+
+## 0.14.0 compute-allocation regressions
+
+Config tests require the global compute mode, reject fixed execution-unit
+resources in automatic mode, require them in isolated mode, and retain fixed
+allocations in the compiled task. Study tests reject automatic execution units
+that do not declare the thread-count-invariant contract before output exists.
+Private compute tests verify equal automatic shares across registered working
+tasks, expansion after a sibling finishes, stable allocation provenance, and
+unchanged isolated allocations. Resource tests separately verify automatic
+working-task admission and fixed-thread accounting. Runtime tests execute units
+inside both automatic and isolated private pools and inspect persisted compute
+metadata.

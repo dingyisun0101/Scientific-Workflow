@@ -1,6 +1,6 @@
 # Study API
 
-This guide documents the `scientific-workflow` 0.13.9 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.0 subsystem contract.
 
 The `study` subsystem is the ultimate coordinator of declared intent. It asks
 Config to capture one project root and fully resolve its declarations, retains
@@ -25,7 +25,8 @@ tasks, identities, persistence plans, registries, or Study builders.
 
 The module root exposes `Study`, `StudyError`, and the borrowed inspection
 types `PlanSummary`, `PhasePlanSummary`, `TaskPlanSummary`,
-`PlanReplicateScheduling`, `PlanFailurePolicy`, and `PlannedTaskKind`.
+`PlanComputeMode`, `PlanReplicateScheduling`, `PlanFailurePolicy`, and
+`PlannedTaskKind`.
 
 ### `study::Study`
 
@@ -48,7 +49,9 @@ moved or shared across host threads without mutable planning state.
   provider once per provider ID, retains the optional top-level master
   seed, decodes every concrete constants value, calls each execution unit's
   side-effect-free `preflight` exactly once, trusts its domain validation, and binds
-  that plan to the resolved schema. An explicit project state takes precedence
+  that plan to the resolved schema. In automatic compute mode it also rejects
+  any selected registration whose `THREAD_COUNT_INVARIANT` declaration is
+  false. An explicit project state takes precedence
   over a standard provider. It does not
   call `ExecutionUnit::initialize`. Loading is synchronous and may block on
   ordinary configuration reads and executable metadata/resolution, but starts
@@ -59,8 +62,8 @@ moved or shared across host threads without mutable planning state.
   starts.
 - `threads() -> usize` returns the required positive global compute budget
   parsed from top-level `study.json.threads`. Study retains the value as intent
-  but starts no workers; Runtime uses it for the shared execution-unit pool and
-  global external-task permits.
+  but starts no workers; Runtime uses it for task-private execution-unit pools
+  and global external-task permits.
 - `plan_summary() -> PlanSummary<'_>` returns a bounded immutable view of the
   fully compiled plan. The view borrows the Study and performs no IO,
   allocation, decoding, or preflight. It cannot mutate or execute the plan.
@@ -83,6 +86,7 @@ the borrowed Study. It is `Clone + Copy + Debug` and exposes:
 
 - `workflow_schema() -> u64`, the validated authored-configuration generation;
 - `threads() -> usize`;
+- `compute_mode() -> PlanComputeMode`;
 - `replicate_count() -> u64`;
 - `replicate_scheduling() -> PlanReplicateScheduling`;
 - `replicate_failure_policy() -> PlanFailurePolicy`;
@@ -93,6 +97,9 @@ the borrowed Study. It is `Clone + Copy + Debug` and exposes:
 - `phases()`, an exact-size dependency-order iterator of
   `PhasePlanSummary<'a>`.
 
+`PlanComputeMode` is the closed `Auto | Isolated` vocabulary. `Auto` means the
+global budget is divided dynamically among working invariant execution units;
+`Isolated` means each execution unit keeps its compiled fixed allocation.
 `PlanReplicateScheduling` is the closed `Sequential | Parallel` vocabulary.
 `PlanFailurePolicy` is the closed `FailFast | FinishAll` vocabulary. Both are
 `Clone + Copy + Debug + Eq + PartialEq` and describe compiled effective policy,
@@ -113,8 +120,9 @@ task `seed_purpose()`, and `kind() -> PlannedTaskKind<'a>`. The closed task-kind
 view is:
 
 - `ExecutionUnit { execution_unit, state, parameter_ordinal,
-  parameter_source }`, containing the linked key, selected named-state key or
-  provider ID, expanded parameter ordinal, and canonical parameters document;
+  parameter_source, threads }`, containing the linked key, selected named-state
+  key or provider ID, expanded parameter ordinal, canonical parameters
+  document, and `Some(fixed_threads)` only in isolated mode;
 - `Program { executable, threads }`, containing the preflight-resolved
   canonical executable and effective permit request; or
 - `Python { launcher, script, threads }`, containing the preflight-resolved
@@ -128,8 +136,9 @@ arguments, the master seed value, or persistence writer construction.
 
 Runtime consumes a deliberately narrow crate-private peer API:
 
-- `Study` supplies the compute-thread count, replicate/phase policy, and
-  persistence plan. Each `StudyTask` supplies its clone-cheap resolved
+- `Study` supplies the compute-thread count and allocation mode,
+  replicate/phase policy, and persistence plan. Each `StudyTask` supplies its
+  optional isolated execution-unit allocation and clone-cheap resolved
   `ConfigSnapshot`. Runtime receives frozen program bytes without
   retaining Config's parsing or typed-lookup interface.
 - `StudyPhase` supplies only its semantic name, dependencies, admission policy,
@@ -162,6 +171,9 @@ execution.
   linked `#[execution_unit]` key without exposing the private catalog type;
 - `UnknownExecutionUnit { phase, execution_unit }` reports a manifest key with no linked
   registration;
+- `AutoComputeRequiresInvariantUnit { phase, execution_unit }` rejects an
+  automatic-mode task whose registered unit has not opted into safe dynamic
+  thread-count changes;
 - `ExecutionUnitPreflight { phase, execution_unit, ordinal, source }` contextualizes constants
   decoding, observation declaration, or schema binding for one concrete task;
   and

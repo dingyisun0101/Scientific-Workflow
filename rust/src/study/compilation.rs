@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::config::{PhaseSpecification, ProjectSpecification, ResolvedTask, StateSchemaDocument};
+use crate::config::{
+    ComputeMode, PhaseSpecification, ProjectSpecification, ResolvedTask, StateSchemaDocument,
+};
 use crate::state::{SystemStateSchema, schema_from_json_value};
 use crate::task::{ExecutionUnitCatalog, Task};
 
@@ -31,9 +33,12 @@ pub(crate) fn compile(
         for resolved in phase.tasks() {
             let configuration = resolved.configuration();
             let config_snapshot = resolved.snapshot().clone();
-            let (identity_suffix, label, task) = match resolved {
+            let (identity_suffix, label, task, threads) = match resolved {
                 ResolvedTask::ExecutionUnit {
-                    parameters, state, ..
+                    parameters,
+                    state,
+                    threads,
+                    ..
                 } => {
                     let registration =
                         catalog.get(parameters.execution_unit()).ok_or_else(|| {
@@ -42,6 +47,14 @@ pub(crate) fn compile(
                                 execution_unit: parameters.execution_unit().to_owned(),
                             }
                         })?;
+                    if project.manifest().compute_mode() == ComputeMode::Auto
+                        && !registration.thread_count_invariant()
+                    {
+                        return Err(StudyError::AutoComputeRequiresInvariantUnit {
+                            phase: phase.name().to_owned(),
+                            execution_unit: parameters.execution_unit().to_owned(),
+                        });
+                    }
                     let (state, schema) = if let Some(state) = state {
                         let schema = schemas
                             .get(state.as_ref())
@@ -104,6 +117,7 @@ pub(crate) fn compile(
                         ),
                         format!("{} #{}", parameters.execution_unit(), parameters.ordinal()),
                         registration.make_task(parameters.clone(), state, schema, observation_plan),
+                        *threads,
                     )
                 }
                 ResolvedTask::Program { program, .. } => {
@@ -113,6 +127,7 @@ pub(crate) fn compile(
                         format!("{kind}-{name}"),
                         format!("{kind} {name}"),
                         Task::for_program(program.clone()),
+                        Some(program.threads()),
                     )
                 }
             };
@@ -124,6 +139,7 @@ pub(crate) fn compile(
                 configuration,
                 config_snapshot,
                 task,
+                threads,
             });
             output_ordinal = output_ordinal
                 .checked_add(1)

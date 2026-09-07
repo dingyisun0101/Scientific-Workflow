@@ -1,6 +1,6 @@
 # Task API
 
-This guide documents the `scientific-workflow` 0.13.5 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.0 subsystem contract.
 
 Task owns Workflow's uniform scientific execution boundary. A configured
 scientific task selects one registered `ExecutionUnit`, one resolved constants
@@ -29,7 +29,15 @@ the trait implementor itself. An ensemble also implements `ExecutionUnit`
 directly, reports several members, and keeps its shared inputs, batching,
 synchronization, and internal parallelism private.
 
-Associated type:
+Associated constant and type:
+
+- `THREAD_COUNT_INVARIANT: bool` defaults to `false`. Set it to `true` only
+  when initialization and every `step` are correct for any positive private
+  Rayon-pool size and remain correct if that size changes between calls. Study
+  rejects a unit with the default value when `compute.mode` is `auto`, before
+  output or workers exist. The declaration is unnecessary in `isolated`, whose
+  task allocation is fixed. This is a semantic safety contract rather than a
+  request for a particular thread count.
 
 - `Constants: DeserializeOwned + 'static` is the complete Config-supplied value.
   Constants need not be `Send` or `Sync`: Study and Runtime independently
@@ -70,9 +78,12 @@ Methods:
   whose members begin at different iterations. A completed member cannot advance
   or become incomplete. An error publishes no successful-step observation.
 
-Workflow checks cancellation between calls to `step`; implementations should
-return in bounded time if responsive cancellation matters. Internal worker
-parallelism must join before `step` returns so every exposed state is coherent.
+Workflow checks cancellation and automatic reallocation between calls to
+`step`; implementations should return in bounded time if responsive
+cancellation or prompt rebalancing matters. Initialization and each step run
+inside that task's current private Rayon pool. Internal worker parallelism must
+join before the call returns so every exposed state is coherent and the pool
+can be safely replaced before the next call.
 
 ### `InitializationContext`
 

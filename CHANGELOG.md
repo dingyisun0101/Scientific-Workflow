@@ -1,5 +1,19 @@
 # Changelog
 
+## Rust 0.14.0 / Python 0.4.5 unchanged — unreleased
+
+- Replace the starvation-prone shared Rayon pool with task-private pools.
+  Required `compute.mode: "auto"` divides the global thread budget equally
+  among working execution-unit tasks and rebalances only between steps;
+  pending tasks receive no share. `"isolated"` instead requires a fixed
+  `resources.threads` value on every execution-unit task.
+- Require execution units used by automatic allocation to opt into the
+  `ExecutionUnit::THREAD_COUNT_INVARIANT` contract. There is no 0.13.x
+  configuration default or compatibility alias.
+- Expose compute mode and isolated task allocations through plan inspection,
+  and persist each execution unit's allocation history. Recording formats 7
+  and 8 and Python 0.4.5 remain unchanged.
+
 ## 0.13.11 / Python 0.4.5 unchanged
 
 - Allow changes to `$npy.exclude_streams` when reusing completed phases that
