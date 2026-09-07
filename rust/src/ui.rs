@@ -5,9 +5,11 @@
 //! automatic dashboard or noninteractive plain renderer.
 
 mod command;
+mod live_log;
 mod plan;
 mod session;
 mod state;
 mod terminal;
+mod usage;
 
 pub(crate) use session::UiSession;

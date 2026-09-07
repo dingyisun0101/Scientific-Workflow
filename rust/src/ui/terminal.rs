@@ -22,6 +22,7 @@ use unicode_width::UnicodeWidthChar;
 
 use super::command::{CommandInput, CommandSubmission, EditAction, UiCommand};
 use super::state::{DashboardSnapshot, TaskSnapshot, TaskStatus, event_message};
+use super::usage::{UsageMonitor, UsageSnapshot};
 use crate::runtime::RuntimeEvent;
 
 static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
@@ -46,8 +47,7 @@ pub(super) struct DashboardTerminal {
     lease: TerminalLease,
     task_offset: usize,
     task_anchor: Option<(u64, String)>,
-    message_end: Option<u64>,
-    last_message: u64,
+    usage: UsageMonitor,
 }
 
 impl DashboardTerminal {
@@ -89,8 +89,7 @@ impl DashboardTerminal {
             lease,
             task_offset: 0,
             task_anchor: None,
-            message_end: None,
-            last_message: 0,
+            usage: UsageMonitor::default(),
         })
     }
 
@@ -108,23 +107,6 @@ impl DashboardTerminal {
                     if key.code == KeyCode::PageUp {
                         self.task_offset = self.task_offset.saturating_sub(5);
                         self.task_anchor = None;
-                        continue;
-                    }
-                    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Up {
-                        self.message_end = Some(
-                            self.message_end
-                                .unwrap_or(self.last_message)
-                                .saturating_sub(3)
-                                .max(1),
-                        );
-                        continue;
-                    }
-                    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Down {
-                        let next = self
-                            .message_end
-                            .unwrap_or(self.last_message)
-                            .saturating_add(3);
-                        self.message_end = (next < self.last_message).then_some(next);
                         continue;
                     }
                     if key.code == KeyCode::Char('c')
@@ -162,25 +144,26 @@ impl DashboardTerminal {
             .tasks
             .get(self.task_offset)
             .map(|t| (t.replicate, t.identity.clone()));
-        self.last_message = snapshot.messages.last().map_or(0, |m| m.sequence);
         let task_offset = self.task_offset;
-        let message_end = self.message_end;
+        let usage = self.usage.sample(snapshot.output.as_deref());
         let tick = self.tick;
         let command = self.command.text();
         let command_cursor = self.command.cursor();
         self.tick = self.tick.wrapping_add(1);
         self.terminal.draw(|frame| {
             let area = frame.area();
-            let [header, tasks, messages, command_area] = Layout::vertical([
+            let [header, tasks, messages, usage_area, command_area] = Layout::vertical([
                 Constraint::Length(if area.height >= 24 { 6 } else { 5 }),
                 Constraint::Min(4),
-                Constraint::Length(if area.height >= 24 { 9 } else { 5 }),
+                Constraint::Length(if area.height >= 24 { 7 } else { 5 }),
+                Constraint::Length(3),
                 Constraint::Length(3),
             ])
             .areas(area);
             render_header(frame, header, snapshot);
             render_tasks(frame, tasks, snapshot, tick, task_offset);
-            render_messages(frame, messages, snapshot, message_end);
+            render_messages(frame, messages, snapshot);
+            render_usage(frame, usage_area, usage);
             render_command(
                 frame,
                 command_area,
@@ -279,7 +262,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
             snapshot.replicate_count,
             snapshot.tasks.len()
         )),
-        Line::from(format!("{phase}")),
+        Line::from(phase.to_string()),
         Line::from(format!("output={output}")),
     ];
     frame.render_widget(
@@ -481,20 +464,11 @@ fn timing_text_for(elapsed: Duration, iteration: u64, target: Option<u64>) -> St
     }
 }
 
-fn render_messages(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    snapshot: &DashboardSnapshot,
-    end: Option<u64>,
-) {
+fn render_messages(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &DashboardSnapshot) {
     let width = usize::from(area.width.saturating_sub(2)).max(1);
     let visible = usize::from(area.height.saturating_sub(2));
     let mut lines = Vec::new();
-    for message in snapshot
-        .messages
-        .iter()
-        .filter(|m| end.is_none_or(|end| m.sequence <= end))
-    {
+    for message in &snapshot.messages {
         let color = match message.level.as_str() {
             "debug" => Color::DarkGray,
             "warning" => Color::Yellow,
@@ -532,8 +506,28 @@ fn render_messages(
         Paragraph::new(text).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Messages · last 100 · Alt-Up/Down "),
+                .title(" Messages · recent · full history in log.txt "),
         ),
+        area,
+    );
+}
+
+fn render_usage(frame: &mut ratatui::Frame<'_>, area: Rect, usage: UsageSnapshot) {
+    let value = |percent: Option<f64>| {
+        percent.map_or_else(|| "--".to_owned(), |percent| format!("{percent:5.1}%"))
+    };
+    let line = Line::from(vec![
+        Span::styled("CPU ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(value(usage.cpu_percent)),
+        Span::raw("   "),
+        Span::styled("RAM ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(value(usage.ram_percent)),
+        Span::raw("   "),
+        Span::styled("DISK ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(value(usage.disk_percent)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line).block(Block::default().borders(Borders::ALL).title(" Usage ")),
         area,
     );
 }
@@ -616,6 +610,35 @@ mod tests {
         assert_eq!(display_kind("execution_unit"), "unit");
         assert_eq!(display_kind("program"), "program");
     }
+
+    #[test]
+    fn usage_panel_labels_all_three_percentages() {
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(60, 3)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_usage(
+                    frame,
+                    frame.area(),
+                    UsageSnapshot {
+                        cpu_percent: Some(12.5),
+                        ram_percent: Some(50.0),
+                        disk_percent: Some(75.25),
+                    },
+                );
+            })
+            .unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Usage"));
+        assert!(text.contains("CPU  12.5%"));
+        assert!(text.contains("RAM  50.0%"));
+        assert!(text.contains("DISK  75.2%"));
+    }
 }
 
 #[cfg(test)]
@@ -630,7 +653,7 @@ mod rendering_tests {
         let snapshot = state.snapshot();
         let mut terminal = ratatui::Terminal::new(TestBackend::new(35, 6)).unwrap();
         terminal
-            .draw(|frame| render_messages(frame, frame.area(), &snapshot, None))
+            .draw(|frame| render_messages(frame, frame.area(), &snapshot))
             .unwrap();
         let text = terminal
             .backend()

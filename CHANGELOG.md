@@ -13,6 +13,9 @@
 - Expose compute mode and isolated task allocations through plan inspection,
   and persist each execution unit's allocation history. Recording formats 7
   and 8 and Python 0.4.5 remain unchanged.
+- Add a dashboard Usage section for CPU, RAM, and execution-filesystem disk
+  occupation. Remove Alt-Up/Down message scrolling and synchronously mirror
+  complete timestamped UI messages to `<execution>/log.txt` in real time.
 
 ## 0.13.11 / Python 0.4.5 unchanged
 

@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
 use super::command::{CommandSubmission, UiCommand};
+use super::live_log::LiveLog;
 use super::plan::UiPlan;
 use super::state::DashboardState;
 use super::terminal::{self, DashboardTerminal};
@@ -38,6 +39,7 @@ struct UiSessionInner {
     control: crate::runtime::RunControl,
     plan: UiPlan,
     state: Mutex<DashboardState>,
+    live_log: Mutex<LiveLog>,
     cancellation_requested: AtomicBool,
     finished: AtomicBool,
     renderer: Mutex<Option<JoinHandle<()>>>,
@@ -72,6 +74,7 @@ impl UiSession {
             interactive,
             plan: UiPlan::automatic(),
             state: Mutex::new(DashboardState::with_control(control)),
+            live_log: Mutex::new(LiveLog::default()),
             cancellation_requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             renderer: Mutex::new(None),
@@ -108,7 +111,11 @@ impl UiSession {
     /// Publishes one event and enforces the selected UI as a healthy interface.
     pub(crate) fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), UiFailure> {
         self.inner.render_health.check()?;
-        lock(&self.inner.state).apply(&event);
+        if let Err(source) = record_event(&self.inner, &event) {
+            let reason = format!("live log failed: {source}");
+            self.inner.render_health.fail(reason.clone());
+            return Err(UiFailure::new(reason));
+        }
         if !self.inner.interactive
             && let Err(source) = terminal::render_plain(&event)
         {
@@ -176,15 +183,28 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
             Ok(Some(CommandSubmission::Parsed(UiCommand::Pause))) => {
                 if !inner.finished.load(Ordering::Acquire) {
                     inner.control.pause(true);
-                    lock(&inner.state)
-                        .push_message("workflow: pause requested; execution timers frozen".into());
+                    if record_message(inner, |state| {
+                        state.push_message(
+                            "workflow: pause requested; execution timers frozen".into(),
+                        );
+                    })
+                    .is_err()
+                    {
+                        return;
+                    }
                 }
                 terminal.clear_command();
             }
             Ok(Some(CommandSubmission::Parsed(UiCommand::Resume))) => {
                 if !inner.finished.load(Ordering::Acquire) {
                     inner.control.pause(false);
-                    lock(&inner.state).push_message("workflow: resumed".into());
+                    if record_message(inner, |state| {
+                        state.push_message("workflow: resumed".into());
+                    })
+                    .is_err()
+                    {
+                        return;
+                    }
                 }
                 terminal.clear_command();
             }
@@ -193,7 +213,9 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
                 if !inner.finished.load(Ordering::Acquire) {
                     inner.control.cancel();
                     inner.cancellation_requested.store(true, Ordering::Release);
-                    lock(&inner.state).request_exit();
+                    if record_message(inner, DashboardState::request_exit).is_err() {
+                        return;
+                    }
                 }
                 terminal.clear_command();
             }
@@ -201,25 +223,39 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
                 if !inner.finished.load(Ordering::Acquire) {
                     inner.control.cancel();
                     inner.cancellation_requested.store(true, Ordering::Release);
-                    lock(&inner.state).request_exit();
+                    let _ = record_message(inner, DashboardState::request_exit);
                 }
                 drop(terminal);
                 crate::runtime::force_exit();
             }
             Ok(Some(CommandSubmission::Parsed(UiCommand::Interrupt))) => {
                 if inner.finished.load(Ordering::Acquire) {
-                    lock(&inner.state).push_message(
-                        "workflow: finished; type exit then Enter to close".to_owned(),
-                    );
+                    if record_message(inner, |state| {
+                        state.push_message(
+                            "workflow: finished; type exit then Enter to close".to_owned(),
+                        );
+                    })
+                    .is_err()
+                    {
+                        return;
+                    }
                 } else {
                     inner.control.cancel();
                     inner.cancellation_requested.store(true, Ordering::Release);
-                    lock(&inner.state).request_interrupt();
+                    if record_message(inner, DashboardState::request_interrupt).is_err() {
+                        return;
+                    }
                 }
                 terminal.clear_command();
             }
             Ok(Some(CommandSubmission::Unknown(command))) => {
-                lock(&inner.state).push_message(format!("unknown command: {command}"));
+                if record_message(inner, |state| {
+                    state.push_message(format!("unknown command: {command}"));
+                })
+                .is_err()
+                {
+                    return;
+                }
             }
             Ok(Some(CommandSubmission::Empty)) | Ok(None) => {}
             Err(source) => {
@@ -241,6 +277,52 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
         }
         thread::sleep(inner.plan.refresh_interval());
     }
+}
+
+fn record_event(inner: &UiSessionInner, event: &RuntimeEvent<'_>) -> std::io::Result<()> {
+    let mut state = lock(&inner.state);
+    let mut live_log = lock(&inner.live_log);
+    if let RuntimeEvent::ExecutionStarted {
+        output_directory, ..
+    } = event
+    {
+        live_log.start(output_directory)?;
+    }
+    let previous = state.message_sequence();
+    state.apply(event);
+    if state.message_sequence() != previous {
+        live_log.append(
+            state
+                .latest_message()
+                .expect("a new message sequence has a retained message"),
+        )?;
+    }
+    Ok(())
+}
+
+fn record_message(
+    inner: &UiSessionInner,
+    update: impl FnOnce(&mut DashboardState),
+) -> Result<(), UiFailure> {
+    let mut state = lock(&inner.state);
+    let mut live_log = lock(&inner.live_log);
+    let previous = state.message_sequence();
+    update(&mut state);
+    if state.message_sequence() != previous
+        && let Err(source) = live_log.append(
+            state
+                .latest_message()
+                .expect("a new message sequence has a retained message"),
+        )
+    {
+        let path = live_log
+            .path()
+            .map_or_else(|| "log.txt".into(), |path| path.display().to_string());
+        let reason = format!("failed to append `{path}`: {source}");
+        inner.render_health.fail(reason.clone());
+        return Err(UiFailure::new(reason));
+    }
+    Ok(())
 }
 
 const fn renderer_should_close(execution_finished: bool, exit_submitted: bool) -> bool {

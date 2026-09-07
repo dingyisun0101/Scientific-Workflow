@@ -1,6 +1,6 @@
 # UI API
 
-This guide documents the `scientific-workflow` 0.13.10 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.0 subsystem contract.
 
 The `ui` subsystem is the sole presentation interface for execution facts
 already known by Runtime. It does not inspect execution units, scientific payloads,
@@ -11,8 +11,8 @@ Runtime owns the planned-task, lifecycle, progress, path, and outcome fact
 vocabulary plus the observer port. Crate-level composition attaches UI's
 automatic adapter after Runtime allocates the execution scope. UI alone owns
 terminal detection, its inferred refresh policy, the Ratatui dashboard state,
-command editing, message history, and the exit request observed through the
-Runtime port. Study has no UI dependency.
+command editing, live execution logging, best-effort host usage sampling, and
+the exit request observed through the Runtime port. Study has no UI dependency.
 
 ## Basic API
 
@@ -32,20 +32,25 @@ Crossterm alternate screen and renders a Ratatui dashboard containing:
 - paused execution elapsed/ETA and an independent **Total time** wall clock;
 - separate study identity/status/count/phase/output rows;
 - severity-colored, text-labeled, timestamped source messages (last 100 retained);
-- task scrolling with PageUp/PageDown and message scrolling with Alt-Up/Down;
+- a Usage section directly beneath Messages showing CPU, RAM, and execution-filesystem
+  disk occupation as percentages;
+- task scrolling with PageUp/PageDown; and
 - pause, resume, exit, and exit --force commands.
 
 The task table itself contains the task label with a concise kind tag, status,
 progress, and an `elapsed / ETA` timing column. The internal `execution_unit`
 kind is presented as `unit`; configuration and API vocabulary are unchanged.
 Rows identify their replicate/phase; full task identities and output paths remain
-in Messages and durable summaries. Task scroll anchors survive incoming events;
-message scrolling anchors by sequence rather than arrival-relative offsets.
-Runtime lifecycle lines are appended to the message panel instead of scrolling
-the interactive terminal. Scientific payloads are never rendered. When either
+in Messages and durable summaries. Task scroll anchors survive incoming events.
+Messages always show the newest wrapped lines and are deliberately not
+scrollable. Every timestamped message is synchronously appended and flushed to
+`<execution>/log.txt` as it occurs, so complete history remains readable while
+the run is active. Runtime lifecycle lines are appended to the message panel
+instead of scrolling the interactive terminal. Scientific payloads are never rendered. When either
 standard stream is not interactive, UI deliberately selects its stable
 line-oriented standard-error renderer, so redirected runs and CI retain
-diagnostics without terminal control sequences. This is a complete UI mode,
+diagnostics without terminal control sequences; it writes the same live
+`log.txt`. This is a complete UI mode,
 not recovery from a broken interactive renderer.
 
 The command editor supports character insertion, Left/Right, Home/End,
@@ -69,10 +74,17 @@ field list, message callback, progress counter, renderer, or cancellation
 handle is user-defined. With `terminal-ui` enabled, UI is the sole presentation
 interface, so failure to
 start its renderer thread, initialize the selected terminal, poll interactive
-input, draw the dashboard, or write plain output is fatal and returns
+input, draw the dashboard, create/append/flush `log.txt`, or write plain output
+is fatal and returns
 `RuntimeError::Presentation`. Such failures are not reclassified as
 cooperative cancellation and are transparently wrapped by `WorkflowError` from
 the ordinary crate facade.
+
+Usage sampling reads Linux `/proc/stat` and `/proc/meminfo`; disk occupation is
+the used percentage of the filesystem containing the active execution
+directory. CPU uses deltas between dashboard refreshes after its initial host
+counter sample. Sampling is presentation-only and best effort: an unavailable
+counter is rendered as `--` and never fails, pauses, or changes execution.
 
 ## Advanced API
 
@@ -102,8 +114,10 @@ publishes every active group to the task panel, filtering before cloning rows.
 Completed groups have no collapsed or expandable representation. Study counters
 include all planned work, including groups no longer visible.
 Concurrent Runtime workers share one clone-cheap session. A
-mutex protects only dashboard presentation state, and a single bounded-refresh
-thread owns interactive terminal input and drawing.
+mutex protects dashboard presentation state and a second serializes the live
+log. State reduction and log append share one lock order so concurrent event
+messages remain in display sequence. A single bounded-refresh thread owns
+interactive terminal input, resource sampling, and drawing.
 
 Interactive initialization uses a renderer-thread handshake, so setup failure
 returns before a usable session is published. Later terminal IO failures are
@@ -141,7 +155,9 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 Running it in a terminal shows the dashboard. Typing `exit` and pressing Enter
 cancels active work or closes an already finished dashboard. Successful completion
 otherwise remains visible until that command is submitted. Redirecting standard
-error selects plain lifecycle lines automatically and does not wait for input. No
+error selects plain lifecycle lines automatically and does not wait for input.
+During either mode, `tail -f <execution>/log.txt` follows the complete message
+history. No
 execution unit or JSON change is involved.
 
 ## Not API
@@ -149,8 +165,9 @@ execution unit or JSON change is involved.
 Ratatui/Crossterm types, the headless silent observer, event variants,
 dashboard snapshots, task statuses,
 command parser/editor, renderer thread, alternate-screen lease, message
-capacity, layout, colors, glyphs, refresh interval, ETA formula, plain-line
-format, and cancellation atomics are private. Applications must not parse the
+capacity, live-log writer, `/proc` and filesystem sampler, layout, colors,
+glyphs, refresh interval, ETA formula, plain-line format, and cancellation
+atomics are private. Applications must not parse the
 human display as a machine protocol; durable facts belong to Runtime summaries
 and persistence metadata.
 
@@ -171,9 +188,10 @@ owned child groups before leaving the process; ordinary exit waits for safe
 scientific cleanup. No public UI/control type is introduced.
 
 Debug is muted, info neutral, warning yellow, error red, and success green; labels
-preserve meaning without color. Wrapped messages are selected by display rows,
-with Unicode column widths. History is bounded to 100 messages; complete program
-stdout/stderr logs remain on disk. Program progress counts are not treated as
+preserve meaning without color. The panel selects the newest wrapped display
+rows with Unicode column widths. In-memory history is bounded to 100 messages;
+the append-only execution `log.txt` retains the complete UI history in real
+time, while program stdout/stderr logs remain separately available. Program progress counts are not treated as
 scientific-time ETA because member sizes differ. Noninteractive mode prints
 lifecycle and program logs; no terminal input or renderer is started. Terminal
 phase messages include completed, failed, cancelled, and skipped task counts.

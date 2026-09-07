@@ -100,6 +100,10 @@ public.
 - `rust/src/ui/command.rs` verifies the former editor and exact lowercase
   `exit` contract. `ui/session.rs` verifies that the interactive renderer closes
   only after both a terminal execution outcome and explicit `exit` submission.
+  `ui/live_log.rs` verifies that messages queued before output creation and
+  messages appended afterward are immediately readable from execution
+  `log.txt`. `ui/usage.rs` verifies Linux CPU and RAM counter parsing and
+  bounded percentages; terminal rendering verifies all CPU/RAM/DISK labels.
   `ui/state.rs` verifies declaration-ordered event-reduced
   rows, per-phase task-panel replacement, progress, bounded message history,
   source-neutral cancellation, and phase/replicate/execution closure of

@@ -469,6 +469,9 @@ fn execution_units_run_inside_the_required_study_pool() {
         metadata["terminal_metadata"]["compute"]["allocations"][0]["threads"],
         3
     );
+    let live_log = fs::read_to_string(summary.output_directory().join("log.txt")).unwrap();
+    assert!(live_log.contains("workflow: started"));
+    assert!(live_log.contains("workflow: completed"));
 }
 
 #[test]

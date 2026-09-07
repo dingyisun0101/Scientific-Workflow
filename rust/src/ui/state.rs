@@ -65,7 +65,6 @@ pub(super) struct DashboardSnapshot {
 
 #[derive(Clone)]
 pub(super) struct Message {
-    pub(super) sequence: u64,
     pub(super) level: String,
     pub(super) text: String,
 }
@@ -126,7 +125,11 @@ impl DashboardState {
                 kind,
             } => {
                 let key = (*replicate, Box::<str>::from(*identity));
-                if !self.phase_plan.iter().any(|planned| planned.as_ref() == *phase) {
+                if !self
+                    .phase_plan
+                    .iter()
+                    .any(|planned| planned.as_ref() == *phase)
+                {
                     self.phase_plan.push(phase.to_string().into_boxed_str());
                 }
                 if !self.tasks.contains_key(&key) {
@@ -349,7 +352,6 @@ impl DashboardState {
         }
         self.message_sequence += 1;
         self.messages.push_back(Message {
-            sequence: self.message_sequence,
             level: level.into(),
             text: format!(
                 "[{} +{:.1}s] {}",
@@ -398,6 +400,14 @@ impl DashboardState {
             execution_finished: self.execution_finished,
             started: self.started,
         }
+    }
+
+    pub(super) const fn message_sequence(&self) -> u64 {
+        self.message_sequence
+    }
+
+    pub(super) fn latest_message(&self) -> Option<&Message> {
+        self.messages.back()
     }
 
     fn task_mut(&mut self, replicate: u64, identity: &str) -> Option<&mut TaskSnapshot> {

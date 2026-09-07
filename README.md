@@ -92,7 +92,8 @@ Each first-level Rust subsystem has an exhaustive API and replacement contract:
   and fallback NumPy conversion for every recorded field.
 - [Runtime](rust/src/runtime/api.md): execution, scheduling, cancellation,
   per-configuration dependency correlation, program environments, and summaries.
-- [UI](rust/src/ui/api.md): automatic terminal presentation and exit handling.
+- [UI](rust/src/ui/api.md): automatic terminal presentation, live `log.txt`,
+  CPU/RAM/disk usage, and exit handling.
 - [Error](rust/src/error/api.md): complete-workflow error composition.
 - [Prelude](rust/src/prelude/api.md): the ordinary execution-unit authoring
   imports.

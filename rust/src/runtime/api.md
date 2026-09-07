@@ -71,7 +71,10 @@ Ratatui dashboard; otherwise UI emits stable plain lifecycle lines. Typing
 cancellation. After any terminal outcome the dashboard remains visible until the
 user explicitly types `exit`; Ctrl+C alone never closes it. Consequently an
 interactive `execute` call returns only after execution has ended and that final
-`exit` is submitted. Noninteractive execution never waits for input. UI is the
+`exit` is submitted. Default-feature UI also creates
+`<execution>/log.txt` and synchronously flushes every timestamped lifecycle and
+program message there in interactive and noninteractive modes. Noninteractive
+execution never waits for input. UI is the
 sole presentation boundary: renderer startup, terminal
 initialization/input/drawing, and plain-output failures return
 `RuntimeError::Presentation` rather than becoming cancellation or silent
@@ -82,6 +85,7 @@ path. When an embedding explicitly disables default features, the UI module and
 terminal dependencies are absent and composition attaches a silent observer to
 Runtime's unchanged port. Execution and summaries behave normally, but there
 is no presentation output or UI-originated cancellation in that build.
+It also has no UI-authored `log.txt` or host-usage sampling.
 
 An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. ExecutionUnit cancellation is cooperative

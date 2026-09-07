@@ -787,7 +787,10 @@ project-relative domain output such as the Python plotter's `output/plots`.
 UI is also automatic. No `ui` object or execution unit display fields are required.
 Interactive stdin and stderr select the Ratatui dashboard with inferred task
 rows for all active phase groups, progress, timing, lifecycle messages, and the
-`exit` command. Completed groups disappear; Messages retain their outcomes.
+`exit` command. A Usage section beneath Messages reports CPU, RAM, and
+execution-filesystem disk occupation. Completed groups disappear; Messages
+retain their latest outcomes without scrolling, while the complete timestamped
+history is flushed live to `<execution>/log.txt` for `tail -f` or later review.
 Execution clocks freeze during pause; the Study Total time clock continues.
 After success, failure, or cancellation, the interactive dashboard stays open
 so the terminal outcome can be inspected; type exact lowercase `exit` and press
@@ -797,8 +800,9 @@ final `exit` is still required. Noninteractive runs never wait for input.
 Redirected execution uses stable plain lifecycle lines. The dashboard and
 plain renderer are the only presentation modes. Failure of the selected mode
 is fatal and returns `RuntimeError::Presentation` rather than silently
-degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.11/rust/src/ui/api.md)
-details commands, scrolling, and pause boundaries.
+degrading or being reported as cooperative workflow cancellation. The
+[UI reference](src/ui/api.md) details commands, live logging, usage sampling,
+and pause boundaries.
 
 Config alone reads `wf_configs/study.json`, every named project state document, and the complete
 arbitrary `wf_configs/parameters.json` namespace once. A top-level section

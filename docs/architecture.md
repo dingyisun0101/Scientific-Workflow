@@ -115,7 +115,7 @@ study
         │ immutable Study returned to the crate facade
         ▼
 runtime::execute
-  one study-wide compute pool + execution directory + replicates + scheduling + cancellation
+  fair task-private compute pools + execution directory + replicates + scheduling + cancellation
   + immutable initialization context + execution-unit stepping
   + direct program/Python/NPY invocation
         ├──── per-member observation boundaries ────► persistence
@@ -125,7 +125,7 @@ runtime::execute
         ├──── program snapshot/log/status/artifacts ─► persistence
         │
         └──── lifecycle/progress facts ─────────────► ui
-                                                      Ratatui + exit cancellation
+                                                      Ratatui + live log + usage + exit cancellation
 ```
 
 The crate facade owns only the transition from project root to Study to
@@ -295,9 +295,11 @@ workflow/
 │   │   ├── ui/api.md                 automatic presentation contract
 │   │   ├── ui/plan.rs                private UI-owned inferred refresh policy
 │   │   ├── ui/command.rs             former command editor and exact exit parser
+│   │   ├── ui/live_log.rs            synchronous execution log.txt message sink
 │   │   ├── ui/state.rs               event-reduced rows/messages/status snapshot
 │   │   ├── ui/session.rs             renderer thread and cancellation bridge
-│   │   └── ui/terminal.rs            Ratatui dashboard + plain noninteractive mode
+│   │   ├── ui/terminal.rs            Ratatui dashboard + plain noninteractive mode
+│   │   └── ui/usage.rs               best-effort CPU/RAM/filesystem sampler
 │   │   │
 │   │   ├── persistence.rs            public completed-recording read root
 │   │   ├── persistence/api.md        complete settings/read/error contract
@@ -603,20 +605,25 @@ iteration values, so neither workload supplies UI code or values.
 
 Interactive stdin and stderr select the Ratatui/Crossterm alternate-screen
 dashboard; noninteractive runs deliberately select UI's stable plain lifecycle
-renderer. UI is the sole presentation interface, so failure to start or
-initialize the selected renderer, poll terminal input, draw, or write plain
-output is a fatal `RuntimeError::Presentation`, never cancellation or silent
+renderer. In both modes UI creates `<execution>/log.txt`, synchronously appends
+and flushes each timestamped message, and treats failure of this required live
+log as a presentation error. UI is the sole presentation interface, so failure
+to start or initialize the selected renderer, poll terminal input, draw, create
+or append the live log, or write plain output is a fatal
+`RuntimeError::Presentation`, never cancellation or silent
 fallback. Renderer health is checked from Runtime-facing publication,
 scheduler, and final-join boundaries, while the terminal lease restores process
 state during ordinary error return and unexpected unwinding.
 Explicit `default-features = false` builds omit the whole UI module plus
 Crossterm and Ratatui; composition attaches a silent Runtime observer instead.
 That headless build retains execution, persistence, summaries, and errors but
-has no terminal output or UI cancellation source. Default builds retain the
-exact existing user-visible behavior.
+has no terminal output, UI live log, usage panel, or UI cancellation source.
 The dashboard
 owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
-one compact `elapsed / ETA` field, a bounded message panel, and the former command editor.
+one compact `elapsed / ETA` field, a bounded non-scrollable newest-message
+panel, a Usage panel, and the former command editor. CPU and RAM come from
+Linux `/proc`; disk is the occupied percentage of the filesystem containing
+the execution directory. Sampling failures render `--` and never affect work.
 Every phase-start event replaces the visible task set. Replicate and phase
 appear once in the panel title; rows contain only the task label, a concise kind
 tag (`unit` for the internal `execution_unit` kind), status, progress, and timing.
