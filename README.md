@@ -13,25 +13,8 @@ iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["che
 The UI preserves complete numeric counters at narrow widths. Stream exclusions
 affect conversion only; raw recordings and scientific stepping are unchanged.
 
-> **BREAKING API UPDATE — 0.13.8 / Python 0.4.4:** Despite the patch version,
-> `InitializationContext::dependencies()` now returns typed dependencies. Python
-> imports move to `scientific_workflow`; no old import aliases are provided.
-> Boundary-only recordings require a reader supporting format 8; format 7 remains readable.
-> **LINUX ONLY. Python tools require Python 3.14+.**
-> **REQUIRED LAYOUT:** Keep `<study>/wf_configs/study.json` and `parameters.json`.
-> Accessors assume the documented layout; relocating required files is unsupported.
-> **Activate the environment containing Workflow's Python package and NumPy before
-> every launch, including in each new shell. Cargo does not install Python tools.**
-
-
 Scientific Workflow turns registered Rust scientific execution units, arbitrary
 executable programs, and declarative JSON into validated, recorded studies.
-
-> **Breaking update — 0.13.0:** This release supersedes Workflow 0.12.x
-> parameter expansion. Top-level `$sweep` values outside execution-unit
-> sections now expand the complete study graph; no compatibility alias retains
-> their former local interpretation. Projects still declare
-> `"workflow_schema": 1`.
 
 ## Nested sweep alternatives in 0.13.8
 
