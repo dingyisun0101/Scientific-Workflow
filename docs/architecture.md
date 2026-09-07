@@ -783,3 +783,15 @@ selection before any stream planning or chunk reads. Selection is immutable
 conversion provenance in member and batch manifests, part of retry compatibility,
 and identical in serial and parallel workers. Recording and NPY format identifiers
 are unchanged; absent v2 selection metadata means no exclusions.
+
+## Reusing scientific phases after NPY filter changes (0.13.11)
+
+Runtime's private reuse adapter determines whether each imported phase is NPY
+itself or has NPY among its transitive prerequisites. Persistence uses that
+semantic fact to retain NPY filter identity for those phases and to ignore only
+`study.phases.$npy.exclude_streams` for other imported phases. Phase declarations,
+scientific parameters, seeds, and all other captured inputs remain strict.
+The same comparator handles committed receipts and legacy evidence. This
+permits adding checkpoint exclusions after preparation without rewriting source
+receipts, weakening completion checks, or reusing stale converted data. Python
+remains 0.4.5 and recording formats remain unchanged.

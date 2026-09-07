@@ -8,7 +8,7 @@
 > provide `reuse_from` alongside the selected indices. Recording formats and
 > the Python companion remain unchanged.
 
-Rust 0.13.10 and Python 0.4.5 correct ensemble progress to the maximum member
+Rust 0.13.11 and Python 0.4.5 correct ensemble progress to the maximum member
 iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["checkpoint"]}`.
 The UI preserves complete numeric counters at narrow widths. Stream exclusions
 affect conversion only; raw recordings and scientific stepping are unchanged.
@@ -137,8 +137,11 @@ replicate. Unselected phases that are not prerequisites are omitted entirely.
 
 Workflow validates the complete graph and constants during Study loading.
 Before creating new output, Runtime requires every imported task to have
-successfully completed with matching captured inputs. Only `active_phases` and
+successfully completed with matching captured inputs. `active_phases` and
 `reuse_from` may differ between the captured and current study snapshots.
+`$npy.exclude_streams` may also differ when the imported phase is neither
+`$npy` nor a direct or transitive consumer of its output. NPY and its consumers
+retain exact filter matching; all other captured inputs still must match.
 A reused phase cannot depend on a phase selected to execute again. Missing,
 failed, incompatible, or ambiguous legacy inputs fail without launching work.
 Programs and `$npy` receive the original completed recording/artifact paths.

@@ -8,7 +8,7 @@
 > provide `reuse_from` alongside the selected indices. Recording formats and
 > the Python companion remain unchanged.
 
-Rust 0.13.10 and Python 0.4.5 correct ensemble progress to the maximum member
+Rust 0.13.11 and Python 0.4.5 correct ensemble progress to the maximum member
 iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["checkpoint"]}`.
 The UI preserves complete numeric counters at narrow widths. Stream exclusions
 affect conversion only; raw recordings and scientific stepping are unchanged.
@@ -35,7 +35,7 @@ configuration-driven execution unit or program execution, and durable outputs.
 
 ## New to Workflow?
 
-Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.10/rust/getting-started.md). It
+Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.11/rust/getting-started.md). It
 explains Serde and deserialization, Rust traits, and the difference between a
 study, phase, task, execution unit, member, and state before presenting a
 minimal runnable project.
@@ -159,7 +159,7 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.13.10"
+scientific-workflow = "0.13.11"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -202,7 +202,7 @@ an embedding choice, not an alternate end-user interface.
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
 into an execution unit's typed `Constants` value. Application code normally
-adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.10/rust/getting-started.md#why-serde-and-deserialize-appear)
+adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.11/rust/getting-started.md#why-serde-and-deserialize-appear)
 shows the exact JSON-to-Rust mapping and explains why
 `#[serde(deny_unknown_fields)]` is recommended.
 
@@ -258,7 +258,7 @@ include:
 - exposing a different public orchestration or execution unit contract;
 - implementing a custom persistence backend, writer lifecycle, or incompatible
   recording format (the current cross-language contract is the repository's
-  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.10/protocol/recording-v7.md));
+  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.11/protocol/recording-v7.md));
 - replacing scheduling, cancellation, output-layout, or UI policy;
 - carrying organization-specific changes that cannot be contributed upstream;
   or
@@ -803,7 +803,7 @@ final `exit` is still required. Noninteractive runs never wait for input.
 Redirected execution uses stable plain lifecycle lines. The dashboard and
 plain renderer are the only presentation modes. Failure of the selected mode
 is fatal and returns `RuntimeError::Presentation` rather than silently
-degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.10/rust/src/ui/api.md)
+degrading or being reported as cooperative workflow cancellation. The [UI reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.11/rust/src/ui/api.md)
 details commands, scrolling, and pause boundaries.
 
 Config alone reads `wf_configs/study.json`, every named project state document, and the complete
@@ -934,7 +934,7 @@ See [`src/state/api.md`](src/state/api.md),
 [`src/ui/api.md`](src/ui/api.md),
 [`src/error/api.md`](src/error/api.md),
 [`src/prelude/api.md`](src/prelude/api.md), and the repository
-[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.10/docs/architecture.md).
+[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.11/docs/architecture.md).
 
 ## Validation
 
@@ -968,8 +968,11 @@ replicate. Unselected phases that are not prerequisites are omitted entirely.
 
 Workflow validates the complete graph and constants during Study loading.
 Before creating new output, Runtime requires every imported task to have
-successfully completed with matching captured inputs. Only `active_phases` and
+successfully completed with matching captured inputs. `active_phases` and
 `reuse_from` may differ between the captured and current study snapshots.
+`$npy.exclude_streams` may also differ when the imported phase is neither
+`$npy` nor a direct or transitive consumer of its output. NPY and its consumers
+retain exact filter matching; all other captured inputs still must match.
 A reused phase cannot depend on a phase selected to execute again. Missing,
 failed, incompatible, or ambiguous legacy inputs fail without launching work.
 Programs and `$npy` receive the original completed recording/artifact paths.

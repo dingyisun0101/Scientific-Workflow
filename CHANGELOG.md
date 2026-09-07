@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.11 / Python 0.4.5 unchanged
+
+- Allow changes to `$npy.exclude_streams` when reusing completed phases that
+  do not depend on NPY output. Keep exact filter matching for NPY itself and
+  its direct or transitive consumers.
+- Retain all scientific-input, phase-graph, task-identity, completion, and
+  provenance checks. Apply the same comparison to modern and legacy results.
+- Cover filter changes, chained reuse, unchanged source receipts, and rejection
+  of changed scientific inputs. No Python or recording-format change is needed.
+
 ## 0.13.10 / Python 0.4.5
 
 - Correct live ensemble progress to maximum member iteration/target, consistent

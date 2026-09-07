@@ -38,6 +38,7 @@ pub(crate) struct TaskReuseExpectation<'a> {
     pub(crate) parameter_ordinal: Option<u64>,
     pub(crate) parameters: Value,
     pub(crate) kind: &'a str,
+    pub(crate) npy_filter_is_input: bool,
 }
 
 fn invalid(reason: impl Into<String>) -> Error {
@@ -49,10 +50,20 @@ fn document(path: &Path) -> Result<Value> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-fn comparable(mut snapshot: Value) -> Value {
+fn comparable(mut snapshot: Value, npy_filter_is_input: bool) -> Value {
     if let Some(study) = snapshot.get_mut("study").and_then(Value::as_object_mut) {
         study.remove("active_phases");
         study.remove("reuse_from");
+        // Conversion selection cannot change an upstream recording or artifact.
+        // Retain it for NPY itself and every phase consuming its output.
+        if !npy_filter_is_input
+            && let Some(npy) = study
+                .get_mut("phases")
+                .and_then(|phases| phases.get_mut("$npy"))
+                .and_then(Value::as_object_mut)
+        {
+            npy.remove("exclude_streams");
+        }
     }
     snapshot
 }
@@ -112,7 +123,10 @@ pub(crate) fn load_result(
     expected: &TaskReuseExpectation<'_>,
     legacy: &LegacyResults,
 ) -> Result<CompletedTaskResult> {
-    let snapshot: Value = serde_json::from_slice(expected.snapshot)?;
+    let snapshot = comparable(
+        serde_json::from_slice(expected.snapshot)?,
+        expected.npy_filter_is_input,
+    );
     let receipt = directory.join(RECEIPT);
     let result: CompletedTaskResult = if receipt.is_file() {
         serde_json::from_value(document(&receipt)?)?
@@ -138,7 +152,9 @@ pub(crate) fn load_result(
             .get(expected.identity)
             .into_iter()
             .flatten()
-            .filter(|result| comparable(result.snapshot.clone()) == comparable(snapshot.clone()));
+            .filter(|result| {
+                comparable(result.snapshot.clone(), expected.npy_filter_is_input) == snapshot
+            });
         let candidate = candidates.next().ok_or_else(|| {
             invalid("no committed result or matching legacy dependent-program summary")
         })?;
@@ -160,7 +176,7 @@ pub(crate) fn load_result(
     if result.format != FORMAT
         || result.identity.as_ref() != expected.identity
         || result.configuration != expected.configuration
-        || comparable(result.snapshot.clone()) != comparable(snapshot)
+        || comparable(result.snapshot.clone(), expected.npy_filter_is_input) != snapshot
     {
         return Err(invalid(
             "completed task identity or captured study inputs differ from this plan",
@@ -290,4 +306,105 @@ pub(crate) fn write_result(
     fs::rename(temporary, path)?;
     File::open(directory)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comparable;
+    use serde_json::{Value, json};
+
+    fn snapshot() -> Value {
+        json!({
+            "study": {
+                "workflow_schema": 1,
+                "active_phases": [0, 1, 2],
+                "seed": 1101,
+                "threads": 2,
+                "phases": {
+                    "prepare": {"tasks": [{"program": "/bin/true"}]},
+                    "evolve": {
+                        "after": ["prepare"],
+                        "tasks": [{"execution_unit": "model"}]
+                    },
+                    "$npy": {"after": ["evolve"]}
+                }
+            },
+            "config": {"parameters.json": {"model": {"maximum_iterations": 36000}}}
+        })
+    }
+
+    #[test]
+    fn upstream_reuse_ignores_only_conversion_exclusions() {
+        let original = snapshot();
+        for exclusions in [
+            json!([]),
+            json!(["checkpoint"]),
+            json!(["space", "checkpoint"]),
+        ] {
+            let mut filtered = original.clone();
+            filtered["study"]["phases"]["$npy"]["exclude_streams"] = exclusions;
+            assert_eq!(
+                comparable(original.clone(), false),
+                comparable(filtered, false)
+            );
+        }
+    }
+
+    #[test]
+    fn npy_and_its_consumers_keep_filter_identity() {
+        let original = snapshot();
+        let mut filtered = original.clone();
+        filtered["study"]["phases"]["$npy"]["exclude_streams"] = json!(["checkpoint"]);
+        assert_ne!(
+            comparable(original, true),
+            comparable(filtered.clone(), true)
+        );
+        let mut changed = filtered.clone();
+        changed["study"]["phases"]["$npy"]["exclude_streams"] = json!(["space"]);
+        assert_ne!(
+            comparable(filtered.clone(), true),
+            comparable(changed, true)
+        );
+        assert_eq!(
+            comparable(filtered.clone(), true),
+            comparable(filtered, true)
+        );
+    }
+
+    #[test]
+    fn scientific_inputs_and_other_phase_settings_still_must_match() {
+        let original = snapshot();
+        for (pointer, value) in [
+            ("/study/seed", json!(1102)),
+            ("/study/threads", json!(4)),
+            (
+                "/config/parameters.json/model/maximum_iterations",
+                json!(36001),
+            ),
+            ("/study/phases/prepare/tasks/0/program", json!("/bin/false")),
+            ("/study/phases/$npy/after", json!(["prepare"])),
+        ] {
+            let mut changed = original.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            changed["study"]["phases"]["$npy"]["exclude_streams"] = json!(["checkpoint"]);
+            assert_ne!(
+                comparable(original.clone(), false),
+                comparable(changed, false)
+            );
+        }
+    }
+
+    #[test]
+    fn selection_and_reuse_source_remain_compatible() {
+        let original = snapshot();
+        let mut resumed = original.clone();
+        resumed["study"]["active_phases"] = json!([1, 2]);
+        resumed["study"]["reuse_from"] = json!("output/execution-previous");
+        for npy_filter_is_input in [false, true] {
+            assert_eq!(
+                comparable(original.clone(), npy_filter_is_input),
+                comparable(resumed.clone(), npy_filter_is_input)
+            );
+        }
+    }
 }

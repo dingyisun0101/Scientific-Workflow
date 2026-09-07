@@ -82,6 +82,9 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
         })?;
         for &(index, &position) in &skipped {
             let phase = &study.phases()[position];
+            let mut predecessors = HashSet::new();
+            ancestors(phase, study, &mut predecessors);
+            let npy_filter_is_input = phase.name() == "$npy" || predecessors.contains("$npy");
             let mut tasks = Vec::with_capacity(phase.tasks().len());
             for task in phase.tasks() {
                 let path = directory.join(format!("task-{:06}", task.output_ordinal()));
@@ -100,6 +103,7 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
                     state: provenance.as_ref().map(|p| p.state()),
                     parameter_ordinal: provenance.as_ref().map(|p| p.parameter_ordinal()),
                     parameters,
+                    npy_filter_is_input,
                     kind: if task.is_npy() {
                         "npy"
                     } else {

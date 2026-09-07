@@ -342,7 +342,7 @@ read-only legacy import adapter. Runtime supplies semantic task identities,
 configuration snapshots, and workload results only after phase success.
 Receipts preserve original output paths when a task is reused; they do not copy
 scientific artifacts or reopen any writer. Import compares captured inputs
-(excluding only phase selection and reuse source), validates successful program
+(excluding phase selection and reuse source), validates successful program
 status, and uses `StoredStateSeriesReader::open_completed_recording` to check
 member completion and metadata provenance. Ordinary readers still verify chunk
 contents on consumption. Legacy unit final iterations come from captured
@@ -351,3 +351,11 @@ receipts are failures, not an invitation to fall back to incomplete outputs.
 Receipt IO failures preserve their source error under `RuntimeError::Task`;
 import failures become contextual `RuntimeError::Reuse` errors.
 No public write handle, serialization trait, or recording-format change is added.
+
+For Rust 0.13.11, Runtime also supplies whether the imported phase is `$npy`
+or has `$npy` as a transitive prerequisite. Only when it is neither does
+Persistence omit `study.phases.$npy.exclude_streams` from snapshot comparison.
+This applies equally to committed receipts and legacy matching. All other
+snapshot values, scientific parameters, workload identities, completion markers,
+and member provenance still must match. NPY and its consumers retain exact
+filter identity; source receipts and recordings are never rewritten.

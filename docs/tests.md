@@ -278,3 +278,13 @@ cover valid exclusions, unsafe argument interpretation, duplicate/invalid names,
 and rejection on ordinary phases. Python tests cover mixed streams, skipped
 corrupt excluded chunks, all-excluded datasets, unknown names, invalid lists,
 CLI forwarding, serial/parallel parity, and filter-aware retries.
+
+## 0.13.11 reuse compatibility regressions
+
+Private Persistence tests check conversion-only exclusions, strict NPY/consumer
+filter identity, phase selection, reuse paths, and unchanged scientific and
+phase-graph validation. `rust/tests/reuse_npy_filters.rs` runs a miniature program
+workflow, adds and changes downstream NPY filters, chains completed upstream
+reuse, preserves original receipts, and rejects changed scientific inputs before
+creating another execution. Dispatcher separately exercises the same transition
+with completed GLV and target-generation outputs plus actual filtered NPY export.
