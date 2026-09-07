@@ -15,7 +15,7 @@ name = "attractor-2d"
 path = "src/main.rs"
 
 [dependencies]
-scientific-workflow = "0.14.0"
+scientific-workflow = "0.14.1"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

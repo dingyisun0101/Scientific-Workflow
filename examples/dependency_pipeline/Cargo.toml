@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-scientific-workflow = "0.14.0"
+scientific-workflow = "0.14.1"
 serde = { version = "1", features = ["derive"] }
