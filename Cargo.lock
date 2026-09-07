@@ -34,7 +34,7 @@ dependencies = [
 name = "attractor-2d"
 version = "0.1.0"
 dependencies = [
- "scientific-workflow 0.13.11",
+ "scientific-workflow 0.13.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
 ]
@@ -875,15 +875,16 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "scientific-workflow"
-version = "0.13.11"
+version = "0.13.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69bf92ee7594030df836400723779cb01ab1e6739d60439d7c2d776f5f55881b"
+checksum = "7b5e7dda5493d2cecf9502f87f1ca13735595d1df59a2fa3c32ef90f1962c9a9"
 dependencies = [
  "crossterm",
  "erased-serde",
  "fs2",
  "inventory",
  "libc",
+ "physics_in_parallel",
  "ratatui",
  "rayon",
  "scientific-workflow-macros 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1256,7 +1257,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workflow-dependency-pipeline"
 version = "0.1.0"
 dependencies = [
- "scientific-workflow 0.13.11",
+ "scientific-workflow 0.13.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
 ]
 
