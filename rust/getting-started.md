@@ -143,7 +143,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [dependencies]
-scientific-workflow = "0.13.11"
+scientific-workflow = "0.14.1"
 serde = { version = "1", features = ["derive"] }
 ```
 

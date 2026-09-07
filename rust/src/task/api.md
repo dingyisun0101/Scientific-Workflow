@@ -1,6 +1,6 @@
 # Task API
 
-This guide documents the `scientific-workflow` 0.14.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.1 subsystem contract.
 
 Task owns Workflow's uniform scientific execution boundary. A configured
 scientific task selects one registered `ExecutionUnit`, one resolved constants

@@ -1,6 +1,6 @@
 # Workflow architecture
 
-This document describes the reviewed architecture for Rust package 0.14.0 and
+This document describes the reviewed architecture for Rust package 0.14.1 and
 its recording-v7/v8 integration with Python companion 0.4.5.
 
 This is the first-time map of the Workflow repository: what users author, how

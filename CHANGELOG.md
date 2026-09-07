@@ -1,6 +1,11 @@
 # Changelog
 
-## Rust 0.14.0 / Python 0.4.5 unchanged — unreleased
+## Rust 0.14.1 / Python 0.4.5 unchanged — 2026-09-07
+
+- Correct packaged installation snippets and release links to the current
+  coordinated Rust/Python tag. Runtime behavior is unchanged from 0.14.0.
+
+## Rust 0.14.0 / Python 0.4.5 unchanged — 2026-09-07
 
 - Replace the starvation-prone shared Rayon pool with task-private pools.
   Required `compute.mode: "auto"` divides the global thread budget equally

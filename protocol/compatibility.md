@@ -7,7 +7,7 @@ versions fail closed.
 
 | Implementation | Package version | Recording writes | Recording reads |
 | --- | --- | --- | --- |
-| Rust `scientific-workflow` | 0.14.0 | 7 or 8 | 7 and 8 |
+| Rust `scientific-workflow` | 0.14.1 | 7 or 8 | 7 and 8 |
 | Python `scientific-workflow` | 0.4.5 | None | 7 and 8 |
 
 Periodic-only recordings continue to use [format 7](recording-v7.md). A recording
@@ -22,7 +22,7 @@ is test infrastructure. Its optional converter writes and reads
 
 Project manifests still use `workflow_schema: 1` and require explicit
 `active_phases` indices plus `compute.mode` (`auto` or `isolated`). Independent program diagnostics use
-[program events v1](program-events-v1.md). Rust 0.14.0's `$npy` preflight
+[program events v1](program-events-v1.md). Rust 0.14.1's `$npy` preflight
 requires Python companion 0.4.5, Python 3.14+, and the `npy` extra.
 
 The previous pair, Rust 0.13.4 and Python `scientific-workflow-reader` 0.4.2,

@@ -23,11 +23,11 @@ for the manifest grammar and a first Rust execution unit.
 # Activate your existing Python 3.14+ environment first.
 python -m pip install --upgrade pip
 python -m pip install \
-  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.11#subdirectory=python'
-cargo add scientific-workflow@0.13.11
+  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.14.1#subdirectory=python'
+cargo add scientific-workflow@0.14.1
 ```
 
-The tag contains Rust 0.13.11 and Python companion 0.4.5. Without `$npy` or NumPy
+The tag contains Rust 0.14.1 and Python companion 0.4.5. Without `$npy` or NumPy
 readback, omit `[npy]` to install the dependency-free Python core. Cargo only
 installs Rust dependencies. **Workflow does not create, activate, or populate a
 Python environment. You must install the Python package yourself.**

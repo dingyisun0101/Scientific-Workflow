@@ -1,6 +1,6 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.14.0 and Python
+This map is the release-qualification baseline for Rust 0.14.1 and Python
 companion 0.4.5.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order

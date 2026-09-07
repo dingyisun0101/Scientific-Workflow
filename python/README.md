@@ -27,7 +27,7 @@ Use the online [Python environment setup guide](https://github.com/dingyisun0101
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.10#subdirectory=python"
+  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.14.1#subdirectory=python"
 ```
 
 Python 3.14 or newer is required. The core reader has no runtime dependencies.
@@ -36,7 +36,7 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 
 ```bash
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.13.10#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.14.1#subdirectory=python"
 ```
 
 This guide documents release 0.4.5.
@@ -98,9 +98,9 @@ framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
 
 The normative language-neutral contract is the repository's
-[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/protocol/recording-v7.md),
+[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.1/protocol/recording-v7.md),
 with a strict structural JSON Schema and a package
-[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.13.8/protocol/compatibility.md). This package is the
+[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.1/protocol/compatibility.md). This package is the
 v7/v8 reader listed there; it does not expose a supported writer.
 
 The record containers cannot be reassigned and their value mappings are
