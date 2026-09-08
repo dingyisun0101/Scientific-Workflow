@@ -1,6 +1,6 @@
 # Scientific Workflow
 
-> **BREAKING COMPUTE UPDATE: Rust 0.14.1 / Python 0.4.5 unchanged.**
+> **BREAKING COMPUTE UPDATE: Rust 0.14.2 / Python 0.4.5 unchanged.**
 > Every study now requires `compute.mode`, and automatic allocation requires
 > each linked execution unit to declare `THREAD_COUNT_INVARIANT = true`.
 > This supersedes the single shared Rayon pool used by Rust 0.13.x. There is

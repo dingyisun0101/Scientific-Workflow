@@ -6,12 +6,12 @@
   },
   "project_configuration": {
     "workflow_schema": 1,
-    "rust_package_version": "0.14.1"
+    "rust_package_version": "0.14.2"
   },
   "implementations": {
     "rust": {
       "package": "scientific-workflow",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "writes": [
         7,
         8

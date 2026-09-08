@@ -78,6 +78,9 @@ impl ComputeCoordinator {
                 reason: format!("duplicate working task {replicate}/{output_ordinal}"),
             });
         }
+        let required_epoch = state.epoch.checked_add(1).ok_or_else(|| ComputeError {
+            reason: "automatic compute allocation epoch overflow".to_owned(),
+        })?;
         state.slots.insert(
             key,
             ComputeSlot {
@@ -90,8 +93,7 @@ impl ComputeCoordinator {
         match self.inner.mode {
             ComputeMode::Auto => {
                 state.rebalancing = true;
-                state = self.wait_for_idle(state);
-                self.rebuild_auto(&mut state);
+                state = self.wait_for_epoch(state, required_epoch);
             }
             ComputeMode::Isolated => self.build_isolated(key, &mut state),
         }
@@ -111,16 +113,21 @@ impl ComputeCoordinator {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn wait_for_idle<'a>(
+    fn wait_for_epoch<'a>(
         &self,
         mut state: MutexGuard<'a, CoordinatorState>,
+        required_epoch: u64,
     ) -> MutexGuard<'a, CoordinatorState> {
-        while state.slots.values().any(|slot| slot.in_compute) && state.failure.is_none() {
-            state = self
-                .inner
-                .changed
-                .wait(state)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while state.epoch < required_epoch && state.failure.is_none() {
+            if state.slots.values().all(|slot| !slot.in_compute) {
+                self.rebuild_auto(&mut state);
+            } else {
+                state = self
+                    .inner
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
         }
         state
     }
@@ -146,10 +153,13 @@ impl ComputeCoordinator {
             return;
         }
         debug_assert!(state.slots.values().all(|slot| !slot.in_compute));
-        state.epoch += 1;
-        let epoch = state.epoch;
+        let epoch = state
+            .epoch
+            .checked_add(1)
+            .expect("compute allocation epoch cannot overflow in a process lifetime");
         let count = state.slots.len();
         if count == 0 {
+            state.epoch = epoch;
             state.rebalancing = false;
             return;
         }
@@ -181,6 +191,7 @@ impl ComputeCoordinator {
                 slot.history.push(Allocation { epoch, threads });
             }
         }
+        state.epoch = epoch;
         state.rebalancing = false;
     }
 
@@ -283,7 +294,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use super::ComputeCoordinator;
+    use super::{ComputeCoordinator, ComputeSlot};
     use crate::config::ComputeMode;
 
     fn observed_threads(lease: &super::ComputeLease) -> usize {
@@ -381,5 +392,40 @@ mod tests {
             assert_eq!(observed_threads(&first), 1);
             assert_eq!(observed_threads(&second), 1);
         });
+    }
+
+    #[test]
+    fn completed_registration_epoch_is_not_blocked_by_resumed_compute() {
+        let coordinator = ComputeCoordinator::new(2, ComputeMode::Auto);
+        let first = coordinator.register(0, 0, None).unwrap();
+        let newcomer = (0, 1);
+        let required_epoch;
+        {
+            let mut state = coordinator.state();
+            required_epoch = state.epoch + 1;
+            state.slots.insert(
+                newcomer,
+                ComputeSlot {
+                    fixed_threads: None,
+                    pool: None,
+                    in_compute: false,
+                    history: Vec::new(),
+                },
+            );
+            state.rebalancing = true;
+            coordinator.rebuild_auto(&mut state);
+
+            // Force the reported race: an existing task begins its next step
+            // before the registering waiter reacquires the coordinator lock.
+            state.slots.get_mut(&(0, 0)).unwrap().in_compute = true;
+            assert_eq!(state.epoch, required_epoch);
+            assert!(!state.rebalancing);
+        }
+
+        let state = coordinator.wait_for_epoch(coordinator.state(), required_epoch);
+        assert!(state.slots[&newcomer].pool.is_some());
+        assert!(state.slots[&(0, 0)].in_compute);
+        drop(state);
+        drop(first);
     }
 }

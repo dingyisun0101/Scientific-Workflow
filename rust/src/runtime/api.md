@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.14.1 subsystem contract.
+This guide documents the `scientific-workflow` 0.14.2 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -29,10 +29,13 @@ by required top-level `study.json.compute.mode`. In `auto`, the coordinator
 divides `study.json.threads` as equally as possible among registered working
 tasks; pending tasks receive no allocation. Starts and finishes request a
 rebalance, active initialization/step calls finish, and new pools are installed
-before the next call. Stable replicate/task order receives any indivisible
-remainder. In `isolated`, each task keeps its authored `resources.threads`
-pool. Dedicated pools prevent one long-lived ensemble from occupying another
-ensemble's workers. Ambient `RAYON_NUM_THREADS` does not override either mode.
+before the next call. Each registering task waits for its requested allocation
+epoch, not for a later coincidental globally idle instant; once that epoch is
+committed, already-running tasks may resume without starving the newcomer.
+Stable replicate/task order receives any indivisible remainder. In `isolated`,
+each task keeps its authored `resources.threads` pool. Dedicated pools prevent
+one long-lived ensemble from occupying another ensemble's workers. Ambient
+`RAYON_NUM_THREADS` does not override either mode.
 
 The global count also initializes one process-wide permit budget shared by all
 replicate schedulers. Auto mode admits at most one execution-unit task per

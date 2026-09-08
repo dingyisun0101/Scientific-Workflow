@@ -1,6 +1,6 @@
 # Workflow architecture
 
-This document describes the reviewed architecture for Rust package 0.14.1 and
+This document describes the reviewed architecture for Rust package 0.14.2 and
 its recording-v7/v8 integration with Python companion 0.4.5.
 
 This is the first-time map of the Workflow repository: what users author, how
@@ -442,10 +442,13 @@ versioned authored-configuration contract. The required positive top-level
 inferred or environment-derived fallback. Required `study.json.compute.mode`
 selects `auto` or `isolated`. Automatic allocation divides the budget equally
 among working execution-unit tasks and excludes pending tasks; execution-unit
-`resources` is forbidden. Isolated allocation requires a positive
-`resources.threads` request on every execution-unit task. Program/Python tasks
-may declare the same positive request no greater than the budget; omission
-means one.
+`resources` is forbidden. Registration is synchronized by committed allocation
+epochs: pool replacement waits for a common execution-unit step boundary, while
+a registering task stops waiting as soon as the epoch containing its pool has
+committed, even if existing tasks resume first. Isolated allocation requires a
+positive `resources.threads` request on every execution-unit task.
+Program/Python tasks may declare the same positive request no greater than the
+budget; omission means one.
 The optional top-level `study.json.seed` is the sole master randomness input
 owned by Workflow. Config parses it once and Study retains it as immutable
 intent; neither layer draws random values. Program/Python tasks may declare a

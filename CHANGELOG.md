@@ -1,5 +1,14 @@
 # Changelog
 
+## Rust 0.14.2 / Python 0.4.5 unchanged — 2026-09-08
+
+- Prevent automatic compute registration from waiting again after its requested
+  pool-allocation epoch has already committed. Existing tasks may resume before
+  the registering thread wakes without starving that admission.
+- Keep the step-boundary pool-replacement invariant and the existing
+  `compute.mode` configuration contract unchanged. Add deterministic coverage
+  for the reported resumed-compute interleaving.
+
 ## Rust 0.14.1 / Python 0.4.5 unchanged — 2026-09-07
 
 - Correct packaged installation snippets and release links to the current

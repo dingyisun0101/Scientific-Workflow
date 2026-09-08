@@ -1,6 +1,6 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.14.1 and Python
+This map is the release-qualification baseline for Rust 0.14.2 and Python
 companion 0.4.5.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
@@ -304,7 +304,10 @@ allocations in the compiled task. Study tests reject automatic execution units
 that do not declare the thread-count-invariant contract before output exists.
 Private compute tests verify equal automatic shares across registered working
 tasks, expansion after a sibling finishes, stable allocation provenance, and
-unchanged isolated allocations. Resource tests separately verify automatic
-working-task admission and fixed-thread accounting. Runtime tests execute units
-inside both automatic and isolated private pools and inspect persisted compute
-metadata.
+unchanged isolated allocations. A deterministic stale-wait regression commits
+a newcomer's requested allocation epoch, resumes an existing compute call before
+the waiter checks coordinator state, and verifies that the completed registration
+does not wait for another globally idle instant. Resource tests separately verify
+automatic working-task admission and fixed-thread accounting. Runtime tests
+execute units inside both automatic and isolated private pools and inspect
+persisted compute metadata.
