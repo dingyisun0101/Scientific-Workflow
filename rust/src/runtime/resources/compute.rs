@@ -54,6 +54,17 @@ pub(crate) struct ComputeError {
 }
 
 impl ComputeCoordinator {
+    pub(crate) fn allocations(&self) -> BTreeMap<(u64, u64), usize> {
+        self.state()
+            .slots
+            .iter()
+            .filter_map(|(key, slot)| {
+                slot.pool
+                    .as_ref()
+                    .map(|pool| (*key, pool.current_num_threads()))
+            })
+            .collect()
+    }
     pub(crate) fn new(total_threads: usize, mode: ComputeMode) -> Self {
         Self {
             inner: Arc::new(CoordinatorInner {

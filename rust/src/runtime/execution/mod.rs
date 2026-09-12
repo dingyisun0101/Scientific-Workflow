@@ -143,6 +143,7 @@ fn execute_with_presentation(
         replicate_count: count,
         task_count_per_replicate,
     })?;
+    resources.publish_allocations(presentation, true)?;
 
     let result = (|| {
         let disk = super::disk::DiskGuard::start(&output, study.disk_pause_at(), presentation)?;
@@ -162,6 +163,7 @@ fn execute_with_presentation(
         result
     })();
 
+    resources.publish_allocations(presentation, true)?;
     let result = if presentation.cancellation_requested()?
         && !matches!(&result, Err(RuntimeError::DiskMonitor { .. }))
     {

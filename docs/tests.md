@@ -330,3 +330,9 @@ on buffered, live, and multiline messages.
 Resource-policy tests cover disk defaults/bypass/range checking, strict NPY
 limits, exact threshold and recovery transitions, independent manual pause,
 headless monitor failure/cancellation, and fixed/auto conversion equivalence.
+
+
+Allocation tests follow automatic 4 → 2+2 → 4 rebalancing across replicates,
+external thread reservations, and final release to zero, checking every total
+against the shared budget. UI tests verify the thread column/Usage counts, full
+page contents, last-page clamping, resizing, and unclipped progress counters.

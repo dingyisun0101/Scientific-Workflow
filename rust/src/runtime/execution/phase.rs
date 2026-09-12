@@ -120,6 +120,9 @@ fn run_phase_inner(
     let mut execution_cancelled = false;
 
     while !pending.is_empty() || !active.is_empty() {
+        context
+            .resources
+            .publish_allocations(context.presentation, false)?;
         if (context.presentation.cancellation_requested()?
             || context.scheduler_cancellation.load(Ordering::Acquire))
             && !execution_cancelled
@@ -287,6 +290,9 @@ fn run_phase_inner(
         }
     }
 
+    context
+        .resources
+        .publish_allocations(context.presentation, true)?;
     if execution_cancelled {
         return Err(RuntimeError::ExecutionCancelled);
     }

@@ -33,6 +33,7 @@ impl TaskStatus {
 
 #[derive(Clone)]
 pub(super) struct TaskSnapshot {
+    pub(super) threads: usize,
     pub(super) identity: String,
     pub(super) program_progress: Option<String>,
     pub(super) replicate: u64,
@@ -49,6 +50,8 @@ pub(super) struct TaskSnapshot {
 
 #[derive(Clone)]
 pub(super) struct DashboardSnapshot {
+    pub(super) active_threads: usize,
+    pub(super) thread_budget: usize,
     pub(super) output: Option<PathBuf>,
     pub(super) replicate_count: u64,
     pub(super) current_phase: usize,
@@ -76,6 +79,7 @@ impl std::ops::Deref for Message {
 }
 
 pub(super) struct DashboardState {
+    thread_budget: usize,
     control: crate::runtime::RunControl,
     active_groups: HashSet<(u64, String)>,
     message_sequence: u64,
@@ -98,6 +102,7 @@ impl DashboardState {
     }
     pub(super) fn with_control(control: crate::runtime::RunControl) -> Self {
         Self {
+            thread_budget: 0,
             control,
             active_groups: HashSet::new(),
             message_sequence: 0,
@@ -117,6 +122,22 @@ impl DashboardState {
     pub(super) fn apply(&mut self, event: &RuntimeEvent<'_>) {
         let now = self.control.now();
         match event {
+            RuntimeEvent::ThreadAllocations {
+                allocations,
+                budget,
+            } => {
+                self.thread_budget = *budget;
+                for task in self.tasks.values_mut() {
+                    task.threads = 0;
+                }
+                for (replicate, identity, threads) in *allocations {
+                    if let Some(task) = self.task_mut(*replicate, identity)
+                        && task.status == TaskStatus::Running
+                    {
+                        task.threads = *threads;
+                    }
+                }
+            }
             RuntimeEvent::TaskPlanned {
                 replicate,
                 phase,
@@ -138,6 +159,7 @@ impl DashboardState {
                 self.tasks.insert(
                     key,
                     TaskSnapshot {
+                        threads: 0,
                         identity: (*identity).to_owned(),
                         program_progress: None,
                         replicate: *replicate,
@@ -378,6 +400,13 @@ impl DashboardState {
             totals[task.status as usize] += 1;
         }
         DashboardSnapshot {
+            active_threads: self
+                .tasks
+                .values()
+                .filter(|task| task.status == TaskStatus::Running)
+                .map(|task| task.threads)
+                .sum(),
+            thread_budget: self.thread_budget,
             totals,
             current_phase: current_phase.unwrap_or(0),
             phase_count,
@@ -445,7 +474,8 @@ impl DashboardState {
 pub(super) fn event_message(event: &RuntimeEvent<'_>) -> Option<String> {
     match event {
         RuntimeEvent::ResourcePolicy { message } => Some(format!("workflow: {message}")),
-        RuntimeEvent::TaskPlanned { .. }
+        RuntimeEvent::ThreadAllocations { .. }
+        | RuntimeEvent::TaskPlanned { .. }
         | RuntimeEvent::TaskProgress { .. }
         | RuntimeEvent::ProgramProgress { .. } => None,
         RuntimeEvent::ProgramLog {
@@ -578,6 +608,14 @@ mod tests {
 
         let snapshot = state.snapshot();
         assert_eq!(snapshot.tasks.len(), 1);
+        state.apply(&RuntimeEvent::ThreadAllocations {
+            allocations: &[(0, "simulate/000000/unit-000000".into(), 3)],
+            budget: 4,
+        });
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.active_threads, 3);
+        assert_eq!(snapshot.thread_budget, 4);
+        assert_eq!(snapshot.tasks[0].threads, 3);
         assert_eq!(snapshot.tasks[0].status, TaskStatus::Running);
         assert_eq!(snapshot.tasks[0].iteration, 25);
         assert_eq!(snapshot.tasks[0].target, Some(100));

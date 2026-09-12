@@ -1060,3 +1060,28 @@ Python's `convert_workflow_dependencies` adds the optional keyword
 `NpyConversionError` before output creation. The Workflow CLI accepts
 `--worker-mode=fixed|auto` with `--workflow-dependencies`; ordinary single-recording
 conversion rejects it. Mode does not change result or reuse identity.
+
+
+## Thread display and task pages
+
+Runtime publishes a complete snapshot of active task allocations, serialized
+across replicate schedulers and sampled at most every 50 ms, with immediate
+publication after activation and at phase/execution completion. Internal pools
+report their actual current Rayon pool sizes, including automatic rebalancing;
+external programs and NPY report their reserved compute allowance. One private
+working-task registry ties display entries to resource-lease lifetime.
+
+The task table includes a `threads` column. Usage shows `THREADS allocated/budget`
+across all running tasks, including tasks on other pages and in other replicates.
+These are allocated compute threads, not measured CPU activity or every OS
+thread. Paused tasks retain their allocation; pending and completed tasks count
+as zero. NPY auto ramp-up reports the reserved allowance. The private
+`ThreadAllocations { allocations, budget }` event carries the whole allocation
+set so UI never combines partial rebalancing updates into an inflated total.
+
+PageUp/PageDown move by the task table's visible data-row capacity, excluding
+borders and its header. The footer no longer replaces a task row. The title
+shows the current page and page count. Resizing recalculates capacity and clamps
+to a valid page; an existing first-row anchor is retained where possible, and a
+disappearing active-group anchor resets to the first page. All rows on a full
+page are usable, and the final page may contain fewer rows.

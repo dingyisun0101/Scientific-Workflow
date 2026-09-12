@@ -6,6 +6,10 @@ use std::path::Path;
 #[derive(Debug)]
 #[cfg_attr(not(feature = "terminal-ui"), allow(dead_code))]
 pub(crate) enum RuntimeEvent<'a> {
+    ThreadAllocations {
+        allocations: &'a [(u64, Box<str>, usize)],
+        budget: usize,
+    },
     ResourcePolicy {
         message: &'a str,
     },

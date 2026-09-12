@@ -48,14 +48,13 @@ pub(super) fn run_task(
 ) -> Result<TaskRunSummary, RuntimeError> {
     let processed_directory = runtime.processed_directory.clone();
     let mut resources = runtime.resources;
-    if task.kind() == TaskKind::ExecutionUnit {
-        resources
-            .activate_compute(runtime.replicate, task.output_ordinal())
-            .map_err(|source| RuntimeError::Task {
-                task: task.identity().to_owned(),
-                source: Box::new(source),
-            })?;
-    }
+    resources
+        .activate(runtime.replicate, task.output_ordinal(), task.identity())
+        .map_err(|source| RuntimeError::Task {
+            task: task.identity().to_owned(),
+            source: Box::new(source),
+        })?;
+    resources.publish_allocations(&runtime.presentation)?;
     let program_seed = task.program_seed_purpose().map(|purpose| {
         let master_seed = runtime
             .master_seed

@@ -51,6 +51,9 @@ These are design proposals until confirmed or explicitly adopted as defaults.
 - Phase 5 implemented the default 95% disk guard, independent pause reasons,
   process-group disk suspension, and NPY phase limits/fixed/auto admission.
   All-feature and headless Rust suites, Clippy, and 35 Python tests passed.
+- Phase 6 implemented current per-task allocations, global Usage totals,
+  full-page navigation, and resize clamping. Allocation/rebalance and rendered
+  paging regressions are included; all-target Rust tests and Clippy passed.
 
 The existing all-feature Rust workspace suite is the starting baseline.
 Use Python 3.14 for companion validation; the shell's default Python is 3.12.

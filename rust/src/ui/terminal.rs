@@ -100,12 +100,20 @@ impl DashboardTerminal {
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
                     if key.code == KeyCode::PageDown {
-                        self.task_offset += 5;
+                        let size = self.terminal.size()?;
+                        let capacity = page_capacity(
+                            dashboard_areas(Rect::new(0, 0, size.width, size.height))[1],
+                        );
+                        self.task_offset = self.task_offset.saturating_add(capacity);
                         self.task_anchor = None;
                         continue;
                     }
                     if key.code == KeyCode::PageUp {
-                        self.task_offset = self.task_offset.saturating_sub(5);
+                        let size = self.terminal.size()?;
+                        let capacity = page_capacity(
+                            dashboard_areas(Rect::new(0, 0, size.width, size.height))[1],
+                        );
+                        self.task_offset = self.task_offset.saturating_sub(capacity);
                         self.task_anchor = None;
                         continue;
                     }
@@ -131,15 +139,16 @@ impl DashboardTerminal {
     }
 
     pub(super) fn draw(&mut self, snapshot: &DashboardSnapshot) -> io::Result<()> {
-        if let Some(anchor) = &self.task_anchor
-            && let Some(index) = snapshot
+        if let Some(anchor) = &self.task_anchor {
+            self.task_offset = snapshot
                 .tasks
                 .iter()
                 .position(|task| (task.replicate, &task.identity) == (anchor.0, &anchor.1))
-        {
-            self.task_offset = index;
+                .unwrap_or(0);
         }
-        self.task_offset = self.task_offset.min(snapshot.tasks.len().saturating_sub(1));
+        let size = self.terminal.size()?;
+        let capacity = page_capacity(dashboard_areas(Rect::new(0, 0, size.width, size.height))[1]);
+        self.task_offset = page_offset(self.task_offset, snapshot.tasks.len(), capacity);
         self.task_anchor = snapshot
             .tasks
             .get(self.task_offset)
@@ -152,18 +161,17 @@ impl DashboardTerminal {
         self.tick = self.tick.wrapping_add(1);
         self.terminal.draw(|frame| {
             let area = frame.area();
-            let [header, tasks, messages, usage_area, command_area] = Layout::vertical([
-                Constraint::Length(if area.height >= 24 { 6 } else { 5 }),
-                Constraint::Min(4),
-                Constraint::Length(if area.height >= 24 { 7 } else { 5 }),
-                Constraint::Length(3),
-                Constraint::Length(3),
-            ])
-            .areas(area);
+            let [header, tasks, messages, usage_area, command_area] = dashboard_areas(area);
             render_header(frame, header, snapshot);
             render_tasks(frame, tasks, snapshot, tick, task_offset);
             render_messages(frame, messages, snapshot);
-            render_usage(frame, usage_area, usage);
+            render_usage(
+                frame,
+                usage_area,
+                usage,
+                snapshot.active_threads,
+                snapshot.thread_budget,
+            );
             render_command(
                 frame,
                 command_area,
@@ -175,6 +183,24 @@ impl DashboardTerminal {
         })?;
         Ok(())
     }
+}
+
+fn dashboard_areas(area: Rect) -> [Rect; 5] {
+    Layout::vertical([
+        Constraint::Length(if area.height >= 24 { 6 } else { 5 }),
+        Constraint::Min(4),
+        Constraint::Length(if area.height >= 24 { 7 } else { 5 }),
+        Constraint::Length(3),
+        Constraint::Length(3),
+    ])
+    .areas(area)
+}
+
+fn page_capacity(area: Rect) -> usize {
+    usize::from(area.height.saturating_sub(3)).max(1)
+}
+fn page_offset(offset: usize, count: usize, capacity: usize) -> usize {
+    (offset / capacity).min(count.saturating_sub(1) / capacity) * capacity
 }
 
 impl Drop for DashboardTerminal {
@@ -278,53 +304,35 @@ fn render_tasks(
     tick: usize,
     offset: usize,
 ) {
-    let header = Row::new(["task", "status", "progress", "elapsed / ETA"]).style(
+    let header = Row::new(["task", "threads", "status", "progress", "elapsed / ETA"]).style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
     );
     let available = usize::from(area.height.saturating_sub(3));
     let widths = task_columns(area.width, &snapshot.tasks);
-    let mut rows = snapshot
+    let rows = snapshot
         .tasks
         .iter()
         .skip(offset)
         .take(available)
-        .map(|task| task_row(task, tick, snapshot.now, usize::from(widths[2])))
+        .map(|task| task_row(task, tick, snapshot.now, usize::from(widths[3])))
         .collect::<Vec<_>>();
-    if snapshot.tasks.len().saturating_sub(offset) > available && available > 0 {
-        rows.truncate(available.saturating_sub(1));
-        rows.push(Row::new([
-            Cell::from(format!(
-                "… {} more tasks",
-                snapshot.tasks.len() - offset - rows.len()
-            )),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(""),
-        ]));
-    }
     let table = Table::new(rows, widths.map(Constraint::Length))
         .header(header)
         .column_spacing(1)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(task_panel_title(snapshot)),
-        );
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " Tasks · page {}/{} · {} tasks · PgUp/PgDn ",
+            offset / page_capacity(area) + 1,
+            snapshot.tasks.len().max(1).div_ceil(page_capacity(area)),
+            snapshot.tasks.len()
+        )));
     frame.render_widget(table, area);
 }
 
-fn task_panel_title(snapshot: &DashboardSnapshot) -> String {
-    format!(
-        " Active groups · {} tasks · PgUp/PgDn · full outcomes in log.txt ",
-        snapshot.tasks.len()
-    )
-}
-
-fn task_columns(width: u16, tasks: &[TaskSnapshot]) -> [u16; 4] {
-    // Reserve borders and three separators, then protect the complete counter.
-    let available = width.saturating_sub(5);
+fn task_columns(width: u16, tasks: &[TaskSnapshot]) -> [u16; 5] {
+    // Reserve borders and four separators, then protect the complete counter.
+    let available = width.saturating_sub(6);
     let required = tasks
         .iter()
         .filter(|task| task.kind == "execution_unit")
@@ -338,6 +346,8 @@ fn task_columns(width: u16, tasks: &[TaskSnapshot]) -> [u16; 4] {
     )
     .expect("progress width is bounded by the terminal area");
     let remaining = available - progress;
+    let threads = remaining.min(7);
+    let remaining = remaining - threads;
     let status = remaining.min(12);
     let remaining = remaining - status;
     let timing = if remaining >= TIMING_WIDTH + 8 {
@@ -345,7 +355,7 @@ fn task_columns(width: u16, tasks: &[TaskSnapshot]) -> [u16; 4] {
     } else {
         0
     };
-    [remaining - timing, status, progress, timing]
+    [remaining - timing, threads, status, progress, timing]
 }
 
 fn progress_count(task: &TaskSnapshot) -> String {
@@ -376,6 +386,11 @@ fn task_row(task: &TaskSnapshot, tick: usize, now: Instant, progress_width: usiz
             task.replicate, task.phase
         ))
         .style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from(if task.status == TaskStatus::Running {
+            task.threads.to_string()
+        } else {
+            "0".into()
+        }),
         Cell::from(task.status.label()).style(status_style),
         Cell::from(progress).style(Style::default().fg(Color::Cyan)),
         Cell::from(timing),
@@ -512,11 +527,19 @@ fn render_messages(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashbo
     );
 }
 
-fn render_usage(frame: &mut ratatui::Frame<'_>, area: Rect, usage: UsageSnapshot) {
+fn render_usage(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    usage: UsageSnapshot,
+    threads: usize,
+    budget: usize,
+) {
     let value = |percent: Option<f64>| {
         percent.map_or_else(|| "--".to_owned(), |percent| format!("{percent:5.1}%"))
     };
     let line = Line::from(vec![
+        Span::styled("THREADS ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!("{threads}/{budget}   ")),
         Span::styled("CPU ", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(value(usage.cpu_percent)),
         Span::raw("   "),
@@ -624,6 +647,8 @@ mod tests {
                         ram_percent: Some(50.0),
                         disk_percent: Some(75.25),
                     },
+                    4,
+                    8,
                 );
             })
             .unwrap();
@@ -635,6 +660,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.contains("Usage"));
+        assert!(text.contains("THREADS 4/8"));
         assert!(text.contains("CPU  12.5%"));
         assert!(text.contains("RAM  50.0%"));
         assert!(text.contains("DISK  75.2%"));
@@ -671,8 +697,45 @@ mod progress_tests {
     use super::*;
     use ratatui::backend::TestBackend;
 
+    #[test]
+    fn pages_use_the_rendered_capacity_and_clamp_after_resize() {
+        let area = Rect::new(0, 0, 120, 8);
+        assert_eq!(page_capacity(area), 5);
+        assert_eq!(page_offset(usize::MAX, 12, 5), 10);
+        assert_eq!(page_offset(10, 12, 8), 8);
+        assert_eq!(page_offset(10, 0, 5), 0);
+        let mut snapshot = super::super::state::DashboardState::new().snapshot();
+        snapshot.tasks = (0..12)
+            .map(|index| {
+                let mut value = task(1, 2);
+                value.label = format!("item-{index:02}");
+                value
+            })
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        for offset in [0, 5, 10] {
+            terminal
+                .draw(|frame| render_tasks(frame, frame.area(), &snapshot, 0, offset))
+                .unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            for index in 0..12 {
+                assert_eq!(
+                    rendered.contains(&format!("item-{index:02}")),
+                    (offset..(offset + 5).min(12)).contains(&index)
+                );
+            }
+        }
+    }
+
     fn task(iteration: u64, target: u64) -> TaskSnapshot {
         TaskSnapshot {
+            threads: 2,
             identity: "ensemble".into(),
             program_progress: None,
             replicate: 0,
