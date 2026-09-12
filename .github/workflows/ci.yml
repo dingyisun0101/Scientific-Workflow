@@ -36,7 +36,7 @@ jobs:
           example_workflow_version=$(python -c 'import tomllib; print(tomllib.load(open("examples/dependency_pipeline/Cargo.toml", "rb"))["dependencies"]["scientific-workflow"])')
           python -m venv /tmp/workflow-example-env
           /tmp/workflow-example-env/bin/python -m pip install "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v${example_workflow_version}#subdirectory=python"
-          PATH=/tmp/workflow-example-env/bin:$PATH cargo run -p workflow-dependency-pipeline --locked
+          PATH=/tmp/workflow-example-env/bin:$PATH python3 scripts/run_dashboard_check.py examples/dependency_pipeline cargo run -p workflow-dependency-pipeline --locked
       - name: Document workspace
         env:
           RUSTDOCFLAGS: -D warnings

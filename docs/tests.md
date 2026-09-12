@@ -377,3 +377,11 @@ PTY test exercises typed pause/resume, disk reminders and rejected resume,
 paging, resizing, cancellation, exit, and exact terminal restoration.
 Noninteractive facade tests preserve existing output even with `--clean`.
 No production headless observer or plain renderer remains.
+
+The pause/timeout integration allows a 1-second active deadline and pauses for
+1.2 seconds. The longer margin avoids the previously observed 80-ms deadline
+flake on shared CI runners while still proving paused time is excluded.
+Release examples run their real dashboard through
+`scripts/run_dashboard_check.py`, which types exit after a terminal outcome
+and checks terminal restoration. This harness is for qualification; users
+launch inside screen/tmux.

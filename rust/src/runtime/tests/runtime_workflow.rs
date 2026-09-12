@@ -1071,6 +1071,10 @@ sleep 0.25
 #[test]
 fn pause_freezes_task_and_phase_timeouts_and_start_precedes_progress() {
     use std::sync::{Arc, Mutex};
+    // Keep the pause longer than either deadline while allowing shared CI hosts
+    // ample active time for task admission and filesystem setup.
+    const DEADLINE_MS: u64 = 1000;
+    const PAUSE: Duration = Duration::from_millis(1200);
     struct Observer {
         control: crate::runtime::RunControl,
         events: Arc<Mutex<Vec<&'static str>>>,
@@ -1086,7 +1090,7 @@ fn pause_freezes_task_and_phase_timeouts_and_start_precedes_progress() {
                     self.control.pause(true);
                     let control = self.control.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(120));
+                        std::thread::sleep(PAUSE);
                         control.pause(false);
                     });
                 }
@@ -1106,8 +1110,8 @@ fn pause_freezes_task_and_phase_timeouts_and_start_precedes_progress() {
             Ok(())
         }
     }
-    let mut declaration = execution_unit_study("runtime-slow", Some(80));
-    declaration["phases"]["run"]["timeout_ms"] = 80.into();
+    let mut declaration = execution_unit_study("runtime-slow", Some(DEADLINE_MS));
+    declaration["phases"]["run"]["timeout_ms"] = DEADLINE_MS.into();
     let project = Project::new(
         declaration,
         serde_json::json!({"runtime-slow":{"sleep_ms":5}}),
@@ -1122,7 +1126,7 @@ fn pause_freezes_task_and_phase_timeouts_and_start_precedes_progress() {
         })
     })
     .unwrap();
-    assert!(started.elapsed() >= Duration::from_millis(120));
+    assert!(started.elapsed() >= PAUSE);
     assert!(observed.lock().unwrap().contains(&"progress"));
 }
 

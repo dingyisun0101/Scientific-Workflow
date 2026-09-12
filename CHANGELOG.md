@@ -1,6 +1,6 @@
 # Changelog
 
-## Rust 0.15.0 / Python 0.5.0 — unreleased
+## Rust 0.15.0 / Python 0.5.0 — 2026-09-12
 
 - Use UTC timestamp execution names and timestamp every physical live-log line.
 - Add guarded `--clean` startup with shared/exclusive project ownership.
@@ -15,7 +15,6 @@
 - Show actual pool allocations and global thread reservations in the dashboard;
   page tasks by visible capacity and clamp after terminal resizing.
 - Refresh approved dependencies, replacing fs2 with synchronous fs4 1.1.0.
-- Final validation, publication, and downstream updates are in progress.
 
 ## Rust 0.14.2 / Python 0.4.5 unchanged — 2026-09-08
 

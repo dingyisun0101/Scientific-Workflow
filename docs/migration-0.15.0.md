@@ -1,8 +1,7 @@
 # Rust 0.15.0 / Python 0.5.0 migration
 
-This is an unreleased coordinated update. Final validation and
-publication remain pending. Scientific APIs and recording formats 7/8 are
-unchanged; runtime policies and finalized JSON handling change.
+This coordinated release preserves scientific APIs and recording formats 7/8.
+Runtime policies, dashboard requirements, and finalized JSON handling change.
 
 ## Disk guard
 

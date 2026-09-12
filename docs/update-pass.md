@@ -81,8 +81,8 @@ to avoid transient inherited-lock retention during concurrent child launches.
 At the earlier candidate checkpoint, dependency agreement and publication were
 pending. Agreement is now complete and Phase 2 is validated. The subsequent
 behavioral corrections listed above must pass final validation before release.
-No release tag or package publication has occurred yet. Push release changes
-and tags before publication, then update consumers to the online versions.
+That checkpoint had no release tag or package publication. The release sequence
+is to push changes and tags before publication, then update consumers online.
 
 ### Final decision implementation
 
@@ -96,3 +96,8 @@ Validation passed: 156 Rust unit tests plus 20 integration tests, three
 doctests, warnings-denied Clippy/rustdoc, explicit fixed/auto NPY handoff,
 35 Python source tests and 35 installed-wheel tests, and wheel/sdist checks.
 The PTY integration covers the required dashboard and disk-resume rejection.
+
+The behavior phase is pushed as `57164a5`. Cargo publication dry-run verified
+the 110-file crate against registry dependencies. Final release preparation
+removes candidate notices, stabilizes the pause test deadline, and runs examples
+in a real terminal. Publication follows a green release-commit CI run.

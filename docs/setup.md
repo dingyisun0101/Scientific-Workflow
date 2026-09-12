@@ -1,9 +1,5 @@
 # Linux setup and operation
 
-> **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
-> Final validation and publication are pending; published examples still
-> consume Rust 0.14.2 with Python 0.4.5.
-
 ## Required platform and layout
 
 **LINUX IS THE ONLY SUPPORTED PLATFORM. Windows and macOS are future work.**

@@ -1,9 +1,5 @@
 # Scientific Workflow Python utilities
 
-> **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
-> Final validation and publication are pending; published examples still
-> consume Rust 0.14.2 with Python 0.4.5.
-
 > **BREAKING IMPORT CHANGE — 0.4.4:** use `scientific_workflow`; the old
 > `scientific_workflow_reader` namespace is not provided.
 > **LINUX ONLY. Python 3.14+ REQUIRED.** Activate the environment containing
