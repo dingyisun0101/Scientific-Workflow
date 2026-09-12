@@ -477,7 +477,12 @@ successfully completed with matching captured inputs. `active_phases` and
 `reuse_from` may differ between the captured and current study snapshots.
 `$npy.exclude_streams` may also differ when the imported phase is neither
 `$npy` nor a direct or transitive consumer of its output. NPY and its consumers
-retain exact filter matching; all other captured inputs still must match.
+retain exact filter matching. Work-relevant inputs still must match: parameters,
+schemas, seeds, programs/scripts, arguments, replicate count, and phase dependencies.
+Compute/thread budgets, scheduling, timeouts, failure policy, persistence buffering,
+disk policy, and Python environment-manager settings are operational provenance
+and do not invalidate completed work. If a resource setting changes scientific
+meaning, express that choice in scientific parameters.
 A reused phase cannot depend on a phase selected to execute again. Missing,
 failed, incompatible, or ambiguous legacy inputs fail without launching work.
 Programs and `$npy` receive the original completed recording/artifact paths.
@@ -503,3 +508,17 @@ The reserved `$npy` phase passes exact stream exclusions as repeated
 only. All included data retains ordinary validation, locking, cancellation,
 worker limits, and atomic publication. Filter identity is checked before reusing
 member outputs or an existing batch; different filters never silently reuse data.
+
+
+## JSON lifecycle guarantees
+
+Source configuration is captured once and source edits affect subsequent runs.
+Generated `workflow-config.json` and `workflow-dependencies.json` are checked
+against their captured byte digests during execution and before program success;
+a changed or missing file fails the task. Runtime control JSON is mutable IPC.
+Active recording/program metadata may advance to one terminal state, which the
+writer cannot subsequently replace. Completed task receipts and NPY batch
+manifests use publication that refuses replacement. A verified matching NPY
+batch is returned without changing its manifest; conflicting inputs or corruption
+require a new output directory. These guarantees do not prevent external file
+modification; input monitoring detects changes present at a check.

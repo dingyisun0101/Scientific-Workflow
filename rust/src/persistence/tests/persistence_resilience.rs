@@ -281,6 +281,16 @@ fn program_status_transitions_leave_one_terminal_metadata_file() {
         serde_json::from_slice(&fs::read(completed.run().join("program.json")).unwrap()).unwrap();
     assert_eq!(metadata["status"], "complete");
     assert_eq!(metadata["exit_code"], 0);
+    let committed = fs::read(completed.run().join("program.json")).unwrap();
+    assert!(matches!(
+        session.complete(Some(0)),
+        Err(PersistenceError::RecordingFinished)
+    ));
+    session.fail(Some(7), "late failure must not rewrite completed JSON");
+    assert_eq!(
+        fs::read(completed.run().join("program.json")).unwrap(),
+        committed
+    );
 
     let failed = TempWorkspace::new("program-failed");
     let launch = ProgramLaunch {
@@ -299,6 +309,33 @@ fn program_status_transitions_leave_one_terminal_metadata_file() {
         serde_json::from_slice(&fs::read(failed.run().join("program.json")).unwrap()).unwrap();
     assert_eq!(metadata["status"], "failed");
     assert_eq!(metadata["reason"], "expected program failure");
+}
+
+#[test]
+fn changed_program_input_json_cannot_commit_success() {
+    let workspace = TempWorkspace::new("program-input-modified");
+    let launch = ProgramLaunch {
+        executable: Path::new("program"),
+        args: &[],
+        kind: "program",
+        python_script: None,
+        python_environment_manager: None,
+        seed_derivation: None,
+        threads: 1,
+    };
+    let mut session =
+        ProgramPersistenceSession::start(workspace.run(), b"{}", b"[]", launch).unwrap();
+    fs::write(session.config_path(), b"{ }").unwrap();
+    assert!(
+        session
+            .complete(Some(0))
+            .unwrap_err()
+            .to_string()
+            .contains("immutable program input JSON")
+    );
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(workspace.run().join("program.json")).unwrap()).unwrap();
+    assert_eq!(metadata["status"], "failed");
 }
 
 #[test]

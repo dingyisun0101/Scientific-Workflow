@@ -39,6 +39,14 @@ These are design proposals until confirmed or explicitly adopted as defaults.
 
 ## Validation and release
 
+### Progress
+
+- Phase 1 review pushed as `c1daaea`; package agreement remains pending.
+- Phase 2 dependency changes are deferred pending that agreement. Independent
+  implementation proceeds with the existing published dependency versions.
+- Phase 3 implemented using the proposed snapshot contract. Rust all-target
+  tests and Clippy passed; all 35 Python tests passed under Python 3.14.
+
 The existing all-feature Rust workspace suite is the starting baseline.
 Use Python 3.14 for companion validation; the shell's default Python is 3.12.
 Keep subsystem API guides and architecture synchronized in each phase.

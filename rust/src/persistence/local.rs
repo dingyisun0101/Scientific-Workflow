@@ -623,6 +623,9 @@ impl RecordingManifest {
         terminal_metadata: Map<String, Value>,
     ) -> Result<(), PersistenceError> {
         let mut current = lock_metadata(&self.metadata);
+        if !matches!(current.status, RecordingStatus::Running) {
+            return Err(PersistenceError::RecordingFinished);
+        }
         let mut candidate = current.clone();
         candidate.status = status;
         candidate.timing.finalized_at_utc = Some(finalized_at_utc);

@@ -820,8 +820,29 @@ Runtime's private reuse adapter determines whether each imported phase is NPY
 itself or has NPY among its transitive prerequisites. Persistence uses that
 semantic fact to retain NPY filter identity for those phases and to ignore only
 `study.phases.$npy.exclude_streams` for other imported phases. Phase declarations,
-scientific parameters, seeds, and all other captured inputs remain strict.
+scientific parameters, schemas, seeds, programs/scripts, arguments, replicate count,
+and phase dependencies remain strict. Resource allocation, scheduling, timeouts,
+failure policy, persistence buffering, disk policy, and Python launcher environment
+settings are retained as provenance but excluded from reuse comparison.
 The same comparator handles committed receipts and legacy evidence. This
 permits adding checkpoint exclusions after preparation without rewriting source
 receipts, weakening completion checks, or reusing stale converted data. Python
 remains 0.4.5 and recording formats remain unchanged.
+
+
+## JSON immutability
+
+Config captures source JSON once; source edits apply to future loads. Runtime
+never rereads source configuration during execution. Persistence retains SHA-256
+digests of exact generated program input JSON bytes; Runtime checks them once
+per second while a program runs and Persistence checks them before committing
+success. Modification or removal fails the task. This detects observed changes,
+not arbitrary transient edits restored between checks.
+
+Active recording metadata and program status use atomic lifecycle updates;
+terminal transitions cannot be repeated. Runtime control JSON remains mutable
+for pause/cancel IPC. Successful task receipts and Python NPY batch manifests
+are published without replacing existing files. A matching completed NPY batch
+is verified and returned unchanged; conflicting or corrupt batches fail without
+rewriting the committed JSON. These are writer/API guarantees, not protection
+against an external process with filesystem write permission.

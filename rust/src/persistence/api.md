@@ -367,3 +367,17 @@ This applies equally to committed receipts and legacy matching. All other
 snapshot values, scientific parameters, workload identities, completion markers,
 and member provenance still must match. NPY and its consumers retain exact
 filter identity; source receipts and recordings are never rewritten.
+
+
+## JSON lifecycle guarantees
+
+Source configuration is captured once and source edits affect subsequent runs.
+Generated `workflow-config.json` and `workflow-dependencies.json` are checked
+against their captured byte digests during execution and before program success;
+a changed or missing file fails the task. Runtime control JSON is mutable IPC.
+Active recording/program metadata may advance to one terminal state, which the
+writer cannot subsequently replace. Completed task receipts and NPY batch
+manifests use publication that refuses replacement. A verified matching NPY
+batch is returned without changing its manifest; conflicting inputs or corruption
+require a new output directory. These guarantees do not prevent external file
+modification; input monitoring detects changes present at a check.

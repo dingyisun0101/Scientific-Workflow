@@ -54,11 +54,38 @@ fn comparable(mut snapshot: Value, npy_filter_is_input: bool) -> Value {
     if let Some(study) = snapshot.get_mut("study").and_then(Value::as_object_mut) {
         study.remove("active_phases");
         study.remove("reuse_from");
+        // Allocation and host policy are provenance, not scientific inputs.
+        for key in ["threads", "compute", "disk", "persistence"] {
+            study.remove(key);
+        }
+        if let Some(replicates) = study.get_mut("replicates").and_then(Value::as_object_mut) {
+            replicates.remove("scheduling");
+            replicates.remove("failure_policy");
+            if replicates.is_empty() {
+                study.remove("replicates");
+            }
+        }
         if let Some(phases) = study.get_mut("phases").and_then(Value::as_object_mut) {
             for phase in phases.values_mut().filter_map(Value::as_object_mut) {
+                for key in [
+                    "max_concurrency",
+                    "start_interval_ms",
+                    "timeout_ms",
+                    "failure_policy",
+                    "threads",
+                    "mode",
+                ] {
+                    phase.remove(key);
+                }
                 if let Some(tasks) = phase.get_mut("tasks").and_then(Value::as_array_mut) {
                     for task in tasks.iter_mut().filter_map(Value::as_object_mut) {
                         task.remove("active");
+                        task.remove("resources");
+                        task.remove("timeout_ms");
+                        if let Some(python) = task.get_mut("python").and_then(Value::as_object_mut)
+                        {
+                            python.remove("environment");
+                        }
                     }
                 }
             }
@@ -312,7 +339,9 @@ pub(crate) fn write_result(
         .open(&temporary)?;
     file.write_all(&serde_json::to_vec_pretty(&result)?)?;
     file.sync_all()?;
-    fs::rename(temporary, path)?;
+    // Publish without replacing a receipt created by another writer.
+    fs::hard_link(&temporary, &path)?;
+    fs::remove_file(temporary)?;
     File::open(directory)?.sync_all()?;
     Ok(())
 }
@@ -385,7 +414,6 @@ mod tests {
         let original = snapshot();
         for (pointer, value) in [
             ("/study/seed", json!(1102)),
-            ("/study/threads", json!(4)),
             (
                 "/config/parameters.json/model/maximum_iterations",
                 json!(36001),
@@ -416,5 +444,21 @@ mod tests {
                 comparable(resumed.clone(), npy_filter_is_input)
             );
         }
+    }
+
+    #[test]
+    fn operational_settings_do_not_invalidate_completed_science() {
+        let original = snapshot();
+        let mut changed = original.clone();
+        changed["study"]["threads"] = json!(8);
+        changed["study"]["compute"] = json!({"mode": "isolated"});
+        changed["study"]["disk"] = json!({"pause_at_percent": null});
+        changed["study"]["persistence"] = json!({"chunk_target_mb": 8});
+        let phase = &mut changed["study"]["phases"]["prepare"];
+        phase["max_concurrency"] = json!(4);
+        phase["timeout_ms"] = json!(1000);
+        phase["tasks"][0]["resources"] = json!({"threads": 3});
+        phase["tasks"][0]["timeout_ms"] = json!(500);
+        assert_eq!(comparable(original, true), comparable(changed, true));
     }
 }

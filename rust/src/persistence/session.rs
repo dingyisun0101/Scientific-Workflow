@@ -5,6 +5,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::observation::BoundObservationPlan;
 use crate::state::SystemState;
@@ -143,6 +144,8 @@ impl MemberRecordingProvenance {
 
 /// Durable workspace prepared for one external-program or Python task.
 pub(crate) struct ProgramPersistenceSession {
+    input_checksums: [[u8; 32]; 2],
+    finished: bool,
     directory: PathBuf,
     artifacts: PathBuf,
     config_path: PathBuf,
@@ -199,6 +202,11 @@ impl ProgramPersistenceSession {
         sync_directory(&directory, "synchronize prepared program workspace entries")?;
 
         let mut session = Self {
+            input_checksums: [
+                Sha256::digest(config_json).into(),
+                Sha256::digest(dependencies_json).into(),
+            ],
+            finished: false,
             directory,
             artifacts,
             config_path,
@@ -251,7 +259,33 @@ impl ProgramPersistenceSession {
     }
 
     pub(crate) fn complete(&mut self, exit_code: Option<i32>) -> Result<(), PersistenceError> {
+        if let Err(error) = self.validate_inputs() {
+            self.fail(exit_code, &error.to_string());
+            return Err(error);
+        }
         self.write_status("complete", exit_code, None)
+    }
+
+    /// Verifies exact captured bytes, including JSON whitespace, before success.
+    pub(crate) fn validate_inputs(&self) -> Result<(), PersistenceError> {
+        for (path, expected) in [&self.config_path, &self.dependencies_path]
+            .into_iter()
+            .zip(&self.input_checksums)
+        {
+            let bytes = fs::read(path).map_err(|source| PersistenceError::Io {
+                operation: "verify immutable program input JSON",
+                path: path.clone(),
+                source,
+            })?;
+            let actual: [u8; 32] = Sha256::digest(&bytes).into();
+            if actual != *expected {
+                return Err(PersistenceError::InvalidMetadata {
+                    path: path.clone(),
+                    reason: "immutable program input JSON was modified".into(),
+                });
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn fail(&mut self, exit_code: Option<i32>, reason: &str) {
@@ -264,6 +298,9 @@ impl ProgramPersistenceSession {
         exit_code: Option<i32>,
         reason: Option<&str>,
     ) -> Result<(), PersistenceError> {
+        if self.finished {
+            return Err(PersistenceError::RecordingFinished);
+        }
         let metadata_path = self.directory.join("program.json");
         let temporary_path = self.directory.join(".program.json.tmp");
         let value = serde_json::json!({
@@ -296,6 +333,7 @@ impl ProgramPersistenceSession {
             path: metadata_path.clone(),
             source,
         })?;
+        self.finished = status != "running";
         sync_directory(&self.directory, "synchronize program metadata transition")
     }
 }

@@ -311,3 +311,11 @@ does not wait for another globally idle instant. Resource tests separately verif
 automatic working-task admission and fixed-thread accounting. Runtime tests
 execute units inside both automatic and isolated private pools and inspect
 persisted compute metadata.
+
+
+## Update pass: identity and JSON
+
+Reuse tests distinguish operational resource/scheduling policy from scientific
+inputs. Persistence tests reject changed program-input bytes (including JSON
+whitespace) and repeated terminal status updates. Python retry tests require
+both member and batch JSON bytes and modification times to remain unchanged.

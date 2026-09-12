@@ -107,8 +107,13 @@ pub(super) fn execute(
     );
     let outcome = (|| -> TaskResult<Option<std::process::ExitStatus>> {
         let mut last_pause = control.paused();
+        let mut last_input_check = Instant::now();
         let mut parked = None;
         loop {
+            if last_input_check.elapsed() >= Duration::from_secs(1) {
+                persistence.validate_inputs()?;
+                last_input_check = Instant::now();
+            }
             if cancellation.load(Ordering::Acquire) || control.cancelled() {
                 if cooperative {
                     let _ = write_control(&control_path, false, true);

@@ -381,8 +381,11 @@ class ParallelBatchTests(unittest.TestCase):
                 self.assertEqual(serial, parallel)
                 member = root / "parallel/member-000000/manifest.json"
                 before = member.stat().st_mtime_ns
+                batch_path = root / "parallel/manifest.json"
+                batch_before = (batch_path.stat().st_mtime_ns, batch_path.read_bytes())
                 self.assertEqual(convert_workflow_dependencies(deps, root / "parallel"), parallel)
                 self.assertEqual(member.stat().st_mtime_ns, before)
+                self.assertEqual((batch_path.stat().st_mtime_ns, batch_path.read_bytes()), batch_before)
                 bad = sources[1] / "streams/signal/chunk-000000.jsonl"
                 original = bad.read_bytes()
                 bad.write_bytes(original + b"corrupt")

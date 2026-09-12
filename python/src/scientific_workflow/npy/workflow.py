@@ -18,7 +18,7 @@ from ..reporting import log, progress
 from .format import (
     MANIFEST_FILE, NPY_BATCH_FORMAT, NPY_FORMAT, NpyConversionError,
     _existing, _manifest_exclusions, _normalize_exclusions, _read_json,
-    _sha256, _write_json, open_npy_conversion,
+    _sha256, _write_json, open_npy_conversion, open_npy_batch,
 )
 from .progress import _drain_updates, _stage, _worker_context, _worker_setup
 from .writing import _convert_stream
@@ -170,10 +170,18 @@ def convert_workflow_dependencies(
     results = {}
     with _publisher(output):
         batch_path = output / MANIFEST_FILE
-        if batch_path.is_file() and _manifest_exclusions(_read_json(batch_path)) != excluded:
-            raise NpyConversionError("conflicting stream exclusions for existing NPY batch")
-        # Remove stale batch success while retaining individually verified members.
-        (output / MANIFEST_FILE).unlink(missing_ok=True)
+        if batch_path.exists():
+            batch = open_npy_batch(output)
+            if _manifest_exclusions(batch.manifest) != excluded:
+                raise NpyConversionError("conflicting stream exclusions for existing NPY batch")
+            if len(batch.members) != len(recordings) or any(
+                member.manifest.get("source_recording") != str(recording)
+                or member.manifest.get("source_metadata_checksum") != _sha256(recording / "metadata.json")
+                for member, recording in zip(batch.members, recordings)
+            ):
+                raise NpyConversionError("conflicting inputs for immutable NPY batch")
+            log(f"conversion reused: {len(recordings)} members", level="success")
+            return dict(batch.manifest)
         pool = None
         updates = None
         control_path = None
@@ -238,7 +246,7 @@ def convert_workflow_dependencies(
                     stream.write("\n")
                     stream.flush()
                     os.fsync(stream.fileno())
-                os.replace(temporary, output / MANIFEST_FILE)
+                os.link(temporary, output / MANIFEST_FILE)
             finally:
                 temporary.unlink(missing_ok=True)
             log(f"conversion complete: {len(results)} members in {_control.active_time() - started:.3f} active seconds", level="success")

@@ -433,7 +433,12 @@ successfully completed with matching captured inputs. `active_phases` and
 `reuse_from` may differ between the captured and current study snapshots.
 `$npy.exclude_streams` may also differ when the imported phase is neither
 `$npy` nor a direct or transitive consumer of its output. NPY and its consumers
-retain exact filter matching; all other captured inputs still must match.
+retain exact filter matching. Work-relevant inputs still must match: parameters,
+schemas, seeds, programs/scripts, arguments, replicate count, and phase dependencies.
+Compute/thread budgets, scheduling, timeouts, failure policy, persistence buffering,
+disk policy, and Python environment-manager settings are operational provenance
+and do not invalidate completed work. If a resource setting changes scientific
+meaning, express that choice in scientific parameters.
 A reused phase cannot depend on a phase selected to execute again. Missing,
 failed, incompatible, or ambiguous legacy inputs fail without launching work.
 Programs and `$npy` receive the original completed recording/artifact paths.
