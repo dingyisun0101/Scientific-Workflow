@@ -41,3 +41,10 @@ Do not rename or relocate required files. External programs use the resolved
 runtime snapshots supplied by Workflow; reading raw source parameters bypasses
 sweep/override resolution. Domain adapters may wrap numeric series, but should
 retain the verified conversion object rather than repeatedly reopening it.
+
+
+The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
+one thread to each execution-unit task within the global two-thread budget.
+The example consumes its manifest's published Workflow version; its Python
+companion must come from the matching release tag. During a pending Workflow
+release, use a separate Python environment for these published-version examples.

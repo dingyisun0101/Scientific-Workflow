@@ -1,5 +1,9 @@
 # Scientific Workflow Python utilities
 
+> **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
+> Dependency agreement and publication are pending; published examples still
+> consume Rust 0.14.2 with Python 0.4.5.
+
 > **BREAKING IMPORT CHANGE — 0.4.4:** use `scientific_workflow`; the old
 > `scientific_workflow_reader` namespace is not provided.
 > **LINUX ONLY. Python 3.14+ REQUIRED.** Activate the environment containing
@@ -27,7 +31,7 @@ Use the online [Python environment setup guide](https://github.com/dingyisun0101
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.14.2#subdirectory=python"
+  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.15.0#subdirectory=python"
 ```
 
 Python 3.14 or newer is required. The core reader has no runtime dependencies.
@@ -36,10 +40,10 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 
 ```bash
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.14.2#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.15.0#subdirectory=python"
 ```
 
-This guide documents release 0.4.5.
+This guide documents release 0.5.0.
 
 ## Reading a recording
 
@@ -92,15 +96,15 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.4.5 supports
+Release 0.5.0 supports
 `scientific-workflow-jsonl` format versions 7 and 8, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
 
 The normative language-neutral contract is the repository's
-[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.2/protocol/recording-v7.md),
+[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/protocol/recording-v7.md),
 with a strict structural JSON Schema and a package
-[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.2/protocol/compatibility.md). This package is the
+[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/protocol/compatibility.md). This package is the
 v7/v8 reader listed there; it does not expose a supported writer.
 
 The record containers cannot be reassigned and their value mappings are

@@ -1,7 +1,7 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.14.2 and Python
-companion 0.4.5.
+This map is the release-qualification baseline for Rust 0.15.0 and Python
+companion 0.5.0.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
 indices and task identities, completed-program and legacy-unit reuse, chained
@@ -336,3 +336,33 @@ Allocation tests follow automatic 4 → 2+2 → 4 rebalancing across replicates,
 external thread reservations, and final release to zero, checking every total
 against the shared budget. UI tests verify the thread column/Usage counts, full
 page contents, last-page clamping, resizing, and unclipped progress counters.
+
+
+## Rust 0.15.0 / Python 0.5.0 candidate qualification
+
+The coordinated NPY test needs an installed Python 3.14+ companion with the NPY
+extra, so the ordinary Rust suite marks it ignored. CI and release qualification
+run it explicitly after installing the matching companion:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --lib coordinated_npy_handoff --locked -- --ignored
+```
+
+It exercises real Rust recordings through the synthesized Python invocation in
+both fixed and auto mode, checking the phase thread allowance and completed
+two-member batch. Runtime cleanup integration verifies replacement of arbitrary
+old output after preflight without changing configuration. Lock tests also cover
+an active run reaching the same output directory through a symlink alias.
+
+The private examples still consume published Workflow 0.14.2 until 0.15.0 is
+online. Both were run successfully with the published Python 0.4.5 companion in
+a separate environment. CI derives their companion release tag from the example
+Cargo manifest instead of mixing it with the local candidate's Python version.
+The examples now declare the required isolated compute mode and per-unit thread
+requests explicitly. This repairs a pre-existing runnable-example preflight gap.
+
+The candidate's 35 Python tests passed against its installed wheel from outside
+the source tree. Wheel and source-archive metadata checks passed. A Linux PTY
+check exercised thread display, pause/resume, page keys, resizing, explicit exit,
+and exact terminal-attribute restoration. Headless execution remains covered by
+the separate no-default-features suite.

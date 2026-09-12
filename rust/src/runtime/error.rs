@@ -30,7 +30,7 @@ pub enum RuntimeError {
     },
     /// The selected active Python environment lacks compatible Workflow tools.
     #[error(
-        "Python prerequisites failed for `{interpreter}`: {reason}. Activate a Python 3.14+ environment with scientific-workflow[npy] 0.4.4 before launching Workflow"
+        "Python prerequisites failed for `{interpreter}`: {reason}. Activate a Python 3.14+ environment with scientific-workflow[npy] 0.5.0 before launching Workflow"
     )]
     PythonPrerequisite {
         /// Selected interpreter, inherited from the active environment.

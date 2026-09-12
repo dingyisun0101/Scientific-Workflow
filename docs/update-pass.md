@@ -35,7 +35,8 @@ This instruction replaces the temporary-branch/merge workflow for this pass.
 - Every physical line in `log.txt` receives an absolute UTC timestamp.
 
 The disk recovery, NPY target, and JSON boundary questions were sent to the user.
-These are design proposals until confirmed or explicitly adopted as defaults.
+The implementation adopted the documented snapshot, automatic recovery, and
+worker-count defaults while the preference questions remained unanswered.
 
 ## Validation and release
 
@@ -61,3 +62,22 @@ Keep subsystem API guides and architecture synchronized in each phase.
 Follow `docs/tests.md` for final validation. Publish only after successfully
 pushing release changes and tags. The macro crate is a public upstream and
 requires separate permission for source or manifest changes.
+
+
+### Release candidate checkpoint
+
+Rust 0.15.0 and Python 0.5.0 are prepared, with migration guidance and breaking
+notices. Phase 7 validation covers all-feature/headless Rust tests, explicit
+coordinated NPY handoff, Clippy, rustdoc/doctests, Rust package verification,
+installed Python wheel tests, package metadata, real terminal behavior, and both
+published-version examples. The final validation result is recorded in the
+commit handoff. The output lease explicitly unlocks before descriptor teardown
+to avoid transient inherited-lock retention during concurrent child launches.
+
+Phase 2 and the publication/downstream portion of Phase 7 remain outstanding:
+no dependency-list agreement has arrived. Registry dependency versions are
+unchanged, the macro crate has not been edited, no release tag has been created,
+and neither candidate package has been published. Once the package list is
+agreed, upgrade and validate dependencies, push that phase, remove candidate
+notices, push release changes and tags, publish, then update consumers to the
+online versions. Do not treat this checkpoint as a completed release.

@@ -1,7 +1,7 @@
 # Two-dimensional attractor study
 
 This example is the release-qualified end-to-end project for
-`scientific-workflow` 0.13.9 and `scientific-workflow` 0.4.4.
+Rust `scientific-workflow` 0.14.2 and Python companion 0.4.5.
 
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all
@@ -72,7 +72,7 @@ one-millisecond per-step presentation delay. With the supplied workload, a
 normal run takes roughly 16 seconds, subject to machine and IO overhead.
 Top-level `study.json.workflow_schema: 1` selects the supported authored
 configuration grammar. Top-level `study.json.threads` is the required global
-compute budget. Workflow owns one shared execution-unit pool of that size; the
+compute budget. This example uses isolated compute with one thread per unit; the
 phase's `max_concurrency` controls task admission and does not create additional
 model pools. The synthesized `$npy` converter and final Python plot task each
 reserve one external-task thread after simulation has completed.
@@ -227,3 +227,10 @@ per-step demonstration delay belongs to the example implementation itself.
 `wf_configs/` root, reserved documents, named-state path, execution-unit
 selector, typed constants, Python environment, and `$npy` launcher before
 Runtime creates output.
+
+
+The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
+one thread to each execution-unit task within the global two-thread budget.
+The example consumes its manifest's published Workflow version; its Python
+companion must come from the matching release tag. During a pending Workflow
+release, use a separate Python environment for these published-version examples.

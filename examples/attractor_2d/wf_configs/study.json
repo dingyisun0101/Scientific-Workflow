@@ -1,5 +1,9 @@
 {
-  "active_phases": [0,1,2],
+  "active_phases": [
+    0,
+    1,
+    2
+  ],
   "workflow_schema": 1,
   "threads": 4,
   "paths": {
@@ -12,17 +16,24 @@
       "tasks": [
         {
           "execution_unit": "attractor",
-          "state": "attractor"
+          "state": "attractor",
+          "resources": {
+            "threads": 1
+          }
         }
       ],
       "max_concurrency": 3,
       "start_interval_ms": 2000
     },
     "$npy": {
-      "after": ["simulate"]
+      "after": [
+        "simulate"
+      ]
     },
     "plot": {
-      "after": ["$npy"],
+      "after": [
+        "$npy"
+      ],
       "tasks": [
         {
           "python": {
@@ -34,5 +45,8 @@
         }
       ]
     }
+  },
+  "compute": {
+    "mode": "isolated"
   }
 }

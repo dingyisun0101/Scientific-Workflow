@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.14.2 subsystem contract.
+This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -291,7 +291,7 @@ This non-exhaustive enum reports failures after a valid Study is available:
 - `Reuse { phase: String, path: PathBuf, reason: String }`: required completed outputs are missing, failed, or incompatible; detected before output creation.
 
 - `PythonPrerequisite { interpreter: PathBuf, reason: String }`: the active
-  interpreter cannot import the coordinated Python 0.4.5 tools, NumPy and
+  interpreter cannot import the coordinated Python 0.5.0 tools, NumPy and
   threadpoolctl, or is older than Python 3.14. The error names the selected
   interpreter and setup remedy. Runtime probes before scientific work and output
   creation; Study::load performs no subprocess probe.
@@ -504,7 +504,7 @@ use the maximum final member iteration. ETA uses this same task clock; member
 recordings and completion policies are unchanged.
 
 The reserved `$npy` phase passes exact stream exclusions as repeated
-`--exclude-stream=NAME` arguments to Python 0.4.5. Filtering affects conversion
+`--exclude-stream=NAME` arguments to Python 0.5.0. Filtering affects conversion
 only. All included data retains ordinary validation, locking, cancellation,
 worker limits, and atomic publication. Filter identity is checked before reusing
 member outputs or an existing batch; different filters never silently reuse data.
@@ -532,8 +532,8 @@ reuse, and Python preflight, it clears `<project-root>/output` before creating
 the execution. Other arguments remain application-owned. `runtime::execute`
 does not inspect process arguments and does not clean.
 
-All runs hold a shared advisory lock on the project directory; a cleaning run
-holds it exclusively until execution and presentation finish. Cleanup rejects
+All runs hold shared advisory locks on the project and output directories; a
+cleaning run holds both exclusively until execution and presentation finish. Cleanup rejects
 an output-root symlink/file, a conflicting active run, or a target containing
 configuration, a resolved executable/script, a selected reuse source, or any
 imported task/member/NPY directory. Child symlinks are removed without following
@@ -566,7 +566,7 @@ startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
 
-Execution units pause between host calls; NPY/Python cooperative tasks acknowledge
+Execution units pause between host calls; cooperative NPY tasks acknowledge
 through control IPC. For non-cooperative Unix programs, disk pause sends SIGSTOP
 to the owned process group and recovery sends SIGCONT. Cleanup resumes a stopped
 group before terminating it. Disk enforcement is sampled and cooperative calls

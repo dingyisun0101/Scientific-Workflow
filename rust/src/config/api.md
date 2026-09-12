@@ -1,6 +1,6 @@
 # Config API
 
-This guide documents the `scientific-workflow` 0.14.2 subsystem contract.
+This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by

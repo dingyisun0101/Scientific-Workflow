@@ -1,12 +1,19 @@
 # Scientific Workflow Rust crate
 
-> **BREAKING COMPUTE UPDATE: Rust 0.14.2 / Python 0.4.5 unchanged.**
-> Every study now requires `compute.mode`, and automatic allocation requires
-> each linked execution unit to declare `THREAD_COUNT_INVARIANT = true`.
-> This supersedes the single shared Rayon pool used by Rust 0.13.x. There is
-> no compatibility default or alias: choose `auto` for equal dynamic shares
-> among working tasks or `isolated` for fixed per-task `resources.threads`.
-> Recording formats and the Python companion remain unchanged.
+> **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
+> Dependency agreement and publication are pending; published examples still
+> consume Rust 0.14.2 with Python 0.4.5.
+
+> **BREAKING UPDATE: Rust 0.15.0 / Python 0.5.0.**
+> This supersedes the Rust 0.14.x / Python 0.4.x runtime-policy generation.
+> Output disk usage now pauses work at 95% by default; configure
+> `disk.pause_at_percent` or explicitly use `null` to bypass it. Execution names
+> use UTC timestamps, operational settings no longer invalidate completed work,
+> and finalized JSON cannot be rewritten through Workflow's writers.
+> `--clean` clears the complete output directory after guarded preflight.
+> `$npy` requires companion 0.5.0 for fixed/auto worker admission.
+> No aliases restore the old execution names or JSON rewrite behavior.
+> Scientific APIs and recording formats 7/8 remain compatible.
 
 Rust 0.13.11 and Python 0.4.5 correct ensemble progress to the maximum member
 iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["checkpoint"]}`.
@@ -24,7 +31,7 @@ Existing 0.13.x projects should follow the
 
 ## New to Workflow?
 
-Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.2/rust/getting-started.md). It
+Start with the [beginner getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/rust/getting-started.md). It
 explains Serde and deserialization, Rust traits, and the difference between a
 study, phase, task, execution unit, member, and state before presenting a
 minimal runnable project.
@@ -148,14 +155,14 @@ For application development, prefer the published release:
 
 ```toml
 [dependencies]
-scientific-workflow = "0.14.2"
+scientific-workflow = "0.15.0"
 serde = { version = "1", features = ["derive"] }
 ```
 
 Or add the same dependencies from the command line:
 
 ```bash
-cargo add scientific-workflow@0.14.2
+cargo add scientific-workflow@0.15.0
 cargo add serde --features derive
 ```
 
@@ -171,7 +178,7 @@ optional converter:
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.14.2#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.15.0#subdirectory=python"
 ```
 
 The default `terminal-ui` feature preserves the automatic interactive
@@ -180,7 +187,7 @@ enabled by every dependency declaration above. Reader-only or explicitly
 headless integrations can omit Crossterm and Ratatui:
 
 ```toml
-scientific-workflow = { version = "0.14.2", default-features = false }
+scientific-workflow = { version = "0.15.0", default-features = false }
 ```
 
 In that explicit mode, `run` and `runtime::execute` use a silent observer: they
@@ -191,7 +198,7 @@ an embedding choice, not an alternate end-user interface.
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
 into an execution unit's typed `Constants` value. Application code normally
-adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.2/rust/getting-started.md#why-serde-and-deserialize-appear)
+adds `#[derive(Deserialize)]`; the [getting-started guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/rust/getting-started.md#why-serde-and-deserialize-appear)
 shows the exact JSON-to-Rust mapping and explains why
 `#[serde(deny_unknown_fields)]` is recommended.
 
@@ -247,7 +254,7 @@ include:
 - exposing a different public orchestration or execution unit contract;
 - implementing a custom persistence backend, writer lifecycle, or incompatible
   recording format (the current cross-language contract is the repository's
-  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.2/protocol/recording-v7.md));
+  [recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/protocol/recording-v7.md));
 - replacing scheduling, cancellation, output-layout, or UI policy;
 - carrying organization-specific changes that cannot be contributed upstream;
   or
@@ -934,7 +941,7 @@ See [`src/state/api.md`](src/state/api.md),
 [`src/ui/api.md`](src/ui/api.md),
 [`src/error/api.md`](src/error/api.md),
 [`src/prelude/api.md`](src/prelude/api.md), and the repository
-[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.14.2/docs/architecture.md).
+[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/docs/architecture.md).
 
 ## Validation
 
@@ -1003,8 +1010,8 @@ reuse, and Python preflight, it clears `<project-root>/output` before creating
 the execution. Other arguments remain application-owned. `runtime::execute`
 does not inspect process arguments and does not clean.
 
-All runs hold a shared advisory lock on the project directory; a cleaning run
-holds it exclusively until execution and presentation finish. Cleanup rejects
+All runs hold shared advisory locks on the project and output directories; a
+cleaning run holds both exclusively until execution and presentation finish. Cleanup rejects
 an output-root symlink/file, a conflicting active run, or a target containing
 configuration, a resolved executable/script, a selected reuse source, or any
 imported task/member/NPY directory. Child symlinks are removed without following
@@ -1037,7 +1044,7 @@ startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
 
-Execution units pause between host calls; NPY/Python cooperative tasks acknowledge
+Execution units pause between host calls; cooperative NPY tasks acknowledge
 through control IPC. For non-cooperative Unix programs, disk pause sends SIGSTOP
 to the owned process group and recovery sends SIGCONT. Cleanup resumes a stopped
 group before terminating it. Disk enforcement is sampled and cooperative calls

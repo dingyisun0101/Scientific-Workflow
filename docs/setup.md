@@ -1,5 +1,9 @@
 # Linux setup and operation
 
+> **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
+> Dependency agreement and publication are pending; published examples still
+> consume Rust 0.14.2 with Python 0.4.5.
+
 ## Required platform and layout
 
 **LINUX IS THE ONLY SUPPORTED PLATFORM. Windows and macOS are future work.**
@@ -23,11 +27,11 @@ for the manifest grammar and a first Rust execution unit.
 # Activate your existing Python 3.14+ environment first.
 python -m pip install --upgrade pip
 python -m pip install \
-  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.14.2#subdirectory=python'
-cargo add scientific-workflow@0.14.2
+  'scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.15.0#subdirectory=python'
+cargo add scientific-workflow@0.15.0
 ```
 
-The tag contains Rust 0.14.2 and Python companion 0.4.5. Without `$npy` or NumPy
+The tag contains Rust 0.15.0 and Python companion 0.5.0. Without `$npy` or NumPy
 readback, omit `[npy]` to install the dependency-free Python core. Cargo only
 installs Rust dependencies. **Workflow does not create, activate, or populate a
 Python environment. You must install the Python package yourself.**
@@ -41,7 +45,7 @@ cargo run --release
 ```
 
 `$npy` selects `python3` from the active `PATH`, preserving virtual-environment
-identity. Preflight verifies Python 3.14+, companion 0.4.5, NumPy, and threadpoolctl
+identity. Preflight verifies Python 3.14+, companion 0.5.0, NumPy, and threadpoolctl
 before scientific work begins. A project-local `python3` does not override this
 selection. An explicitly configured generic Python program retains its separate
 interpreter configuration. See [Config](../rust/src/config/api.md).
@@ -82,7 +86,7 @@ for progress and standard logging. Imports do not configure the root logger.
 ## Troubleshooting and reference
 
 - Prerequisite error: activate the correct environment and repeat the import
-  command above; verify `python3` resolves inside it and reports 0.4.5.
+  command above; verify `python3` resolves inside it and reports 0.5.0.
 - Missing dependency: check phase prerequisites and selector filters.
   Ambiguous dependency: add phase/task/member filters; `.optional()` also rejects
   multiple matches. Do not silently choose the first result.

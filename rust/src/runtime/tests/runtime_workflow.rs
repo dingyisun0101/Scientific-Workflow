@@ -59,6 +59,69 @@ fn disk_pause_before_admission_can_be_cancelled_without_a_dashboard() {
     assert_eq!(started.load(Ordering::Relaxed), 0);
 }
 
+#[cfg(unix)]
+#[test]
+fn cleaning_run_replaces_previous_output_after_preflight() {
+    let project = Project::new(
+        serde_json::json!({"phases":{"run":{"tasks":[{"program":"/bin/true"}]}}}),
+        serde_json::json!({}),
+    );
+    let first = execute(Study::load(project.path()).unwrap()).unwrap();
+    let config = fs::read(project.path().join("wf_configs/study.json")).unwrap();
+    fs::create_dir_all(project.path().join("output/arbitrary/nested")).unwrap();
+    fs::write(project.path().join("output/arbitrary/nested/data"), "old").unwrap();
+    let second =
+        crate::composition::execute_options(Study::load(project.path()).unwrap(), true).unwrap();
+    assert!(!first.output_directory().exists());
+    assert!(!project.path().join("output/arbitrary").exists());
+    assert!(second.output_directory().is_dir());
+    assert_eq!(
+        fs::read_dir(project.path().join("output")).unwrap().count(),
+        1
+    );
+    assert_eq!(
+        fs::read(project.path().join("wf_configs/study.json")).unwrap(),
+        config
+    );
+}
+
+#[test]
+#[ignore = "requires the installed coordinated Python 3.14+ companion with the npy extra"]
+fn coordinated_npy_handoff_respects_phase_limits_and_worker_modes() {
+    for (threads, mode) in [(1, "fixed"), (2, "auto")] {
+        let mut study = execution_unit_study("runtime-ensemble", None);
+        study["seed"] = 42.into();
+        study["threads"] = 4.into();
+        study["phases"]["$npy"] =
+            serde_json::json!({"after":["run"], "threads":threads, "mode":mode});
+        let project = Project::new(study, serde_json::json!({"runtime-ensemble":{}}));
+        let summary = execute(Study::load(project.path()).unwrap()).unwrap();
+        let task = &summary.replicates()[0].phases()[1].tasks()[0];
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &fs::read(task.output_directory().join("program.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata["threads"], threads);
+        assert!(
+            metadata["args"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(format!("--worker-mode={mode}")))
+        );
+        let TaskRunKind::Npy {
+            processed_directory,
+            ..
+        } = task.kind()
+        else {
+            panic!("expected NPY task")
+        };
+        let batch: serde_json::Value =
+            serde_json::from_slice(&fs::read(processed_directory.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(batch["members"].as_array().unwrap().len(), 2);
+    }
+}
+
 struct Project(PathBuf);
 
 impl Project {

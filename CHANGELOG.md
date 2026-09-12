@@ -1,5 +1,20 @@
 # Changelog
 
+## Rust 0.15.0 / Python 0.5.0 — unreleased
+
+- Use UTC timestamp execution names and timestamp every physical live-log line.
+- Add guarded `--clean` startup with shared/exclusive project ownership.
+- Exclude operational settings from scientific reuse comparison; detect changes
+  to captured program input JSON and prevent repeated terminal JSON publication.
+- Preserve matching completed NPY batch manifests unchanged on retry.
+- Default to a 95% output-disk pause, configurable or bypassable in `study.json`,
+  with automatic recovery and independent manual pause. Enforce without a UI.
+- Add NPY phase thread limits and fixed/gradual automatic worker admission.
+- Show actual pool allocations and global thread reservations in the dashboard;
+  page tasks by visible capacity and clamp after terminal resizing.
+- Dependency upgrades, final publication, and downstream version updates await
+  agreement on the package list in `upstream.md`.
+
 ## Rust 0.14.2 / Python 0.4.5 unchanged — 2026-09-08
 
 - Prevent automatic compute registration from waiting again after its requested

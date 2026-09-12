@@ -9,6 +9,7 @@ use super::error::RuntimeError;
 /// Shared project lease for ordinary runs, exclusive for a cleaning run.
 pub(crate) struct OutputLease {
     _project: File,
+    _output: File,
 }
 
 impl OutputLease {
@@ -19,7 +20,35 @@ impl OutputLease {
         } else {
             FileExt::try_lock_shared(&file)?;
         }
-        Ok(Self { _project: file })
+        let root = project.join("output");
+        if clean
+            && fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(std::io::Error::other(
+                "--clean refuses a symlink output root",
+            ));
+        }
+        fs::create_dir_all(&root)?;
+        let output = File::open(&root)?;
+        if clean {
+            FileExt::try_lock_exclusive(&output)?;
+        } else {
+            FileExt::try_lock_shared(&output)?;
+        }
+        Ok(Self {
+            _project: file,
+            _output: output,
+        })
+    }
+}
+
+impl Drop for OutputLease {
+    fn drop(&mut self) {
+        // A concurrently spawning child can briefly retain duplicated file
+        // descriptions before exec closes them. Release ownership explicitly
+        // so a following run never depends on that child's scheduling.
+        let _ = FileExt::unlock(&self._output);
+        let _ = FileExt::unlock(&self._project);
     }
 }
 
@@ -136,6 +165,17 @@ mod tests {
         assert!(first.is_dir());
         let running = OutputLease::acquire(&project, false).unwrap();
         assert!(OutputLease::acquire(&project, true).is_err());
+        #[cfg(unix)]
+        {
+            let alias = project.join("alias-project");
+            fs::create_dir(&alias).unwrap();
+            std::os::unix::fs::symlink(&root, alias.join("output")).unwrap();
+            let aliased_run = OutputLease::acquire(&alias, false).unwrap();
+            drop(running);
+            assert!(OutputLease::acquire(&project, true).is_err());
+            drop(aliased_run);
+        }
+        #[cfg(not(unix))]
         drop(running);
         let cleaning = OutputLease::acquire(&project, true).unwrap();
         assert!(OutputLease::acquire(&project, false).is_err());

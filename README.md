@@ -1,12 +1,19 @@
 # Scientific Workflow
 
-> **BREAKING COMPUTE UPDATE: Rust 0.14.2 / Python 0.4.5 unchanged.**
-> Every study now requires `compute.mode`, and automatic allocation requires
-> each linked execution unit to declare `THREAD_COUNT_INVARIANT = true`.
-> This supersedes the single shared Rayon pool used by Rust 0.13.x. There is
-> no compatibility default or alias: choose `auto` for equal dynamic shares
-> among working tasks or `isolated` for fixed per-task `resources.threads`.
-> Recording formats and the Python companion remain unchanged.
+> **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
+> Dependency agreement and publication are pending; published examples still
+> consume Rust 0.14.2 with Python 0.4.5.
+
+> **BREAKING UPDATE: Rust 0.15.0 / Python 0.5.0.**
+> This supersedes the Rust 0.14.x / Python 0.4.x runtime-policy generation.
+> Output disk usage now pauses work at 95% by default; configure
+> `disk.pause_at_percent` or explicitly use `null` to bypass it. Execution names
+> use UTC timestamps, operational settings no longer invalidate completed work,
+> and finalized JSON cannot be rewritten through Workflow's writers.
+> `--clean` clears the complete output directory after guarded preflight.
+> `$npy` requires companion 0.5.0 for fixed/auto worker admission.
+> No aliases restore the old execution names or JSON rewrite behavior.
+> Scientific APIs and recording formats 7/8 remain compatible.
 
 Rust 0.13.11 and Python 0.4.5 correct ensemble progress to the maximum member
 iteration/target and support `"$npy":{"after":["evolve"],"exclude_streams":["checkpoint"]}`.
@@ -159,8 +166,8 @@ reuse, and Python preflight, it clears `<project-root>/output` before creating
 the execution. Other arguments remain application-owned. `runtime::execute`
 does not inspect process arguments and does not clean.
 
-All runs hold a shared advisory lock on the project directory; a cleaning run
-holds it exclusively until execution and presentation finish. Cleanup rejects
+All runs hold shared advisory locks on the project and output directories; a
+cleaning run holds both exclusively until execution and presentation finish. Cleanup rejects
 an output-root symlink/file, a conflicting active run, or a target containing
 configuration, a resolved executable/script, a selected reuse source, or any
 imported task/member/NPY directory. Child symlinks are removed without following
@@ -193,7 +200,7 @@ startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
 
-Execution units pause between host calls; NPY/Python cooperative tasks acknowledge
+Execution units pause between host calls; cooperative NPY tasks acknowledge
 through control IPC. For non-cooperative Unix programs, disk pause sends SIGSTOP
 to the owned process group and recovery sends SIGCONT. Cleanup resumes a stopped
 group before terminating it. Disk enforcement is sampled and cooperative calls

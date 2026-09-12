@@ -1,7 +1,7 @@
 # Workflow architecture
 
-This document describes the reviewed architecture for Rust package 0.14.2 and
-its recording-v7/v8 integration with Python companion 0.4.5.
+This document describes the reviewed architecture for Rust package 0.15.0 and
+its recording-v7/v8 integration with Python companion 0.5.0.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -827,8 +827,8 @@ failure policy, persistence buffering, disk policy, and Python launcher environm
 settings are retained as provenance but excluded from reuse comparison.
 The same comparator handles committed receipts and legacy evidence. This
 permits adding checkpoint exclusions after preparation without rewriting source
-receipts, weakening completion checks, or reusing stale converted data. Python
-remains 0.4.5 and recording formats remain unchanged.
+receipts, weakening completion checks, or reusing stale converted data.
+Recording formats remain unchanged.
 
 
 ## JSON immutability
@@ -857,8 +857,8 @@ reuse, and Python preflight, it clears `<project-root>/output` before creating
 the execution. Other arguments remain application-owned. `runtime::execute`
 does not inspect process arguments and does not clean.
 
-All runs hold a shared advisory lock on the project directory; a cleaning run
-holds it exclusively until execution and presentation finish. Cleanup rejects
+All runs hold shared advisory locks on the project and output directories; a
+cleaning run holds both exclusively until execution and presentation finish. Cleanup rejects
 an output-root symlink/file, a conflicting active run, or a target containing
 configuration, a resolved executable/script, a selected reuse source, or any
 imported task/member/NPY directory. Child symlinks are removed without following
@@ -891,7 +891,7 @@ startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
 
-Execution units pause between host calls; NPY/Python cooperative tasks acknowledge
+Execution units pause between host calls; cooperative NPY tasks acknowledge
 through control IPC. For non-cooperative Unix programs, disk pause sends SIGSTOP
 to the owned process group and recovery sends SIGCONT. Cleanup resumes a stopped
 group before terminating it. Disk enforcement is sampled and cooperative calls
