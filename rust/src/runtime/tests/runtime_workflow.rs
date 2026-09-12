@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::runtime::{
     PresentationFailure, RuntimeError, RuntimeEvent, RuntimeObserver, TaskRunKind, TaskRunSummary,
-    execute, execute_with_observer,
+    execute_with_observer,
 };
 use crate::state::{StateTime, SystemState, SystemStateSchema};
 use crate::study::Study;
@@ -19,8 +19,16 @@ use super::execution::task_exceeded_timeout;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+// Exercise Runtime and durable UI logging without taking over the test runner's
+// terminal. This observer constructor exists only in test builds.
+pub(crate) fn execute(study: Study) -> Result<super::RunSummary, RuntimeError> {
+    execute_with_observer(study, || {
+        crate::ui::UiSession::testing().map_err(|error| Box::new(error) as _)
+    })
+}
+
 #[test]
-fn disk_pause_before_admission_can_be_cancelled_without_a_dashboard() {
+fn disk_pause_before_admission_can_be_cancelled() {
     use std::sync::{Arc, atomic::AtomicUsize};
     struct Observer {
         control: super::RunControl,
@@ -70,8 +78,12 @@ fn cleaning_run_replaces_previous_output_after_preflight() {
     let config = fs::read(project.path().join("wf_configs/study.json")).unwrap();
     fs::create_dir_all(project.path().join("output/arbitrary/nested")).unwrap();
     fs::write(project.path().join("output/arbitrary/nested/data"), "old").unwrap();
-    let second =
-        crate::composition::execute_options(Study::load(project.path()).unwrap(), true).unwrap();
+    let second = super::execute_with_observer_options(
+        Study::load(project.path()).unwrap(),
+        || crate::ui::UiSession::testing().map_err(|error| Box::new(error) as _),
+        true,
+    )
+    .unwrap();
     assert!(!first.output_directory().exists());
     assert!(!project.path().join("output/arbitrary").exists());
     assert!(second.output_directory().is_dir());
@@ -572,7 +584,6 @@ fn execution_units_run_inside_the_required_study_pool() {
         metadata["terminal_metadata"]["compute"]["allocations"][0]["threads"],
         3
     );
-    #[cfg(feature = "terminal-ui")]
     {
         let live_log = fs::read_to_string(summary.output_directory().join("log.txt")).unwrap();
         assert!(live_log.contains("workflow: started"));

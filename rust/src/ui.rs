@@ -2,7 +2,7 @@
 //!
 //! Applications configure and drive no UI objects. Runtime owns the observer
 //! and lifecycle-fact contracts; crate composition attaches UI's inferred
-//! automatic dashboard or noninteractive plain renderer.
+//! required interactive dashboard.
 
 mod command;
 mod live_log;

@@ -1,6 +1,6 @@
 # Rust 0.15.0 / Python 0.5.0 migration
 
-This is an unreleased coordinated update. The dependency decision and final
+This is an unreleased coordinated update. Final validation and
 publication remain pending. Scientific APIs and recording formats 7/8 are
 unchanged; runtime policies and finalized JSON handling change.
 
@@ -8,10 +8,11 @@ unchanged; runtime policies and finalized JSON handling change.
 
 Existing studies default to pausing when the output filesystem is 95% occupied.
 Set `"disk": {"pause_at_percent": 90}` to change the threshold, or explicitly
-set the value to `null` to bypass monitoring. Recovery automatically releases
-the disk pause two percentage points below the threshold, preserving a separate
-manual pause. The guard works in headless runs. Sampling failure cancels active
-work and returns `RuntimeError::DiskMonitor`.
+set the value to `null` to bypass monitoring. Free space until usage is at or
+below two percentage points under the threshold, then type `resume` and Enter
+in the dashboard. Recovery alone never resumes work. The dashboard reminds you
+when paused and when space is sufficient; early resume attempts are rejected.
+Sampling failure cancels active work and returns `RuntimeError::DiskMonitor`.
 
 Disk pause is sampled, not a disk-space reservation. Execution units finish their
 current host call before pausing; NPY workers use cooperative checkpoints, and
@@ -20,10 +21,11 @@ non-cooperative Unix programs are suspended through their owned process groups.
 ## NPY resources
 
 The reserved `$npy` phase accepts `threads` bounded by the global study budget
-and `mode` equal to `fixed` (default) or `auto`. Auto increases admission from one
+and `mode` equal to `auto` (default) or `fixed`. Auto increases admission from one
 worker by one every 250 ms of active time. It targets the worker limit, not CPU
 or RAM utilization. Install the coordinated Python 0.5.0 companion with its NPY
-extra; older companion CLIs do not support the worker-mode argument.
+extra. Leave mode and worker limits unset unless you need to reserve resources
+for other tasks; older companion CLIs do not support the worker-mode argument.
 
 ## Cleanup and execution identity
 
@@ -60,6 +62,13 @@ committed batch manifest. There are no compatibility aliases restoring the old
 execution names or finalized JSON rewrite behavior.
 
 ## Dashboard
+
+The dashboard is now required for execution. Start `tmux new -s workflow` or
+`screen -S workflow` and run your application inside the session. Terminal stdin
+and stderr are required; redirected/noninteractive execution fails before
+output creation or cleanup. Remove explicit `terminal-ui` feature selections;
+that feature and the headless/plain execution paths have been removed. Reader
+and configuration-loading APIs still work without executing a study.
 
 Task rows show allocated threads, and Usage shows the total across all active
 replicates against the global budget. This is allocation, not CPU utilization or

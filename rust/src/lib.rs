@@ -112,7 +112,6 @@ pub mod runtime;
 pub mod state;
 pub mod study;
 pub mod task;
-#[cfg(feature = "terminal-ui")]
 mod ui;
 
 pub use error::WorkflowError;
@@ -136,6 +135,8 @@ pub use task::{
 /// project ownership. Symlink output roots, active runs, and reuse sources in
 /// that directory are rejected. Other application arguments are ignored.
 /// Embedding through [`runtime::execute`] never reads process arguments.
+/// Execution requires terminal stdin and stderr for the dashboard; use screen
+/// or tmux. A missing terminal fails before output creation or cleanup.
 pub fn run(project_root: &std::path::Path) -> Result<(), WorkflowError> {
     let study = study::Study::load(project_root)?;
     let clean = std::env::args_os()

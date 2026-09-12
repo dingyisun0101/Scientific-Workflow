@@ -810,8 +810,8 @@ impl Default for RawDisk {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum RawNpyMode {
-    #[default]
     Fixed,
+    #[default]
     Auto,
 }
 

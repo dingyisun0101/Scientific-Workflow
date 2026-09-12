@@ -19,14 +19,6 @@ pub(crate) fn usage(path: &Path) -> std::io::Result<f64> {
     )
 }
 
-fn next_pause(paused: bool, occupied: f64, threshold: f64) -> bool {
-    if paused {
-        occupied > (threshold - 2.0).max(0.0)
-    } else {
-        occupied >= threshold
-    }
-}
-
 pub(super) struct DiskGuard {
     stop: Option<mpsc::Sender<()>>,
     worker: Option<JoinHandle<Result<(), RuntimeError>>>,
@@ -120,16 +112,8 @@ fn sample(
         path: path.to_path_buf(),
         source,
     })?;
-    let previous = presentation.control.disk_paused();
-    let paused = next_pause(previous, occupied, threshold);
-    if previous != paused {
-        let message = if paused {
-            format!("disk usage {occupied:.2}% reached {threshold:.2}%; auto-pausing")
-        } else {
-            format!("disk usage {occupied:.2}% recovered; disk pause released")
-        };
+    if let Some(message) = presentation.control.sample_disk(occupied, threshold) {
         presentation.publish(RuntimeEvent::ResourcePolicy { message: &message })?;
-        presentation.control.pause_for_disk(paused);
     }
     Ok(())
 }
@@ -139,16 +123,45 @@ mod tests {
     use super::*;
     #[test]
     fn exact_threshold_and_recovery_margin() {
-        assert!(!next_pause(false, 94.99, 95.0));
-        assert!(next_pause(false, 95.0, 95.0));
-        assert!(next_pause(true, 94.0, 95.0));
-        assert!(!next_pause(true, 93.0, 95.0));
-        assert!(!next_pause(true, 0.0, 1.0));
+        let control = RunControl::default();
+        assert!(control.sample_disk(94.99, 95.0).is_none());
+        assert!(!control.paused());
+        assert!(
+            control
+                .sample_disk(95.0, 95.0)
+                .unwrap()
+                .contains("type resume")
+        );
+        let frozen = control.now();
+        assert!(!control.resume());
+        assert!(control.sample_disk(94.0, 95.0).is_none());
+        assert!(!control.resume());
+        assert!(
+            control
+                .sample_disk(93.0, 95.0)
+                .unwrap()
+                .contains("still paused")
+        );
+        assert!(control.disk_paused());
+        assert_eq!(control.now(), frozen);
+        // Recovery can be lost before the command; that must block resumption.
+        assert!(control.sample_disk(94.0, 95.0).unwrap().contains("blocked"));
+        assert!(!control.resume());
+        control.pause(true);
+        control.sample_disk(93.0, 95.0);
+        assert!(control.paused());
+        assert!(control.resume());
+        assert!(!control.paused());
+        assert!(!control.disk_paused());
+        control.sample_disk(1.0, 1.0);
+        control.sample_disk(0.0, 1.0);
+        assert!(control.paused());
+        assert!(control.resume());
         assert!(usage(Path::new("/this-path-does-not-exist/workflow")).is_err());
     }
 
     #[test]
-    fn monitor_errors_cancel_headless_control_and_are_returned_on_join() {
+    fn monitor_errors_cancel_control_and_are_returned_on_join() {
         struct Observer;
         impl super::super::RuntimeObserver for Observer {
             fn publish(

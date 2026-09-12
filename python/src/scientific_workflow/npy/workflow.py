@@ -144,7 +144,7 @@ def convert_workflow_dependencies(
     output_directory: str | Path,
     *,
     exclude_streams: Iterable[str] = (),
-    worker_mode: str = "fixed",
+    worker_mode: str = "auto",
 ) -> dict[str, object]:
     """Convert prerequisites within WORKFLOW_THREADS; publish in stable order.
 
@@ -153,7 +153,7 @@ def convert_workflow_dependencies(
     and are verified/reused on retry. No partial success batch is published.
     Exact-name exclusions apply uniformly to every member and are part of reuse
     identity. Missing names are ignored; excluded chunks are never converted.
-    worker_mode='fixed' admits up to the allowance immediately; 'auto' begins
+    The default worker_mode='auto' ramps gradually. Explicit 'fixed' admits up to the allowance immediately; 'auto' begins
     with one worker and grows by one every 250 ms of active time, up to the same
     allowance. This is a worker-count policy, not CPU or memory feedback.
     """

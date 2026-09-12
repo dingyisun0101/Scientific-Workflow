@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{Study, StudyError};
+use crate::runtime::runtime_workflow_tests::execute;
 use scientific_workflow::prelude::*;
 use scientific_workflow::runtime::TaskRunKind;
-use scientific_workflow::runtime::execute;
 use scientific_workflow::state::StateSchemaProvider;
 use serde::Deserialize;
 
@@ -579,7 +579,11 @@ fn one_study_binds_each_execution_unit_task_to_its_selected_named_state() {
 }
 
 #[test]
-fn crate_level_run_is_the_complete_ordinary_entry_point() {
+fn crate_level_run_requires_a_dashboard_after_config_loading() {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+        return;
+    }
     let project = Project::new(
         r#"{ "active_phases": [0],"phases":{"only":{"tasks":[{"execution_unit":"counter"}]}}}"#,
         r#"{"initial":1,"steps":1}"#,
@@ -587,8 +591,9 @@ fn crate_level_run_is_the_complete_ordinary_entry_point() {
     let study = Study::load(project.path()).unwrap();
     assert_eq!(study.persistence_plan().chunk_target().get(), 64_000_000);
     assert_eq!(study.persistence_plan().queue_capacity().get(), 64_000_000);
-    scientific_workflow::run(project.path()).unwrap();
-    assert!(project.path().join("output").is_dir());
+    let error = scientific_workflow::run(project.path()).unwrap_err();
+    assert!(error.to_string().contains("screen or tmux"));
+    assert!(!project.path().join("output").exists());
 }
 
 #[test]

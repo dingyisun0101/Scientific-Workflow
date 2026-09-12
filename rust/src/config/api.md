@@ -620,11 +620,13 @@ is 95; a finite numeric threshold must be greater than 0 and at most 100. Use
 invalid values are rejected during Config preflight.
 
 Runtime samples the output filesystem before admitting work and every 250 ms
-of wall time. At the threshold it requests a disk pause; it automatically clears
-that reason when usage reaches `max(0, threshold - 2)` percent. A separate manual
-pause remains in force, and manual resume cannot bypass the disk reason. The
-shared active clock freezes while either reason holds. Cancellation wakes
-paused work. These operations also run in headless builds. Sampling or monitor
+of wall time. At the threshold it requests a disk pause and tells the user to
+free space, then type `resume` and Enter. Usage must reach
+`max(0, threshold - 2)` percent before that command can succeed. Recovery alone
+never resumes work: a second reminder and the dashboard status indicate when
+space is sufficient. The explicit command clears the disk and manual pauses;
+an early command is rejected without being queued. The shared active clock
+freezes while either pause holds. Cancellation wakes paused work. Sampling or monitor
 startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
@@ -637,8 +639,9 @@ may take time to return, so the threshold is a pause trigger, not reserved free
 space or a guarantee that in-flight writes cannot fill the filesystem.
 
 The `$npy` phase accepts `"threads": 4` and `"mode": "auto"` (or `"fixed"`).
-Threads default to `study.threads` and must be a positive integer no larger than
-that global limit. Mode defaults to `fixed`; these fields are invalid on ordinary
+Leave the worker limit unset unless reserving resources for other tasks requires
+a lower limit. Threads default to `study.threads` and must be a positive integer no larger than
+that global limit. Mode defaults to `auto`; these fields are invalid on ordinary
 phases. Runtime reserves `min(phase.threads, study.threads, recording_count)`
 permits through the existing shared budget, including across replicates. Each
 conversion worker limits native numerical pools to one thread. Fixed mode admits
@@ -648,7 +651,7 @@ Short batches may finish before reaching the limit. This does not measure CPU
 or RAM utilization, and the full allowance remains reserved during ramp-up.
 
 Python's `convert_workflow_dependencies` adds the optional keyword
-`worker_mode="fixed"`; `"auto"` selects gradual admission. Other values raise
+`worker_mode="auto"`; `"fixed"` selects immediate admission. Other values raise
 `NpyConversionError` before output creation. The Workflow CLI accepts
 `--worker-mode=fixed|auto` with `--workflow-dependencies`; ordinary single-recording
 conversion rejects it. Mode does not change result or reuse identity.

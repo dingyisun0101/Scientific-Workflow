@@ -1,7 +1,7 @@
 # Linux setup and operation
 
 > **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
-> Dependency agreement and publication are pending; published examples still
+> Final validation and publication are pending; published examples still
 > consume Rust 0.14.2 with Python 0.4.5.
 
 ## Required platform and layout
@@ -56,9 +56,20 @@ in that activated environment, then run
 
 ## Execution and diagnostics
 
+Run the application inside `tmux new -s workflow` or `screen -S workflow`.
+The dashboard requires terminal stdin and stderr; redirected or headless runs
+are rejected before output creation or cleanup. Detach from the multiplexer
+when needed and reattach to interact with the dashboard.
+
+Disk usage pauses work at 95% by default. Free space to at most 93%, then type
+`resume` and Enter. Recovery alone never resumes work; the dashboard reminds
+you when space is sufficient. Early resume commands are rejected.
+
 The study `threads` budget is shared across tasks and replicates. `$npy` gets at
 most `min(study threads, distinct source recordings)` worker processes, with one
-native numeric-library thread per worker. There is no user worker-count knob.
+native numeric-library thread per worker. The default `auto` mode ramps from one
+worker by one every 250 ms of active time. Leave `$npy.mode` and `$npy.threads`
+unset unless you need a lower limit to reserve resources for other tasks.
 More workers trade memory for throughput; see [qualification measurements](tests.md).
 
 The dashboard combines active phase groups in plan order. **Completed, failed,

@@ -8,12 +8,14 @@
   to captured program input JSON and prevent repeated terminal JSON publication.
 - Preserve matching completed NPY batch manifests unchanged on retry.
 - Default to a 95% output-disk pause, configurable or bypassable in `study.json`,
-  with automatic recovery and independent manual pause. Enforce without a UI.
-- Add NPY phase thread limits and fixed/gradual automatic worker admission.
+  requiring typed `resume` after disk recovery, with pause and recovery reminders.
+- Default NPY to gradual automatic worker admission, with optional phase limits.
+- Require the dashboard for execution; reject missing terminals before cleanup
+  or output creation and direct users to screen/tmux. Remove headless/plain modes.
 - Show actual pool allocations and global thread reservations in the dashboard;
   page tasks by visible capacity and clamp after terminal resizing.
-- Dependency upgrades, final publication, and downstream version updates await
-  agreement on the package list in `upstream.md`.
+- Refresh approved dependencies, replacing fs2 with synchronous fs4 1.1.0.
+- Final validation, publication, and downstream updates are in progress.
 
 ## Rust 0.14.2 / Python 0.4.5 unchanged — 2026-09-08
 

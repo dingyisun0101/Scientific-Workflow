@@ -21,7 +21,7 @@ mod summary;
 
 #[cfg(test)]
 #[path = "runtime/tests/runtime_workflow.rs"]
-mod runtime_workflow_tests;
+pub(crate) mod runtime_workflow_tests;
 
 pub use crate::composition::execute;
 pub use error::RuntimeError;
@@ -35,8 +35,10 @@ pub use summary::{
 };
 
 pub(crate) use control::RunControl;
-#[cfg(feature = "terminal-ui")]
 pub(crate) use disk::usage as disk_usage;
 
-#[cfg(feature = "terminal-ui")]
 pub(crate) use program::force_exit;
+
+#[cfg(test)]
+#[path = "runtime/tests/reuse_npy_filters.rs"]
+mod reuse_npy_filter_tests;

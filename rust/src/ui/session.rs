@@ -37,7 +37,6 @@ impl UiFailure {
 }
 
 struct UiSessionInner {
-    interactive: bool,
     control: crate::runtime::RunControl,
     state: Mutex<DashboardState>,
     live_log: Mutex<LiveLog>,
@@ -66,13 +65,31 @@ impl RenderHealth {
 }
 
 impl UiSession {
-    /// Selects the Ratatui dashboard for a terminal and plain lines otherwise.
+    pub(crate) fn require_terminal() -> Result<(), UiFailure> {
+        if terminal::interactive() {
+            Ok(())
+        } else {
+            Err(UiFailure::new(
+                "Workflow requires an interactive dashboard (terminal stdin and stderr). Run inside screen or tmux; headless and redirected execution are not supported.",
+            ))
+        }
+    }
+
+    /// Starts the required Ratatui dashboard.
     pub(crate) fn automatic() -> Result<Self, UiFailure> {
-        let interactive = terminal::interactive();
+        Self::require_terminal()?;
+        Self::new(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn testing() -> Result<Self, UiFailure> {
+        Self::new(false)
+    }
+
+    fn new(interactive: bool) -> Result<Self, UiFailure> {
         let control = crate::runtime::RunControl::default();
         let inner = Arc::new(UiSessionInner {
             control: control.clone(),
-            interactive,
             state: Mutex::new(DashboardState::with_control(control)),
             live_log: Mutex::new(LiveLog::default()),
             cancellation_requested: AtomicBool::new(false),
@@ -113,13 +130,6 @@ impl UiSession {
         self.inner.render_health.check()?;
         if let Err(source) = record_event(&self.inner, &event) {
             let reason = format!("live log failed: {source}");
-            self.inner.render_health.fail(reason.clone());
-            return Err(UiFailure::new(reason));
-        }
-        if !self.inner.interactive
-            && let Err(source) = terminal::render_plain(&event)
-        {
-            let reason = format!("plain output failed: {source}");
             self.inner.render_health.fail(reason.clone());
             return Err(UiFailure::new(reason));
         }
@@ -197,9 +207,13 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
             }
             Ok(Some(CommandSubmission::Parsed(UiCommand::Resume))) => {
                 if !inner.finished.load(Ordering::Acquire) {
-                    inner.control.pause(false);
+                    let resumed = inner.control.resume();
                     if record_message(inner, |state| {
-                        state.push_message("workflow: resumed".into());
+                        state.push_message(if resumed {
+                            "workflow: resumed".into()
+                        } else {
+                            "workflow: still paused; disk usage is above the recovery threshold. Free space, wait for the disk-ready reminder, then type resume and Enter.".into()
+                        });
                     })
                     .is_err()
                     {

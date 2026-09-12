@@ -20,6 +20,24 @@ fn disk_policy_and_npy_resource_limits_are_strict() {
     }});
     let parsed = parse(Path::new("wf_configs/study.json"), base.clone()).unwrap();
     assert_eq!(parsed.manifest.disk_pause_at(), Some(95.0));
+    let mut defaults = base.clone();
+    defaults["phases"]["$npy"]
+        .as_object_mut()
+        .unwrap()
+        .remove("threads");
+    defaults["phases"]["$npy"]
+        .as_object_mut()
+        .unwrap()
+        .remove("mode");
+    let default_phase = parse(Path::new("study.json"), defaults).unwrap();
+    assert!(matches!(
+        &default_phase.phases[1].tasks[0],
+        crate::config::manifest::ParsedTask::Npy {
+            threads: 4,
+            auto: true,
+            ..
+        }
+    ));
     assert!(matches!(
         &parsed.phases[1].tasks[0],
         crate::config::manifest::ParsedTask::Npy {
@@ -1486,7 +1504,7 @@ fn reserved_npy_stream_exclusions_are_lowered_without_shell_interpretation() {
             "-m",
             "scientific_workflow.npy",
             "--workflow-dependencies",
-            "--worker-mode=fixed",
+            "--worker-mode=auto",
             "--exclude-stream=checkpoint",
             "--exclude-stream=--literal"
         ]

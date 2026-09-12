@@ -1,7 +1,7 @@
 # Scientific Workflow Rust crate
 
 > **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
-> Dependency agreement and publication are pending; published examples still
+> Final validation and publication are pending; published examples still
 > consume Rust 0.14.2 with Python 0.4.5.
 
 > **BREAKING UPDATE: Rust 0.15.0 / Python 0.5.0.**
@@ -11,6 +11,8 @@
 > use UTC timestamps, operational settings no longer invalidate completed work,
 > and finalized JSON cannot be rewritten through Workflow's writers.
 > `--clean` clears the complete output directory after guarded preflight.
+> Execution requires the dashboard: use `screen` or `tmux`. Disk recovery requires
+> typing `resume`; NPY defaults to gradual `auto` worker admission.
 > `$npy` requires companion 0.5.0 for fixed/auto worker admission.
 > No aliases restore the old execution names or JSON rewrite behavior.
 > Scientific APIs and recording formats 7/8 remain compatible.
@@ -184,19 +186,13 @@ python -m pip install \
   "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.15.0#subdirectory=python"
 ```
 
-The default `terminal-ui` feature preserves the automatic interactive
-dashboard and noninteractive lifecycle lines described in this guide. It is
-enabled by every dependency declaration above. Reader-only or explicitly
-headless integrations can omit Crossterm and Ratatui:
-
-```toml
-scientific-workflow = { version = "0.15.0", default-features = false }
-```
-
-In that explicit mode, `run` and `runtime::execute` use a silent observer: they
-still execute and return the same durable results/errors, but provide no
-terminal output or UI-originated cancellation. Disabling defaults is therefore
-an embedding choice, not an alternate end-user interface.
+Execution requires terminal standard input and standard error for the dashboard.
+For long or remote runs, start `tmux new -s workflow` or `screen -S workflow`,
+then activate the Python environment and run your application inside it.
+Noninteractive or redirected execution is rejected before output creation or
+`--clean` deletion. The `terminal-ui` feature and silent execution mode have been
+removed; disabling default features does not remove the dashboard. Configuration
+loading and recording-reader APIs can still be used without launching a run.
 
 Serde is Rust's standard data-conversion framework. Workflow uses its
 `Deserialize` trait to turn expanded JSON from `wf_configs/parameters.json`
@@ -297,11 +293,11 @@ allocation. Execution units in `auto` must declare
 `THREAD_COUNT_INVARIANT = true`; they cannot declare task `resources`.
 
 The disk guard checks before work admission and every 250 ms of wall time,
-including while paused. It automatically clears its pause at
-`max(0, pause_at_percent - 2)` percent used space: 93% with the default threshold.
-A manual pause remains independent. Polling interval and recovery margin are
-fixed behavior, not JSON settings. Enforcement also works without the terminal
-UI; in-flight work may take time to pause. See
+including while paused. At `max(0, pause_at_percent - 2)` percent used space
+(93% with the default threshold), the dashboard reminds you to type `resume`
+and Enter. Space recovery alone never resumes work; an early command is rejected.
+Polling interval and recovery margin are fixed behavior, not JSON settings.
+In-flight work may take time to pause. See
 [disk guard behavior](#disk-guard-and-npy-resource-policy) for process handling
 and monitor failures. To bypass it, use `"disk":{"pause_at_percent":null}`;
 omitting `disk` or using `"disk":{}` keeps the 95% default.
@@ -336,8 +332,10 @@ These settings apply only to the reserved `$npy` phase. Ordinary phases reject
 | Setting | Default / allowed values | Effect |
 | --- | --- | --- |
 | `phases.$npy.threads` | Global `threads`; `null` or positive integer no greater than that budget | Caps single-thread conversion workers; `null` uses the global budget. Runtime reserves the smaller of this limit and the number of distinct input recordings. |
-| `phases.$npy.mode` | `"fixed"`; also `"auto"` | `fixed` admits workers up to the allowance immediately. `auto` starts at one and raises the admission limit by one every 250 ms of active time up to the same allowance. |
+| `phases.$npy.mode` | `"auto"`; also `"fixed"` | `fixed` admits workers up to the allowance immediately. `auto` starts at one and raises the admission limit by one every 250 ms of active time up to the same allowance. |
 
+Leave `$npy.mode` and `$npy.threads` unset for the automatic defaults. Set a
+lower thread limit only when reserving resources for other tasks requires it.
 The full allowance remains reserved during the automatic ramp. Auto mode uses
 worker counts, with no CPU or RAM utilization target. `$npy` creates one
 aggregate task per replicate, so phase `max_concurrency` does not set its worker
@@ -937,9 +935,9 @@ After success, failure, or cancellation, the interactive dashboard stays open
 so the terminal outcome can be inspected; type exact lowercase `exit` and press
 Enter to close it. `exit` during active work also requests cooperative
 cancellation. Ctrl+C cancels active work but does not close the dashboard, so a
-final `exit` is still required. Noninteractive runs never wait for input.
-Redirected execution uses stable plain lifecycle lines. The dashboard and
-plain renderer are the only presentation modes. Failure of the selected mode
+final `exit` is still required. Run inside `screen` or `tmux` for persistent
+sessions. Noninteractive execution is rejected; the dashboard is required.
+Failure of the dashboard
 is fatal and returns `RuntimeError::Presentation` rather than silently
 degrading or being reported as cooperative workflow cancellation. The
 [UI reference](src/ui/api.md) details commands, live logging, usage sampling,
@@ -1085,7 +1083,6 @@ From the repository root:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-targets --all-features --locked
-cargo test -p scientific-workflow --all-targets --no-default-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```
 
@@ -1158,7 +1155,7 @@ additional numeric suffix only on collision. Atomic directory creation prevents
 reuse even if the clock repeats. Names are invocation identities; scientific
 task identity is unchanged. Every physical `log.txt` line receives an absolute
 RFC 3339 UTC timestamp when appended, including buffered and multiline messages.
-Headless builds continue to omit the UI-owned log.
+Execution requires the dashboard; launch inside `screen` or `tmux` for long runs.
 
 
 ## Disk guard and NPY resource policy
@@ -1169,11 +1166,13 @@ is 95; a finite numeric threshold must be greater than 0 and at most 100. Use
 invalid values are rejected during Config preflight.
 
 Runtime samples the output filesystem before admitting work and every 250 ms
-of wall time. At the threshold it requests a disk pause; it automatically clears
-that reason when usage reaches `max(0, threshold - 2)` percent. A separate manual
-pause remains in force, and manual resume cannot bypass the disk reason. The
-shared active clock freezes while either reason holds. Cancellation wakes
-paused work. These operations also run in headless builds. Sampling or monitor
+of wall time. At the threshold it requests a disk pause and tells the user to
+free space, then type `resume` and Enter. Usage must reach
+`max(0, threshold - 2)` percent before that command can succeed. Recovery alone
+never resumes work: a second reminder and the dashboard status indicate when
+space is sufficient. The explicit command clears the disk and manual pauses;
+an early command is rejected without being queued. The shared active clock
+freezes while either pause holds. Cancellation wakes paused work. Sampling or monitor
 startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
@@ -1186,8 +1185,9 @@ may take time to return, so the threshold is a pause trigger, not reserved free
 space or a guarantee that in-flight writes cannot fill the filesystem.
 
 The `$npy` phase accepts `"threads": 4` and `"mode": "auto"` (or `"fixed"`).
-Threads default to `study.threads` and must be a positive integer no larger than
-that global limit. Mode defaults to `fixed`; these fields are invalid on ordinary
+Leave the worker limit unset unless reserving resources for other tasks requires
+a lower limit. Threads default to `study.threads` and must be a positive integer no larger than
+that global limit. Mode defaults to `auto`; these fields are invalid on ordinary
 phases. Runtime reserves `min(phase.threads, study.threads, recording_count)`
 permits through the existing shared budget, including across replicates. Each
 conversion worker limits native numerical pools to one thread. Fixed mode admits
@@ -1197,7 +1197,7 @@ Short batches may finish before reaching the limit. This does not measure CPU
 or RAM utilization, and the full allowance remains reserved during ramp-up.
 
 Python's `convert_workflow_dependencies` adds the optional keyword
-`worker_mode="fixed"`; `"auto"` selects gradual admission. Other values raise
+`worker_mode="auto"`; `"fixed"` selects immediate admission. Other values raise
 `NpyConversionError` before output creation. The Workflow CLI accepts
 `--worker-mode=fixed|auto` with `--workflow-dependencies`; ordinary single-recording
 conversion rejects it. Mode does not change result or reuse identity.

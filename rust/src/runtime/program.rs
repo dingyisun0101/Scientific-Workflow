@@ -29,7 +29,6 @@ fn spawn(command: &mut Command) -> std::io::Result<ProcessTree> {
     Ok(ProcessTree(child, false, false))
 }
 
-#[cfg(feature = "terminal-ui")]
 pub(crate) fn force_exit() -> ! {
     let groups = PROCESS_GROUPS
         .lock()

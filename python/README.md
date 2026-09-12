@@ -1,7 +1,7 @@
 # Scientific Workflow Python utilities
 
 > **Release candidate:** Rust 0.15.0 / Python 0.5.0 is prepared but not published.
-> Dependency agreement and publication are pending; published examples still
+> Final validation and publication are pending; published examples still
 > consume Rust 0.14.2 with Python 0.4.5.
 
 > **BREAKING IMPORT CHANGE — 0.4.4:** use `scientific_workflow`; the old
@@ -244,11 +244,16 @@ scientific-workflow-to-npy path/to/member-recording --exclude-stream checkpoint
 
 ### Batch worker admission
 
-`convert_workflow_dependencies(..., worker_mode="fixed")` retains immediate
-admission up to `WORKFLOW_THREADS`. With `worker_mode="auto"`, admission starts
+`convert_workflow_dependencies(..., worker_mode="auto")` is the default.
+Explicit `worker_mode="fixed"` admits up to `WORKFLOW_THREADS` immediately.
+With the default `worker_mode="auto"`, admission starts
 at one and grows by one every 250 ms of active time to the same limit. Both
 policies retain native-library one-thread limits, deterministic output ordering,
 pause/cancel behavior, and immutable matching-batch reuse. Invalid modes fail
 before output creation. The CLI accepts `--worker-mode=fixed|auto` only with
 `--workflow-dependencies`. Workflow authors set `$npy.threads` and `$npy.mode`
 in `study.json`; these do not change scientific or NPY reuse identity.
+
+For Workflow runs, leave `$npy.mode` and `$npy.threads` unset unless a lower
+limit is needed to reserve resources for other tasks. Auto reserves the full
+allowance while ramping; it does not adapt to CPU or RAM pressure.

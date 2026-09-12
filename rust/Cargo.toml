@@ -22,18 +22,14 @@ include = [
     "LICENSE",
 ]
 
-[features]
-default = ["terminal-ui"]
-terminal-ui = ["dep:crossterm", "dep:ratatui"]
-
 [dependencies]
-crossterm = { version = "0.29", optional = true }
+crossterm = "0.29"
 erased-serde = "0.4.10"
 fs4 = { version = "1.1", default-features = false, features = ["sync"] }
 inventory = "0.3"
 libc = "0.2"
 rayon = "1.12"
-ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"], optional = true }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = "0.11"

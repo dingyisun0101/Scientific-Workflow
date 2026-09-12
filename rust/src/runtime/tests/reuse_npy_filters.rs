@@ -8,6 +8,10 @@ mod unix {
 
     use serde_json::{Value, json};
 
+    fn run(project: &Path) -> Result<crate::runtime::RunSummary, crate::runtime::RuntimeError> {
+        crate::runtime::runtime_workflow_tests::execute(crate::study::Study::load(project).unwrap())
+    }
+
     struct Project(PathBuf);
 
     impl Project {
@@ -70,7 +74,7 @@ mod unix {
         });
         project.write("study.json", &study);
         project.write("parameters.json", &json!({"maximum_iterations": 36000}));
-        scientific_workflow::run(&project.0).unwrap();
+        run(&project.0).unwrap();
         let source = executions(&project.0).pop().unwrap();
         let original_task = source.join("replicate-000000/task-000000");
         let original_receipt = fs::read(original_task.join("workflow-result.json")).unwrap();
@@ -79,7 +83,7 @@ mod unix {
         study["reuse_from"] = json!(source);
         study["phases"]["$npy"]["exclude_streams"] = json!(["checkpoint"]);
         project.write("study.json", &study);
-        scientific_workflow::run(&project.0).unwrap();
+        run(&project.0).unwrap();
         let resumed = executions(&project.0)
             .into_iter()
             .find(|path| *path != source)
@@ -99,7 +103,7 @@ mod unix {
         study["reuse_from"] = json!(resumed);
         study["phases"]["$npy"]["exclude_streams"] = json!(["space"]);
         project.write("study.json", &study);
-        scientific_workflow::run(&project.0).unwrap();
+        run(&project.0).unwrap();
         assert_eq!(executions(&project.0).len(), 3);
         assert_eq!(
             fs::read(original_task.join("workflow-result.json")).unwrap(),
@@ -107,7 +111,7 @@ mod unix {
         );
 
         project.write("parameters.json", &json!({"maximum_iterations": 36001}));
-        let error = scientific_workflow::run(&project.0).unwrap_err();
+        let error = run(&project.0).unwrap_err();
         assert!(error.to_string().contains("captured study inputs differ"));
         assert_eq!(executions(&project.0).len(), 3);
     }

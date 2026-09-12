@@ -1,4 +1,4 @@
-//! Ratatui dashboard and noninteractive line-rendering mode.
+//! Required interactive Ratatui dashboard.
 
 use std::io::{self, IsTerminal, Write as _};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,9 +21,8 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use unicode_width::UnicodeWidthChar;
 
 use super::command::{CommandInput, CommandSubmission, EditAction, UiCommand};
-use super::state::{DashboardSnapshot, TaskSnapshot, TaskStatus, event_message};
+use super::state::{DashboardSnapshot, TaskSnapshot, TaskStatus};
 use super::usage::{UsageMonitor, UsageSnapshot};
-use crate::runtime::RuntimeEvent;
 
 static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -31,13 +30,6 @@ const TIMING_WIDTH: u16 = 19;
 
 pub(super) fn interactive() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
-}
-
-pub(super) fn render_plain(event: &RuntimeEvent<'_>) -> io::Result<()> {
-    if let Some(message) = event_message(event) {
-        writeln!(io::stderr().lock(), "[{message}]")?;
-    }
-    Ok(())
 }
 
 pub(super) struct DashboardTerminal {

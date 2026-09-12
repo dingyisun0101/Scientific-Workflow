@@ -186,7 +186,7 @@ task        ──► config + observation + state
 study       ──► config + observation + persistence + state + task
 runtime     ──► config + persistence + state + study + task
 ui          ──► runtime-owned lifecycle observer contract
-composition ──► runtime + default-on terminal-ui adapter (silent when disabled)
+composition ──► runtime + required terminal dashboard
 error       ──► StudyError + RuntimeError
 crate facade──► study + composition + error
 
@@ -295,7 +295,7 @@ workflow/
 │   │   ├── ui/live_log.rs            synchronous execution log.txt message sink
 │   │   ├── ui/state.rs               event-reduced rows/messages/status snapshot
 │   │   ├── ui/session.rs             renderer thread and cancellation bridge
-│   │   ├── ui/terminal.rs            Ratatui dashboard + plain noninteractive mode
+│   │   ├── ui/terminal.rs            required Ratatui dashboard
 │   │   └── ui/usage.rs               best-effort CPU/RAM/filesystem sampler
 │   │   │
 │   │   ├── persistence.rs            public completed-recording read root
@@ -601,8 +601,8 @@ external task's effective permit request, which is also supplied to the child.
 
 Runtime owns the borrowed execution, replicate, phase, task, iteration,
 outcome, and path fact vocabulary plus the observer and task-progress ports.
-With the default `terminal-ui` feature, crate-level composition selects one
-clone-cheap `UiSession` after Runtime creates the execution output. UI owns its
+Crate-level composition checks terminal stdin/stderr before Runtime can clean
+or create output, then starts one clone-cheap `UiSession` after output creation. UI owns its
 private zero-configuration refresh
 policy; nothing is authored in `wf_configs/study.json`, and Study has no UI
 dependency.
@@ -610,21 +610,15 @@ Execution unit progress comes from the same host boundaries already used for aut
 persistence. Programs publish generic lifecycle facts without invented
 iteration values, so neither workload supplies UI code or values.
 
-Interactive stdin and stderr select the Ratatui/Crossterm alternate-screen
-dashboard; noninteractive runs deliberately select UI's stable plain lifecycle
-renderer. In both modes UI creates `<execution>/log.txt`, synchronously appends
-and flushes each timestamped message, and treats failure of this required live
-log as a presentation error. UI is the sole presentation interface, so failure
-to start or initialize the selected renderer, poll terminal input, draw, create
-or append the live log, or write plain output is a fatal
-`RuntimeError::Presentation`, never cancellation or silent
-fallback. Renderer health is checked from Runtime-facing publication,
-scheduler, and final-join boundaries, while the terminal lease restores process
-state during ordinary error return and unexpected unwinding.
-Explicit `default-features = false` builds omit the whole UI module plus
-Crossterm and Ratatui; composition attaches a silent Runtime observer instead.
-That headless build retains execution, persistence, summaries, and errors but
-has no terminal output, UI live log, usage panel, or UI cancellation source.
+The Ratatui/Crossterm alternate-screen dashboard is required. Noninteractive
+launches fail with instructions to use `screen` or `tmux`. There is no silent
+observer, plain renderer, or `terminal-ui` feature in production. Unit tests use
+a test-only observer to qualify scheduling and logs independently of a terminal;
+PTY integration tests exercise the public execution facade.
+UI creates `<execution>/log.txt`, synchronously appends and flushes timestamped
+messages, and returns renderer/log failures as `RuntimeError::Presentation`.
+Renderer health is checked at publication, scheduling, and final-join boundaries;
+the terminal lease restores process state on return and unwinding.
 The dashboard
 owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
 one compact `elapsed / ETA` field, a bounded non-scrollable newest-message
@@ -641,7 +635,7 @@ stops further admission, and waits for active execution unit/program cleanup. Ct
 requests cancellation without closing the interface. After every successful,
 failed, or cancelled terminal outcome, the dashboard and command editor remain on
 screen until the user types `exit`; only then does Runtime join the renderer,
-restore the terminal, and return. Noninteractive rendering has no input wait. One
+restore the terminal, and return. One
 private refresh thread retains presentation facts
 but never scientific payloads. It exposes no downstream API. Early phase,
 replicate, or execution termination closes affected
@@ -690,8 +684,8 @@ conveniences. It owns no behavior or alternative implementation path.
 14. The default UI consumes only Runtime-owned observer facts, activates
     automatically as the sole presentation interface, and returns
     selected-renderer failures through `RuntimeError` without reclassifying
-    them as cancellation. Explicit headless builds replace it only at the
-    composition boundary.
+    them as cancellation. Execution requires terminal stdin/stderr; a missing
+    terminal fails before output mutation and directs the user to screen/tmux.
 15. Scientific execution-unit and external-program tasks share phase, dependency, timeout, failure,
     summary, persistence-workspace, and UI lifecycle semantics without forcing
     fake state or iteration onto programs. Both may consume Workflow-derived
@@ -871,7 +865,7 @@ additional numeric suffix only on collision. Atomic directory creation prevents
 reuse even if the clock repeats. Names are invocation identities; scientific
 task identity is unchanged. Every physical `log.txt` line receives an absolute
 RFC 3339 UTC timestamp when appended, including buffered and multiline messages.
-Headless builds continue to omit the UI-owned log.
+Execution requires the dashboard; launch inside `screen` or `tmux` for long runs.
 
 
 ## Disk guard and NPY resource policy
@@ -882,11 +876,13 @@ is 95; a finite numeric threshold must be greater than 0 and at most 100. Use
 invalid values are rejected during Config preflight.
 
 Runtime samples the output filesystem before admitting work and every 250 ms
-of wall time. At the threshold it requests a disk pause; it automatically clears
-that reason when usage reaches `max(0, threshold - 2)` percent. A separate manual
-pause remains in force, and manual resume cannot bypass the disk reason. The
-shared active clock freezes while either reason holds. Cancellation wakes
-paused work. These operations also run in headless builds. Sampling or monitor
+of wall time. At the threshold it requests a disk pause and tells the user to
+free space, then type `resume` and Enter. Usage must reach
+`max(0, threshold - 2)` percent before that command can succeed. Recovery alone
+never resumes work: a second reminder and the dashboard status indicate when
+space is sufficient. The explicit command clears the disk and manual pauses;
+an early command is rejected without being queued. The shared active clock
+freezes while either pause holds. Cancellation wakes paused work. Sampling or monitor
 startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
@@ -899,8 +895,9 @@ may take time to return, so the threshold is a pause trigger, not reserved free
 space or a guarantee that in-flight writes cannot fill the filesystem.
 
 The `$npy` phase accepts `"threads": 4` and `"mode": "auto"` (or `"fixed"`).
-Threads default to `study.threads` and must be a positive integer no larger than
-that global limit. Mode defaults to `fixed`; these fields are invalid on ordinary
+Leave the worker limit unset unless reserving resources for other tasks requires
+a lower limit. Threads default to `study.threads` and must be a positive integer no larger than
+that global limit. Mode defaults to `auto`; these fields are invalid on ordinary
 phases. Runtime reserves `min(phase.threads, study.threads, recording_count)`
 permits through the existing shared budget, including across replicates. Each
 conversion worker limits native numerical pools to one thread. Fixed mode admits
@@ -910,7 +907,7 @@ Short batches may finish before reaching the limit. This does not measure CPU
 or RAM utilization, and the full allowance remains reserved during ramp-up.
 
 Python's `convert_workflow_dependencies` adds the optional keyword
-`worker_mode="fixed"`; `"auto"` selects gradual admission. Other values raise
+`worker_mode="auto"`; `"fixed"` selects immediate admission. Other values raise
 `NpyConversionError` before output creation. The Workflow CLI accepts
 `--worker-mode=fixed|auto` with `--workflow-dependencies`; ordinary single-recording
 conversion rejects it. Mode does not change result or reuse identity.

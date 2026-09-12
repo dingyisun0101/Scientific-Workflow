@@ -71,7 +71,7 @@ requires separate permission for source or manifest changes.
 ### Release candidate checkpoint
 
 Rust 0.15.0 and Python 0.5.0 are prepared, with migration guidance and breaking
-notices. Phase 7 validation covers all-feature/headless Rust tests, explicit
+notices. The earlier Phase 7 checkpoint covered all-feature/headless Rust tests, explicit
 coordinated NPY handoff, Clippy, rustdoc/doctests, Rust package verification,
 installed Python wheel tests, package metadata, real terminal behavior, and both
 published-version examples. The final validation result is recorded in the
@@ -83,3 +83,16 @@ pending. Agreement is now complete and Phase 2 is validated. The subsequent
 behavioral corrections listed above must pass final validation before release.
 No release tag or package publication has occurred yet. Push release changes
 and tags before publication, then update consumers to the online versions.
+
+### Final decision implementation
+
+The dependency refresh is pushed as `c6ccce5`. Subsequent changes implement
+latched disk pauses with typed resume and dashboard reminders, default NPY auto
+admission, and mandatory dashboard execution. Headless/plain execution and the
+terminal-ui feature switch are removed. Existing Runtime tests use test-only
+observers; public execution is qualified with a real PTY.
+
+Validation passed: 156 Rust unit tests plus 20 integration tests, three
+doctests, warnings-denied Clippy/rustdoc, explicit fixed/auto NPY handoff,
+35 Python source tests and 35 installed-wheel tests, and wheel/sdist checks.
+The PTY integration covers the required dashboard and disk-resume rejection.

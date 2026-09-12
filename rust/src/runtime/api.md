@@ -67,28 +67,20 @@ program kind, and purpose; the child receives only that derived value, not an
 
 Runtime owns the presentation observer port and execution, replicate, phase,
 task, iteration, target, outcome, and recording-path fact vocabulary.
-Crate-level composition attaches UI's automatic adapter after output creation;
-Study contains no UI policy. Interactive stdin plus stderr selects the
-Ratatui dashboard; otherwise UI emits stable plain lifecycle lines. Typing
-`exit` while work is active or pressing Ctrl+C requests cooperative execution
-cancellation. After any terminal outcome the dashboard remains visible until the
-user explicitly types `exit`; Ctrl+C alone never closes it. Consequently an
-interactive `execute` call returns only after execution has ended and that final
-`exit` is submitted. Default-feature UI also creates
-`<execution>/log.txt` and synchronously flushes every timestamped lifecycle and
-program message there in interactive and noninteractive modes. Noninteractive
-execution never waits for input. UI is the
-sole presentation boundary: renderer startup, terminal
-initialization/input/drawing, and plain-output failures return
-`RuntimeError::Presentation` rather than becoming cancellation or silent
-fallback.
+Crate-level composition requires terminal stdin and stderr before Runtime may
+create or clean output. Noninteractive launches return `RuntimeError::Presentation`
+with instructions to use `screen` or `tmux`. Study contains no UI policy.
+After output creation, UI starts the required Ratatui dashboard and live
+`<execution>/log.txt`; renderer initialization/input/drawing and log failures
+are fatal presentation errors. There is no headless or plain renderer and no
+`terminal-ui` feature switch. Loading a Study or reading recordings remains
+independent of execution and needs no terminal.
 
-The default `terminal-ui` Cargo feature preserves this complete presentation
-path. When an embedding explicitly disables default features, the UI module and
-terminal dependencies are absent and composition attaches a silent observer to
-Runtime's unchanged port. Execution and summaries behave normally, but there
-is no presentation output or UI-originated cancellation in that build.
-It has no UI-authored `log.txt` or host-usage panel; Runtime disk monitoring remains active.
+Typing `exit` while work is active or pressing Ctrl+C requests cooperative
+cancellation. After any terminal outcome the dashboard remains visible until
+the user types `exit`; Ctrl+C alone never closes it. Execution returns only
+after cleanup and that explicit exit. Disk pauses require typing `resume`
+after the recovery threshold is reached; the dashboard displays reminders.
 
 An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. ExecutionUnit cancellation is cooperative
@@ -549,7 +541,7 @@ additional numeric suffix only on collision. Atomic directory creation prevents
 reuse even if the clock repeats. Names are invocation identities; scientific
 task identity is unchanged. Every physical `log.txt` line receives an absolute
 RFC 3339 UTC timestamp when appended, including buffered and multiline messages.
-Headless builds continue to omit the UI-owned log.
+Execution requires the dashboard; launch inside `screen` or `tmux` for long runs.
 
 
 ## Disk guard and NPY resource policy
@@ -560,11 +552,13 @@ is 95; a finite numeric threshold must be greater than 0 and at most 100. Use
 invalid values are rejected during Config preflight.
 
 Runtime samples the output filesystem before admitting work and every 250 ms
-of wall time. At the threshold it requests a disk pause; it automatically clears
-that reason when usage reaches `max(0, threshold - 2)` percent. A separate manual
-pause remains in force, and manual resume cannot bypass the disk reason. The
-shared active clock freezes while either reason holds. Cancellation wakes
-paused work. These operations also run in headless builds. Sampling or monitor
+of wall time. At the threshold it requests a disk pause and tells the user to
+free space, then type `resume` and Enter. Usage must reach
+`max(0, threshold - 2)` percent before that command can succeed. Recovery alone
+never resumes work: a second reminder and the dashboard status indicate when
+space is sufficient. The explicit command clears the disk and manual pauses;
+an early command is rejected without being queued. The shared active clock
+freezes while either pause holds. Cancellation wakes paused work. Sampling or monitor
 startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
 monitor failure cancels work and is returned after joining workers. The guard
 is stopped before the terminal's final user-input wait.
@@ -577,8 +571,9 @@ may take time to return, so the threshold is a pause trigger, not reserved free
 space or a guarantee that in-flight writes cannot fill the filesystem.
 
 The `$npy` phase accepts `"threads": 4` and `"mode": "auto"` (or `"fixed"`).
-Threads default to `study.threads` and must be a positive integer no larger than
-that global limit. Mode defaults to `fixed`; these fields are invalid on ordinary
+Leave the worker limit unset unless reserving resources for other tasks requires
+a lower limit. Threads default to `study.threads` and must be a positive integer no larger than
+that global limit. Mode defaults to `auto`; these fields are invalid on ordinary
 phases. Runtime reserves `min(phase.threads, study.threads, recording_count)`
 permits through the existing shared budget, including across replicates. Each
 conversion worker limits native numerical pools to one thread. Fixed mode admits
@@ -588,7 +583,7 @@ Short batches may finish before reaching the limit. This does not measure CPU
 or RAM utilization, and the full allowance remains reserved during ramp-up.
 
 Python's `convert_workflow_dependencies` adds the optional keyword
-`worker_mode="fixed"`; `"auto"` selects gradual admission. Other values raise
+`worker_mode="auto"`; `"fixed"` selects immediate admission. Other values raise
 `NpyConversionError` before output creation. The Workflow CLI accepts
 `--worker-mode=fixed|auto` with `--workflow-dependencies`; ordinary single-recording
 conversion rejects it. Mode does not change result or reuse identity.

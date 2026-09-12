@@ -114,8 +114,9 @@ public.
   manual PTY validation should confirm alternate-screen Ratatui rendering,
   completion retention, explicit keyboard exit, Ctrl+C cancellation without
   closure, cooperative Runtime cancellation, and terminal restoration.
-  Noninteractive tests receive stable plain lifecycle diagnostics rather than
-  terminal control sequences.
+  Runtime unit tests use a test-only observer; the public facade is exercised
+  in a real PTY by `rust/tests/dashboard.rs` and `terminal_probe.py`. Missing
+  terminals are rejected before output creation or cleanup.
 
 ## Persistence tests
 
@@ -163,7 +164,6 @@ unsupported APIs.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-targets --all-features --locked
-cargo test --manifest-path rust/Cargo.toml --all-targets --no-default-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 cargo test --manifest-path rust/Cargo.toml --doc --all-features --locked
 PYTHONPATH=python/src python -m unittest discover -s python/tests -v
@@ -290,7 +290,7 @@ CLI forwarding, serial/parallel parity, and filter-aware retries.
 
 Private Persistence tests check conversion-only exclusions, strict NPY/consumer
 filter identity, phase selection, reuse paths, and unchanged scientific and
-phase-graph validation. `rust/tests/reuse_npy_filters.rs` runs a miniature program
+phase-graph validation. `rust/src/runtime/tests/reuse_npy_filters.rs` runs a miniature program
 workflow, adds and changes downstream NPY filters, chains completed upstream
 reuse, preserves original receipts, and rejects changed scientific inputs before
 creating another execution. Dispatcher separately exercises the same transition
@@ -329,7 +329,7 @@ on buffered, live, and multiline messages.
 
 Resource-policy tests cover disk defaults/bypass/range checking, strict NPY
 limits, exact threshold and recovery transitions, independent manual pause,
-headless monitor failure/cancellation, and fixed/auto conversion equivalence.
+monitor failure/cancellation, and fixed/auto conversion equivalence.
 
 
 Allocation tests follow automatic 4 → 2+2 → 4 rebalancing across replicates,
@@ -364,5 +364,16 @@ requests explicitly. This repairs a pre-existing runnable-example preflight gap.
 The candidate's 35 Python tests passed against its installed wheel from outside
 the source tree. Wheel and source-archive metadata checks passed. A Linux PTY
 check exercised thread display, pause/resume, page keys, resizing, explicit exit,
-and exact terminal-attribute restoration. Headless execution remains covered by
-the separate no-default-features suite.
+and exact terminal-attribute restoration. Execution now requires a dashboard;
+the no-default-features/headless validation lane has been removed.
+
+### Final decision regressions
+
+Disk policy tests require typed resume after safe recovery, reject early resume,
+keep the execution clock frozen after recovery, recheck the gate when space
+decreases again, and retain cancellation behavior. Config tests assert default
+NPY auto mode and inheritance of the global thread budget. The public-facade
+PTY test exercises typed pause/resume, disk reminders and rejected resume,
+paging, resizing, cancellation, exit, and exact terminal restoration.
+Noninteractive facade tests preserve existing output even with `--clean`.
+No production headless observer or plain renderer remains.
