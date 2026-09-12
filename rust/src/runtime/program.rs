@@ -26,7 +26,7 @@ fn spawn(command: &mut Command) -> std::io::Result<ProcessTree> {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let child = command.spawn()?;
     groups.push(child.id());
-    Ok(ProcessTree(child, false))
+    Ok(ProcessTree(child, false, false))
 }
 
 #[cfg(feature = "terminal-ui")]
@@ -140,6 +140,15 @@ pub(super) fn execute(
                 } else {
                     parked = None;
                 }
+            } else {
+                // Disk pressure must also stop writers without cooperative IPC.
+                let paused = control.disk_paused();
+                child.suspend(paused)?;
+                if paused {
+                    parked.get_or_insert_with(|| control.parked());
+                } else {
+                    parked = None;
+                }
             }
             if let Some(status) = child.0.try_wait()? {
                 return Ok(Some(status));
@@ -186,13 +195,43 @@ pub(super) fn execute(
     }
 }
 
-struct ProcessTree(Child, bool);
+struct ProcessTree(Child, bool, bool);
 impl ProcessTree {
+    fn suspend(&mut self, paused: bool) -> std::io::Result<()> {
+        if self.2 == paused {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            // SAFETY: only this task's exclusively owned process group is targeted.
+            let result = unsafe {
+                libc::kill(
+                    -(self.0.id() as i32),
+                    if paused { libc::SIGSTOP } else { libc::SIGCONT },
+                )
+            };
+            if result != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error);
+                }
+            }
+            self.2 = paused;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(std::io::Error::other(
+                "disk pause of non-cooperative programs requires Unix process groups",
+            ))
+        }
+    }
     fn stop(&mut self) {
         if self.1 {
             return;
         }
         self.1 = true;
+        let _ = self.suspend(false);
         #[cfg(unix)]
         // SAFETY: process_group(0) creates an exclusively owned group led by this child.
         unsafe {
@@ -424,6 +463,37 @@ pub(super) fn check_prerequisites(study: &crate::study::Study) -> Result<(), sup
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn noncooperative_process_group_suspends_resumes_and_cleans_up() {
+        use super::*;
+        use std::os::unix::process::CommandExt;
+        let mut command = Command::new("/bin/sleep");
+        command.arg("10").process_group(0);
+        let mut child = spawn(&mut command).unwrap();
+        let status_path = std::path::PathBuf::from(format!("/proc/{}/status", child.0.id()));
+        child.suspend(true).unwrap();
+        let stopped = || {
+            std::fs::read_to_string(&status_path)
+                .unwrap()
+                .lines()
+                .any(|line| line.starts_with("State:\tT"))
+        };
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !stopped() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert!(stopped());
+        child.suspend(false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while stopped() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert!(!stopped());
+        child.suspend(true).unwrap();
+        child.stop();
+        assert!(!status_path.exists());
+    }
     use super::*;
     #[test]
     fn frames_reject_bad_versions_bounds_and_control_characters() {

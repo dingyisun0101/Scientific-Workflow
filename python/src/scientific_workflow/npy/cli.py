@@ -14,6 +14,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--exclude-stream", action="append", default=[], metavar="NAME", help="exclude an exact stream name; repeat for multiple streams")
     parser.add_argument("--workflow-dependencies", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--worker-mode", choices=("fixed", "auto"), help="Workflow batch worker admission policy")
     arguments = parser.parse_args()
     if arguments.workflow_dependencies:
         if arguments.recording is not None or arguments.output is not None:
@@ -23,10 +24,13 @@ def main() -> None:
             output_directory = os.environ["WORKFLOW_NPY_OUTPUT"]
         except KeyError as error:
             parser.error(f"missing required Workflow environment variable {error.args[0]}")
-        convert_workflow_dependencies(dependencies_path, output_directory, exclude_streams=arguments.exclude_stream)
+        options = {} if arguments.worker_mode is None else {"worker_mode": arguments.worker_mode}
+        convert_workflow_dependencies(dependencies_path, output_directory, exclude_streams=arguments.exclude_stream, **options)
         return
     if arguments.recording is None:
         parser.error("recording is required")
+    if arguments.worker_mode is not None:
+        parser.error("--worker-mode requires --workflow-dependencies")
     manifest = convert_recording(arguments.recording, arguments.output, exclude_streams=arguments.exclude_stream)
     print(
         f"converted {manifest['source_recording']} into "

@@ -8,6 +8,7 @@
 //! binds execution unit keys itself.
 
 mod control;
+mod disk;
 mod error;
 mod event;
 mod execution;
@@ -34,6 +35,8 @@ pub use summary::{
 };
 
 pub(crate) use control::RunControl;
+#[cfg(feature = "terminal-ui")]
+pub(crate) use disk::usage as disk_usage;
 
 #[cfg(feature = "terminal-ui")]
 pub(crate) use program::force_exit;

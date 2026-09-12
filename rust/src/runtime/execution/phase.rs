@@ -175,7 +175,10 @@ fn run_phase_inner(
                     .collect::<std::collections::BTreeSet<_>>()
                     .len();
                 TaskResourceRequirement::External {
-                    threads: context.study.threads().min(count.max(1)),
+                    threads: task
+                        .program_threads()
+                        .min(context.study.threads())
+                        .min(count.max(1)),
                 }
             } else {
                 task_resource_requirement(task, context.study.compute_mode())

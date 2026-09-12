@@ -95,9 +95,7 @@ fn parse_ram_usage(document: &str) -> Option<f64> {
 }
 
 fn read_disk_usage(path: &Path) -> Option<f64> {
-    let total = fs2::total_space(path).ok()?;
-    let available = fs2::available_space(path).ok()?;
-    percentage(total.saturating_sub(available), total)
+    crate::runtime::disk_usage(path).ok()
 }
 
 fn percentage(occupied: u64, total: u64) -> Option<f64> {

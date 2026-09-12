@@ -14,6 +14,8 @@ struct Inner {
 }
 #[derive(Default)]
 struct State {
+    manual_pause: bool,
+    disk_pause: bool,
     paused_since: Option<Instant>,
     paused_total: Duration,
     cancelled: bool,
@@ -29,11 +31,30 @@ impl RunControl {
     }
     #[cfg(any(feature = "terminal-ui", test))]
     pub(crate) fn pause(&self, paused: bool) {
+        self.set_pause(paused, false);
+    }
+    pub(crate) fn pause_for_disk(&self, paused: bool) {
+        self.set_pause(paused, true);
+    }
+    pub(crate) fn disk_paused(&self) -> bool {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .disk_pause
+    }
+    fn set_pause(&self, paused: bool, disk: bool) {
         let mut state = self
             .0
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if disk {
+            state.disk_pause = paused;
+        } else {
+            state.manual_pause = paused;
+        }
+        let paused = state.disk_pause || state.manual_pause;
         if paused && !state.cancelled && state.paused_since.is_none() {
             state.paused_since = Some(Instant::now());
         }
@@ -122,6 +143,19 @@ impl Drop for Parked {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disk_recovery_and_manual_resume_preserve_other_pause_reasons() {
+        let control = RunControl::default();
+        control.pause(true);
+        control.pause_for_disk(true);
+        control.pause(false);
+        assert!(control.paused());
+        control.pause(true);
+        control.pause_for_disk(false);
+        assert!(control.paused());
+        control.pause(false);
+        assert!(!control.paused());
+    }
     #[test]
     fn clock_freezes_immediately_and_cancellation_wakes_a_parked_worker() {
         let control = RunControl::default();

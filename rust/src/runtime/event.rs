@@ -6,6 +6,9 @@ use std::path::Path;
 #[derive(Debug)]
 #[cfg_attr(not(feature = "terminal-ui"), allow(dead_code))]
 pub(crate) enum RuntimeEvent<'a> {
+    ResourcePolicy {
+        message: &'a str,
+    },
     TaskPlanned {
         replicate: u64,
         phase: &'a str,

@@ -630,7 +630,8 @@ owns a phase-scoped declaration-ordered task panel, progress gauges/spinners,
 one compact `elapsed / ETA` field, a bounded non-scrollable newest-message
 panel, a Usage panel, and the former command editor. CPU and RAM come from
 Linux `/proc`; disk is the occupied percentage of the filesystem containing
-the execution directory. Sampling failures render `--` and never affect work.
+the execution directory. UI sampling failures render `--`; the independent Runtime
+disk guard treats its own sampling failures as fatal while enabled.
 Every phase-start event replaces the visible task set. Replicate and phase
 appear once in the panel title; rows contain only the task label, a concise kind
 tag (`unit` for the internal `execution_unit` kind), status, progress, and timing.
@@ -871,3 +872,45 @@ reuse even if the clock repeats. Names are invocation identities; scientific
 task identity is unchanged. Every physical `log.txt` line receives an absolute
 RFC 3339 UTC timestamp when appended, including buffered and multiline messages.
 Headless builds continue to omit the UI-owned log.
+
+
+## Disk guard and NPY resource policy
+
+`study.json` accepts optional `"disk": {"pause_at_percent": 95}`. The default
+is 95; a finite numeric threshold must be greater than 0 and at most 100. Use
+`null` as the threshold to explicitly bypass the guard. Unknown fields and
+invalid values are rejected during Config preflight.
+
+Runtime samples the output filesystem before admitting work and every 250 ms
+of wall time. At the threshold it requests a disk pause; it automatically clears
+that reason when usage reaches `max(0, threshold - 2)` percent. A separate manual
+pause remains in force, and manual resume cannot bypass the disk reason. The
+shared active clock freezes while either reason holds. Cancellation wakes
+paused work. These operations also run in headless builds. Sampling or monitor
+startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
+monitor failure cancels work and is returned after joining workers. The guard
+is stopped before the terminal's final user-input wait.
+
+Execution units pause between host calls; NPY/Python cooperative tasks acknowledge
+through control IPC. For non-cooperative Unix programs, disk pause sends SIGSTOP
+to the owned process group and recovery sends SIGCONT. Cleanup resumes a stopped
+group before terminating it. Disk enforcement is sampled and cooperative calls
+may take time to return, so the threshold is a pause trigger, not reserved free
+space or a guarantee that in-flight writes cannot fill the filesystem.
+
+The `$npy` phase accepts `"threads": 4` and `"mode": "auto"` (or `"fixed"`).
+Threads default to `study.threads` and must be a positive integer no larger than
+that global limit. Mode defaults to `fixed`; these fields are invalid on ordinary
+phases. Runtime reserves `min(phase.threads, study.threads, recording_count)`
+permits through the existing shared budget, including across replicates. Each
+conversion worker limits native numerical pools to one thread. Fixed mode admits
+workers up to that allowance immediately; auto begins at one and increases the
+admission limit by one every 250 ms of active time until the allowance is reached.
+Short batches may finish before reaching the limit. This does not measure CPU
+or RAM utilization, and the full allowance remains reserved during ramp-up.
+
+Python's `convert_workflow_dependencies` adds the optional keyword
+`worker_mode="fixed"`; `"auto"` selects gradual admission. Other values raise
+`NpyConversionError` before output creation. The Workflow CLI accepts
+`--worker-mode=fixed|auto` with `--workflow-dependencies`; ordinary single-recording
+conversion rejects it. Mode does not change result or reuse identity.

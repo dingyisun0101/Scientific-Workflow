@@ -280,10 +280,16 @@ impl ProjectSpecification {
                             });
                         }
                     }
-                    ParsedTask::Npy { exclude_streams } => {
+                    ParsedTask::Npy {
+                        exclude_streams,
+                        threads,
+                        auto,
+                    } => {
                         let program = ResolvedProgramTask::for_npy(
                             resolve_active_python()?,
                             &exclude_streams,
+                            threads,
+                            auto,
                         );
                         let snapshot = resolved_parameters
                             .first()

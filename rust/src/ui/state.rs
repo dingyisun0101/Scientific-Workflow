@@ -444,6 +444,7 @@ impl DashboardState {
 
 pub(super) fn event_message(event: &RuntimeEvent<'_>) -> Option<String> {
     match event {
+        RuntimeEvent::ResourcePolicy { message } => Some(format!("workflow: {message}")),
         RuntimeEvent::TaskPlanned { .. }
         | RuntimeEvent::TaskProgress { .. }
         | RuntimeEvent::ProgramProgress { .. } => None,

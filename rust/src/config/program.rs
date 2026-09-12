@@ -86,7 +86,12 @@ impl ResolvedProgramTask {
         }
     }
 
-    pub(crate) fn for_npy(program: PathBuf, exclude_streams: &[Box<str>]) -> Self {
+    pub(crate) fn for_npy(
+        program: PathBuf,
+        exclude_streams: &[Box<str>],
+        threads: usize,
+        auto: bool,
+    ) -> Self {
         Self {
             inner: Arc::new(ResolvedProgramTaskInner {
                 program,
@@ -94,6 +99,11 @@ impl ResolvedProgramTask {
                     OsString::from("-m"),
                     OsString::from("scientific_workflow.npy"),
                     OsString::from("--workflow-dependencies"),
+                    OsString::from(if auto {
+                        "--worker-mode=auto"
+                    } else {
+                        "--worker-mode=fixed"
+                    }),
                 ]
                 .into_iter()
                 .chain(
@@ -104,7 +114,7 @@ impl ResolvedProgramTask {
                 .collect(),
                 timeout: None,
                 seed_purpose: None,
-                threads: 1,
+                threads,
                 subject: "NPY conversion".into(),
                 source: ProgramSource::Npy,
             }),

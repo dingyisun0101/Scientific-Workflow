@@ -253,3 +253,11 @@ IO or allocation, and are safe to share with the owning Study. Task identities
 and output ordinals retain their original declaration-based values. Study keeps
 the canonical optional reuse source as private intent; Runtime and Persistence
 validate completed source outputs before execution creates new directories.
+
+
+The immutable Study retains the Config-validated optional disk threshold for
+Runtime through the private `disk_pause_at()` view. Synthesized NPY programs
+retain their effective phase thread allowance in the existing program thread
+field, so planned task inspection reflects the limit. `mode` lowers to the
+converter's `--worker-mode` argument. Neither setting participates in work reuse
+identity; Runtime owns enforcement, not Study or UI.

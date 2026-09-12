@@ -41,7 +41,7 @@ The global count also initializes one process-wide permit budget shared by all
 replicate schedulers. Auto mode admits at most one execution-unit task per
 global thread; isolated tasks are admitted only while their fixed allocations
 fit. External tasks reserve their configured thread count; `$npy` reserves
-`min(study.threads, deduplicated recording count)`. External work and
+`min(phase.threads, study.threads, deduplicated recording count)`. External work and
 in-process execution-unit work do not overlap, keeping the authored global
 ceiling exact.
 
@@ -88,7 +88,7 @@ path. When an embedding explicitly disables default features, the UI module and
 terminal dependencies are absent and composition attaches a silent observer to
 Runtime's unchanged port. Execution and summaries behave normally, but there
 is no presentation output or UI-originated cancellation in that build.
-It also has no UI-authored `log.txt` or host-usage sampling.
+It has no UI-authored `log.txt` or host-usage panel; Runtime disk monitoring remains active.
 
 An execution blocks until all admitted work has stopped and all successful
 persistence sessions have durably completed. ExecutionUnit cancellation is cooperative
@@ -445,7 +445,7 @@ Standard converter workers use spawn, never fork inherited Rust state. Runtime
 reserves the pool allowance through the shared resource coordinator and the
 task's lifetime lease; concurrent replicates
 cannot each independently consume the study ceiling. NumPy native pools are
-limited to one thread per worker. No separate user worker-count setting is added.
+limited to one thread per worker. The optional `$npy.threads` limit and `$npy.mode` policy are described below.
 
 ### Optional phase and execution-unit selection
 
@@ -547,3 +547,45 @@ reuse even if the clock repeats. Names are invocation identities; scientific
 task identity is unchanged. Every physical `log.txt` line receives an absolute
 RFC 3339 UTC timestamp when appended, including buffered and multiline messages.
 Headless builds continue to omit the UI-owned log.
+
+
+## Disk guard and NPY resource policy
+
+`study.json` accepts optional `"disk": {"pause_at_percent": 95}`. The default
+is 95; a finite numeric threshold must be greater than 0 and at most 100. Use
+`null` as the threshold to explicitly bypass the guard. Unknown fields and
+invalid values are rejected during Config preflight.
+
+Runtime samples the output filesystem before admitting work and every 250 ms
+of wall time. At the threshold it requests a disk pause; it automatically clears
+that reason when usage reaches `max(0, threshold - 2)` percent. A separate manual
+pause remains in force, and manual resume cannot bypass the disk reason. The
+shared active clock freezes while either reason holds. Cancellation wakes
+paused work. These operations also run in headless builds. Sampling or monitor
+startup failure produces `RuntimeError::DiskMonitor { path, source }`; an active
+monitor failure cancels work and is returned after joining workers. The guard
+is stopped before the terminal's final user-input wait.
+
+Execution units pause between host calls; NPY/Python cooperative tasks acknowledge
+through control IPC. For non-cooperative Unix programs, disk pause sends SIGSTOP
+to the owned process group and recovery sends SIGCONT. Cleanup resumes a stopped
+group before terminating it. Disk enforcement is sampled and cooperative calls
+may take time to return, so the threshold is a pause trigger, not reserved free
+space or a guarantee that in-flight writes cannot fill the filesystem.
+
+The `$npy` phase accepts `"threads": 4` and `"mode": "auto"` (or `"fixed"`).
+Threads default to `study.threads` and must be a positive integer no larger than
+that global limit. Mode defaults to `fixed`; these fields are invalid on ordinary
+phases. Runtime reserves `min(phase.threads, study.threads, recording_count)`
+permits through the existing shared budget, including across replicates. Each
+conversion worker limits native numerical pools to one thread. Fixed mode admits
+workers up to that allowance immediately; auto begins at one and increases the
+admission limit by one every 250 ms of active time until the allowance is reached.
+Short batches may finish before reaching the limit. This does not measure CPU
+or RAM utilization, and the full allowance remains reserved during ramp-up.
+
+Python's `convert_workflow_dependencies` adds the optional keyword
+`worker_mode="fixed"`; `"auto"` selects gradual admission. Other values raise
+`NpyConversionError` before output creation. The Workflow CLI accepts
+`--worker-mode=fixed|auto` with `--workflow-dependencies`; ordinary single-recording
+conversion rejects it. Mode does not change result or reuse identity.

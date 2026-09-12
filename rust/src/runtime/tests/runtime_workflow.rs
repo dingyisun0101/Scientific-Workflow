@@ -19,6 +19,46 @@ use super::execution::task_exceeded_timeout;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn disk_pause_before_admission_can_be_cancelled_without_a_dashboard() {
+    use std::sync::{Arc, atomic::AtomicUsize};
+    struct Observer {
+        control: super::RunControl,
+        started: Arc<AtomicUsize>,
+    }
+    impl RuntimeObserver for Observer {
+        fn publish(&self, event: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
+            if matches!(event, RuntimeEvent::TaskStarted { .. }) {
+                self.started.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(())
+        }
+        fn control(&self) -> super::RunControl {
+            self.control.clone()
+        }
+        fn cancellation_requested(&self) -> Result<bool, PresentationFailure> {
+            Ok(self.control.disk_paused())
+        }
+        fn finish(&self) -> Result<(), PresentationFailure> {
+            Ok(())
+        }
+    }
+    let project = Project::new(
+        serde_json::json!({"disk":{"pause_at_percent":0.000001}, "phases":{"run":{"tasks":[{"program":"/bin/true"}]}}}),
+        serde_json::json!({}),
+    );
+    let started = Arc::new(AtomicUsize::new(0));
+    let error = execute_with_observer(Study::load(project.path()).unwrap(), || {
+        Ok(Observer {
+            control: super::RunControl::default(),
+            started: started.clone(),
+        })
+    })
+    .unwrap_err();
+    assert!(matches!(error, RuntimeError::ExecutionCancelled));
+    assert_eq!(started.load(Ordering::Relaxed), 0);
+}
+
 struct Project(PathBuf);
 
 impl Project {

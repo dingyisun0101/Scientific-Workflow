@@ -145,21 +145,26 @@ fn execute_with_presentation(
     })?;
 
     let result = (|| {
+        let disk = super::disk::DiskGuard::start(&output, study.disk_pause_at(), presentation)?;
         let mut scopes = Vec::new();
         for index in 0..count {
             scopes.push((index, create_replicate(&output, index)?));
         }
-        match study.replicate_policy().scheduling() {
+        let result = match study.replicate_policy().scheduling() {
             ReplicateScheduling::Sequential => {
                 run_replicates_sequential(&study, scopes, presentation, &resources, reused)
             }
             ReplicateScheduling::Parallel => {
                 run_replicates_parallel(&study, scopes, presentation, &resources, reused)
             }
-        }
+        };
+        disk.finish()?;
+        result
     })();
 
-    let result = if presentation.cancellation_requested()? {
+    let result = if presentation.cancellation_requested()?
+        && !matches!(&result, Err(RuntimeError::DiskMonitor { .. }))
+    {
         Err(RuntimeError::ExecutionCancelled)
     } else {
         result

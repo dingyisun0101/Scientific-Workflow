@@ -11,6 +11,43 @@ use serde::Deserialize;
 
 static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
 
+#[test]
+fn disk_policy_and_npy_resource_limits_are_strict() {
+    use crate::config::manifest::parse;
+    use serde_json::json;
+    let base = json!({"workflow_schema":1, "threads":4, "compute":{"mode":"auto"}, "phases":{
+        "run":{"tasks":[{"execution_unit":"unit"}]}, "$npy":{"after":["run"], "threads":2, "mode":"auto"}
+    }});
+    let parsed = parse(Path::new("wf_configs/study.json"), base.clone()).unwrap();
+    assert_eq!(parsed.manifest.disk_pause_at(), Some(95.0));
+    assert!(matches!(
+        &parsed.phases[1].tasks[0],
+        crate::config::manifest::ParsedTask::Npy {
+            threads: 2,
+            auto: true,
+            ..
+        }
+    ));
+    for value in [json!(null), json!(90), json!(99.5)] {
+        let mut changed = base.clone();
+        changed["disk"] = json!({"pause_at_percent":value});
+        assert!(parse(Path::new("study.json"), changed).is_ok());
+    }
+    for value in [json!(0), json!(-1), json!(101), json!("95")] {
+        let mut changed = base.clone();
+        changed["disk"] = json!({"pause_at_percent":value});
+        assert!(parse(Path::new("study.json"), changed).is_err());
+    }
+    for value in [json!(0), json!(5), json!(1.5)] {
+        let mut changed = base.clone();
+        changed["phases"]["$npy"]["threads"] = value;
+        assert!(parse(Path::new("study.json"), changed).is_err());
+    }
+    let mut changed = base;
+    changed["phases"]["run"]["threads"] = json!(2);
+    assert!(parse(Path::new("study.json"), changed).is_err());
+}
+
 struct TestProject(PathBuf);
 
 impl TestProject {
@@ -1449,6 +1486,7 @@ fn reserved_npy_stream_exclusions_are_lowered_without_shell_interpretation() {
             "-m",
             "scientific_workflow.npy",
             "--workflow-dependencies",
+            "--worker-mode=fixed",
             "--exclude-stream=checkpoint",
             "--exclude-stream=--literal"
         ]

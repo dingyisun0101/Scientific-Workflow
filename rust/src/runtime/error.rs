@@ -9,6 +9,15 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// Required output-filesystem monitoring failed; active work is cancelled.
+    #[error("output disk monitoring failed for `{path}`: {source}")]
+    DiskMonitor {
+        /// Filesystem location being monitored.
+        path: PathBuf,
+        /// Capacity sampling or monitoring-thread failure.
+        #[source]
+        source: std::io::Error,
+    },
     /// A skipped prerequisite has no matching, successfully completed source result.
     #[error("cannot reuse phase `{phase}` from `{path}`: {reason}")]
     Reuse {

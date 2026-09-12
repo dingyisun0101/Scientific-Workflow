@@ -51,6 +51,7 @@ impl Study {
         );
         Self {
             inner: Arc::new(StudyInner {
+                disk_pause_at: manifest.disk_pause_at(),
                 active_phases: manifest.active_phases().into(),
                 reuse_from: manifest.reuse_from().map(Path::to_path_buf),
                 phase_order: topological_positions(&phases).into_boxed_slice(),
@@ -81,6 +82,10 @@ impl Study {
     /// Returns the required study-wide global compute budget.
     pub fn threads(&self) -> usize {
         self.inner.threads
+    }
+
+    pub(crate) fn disk_pause_at(&self) -> Option<f64> {
+        self.inner.disk_pause_at
     }
 
     pub(crate) fn compute_mode(&self) -> ComputeMode {
@@ -148,6 +153,7 @@ impl std::fmt::Debug for Study {
 }
 
 struct StudyInner {
+    disk_pause_at: Option<f64>,
     active_phases: Box<[usize]>,
     reuse_from: Option<PathBuf>,
     phase_order: Box<[usize]>,

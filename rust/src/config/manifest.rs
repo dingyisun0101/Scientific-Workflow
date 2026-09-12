@@ -68,8 +68,9 @@ pub(crate) enum FailurePolicy {
 }
 
 /// The validated Workflow-owned portion of `wf_configs/study.json`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StudyManifest {
+    disk_pause_at: Option<f64>,
     workflow_schema: u64,
     active_phases: Box<[usize]>,
     reuse_from: Option<PathBuf>,
@@ -81,6 +82,9 @@ pub(crate) struct StudyManifest {
 }
 
 impl StudyManifest {
+    pub(crate) const fn disk_pause_at(&self) -> Option<f64> {
+        self.disk_pause_at
+    }
     /// Returns effective zero-based dependency-order phase indices.
     pub(crate) fn active_phases(&self) -> &[usize] {
         &self.active_phases
@@ -182,6 +186,8 @@ pub(crate) enum ParsedTask {
     },
     Npy {
         exclude_streams: Box<[Box<str>]>,
+        threads: usize,
+        auto: bool,
     },
 }
 
@@ -273,7 +279,19 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         raw.persistence.queue_capacity_mb,
     )?;
 
+    if raw
+        .disk
+        .pause_at_percent
+        .is_some_and(|value| !value.is_finite() || value <= 0.0 || value > 100.0)
+    {
+        return Err(ConfigError::invalid(
+            path,
+            "/disk/pause_at_percent",
+            "disk pause threshold must be greater than 0 and at most 100, or null to bypass",
+        ));
+    }
     let manifest = StudyManifest {
+        disk_pause_at: raw.disk.pause_at_percent,
         workflow_schema: raw.workflow_schema,
         active_phases: active_phases.into_boxed_slice(),
         reuse_from,
@@ -325,9 +343,25 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         let phase_pointer = child_pointer("/phases", &name);
         validate_identifier(path, &phase_pointer, &name, "phase")?;
         let exclusions_authored = value.get("exclude_streams").is_some();
+        let npy_resources_authored = value.get("threads").is_some() || value.get("mode").is_some();
         let raw: RawPhase = serde_json::from_value(value)
             .map_err(|error| ConfigError::invalid(path, &phase_pointer, error.to_string()))?;
         let npy_phase = name == NPY_PHASE_NAME;
+        if npy_resources_authored && !npy_phase {
+            return Err(ConfigError::invalid(
+                path,
+                &phase_pointer,
+                "phase threads and mode are valid only on `$npy`",
+            ));
+        }
+        let npy_threads = raw.threads.map_or(manifest.threads(), NonZeroUsize::get);
+        if npy_threads > manifest.threads() {
+            return Err(ConfigError::invalid(
+                path,
+                format!("{phase_pointer}/threads"),
+                "NPY thread limit must not exceed study threads",
+            ));
+        }
         if exclusions_authored && !npy_phase {
             return Err(ConfigError::invalid(
                 path,
@@ -523,6 +557,8 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
         }
         if npy_phase {
             tasks.push(ParsedTask::Npy {
+                threads: npy_threads,
+                auto: matches!(raw.mode, RawNpyMode::Auto),
                 exclude_streams: raw
                     .exclude_streams
                     .into_iter()
@@ -647,6 +683,8 @@ fn validate_acyclic(path: &Path, phases: &[ParsedPhase]) -> Result<(), ConfigErr
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawStudy {
+    #[serde(default)]
+    disk: RawDisk,
     workflow_schema: u64,
     #[serde(default)]
     active_phases: Option<Vec<usize>>,
@@ -737,6 +775,10 @@ impl Default for RawReplicatePolicy {
 #[serde(deny_unknown_fields)]
 struct RawPhase {
     #[serde(default)]
+    threads: Option<NonZeroUsize>,
+    #[serde(default)]
+    mode: RawNpyMode,
+    #[serde(default)]
     exclude_streams: Vec<String>,
     #[serde(default)]
     after: Vec<String>,
@@ -750,6 +792,27 @@ struct RawPhase {
     timeout_ms: Option<u64>,
     #[serde(default)]
     failure_policy: RawFailurePolicy,
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawDisk {
+    pause_at_percent: Option<f64>,
+}
+impl Default for RawDisk {
+    fn default() -> Self {
+        Self {
+            pause_at_percent: Some(95.0),
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RawNpyMode {
+    #[default]
+    Fixed,
+    Auto,
 }
 
 const fn default_max_concurrency() -> usize {

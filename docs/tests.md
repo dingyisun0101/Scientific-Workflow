@@ -325,3 +325,8 @@ Output tests force duplicate timestamps, verify collision suffixes, assert
 shared/exclusive project-lock conflicts, and exercise protected reuse paths,
 output-root symlinks, and child symlink cleanup. Live-log tests parse UTC stamps
 on buffered, live, and multiline messages.
+
+
+Resource-policy tests cover disk defaults/bypass/range checking, strict NPY
+limits, exact threshold and recovery transitions, independent manual pause,
+headless monitor failure/cancellation, and fixed/auto conversion equivalence.

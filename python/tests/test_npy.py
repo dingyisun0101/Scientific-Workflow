@@ -379,6 +379,11 @@ class ParallelBatchTests(unittest.TestCase):
             with patch.dict(os.environ, {"WORKFLOW_THREADS":"2"}):
                 parallel = convert_workflow_dependencies(deps, root / "parallel")
                 self.assertEqual(serial, parallel)
+                automatic = convert_workflow_dependencies(deps, root / "automatic", worker_mode="auto")
+                self.assertEqual(automatic, serial)
+                with self.assertRaises(NpyConversionError):
+                    convert_workflow_dependencies(deps, root / "invalid-mode", worker_mode="invalid")
+                self.assertFalse((root / "invalid-mode").exists())
                 member = root / "parallel/member-000000/manifest.json"
                 before = member.stat().st_mtime_ns
                 batch_path = root / "parallel/manifest.json"

@@ -144,6 +144,7 @@ def convert_workflow_dependencies(
     output_directory: str | Path,
     *,
     exclude_streams: Iterable[str] = (),
+    worker_mode: str = "fixed",
 ) -> dict[str, object]:
     """Convert prerequisites within WORKFLOW_THREADS; publish in stable order.
 
@@ -152,7 +153,12 @@ def convert_workflow_dependencies(
     and are verified/reused on retry. No partial success batch is published.
     Exact-name exclusions apply uniformly to every member and are part of reuse
     identity. Missing names are ignored; excluded chunks are never converted.
+    worker_mode='fixed' admits up to the allowance immediately; 'auto' begins
+    with one worker and grows by one every 250 ms of active time, up to the same
+    allowance. This is a worker-count policy, not CPU or memory feedback.
     """
+    if worker_mode not in ("fixed", "auto"):
+        raise NpyConversionError("worker_mode must be 'fixed' or 'auto'")
     excluded = _normalize_exclusions(exclude_streams)
     dependencies = Path(dependencies_path).expanduser().resolve(strict=True)
     output = Path(output_directory).expanduser().resolve()
@@ -204,12 +210,18 @@ def convert_workflow_dependencies(
                 pool = ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_worker_setup, initargs=(updates,))
                 pending = {}
                 next_ordinal = 0
+                admitted_limit = 1 if worker_mode == "auto" else workers
+                next_growth = _control.active_time() + 0.25
                 while next_ordinal < len(recordings) or pending:
                     _drain_updates(updates)
                     control_path, paused, cancelled = _control.state()
                     if cancelled:
                         raise InterruptedError("Workflow conversion cancelled")
-                    while not paused and next_ordinal < len(recordings) and len(pending) < workers:
+                    if not paused and worker_mode == "auto" and admitted_limit < workers and _control.active_time() >= next_growth:
+                        admitted_limit += 1
+                        next_growth = _control.active_time() + 0.25
+                        log(f"conversion worker limit increased: {admitted_limit}/{workers}")
+                    while not paused and next_ordinal < len(recordings) and len(pending) < admitted_limit:
                         ordinal = next_ordinal
                         recording = recordings[ordinal]
                         log(f"member {ordinal} started: {recording}")

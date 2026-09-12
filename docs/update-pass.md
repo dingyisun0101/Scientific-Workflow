@@ -48,6 +48,9 @@ These are design proposals until confirmed or explicitly adopted as defaults.
   tests and Clippy passed; all 35 Python tests passed under Python 3.14.
 - Phase 4 implemented timestamp execution names, guarded `--clean`, and UTC
   timestamps on every physical log line. Rust all-target tests passed.
+- Phase 5 implemented the default 95% disk guard, independent pause reasons,
+  process-group disk suspension, and NPY phase limits/fixed/auto admission.
+  All-feature and headless Rust suites, Clippy, and 35 Python tests passed.
 
 The existing all-feature Rust workspace suite is the starting baseline.
 Use Python 3.14 for companion validation; the shell's default Python is 3.12.

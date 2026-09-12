@@ -212,3 +212,9 @@ rather than presenting a truncated integer. Presentation never changes execution
 The private live-log sink timestamps each physical line with RFC 3339 UTC at
 append time, including messages buffered before log creation and multiline
 program messages. Dashboard timing remains based on the pause-aware run clock.
+
+
+Runtime's private `ResourcePolicy { message }` event reports disk pause/recovery
+through the existing message/log path. UI never enforces the disk policy; its
+best-effort disk reading shares Runtime's one-snapshot filesystem sampling
+helper. Required Runtime monitor failures remain fatal even if the UI is absent.
