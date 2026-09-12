@@ -307,6 +307,9 @@ reparse them as JSON.
 
 ## Not API
 
+Filesystem capacity sampling and directory leases use synchronous `fs4`.
+Lock contention remains a distinct failure; leases explicitly unlock on drop.
+
 Backend selection, `SystemStateWriter`,
 stream storage/layout values, queue worker, chunk
 publisher, metadata mutation, directory synchronization, directory lease,

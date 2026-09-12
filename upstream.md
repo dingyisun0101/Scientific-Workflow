@@ -4,10 +4,11 @@ Reviewed 2026-09-12 against the manifests, lockfile, upstream documentation,
 and the crates.io/PyPI registry APIs. Versions below are the latest published
 stable versions observed during this review, except explicitly named prereleases.
 Release dates are maintenance evidence, not a guarantee of quality or support.
-The package choices are proposals pending user agreement; no dependency version
-has been changed by this review.
+The user approved the proposed package list during the final decision review.
+The release refresh uses synchronous fs4 1.1.0 and the latest compatible
+registry versions. The macro crate source and manifest remain unchanged.
 
-## Proposed package choices
+## Approved package choices
 
 Retain the existing packages except replace `fs2` with `fs4` for filesystem
 statistics and directory locking. Use only synchronous features. Do not add a
@@ -23,7 +24,7 @@ pass: the requested changes fit the existing runtime and terminal architecture.
 | [erased-serde](https://docs.rs/erased-serde/latest/erased_serde/) | 0.4.10; 2026-03-02 | Retain for object-safe serialization of heterogeneous scientific payloads. [typetag](https://github.com/dtolnay/typetag) adds tagged trait-object registration/deserialization above erased-serde, while Workflow already owns its decoder registry and schema identity. |
 | [inventory](https://docs.rs/inventory/latest/inventory/) | 0.3.24; 2026-03-30 | Retain for linked execution-unit registration. [linkme](https://github.com/dtolnay/linkme) is a credible distributed-slice alternative, but changing the published registration macro and linker contract requires a separate demonstrated need. |
 | [rayon](https://docs.rs/rayon/latest/rayon/) | 1.12.0; 2026-04-14 | Retain for task-private CPU pools and work stealing. Scoped standard threads require custom scheduling; [Tokio](https://tokio.rs/) addresses asynchronous I/O rather than the synchronous CPU parallelism exposed to execution units. |
-| [fs2](https://docs.rs/fs2/latest/fs2/) → [fs4](https://docs.rs/fs4/latest/fs4/) | fs2 0.4.3; 2018-01-06. fs4 1.1.0; 2026-04-28 | Propose replacing fs2: its last published release is much older, while fs4 maintains the relevant filesystem-statistics and locking functionality. [std::fs::File](https://doc.rust-lang.org/std/fs/struct.File.html) now provides locking but not filesystem capacity queries; [rustix](https://docs.rs/rustix/latest/rustix/) is another strong lower-level option. fs4 supplies both required capabilities with a small migration. Validate directory locking, contention, and one-snapshot capacity sampling before acceptance. |
+| [fs2](https://docs.rs/fs2/latest/fs2/) → [fs4](https://docs.rs/fs4/latest/fs4/) | fs2 0.4.3; 2018-01-06. fs4 1.1.0; 2026-04-28 | Replace fs2: its last published release is much older, while fs4 maintains the relevant filesystem-statistics and locking functionality. [std::fs::File](https://doc.rust-lang.org/std/fs/struct.File.html) now provides locking but not filesystem capacity queries; [rustix](https://docs.rs/rustix/latest/rustix/) is another strong lower-level option. fs4 supplies both required capabilities with a small migration. Validate directory locking, contention, and one-snapshot capacity sampling before acceptance. |
 | [libc](https://github.com/rust-lang/libc) | 0.2.189; 2026-07-21 | Retain for current Unix process-group control. rustix and [nix](https://docs.rs/nix/latest/nix/) provide safer wrappers, but replacing the small existing platform layer is not necessary for this pass. Keep unsafe calls contained and reviewed. |
 | [sha2](https://github.com/RustCrypto/hashes) | 0.11.0; 2026-03-25 | Retain SHA-256 because it is part of persisted checksum compatibility and matches Python hashlib. [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) is a credible faster-hash alternative, but adopting it would change the recording protocol; [ring](https://docs.rs/ring/latest/ring/) introduces a broader cryptography implementation than needed. |
 | [thiserror](https://github.com/dtolnay/thiserror) | 2.0.20; 2026-08-08 | Retain typed subsystem errors and source chaining. [anyhow](https://github.com/dtolnay/anyhow) fits application-level opaque errors, while [SNAFU](https://docs.rs/snafu/latest/snafu/) would require a different error/context pattern. Neither improves the supported typed error API here. |
@@ -63,7 +64,7 @@ by their direct owners rather than independently substituted: Rayon owns its
 worker deque/core stack; Ratatui/Crossterm own terminal backends and layout;
 Serde/Thiserror own their derive implementations; SHA-2 owns its digest stack;
 fs4 owns its platform filesystem bindings. Refresh compatible transitive
-versions after agreement, inspect the lockfile diff, and validate the resulting
+versions after approval, inspect the lockfile diff, and validate the resulting
 graph. Do not force incompatible major upgrades through overrides.
 
 The private examples intentionally consume the published Workflow package and
@@ -75,3 +76,13 @@ Registry evidence is directly reproducible at
 `https://crates.io/api/v1/crates/<package>` and
 `https://pypi.org/pypi/<package>/json`; each package's linked upstream supplies
 the API and architectural evidence for the comparisons above.
+
+## Approved refresh validation
+
+Registry versions were rechecked against crates.io and PyPI for the approved
+refresh. All reviewed direct versions still match the tables above. The
+lockfile refresh advances compatible transitive dependencies. fs4 replaces
+fs2 in Workflow; the older published Workflow used by private examples still
+brings fs2 transitively until those consumers move to the online new release.
+Python validation uses NumPy 2.5.3, threadpoolctl 3.6.0, and setuptools 84.0.0;
+existing compatible requirement ranges remain unchanged.

@@ -367,6 +367,9 @@ for replicate in summary.replicates() {
 
 ## Not API
 
+Filesystem capacity sampling and directory leases use synchronous `fs4`.
+Lock contention remains a distinct failure; leases explicitly unlock on drop.
+
 Scheduler polling, worker thread names, active task handles, atomic cancellation
 flags, completion channels/timestamps, bounded panic-payload formatting,
 task output ordinals, the compute coordinator/leases/rebalancing barrier,

@@ -1,6 +1,6 @@
 //! Private inferred Runtime output directories.
 
-use fs2::FileExt;
+use fs4::FileExt;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
@@ -16,7 +16,7 @@ impl OutputLease {
     pub(crate) fn acquire(project: &Path, clean: bool) -> std::io::Result<Self> {
         let file = File::open(project)?;
         if clean {
-            FileExt::try_lock_exclusive(&file)?;
+            FileExt::try_lock(&file)?;
         } else {
             FileExt::try_lock_shared(&file)?;
         }
@@ -31,7 +31,7 @@ impl OutputLease {
         fs::create_dir_all(&root)?;
         let output = File::open(&root)?;
         if clean {
-            FileExt::try_lock_exclusive(&output)?;
+            FileExt::try_lock(&output)?;
         } else {
             FileExt::try_lock_shared(&output)?;
         }

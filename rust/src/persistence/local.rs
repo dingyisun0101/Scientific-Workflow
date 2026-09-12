@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use fs2::FileExt;
+use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -657,17 +657,15 @@ impl RecordingLease {
             path: root.to_path_buf(),
             source,
         })?;
-        match FileExt::try_lock_exclusive(&directory) {
+        match FileExt::try_lock(&directory) {
             Ok(()) => Ok(Self { directory }),
-            Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
-                Err(PersistenceError::RecordingDirectoryInUse {
-                    path: root.to_path_buf(),
-                })
-            }
+            Err(fs4::TryLockError::WouldBlock) => Err(PersistenceError::RecordingDirectoryInUse {
+                path: root.to_path_buf(),
+            }),
             Err(source) => Err(PersistenceError::Io {
                 operation: "acquire exclusive output ownership",
                 path: root.to_path_buf(),
-                source,
+                source: source.into(),
             }),
         }
     }

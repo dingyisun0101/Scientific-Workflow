@@ -939,3 +939,6 @@ shows the current page and page count. Resizing recalculates capacity and clamps
 to a valid page; an existing first-row anchor is retained where possible, and a
 disappearing active-group anchor resets to the first page. All rows on a full
 page are usable, and the final page may contain fewer rows.
+
+Filesystem capacity sampling and advisory directory leases use synchronous `fs4`;
+Runtime owns output leases and Persistence owns recording-writer leases.

@@ -8,7 +8,7 @@ use super::presentation::RuntimePresentation;
 use super::{RunControl, RuntimeError, RuntimeEvent};
 
 pub(crate) fn usage(path: &Path) -> std::io::Result<f64> {
-    let stats = fs2::statvfs(path)?;
+    let stats = fs4::statvfs(path)?;
     let total = stats.total_space();
     if total == 0 {
         return Err(std::io::Error::other("filesystem reported zero capacity"));

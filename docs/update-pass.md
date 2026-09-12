@@ -5,7 +5,7 @@ on `main`, with a commit and successful push between phases, on 2026-09-12.
 This instruction replaces the temporary-branch/merge workflow for this pass.
 
 1. Contracts and upstream review: `upstream.md` records the proposed dependency
-   list. Await agreement before changing dependency choices or versions.
+   list. The user approved it during the final decision review.
 2. Establish and validate the approved dependency baseline.
 3. Separate work identity from operational settings and tighten JSON immutability.
 4. Timestamp execution IDs, implement `--clean`, and timestamp every log line.
@@ -14,37 +14,41 @@ This instruction replaces the temporary-branch/merge workflow for this pass.
 7. Complete integrated checks, documentation, push/tag/publication, and update
    downstream consumers to the published release.
 
-## Proposed behavioral contracts
+## Agreed behavioral contracts
 
-- UTC execution IDs use a sortable filesystem-safe timestamp and atomic
-  directory creation with collision protection.
-- `--clean` clears the configured output directory before execution creation,
-  after preflight and cleanup-target validation. It must not delete a selected
-  reuse source, project inputs, or another active execution.
-- Work identity retains parameters, schemas, seeds, execution-unit/program
-  selection, arguments, and the dependency graph. Scheduling, resource limits,
-  disk policy, and host-specific launcher settings are operational metadata.
-- JSON configuration is captured once. Task input JSON is immutable and checked
-  for modification; finalized output JSON cannot be rewritten. Runtime control
-  documents and active recording metadata need explicit lifecycle exceptions.
-- Proposed disk recovery: automatically resume at two percentage points below
-  the pause threshold, preserving independently requested manual pause.
-- Proposed NPY auto target: gradually admit single-thread workers to the phase
-  limit within the global thread budget; this is not utilization-based tuning.
-- Dashboard counts represent allocated compute threads, not all OS threads.
-- Every physical line in `log.txt` receives an absolute UTC timestamp.
+The user settled these decisions individually before final release validation:
 
-The disk recovery, NPY target, and JSON boundary questions were sent to the user.
-The implementation adopted the documented snapshot, automatic recovery, and
-worker-count defaults while the preference questions remained unanswered.
+- Refresh the reviewed dependencies, including `fs2` → synchronous `fs4`.
+  Keep the separately published macro crate unchanged.
+- Disk usage pauses work at 95% by default. Recovery to two percentage points
+  below the threshold only enables manual resumption: the user must type
+  `resume` and Enter. Remind users when paused and when space is sufficient.
+- Disk monitor startup/sampling failures stop the run with a clear error;
+  active work is cancelled and existing output retained.
+- NPY defaults to `auto`: start one single-thread worker, add one every 250 ms
+  of active time, and retain the full reserved allowance throughout the ramp.
+  Advise users to inherit the study thread budget unless reserving resources
+  for other tasks requires a lower conversion limit.
+- Source JSON remains editable for future runs. Active runs retain immutable
+  snapshots, captured inputs, and finalized output JSON; active runtime control
+  and recording metadata have lifecycle exceptions.
+- `--clean` removes all previous output after preflight and protection checks.
+- Operational settings, including Python environment selection, do not
+  invalidate reuse; scientific inputs still must match.
+- Dashboard thread counts show allocated compute threads and used/budget totals.
+- Execution names and every physical log line use absolute UTC timestamps.
+- The dashboard is required. There is no headless execution mode. Reject
+  noninteractive launches before output mutation and instruct users to run
+  inside `screen` or `tmux`. Typed `resume` uses the dashboard command input.
+- Preserve page-capacity navigation, resize clamping, and stable task identity.
 
 ## Validation and release
 
 ### Progress
 
-- Phase 1 review pushed as `c1daaea`; package agreement remains pending.
-- Phase 2 dependency changes are deferred pending that agreement. Independent
-  implementation proceeds with the existing published dependency versions.
+- Phase 1 review pushed as `c1daaea`; package agreement is now complete.
+- Phase 2 dependency refresh completed: fs4 1.1.0 plus compatible lockfile
+  updates. Workspace tests, Clippy, and 35 Python tests passed.
 - Phase 3 implemented using the proposed snapshot contract. Rust all-target
   tests and Clippy passed; all 35 Python tests passed under Python 3.14.
 - Phase 4 implemented timestamp execution names, guarded `--clean`, and UTC
@@ -74,10 +78,8 @@ published-version examples. The final validation result is recorded in the
 commit handoff. The output lease explicitly unlocks before descriptor teardown
 to avoid transient inherited-lock retention during concurrent child launches.
 
-Phase 2 and the publication/downstream portion of Phase 7 remain outstanding:
-no dependency-list agreement has arrived. Registry dependency versions are
-unchanged, the macro crate has not been edited, no release tag has been created,
-and neither candidate package has been published. Once the package list is
-agreed, upgrade and validate dependencies, push that phase, remove candidate
-notices, push release changes and tags, publish, then update consumers to the
-online versions. Do not treat this checkpoint as a completed release.
+At the earlier candidate checkpoint, dependency agreement and publication were
+pending. Agreement is now complete and Phase 2 is validated. The subsequent
+behavioral corrections listed above must pass final validation before release.
+No release tag or package publication has occurred yet. Push release changes
+and tags before publication, then update consumers to the online versions.
