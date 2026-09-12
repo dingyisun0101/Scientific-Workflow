@@ -34,7 +34,7 @@ dependencies = [
 name = "attractor-2d"
 version = "0.1.0"
 dependencies = [
- "scientific-workflow 0.14.2",
+ "scientific-workflow 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
 ]
@@ -311,16 +311,6 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
-
-[[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
-]
 
 [[package]]
 name = "fs4"
@@ -885,15 +875,14 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "scientific-workflow"
-version = "0.14.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9913b8fb0656d4abe6b2c3de18a283cea321f1b224827e0042a27e40225b98f2"
+version = "0.15.0"
 dependencies = [
  "crossterm",
  "erased-serde",
- "fs2",
+ "fs4",
  "inventory",
  "libc",
+ "physics_in_parallel",
  "ratatui",
  "rayon",
  "scientific-workflow-macros 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -908,13 +897,14 @@ dependencies = [
 [[package]]
 name = "scientific-workflow"
 version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4839b902fcd78e10576adb618ca7a6367cfaf9212eed7301a9effb675de350ba"
 dependencies = [
  "crossterm",
  "erased-serde",
  "fs4",
  "inventory",
  "libc",
- "physics_in_parallel",
  "ratatui",
  "rayon",
  "scientific-workflow-macros 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1266,7 +1256,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workflow-dependency-pipeline"
 version = "0.1.0"
 dependencies = [
- "scientific-workflow 0.14.2",
+ "scientific-workflow 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
 ]
 

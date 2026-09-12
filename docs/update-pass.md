@@ -101,3 +101,15 @@ The behavior phase is pushed as `57164a5`. Cargo publication dry-run verified
 the 110-file crate against registry dependencies. Final release preparation
 removes candidate notices, stabilizes the pause test deadline, and runs examples
 in a real terminal. Publication follows a green release-commit CI run.
+
+### Publication and repository consumers
+
+Release commit `d4c1af3` passed both CI jobs. Tag `v0.15.0` was pushed before
+publishing Rust 0.15.0 to crates.io and Python 0.5.0 to PyPI. Registry checks
+confirmed availability and the uploaded Python artifact checksums.
+Workflow's two private examples now consume those online versions, with the
+Python companion pinned in `examples/requirements.txt`. Both dashboards, NPY
+conversion, pipeline values `[7, 8, 9, 10, 11, 12]`, and attractor plot outputs
+passed. Workspace tests and Clippy passed with the updated consumer lockfile.
+Other workspace repositories remain outside this commit; their migration scope
+was presented separately to the user.

@@ -3,7 +3,9 @@
 **Linux only. Python 3.14+ and an activated environment containing the compatible
 `scientific-workflow[npy]` package are REQUIRED. Cargo does not install Python.**
 
-From the repository root, after installing `./python[npy]` in that environment:
+From the repository root, install the published companion with
+`python -m pip install -r examples/requirements.txt`, then run inside
+`tmux new -s workflow` or `screen -S workflow`:
 
 ```sh
 cargo run -p workflow-dependency-pipeline
@@ -25,7 +27,7 @@ The `initialize` unit records its already-complete value once using
 recording through typed dependencies, decodes `u64` with `with_json_field`, moves
 its payload into a new state, and advances five steps. Its periodic recording
 uses format 7. The standard `$npy` task receives both transitive recordings and
-converts them using two shared-budget workers. NPY remains format 2.
+converts them with gradual admission of up to two shared-budget workers. NPY remains format 2.
 
 Python locates the aggregate batch using `Dependencies.from_env()`, selects
 simulation members using `execution_unit`, and reads a cached whole-series view.
@@ -45,6 +47,8 @@ retain the verified conversion object rather than repeatedly reopening it.
 
 The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
 one thread to each execution-unit task within the global two-thread budget.
-The example consumes its manifest's published Workflow version; its Python
-companion must come from the matching release tag. During a pending Workflow
-release, use a separate Python environment for these published-version examples.
+The example consumes published Workflow 0.15.0 and the Python 0.5.0 companion
+pinned in `examples/requirements.txt`. Execution requires the dashboard; run
+inside screen/tmux. Disk pauses require freeing space and typing `resume`.
+Leave NPY worker settings unset for the default gradual auto allocation unless
+a lower limit is needed to reserve resources for other work.

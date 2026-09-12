@@ -354,10 +354,10 @@ two-member batch. Runtime cleanup integration verifies replacement of arbitrary
 old output after preflight without changing configuration. Lock tests also cover
 an active run reaching the same output directory through a symlink alias.
 
-The private examples still consume published Workflow 0.14.2 until 0.15.0 is
-online. Both were run successfully with the published Python 0.4.5 companion in
-a separate environment. CI derives their companion release tag from the example
-Cargo manifest instead of mixing it with the local candidate's Python version.
+The private examples now consume published Workflow 0.15.0 and Python 0.5.0.
+Before publication both were also qualified against 0.14.2 / 0.4.5. CI installs
+the examples' published companion from `examples/requirements.txt` in a separate
+environment, independently of future candidate package versions.
 The examples now declare the required isolated compute mode and per-unit thread
 requests explicitly. This repairs a pre-existing runnable-example preflight gap.
 
