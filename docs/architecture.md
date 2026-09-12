@@ -846,3 +846,28 @@ are published without replacing existing files. A matching completed NPY batch
 is verified and returned unchanged; conflicting or corrupt batches fail without
 rewriting the committed JSON. These are writer/API guarantees, not protection
 against an external process with filesystem write permission.
+
+
+## Run cleanup and timestamps
+
+The ordinary `run(&Path)` facade recognizes `--clean` before an optional `--`
+argument delimiter, for example `cargo run -- --clean`. After complete study,
+reuse, and Python preflight, it clears `<project-root>/output` before creating
+the execution. Other arguments remain application-owned. `runtime::execute`
+does not inspect process arguments and does not clean.
+
+All runs hold a shared advisory lock on the project directory; a cleaning run
+holds it exclusively until execution and presentation finish. Cleanup rejects
+an output-root symlink/file, a conflicting active run, or a target containing
+configuration, a resolved executable/script, a selected reuse source, or any
+imported task/member/NPY directory. Child symlinks are removed without following
+them. Deletion errors abort startup; already removed entries are not restored.
+The output directory itself is preserved. Older Workflow versions do not
+participate in this project-lock protocol.
+
+Execution directories use `execution-YYYYMMDDTHHMMSS.nnnnnnnnnZ`, UTC, with an
+additional numeric suffix only on collision. Atomic directory creation prevents
+reuse even if the clock repeats. Names are invocation identities; scientific
+task identity is unchanged. Every physical `log.txt` line receives an absolute
+RFC 3339 UTC timestamp when appended, including buffered and multiline messages.
+Headless builds continue to omit the UI-owned log.

@@ -10,16 +10,22 @@ use crate::runtime::{PresentationFailure, RuntimeEvent, RuntimeObserver};
 
 /// Executes a validated Study with Workflow's automatic presentation adapter.
 pub fn execute(study: Study) -> Result<RunSummary, RuntimeError> {
+    execute_options(study, false)
+}
+
+pub(crate) fn execute_options(study: Study, clean: bool) -> Result<RunSummary, RuntimeError> {
     #[cfg(feature = "terminal-ui")]
     {
-        crate::runtime::execute_with_observer(study, || {
-            UiSession::automatic().map_err(|source| Box::new(source) as _)
-        })
+        crate::runtime::execute_with_observer_options(
+            study,
+            || UiSession::automatic().map_err(|source| Box::new(source) as _),
+            clean,
+        )
     }
 
     #[cfg(not(feature = "terminal-ui"))]
     {
-        crate::runtime::execute_with_observer(study, || Ok(SilentObserver))
+        crate::runtime::execute_with_observer_options(study, || Ok(SilentObserver), clean)
     }
 }
 

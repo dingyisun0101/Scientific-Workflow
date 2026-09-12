@@ -130,9 +130,19 @@ pub use task::{
 /// an embedding integration can load a [`study::Study`] and call
 /// [`runtime::execute`] to
 /// retain a read-only run summary.
+///
+/// Recognizes `--clean` in process arguments before an optional `--` delimiter.
+/// After preflight, this clears `<project_root>/output` while holding exclusive
+/// project ownership. Symlink output roots, active runs, and reuse sources in
+/// that directory are rejected. Other application arguments are ignored.
+/// Embedding through [`runtime::execute`] never reads process arguments.
 pub fn run(project_root: &std::path::Path) -> Result<(), WorkflowError> {
     let study = study::Study::load(project_root)?;
-    runtime::execute(study)?;
+    let clean = std::env::args_os()
+        .skip(1)
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--clean");
+    composition::execute_options(study, clean)?;
     Ok(())
 }
 

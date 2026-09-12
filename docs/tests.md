@@ -319,3 +319,9 @@ Reuse tests distinguish operational resource/scheduling policy from scientific
 inputs. Persistence tests reject changed program-input bytes (including JSON
 whitespace) and repeated terminal status updates. Python retry tests require
 both member and batch JSON bytes and modification times to remain unchanged.
+
+
+Output tests force duplicate timestamps, verify collision suffixes, assert
+shared/exclusive project-lock conflicts, and exercise protected reuse paths,
+output-root symlinks, and child symlink cleanup. Live-log tests parse UTC stamps
+on buffered, live, and multiline messages.

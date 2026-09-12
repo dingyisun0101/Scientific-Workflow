@@ -207,3 +207,8 @@ The table reserves space for complete numeric counters before task labels and
 timing columns. Numbers precede the bar, whose length shrinks to fit. On a
 terminal too narrow for the counter itself, dots explicitly omit the value
 rather than presenting a truncated integer. Presentation never changes execution.
+
+
+The private live-log sink timestamps each physical line with RFC 3339 UTC at
+append time, including messages buffered before log creation and multiline
+program messages. Dashboard timing remains based on the pause-aware run clock.

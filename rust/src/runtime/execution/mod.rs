@@ -28,6 +28,7 @@ use super::summary::{PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKi
 use crate::config::{FailurePolicy, ReplicateScheduling};
 use crate::study::{Study, StudyPhase};
 
+#[cfg(test)]
 pub(crate) fn execute_with_observer<O, F>(
     study: Study,
     create_observer: F,
@@ -36,8 +37,59 @@ where
     O: RuntimeObserver,
     F: FnOnce() -> Result<O, PresentationFailure>,
 {
+    execute_with_observer_options(study, create_observer, false)
+}
+
+pub(crate) fn execute_with_observer_options<O, F>(
+    study: Study,
+    create_observer: F,
+    clean: bool,
+) -> Result<RunSummary, RuntimeError>
+where
+    O: RuntimeObserver,
+    F: FnOnce() -> Result<O, PresentationFailure>,
+{
     let reused = reuse::prepare(&study)?;
     super::program::check_prerequisites(&study)?;
+    let _lease =
+        super::output::OutputLease::acquire(study.project_root(), clean).map_err(|source| {
+            RuntimeError::OutputScope {
+                path: study.output_root().to_path_buf(),
+                source,
+            }
+        })?;
+    if clean {
+        let config_root = study.project_root().join("wf_configs");
+        let mut protected = vec![config_root.as_path()];
+        protected.extend(study.reuse_from());
+        for phase in study.phases() {
+            for task in phase.tasks() {
+                protected.extend(task.program_path());
+                protected.extend(task.python_script());
+            }
+        }
+        for phase in reused.values() {
+            for task in phase.tasks() {
+                protected.push(task.output_directory());
+                match task.kind() {
+                    TaskRunKind::ExecutionUnit { members, .. } => {
+                        protected.extend(members.iter().map(|member| member.output_directory()));
+                    }
+                    TaskRunKind::Npy {
+                        processed_directory,
+                        ..
+                    } => protected.push(processed_directory),
+                    _ => {}
+                }
+            }
+        }
+        super::output::clean_output(study.output_root(), &protected).map_err(|source| {
+            RuntimeError::OutputScope {
+                path: study.output_root().to_path_buf(),
+                source,
+            }
+        })?;
+    }
     let resources = ResourceCoordinator::new(study.threads(), study.compute_mode());
     let output = create_execution(study.output_root())?;
     let observer = create_observer().map_err(RuntimeError::presentation_boxed)?;

@@ -91,3 +91,9 @@ Individual `pub use` statements, the hidden sealed tuple implementation, the
 macro-support registration type, and `scientific_workflow::__private` are
 implementation details. Public ownership is defined by the crate root or the
 symbol's module root, never by its prelude path.
+
+
+`run` recognizes the process flag `--clean` before an optional `--` delimiter.
+It validates first, then clears the standard output directory with exclusive
+project ownership. Embedding with `runtime::execute` does not read CLI flags.
+See Runtime's API guide for cleanup protections and failure behavior.

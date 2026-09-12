@@ -46,6 +46,8 @@ These are design proposals until confirmed or explicitly adopted as defaults.
   implementation proceeds with the existing published dependency versions.
 - Phase 3 implemented using the proposed snapshot contract. Rust all-target
   tests and Clippy passed; all 35 Python tests passed under Python 3.14.
+- Phase 4 implemented timestamp execution names, guarded `--clean`, and UTC
+  timestamps on every physical log line. Rust all-target tests passed.
 
 The existing all-feature Rust workspace suite is the starting baseline.
 Use Python 3.14 for companion validation; the shell's default Python is 3.12.

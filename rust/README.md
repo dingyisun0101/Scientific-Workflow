@@ -993,3 +993,28 @@ Pre-0.13.9 program outputs may be imported from their successful `program.json`
 and captured config. Legacy execution-unit imports additionally require an
 authoritative matching summary in a dependent program's captured dependency
 file; Workflow never guesses a final iteration from sampling cadence.
+
+
+## Run cleanup and timestamps
+
+The ordinary `run(&Path)` facade recognizes `--clean` before an optional `--`
+argument delimiter, for example `cargo run -- --clean`. After complete study,
+reuse, and Python preflight, it clears `<project-root>/output` before creating
+the execution. Other arguments remain application-owned. `runtime::execute`
+does not inspect process arguments and does not clean.
+
+All runs hold a shared advisory lock on the project directory; a cleaning run
+holds it exclusively until execution and presentation finish. Cleanup rejects
+an output-root symlink/file, a conflicting active run, or a target containing
+configuration, a resolved executable/script, a selected reuse source, or any
+imported task/member/NPY directory. Child symlinks are removed without following
+them. Deletion errors abort startup; already removed entries are not restored.
+The output directory itself is preserved. Older Workflow versions do not
+participate in this project-lock protocol.
+
+Execution directories use `execution-YYYYMMDDTHHMMSS.nnnnnnnnnZ`, UTC, with an
+additional numeric suffix only on collision. Atomic directory creation prevents
+reuse even if the clock repeats. Names are invocation identities; scientific
+task identity is unchanged. Every physical `log.txt` line receives an absolute
+RFC 3339 UTC timestamp when appended, including buffered and multiline messages.
+Headless builds continue to omit the UI-owned log.

@@ -25,7 +25,9 @@ mod runtime_workflow_tests;
 pub use crate::composition::execute;
 pub use error::RuntimeError;
 pub(crate) use event::RuntimeEvent;
+#[cfg(test)]
 pub(crate) use execution::execute_with_observer;
+pub(crate) use execution::execute_with_observer_options;
 pub(crate) use presentation::{PresentationFailure, RuntimeObserver};
 pub use summary::{
     MemberRunSummary, PhaseRunSummary, ReplicateRunSummary, RunSummary, TaskRunKind, TaskRunSummary,
