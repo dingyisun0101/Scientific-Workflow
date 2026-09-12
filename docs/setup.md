@@ -85,6 +85,9 @@ for progress and standard logging. Imports do not configure the root logger.
 
 ## Troubleshooting and reference
 
+- Configure disk protection, thread budgets, scheduling, timeouts, recording
+  buffers, and Python launchers with the
+  [`study.json` system settings reference](../rust/README.md#studyjson-system-settings).
 - Prerequisite error: activate the correct environment and repeat the import
   command above; verify `python3` resolves inside it and reports 0.5.0.
 - Missing dependency: check phase prerequisites and selector filters.

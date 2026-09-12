@@ -44,6 +44,10 @@ See the [Config contract](rust/src/config/api.md#nested-alternatives-and-indepen
 - To use the library, follow the complete [Rust crate guide](rust/README.md).
   It contains installation, architecture and ownership diagrams, the full
   project procedure, execution unit examples, JSON grammar, execution, and validation.
+- To configure disk protection, threads, scheduling, timeouts, buffering, run
+  selection, or Python launchers, use the complete
+  [`study.json` system settings reference](rust/README.md#studyjson-system-settings),
+  including defaults, valid values, and settings specific to `$npy`.
 - To see a complete working project, open the
   [two-dimensional attractor example](examples/attractor_2d/README.md), its
   [study manifest](examples/attractor_2d/wf_configs/study.json), and its

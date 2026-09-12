@@ -93,6 +93,10 @@ generations before assembly:
 
 Unknown properties are rejected at every Workflow-owned level.
 
+For an operational field-by-field reference with defaults and valid values, see
+the crate README's [`study.json` system settings](../../README.md#studyjson-system-settings).
+The grammar below also covers scientific workload declarations.
+
 - `workflow_schema` is required and must equal `1`. It versions the authored
   project grammar and is retained in the frozen snapshot supplied to external
   tasks. An omitted or unsupported generation is never interpreted as the
