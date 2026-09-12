@@ -111,5 +111,17 @@ Workflow's two private examples now consume those online versions, with the
 Python companion pinned in `examples/requirements.txt`. Both dashboards, NPY
 conversion, pipeline values `[7, 8, 9, 10, 11, 12]`, and attractor plot outputs
 passed. Workspace tests and Clippy passed with the updated consumer lockfile.
-Other workspace repositories remain outside this commit; their migration scope
-was presented separately to the user.
+The user subsequently approved the workspace consumer migration. Eco Core
+0.14.0 and GLV 0.19.0 were pushed and published before downstream updates.
+Private Simulator 0.15.0, Dispatcher 0.12.0, and Analysis 0.1.1 now consume the
+online coordinated releases. Private GLV/Simulator Python readers require the
+0.5 companion from PyPI. PiP and the macro crate remain unchanged.
+
+All four GLV examples and Simulator's kernel-sweep example completed through real
+dashboards and NPY conversion. Dispatcher passes 21 Rust tests and all nine
+bounded active studies: 328 recordings and 23,410 verified field records.
+Analysis passes 67 tests and loaded all nine generated studies (324 analysis
+members). Rust consumers passed Clippy/rustdoc/doctests and their package checks
+where applicable. Bounded runs establish scientific contracts, not production
+memory, throughput, or long-run convergence. The full downstream record is in
+Dispatcher's `verification.md`.
