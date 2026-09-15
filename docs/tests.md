@@ -1,6 +1,6 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.15.1 and Python
+This map is the release-qualification baseline for Rust 0.15.2 and Python
 companion 0.5.0.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
@@ -418,3 +418,25 @@ workspace passes Clippy and Rust tests. Additional tutorial checks verified
 chapter 6's sampled iterations `[0, 2, 4, 5]` and checkpoint `[0, 5]`, and chapter
 12's 40-task study with five resulting figures. No local upstream overrides
 were used for these checks.
+
+
+## Agent-instruction documentation release 0.15.2
+
+`docs/AGENTS.md` consolidates the integration patterns reviewed across all nine
+Dispatcher project manifests and all eight OmniFluid instance manifests, with
+supporting model adapters, initialization/checkpoint handoff, analysis consumers,
+and validation tools. The published guidance uses generic patterns and current
+Workflow contracts rather than project-specific scientific settings or older
+runtime requirements. Neither source project was modified.
+
+Both READMEs require all AI agents to read the new instructions. The documentation
+index, previous agent-guide entry point, and AI-assisted-studies chapter lead to
+the same canonical file. All 292 Markdown links were checked, including local
+anchors and release-pinned targets. The complete `study.json` reference remains
+synchronized between the crate README and chapter 4.
+
+Local release checks passed: formatting, warnings-denied Clippy, 156 Rust unit
+tests and 20 integration tests, three doctests, rustdoc, explicit coordinated
+NPY handoff, 35 Python tests, and package verification. No scientific or runtime
+source changed. Subsystem API contracts remain valid; the architecture guide
+records the new documentation entry point.

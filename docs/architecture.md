@@ -201,7 +201,9 @@ fully preflighted Study and its retained Config.
 
 ## Source tree and file responsibilities
 
-User documentation starts at [`docs/README.md`](README.md). The twelve numbered
+User documentation starts at [`docs/README.md`](README.md). AI agents first
+read [`docs/AGENTS.md`](AGENTS.md), the canonical instructions for Workflow-based
+projects. `docs/agent-guide.md` retains the previous entry link. The twelve numbered
 `docs/guide/` chapters progress from setup through AI-assisted studies and link
 to each other. `docs/reference/` holds the Rust API overview and output layout;
 exhaustive subsystem contracts remain beside their implementation. Both product

@@ -1,5 +1,14 @@
 # Changelog
 
+## Rust 0.15.2 / Python 0.5.0 unchanged — 2026-09-15
+
+- Add canonical `docs/AGENTS.md` instructions distilled from real scientific
+  integrations: configuration scope, generated handoffs, model adapters, seeds,
+  verified data, analysis stages, resources, and scientific validation.
+- Require all AI agents to read those instructions in both READMEs and the
+  documentation entry points; retain the old agent-guide URL as navigation.
+- Documentation-only patch; runtime, scientific APIs, and formats are unchanged.
+
 ## Rust 0.15.1 / Python 0.5.0 unchanged — 2026-09-15
 
 - Reframe the repository and crate READMEs around scientific work and AI-assisted

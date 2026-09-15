@@ -4,6 +4,9 @@
 agent translate them into project JSON using documented, integrated components.
 You need a project that already builds and a successful small study.
 
+**All AI agents must read [the Workflow agent instructions](../AGENTS.md)
+before working on the project.**
+
 ## Set up once
 
 Give the agent a compact project map:
@@ -85,7 +88,7 @@ scientific implementation work. Expose reusable choices through model constants
 and script settings so later studies return to JSON edits. Do not promise that
 an arbitrary verbal request can always be expressed by existing components.
 
-The [coding-agent guide](../agent-guide.md) defines where to look for APIs and
+The [agent instructions](../AGENTS.md) defines where to look for APIs and
 how to keep application work within supported extension points.
 
 ---

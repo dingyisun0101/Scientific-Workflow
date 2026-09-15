@@ -3,6 +3,8 @@
 Follow the numbered guide from a first run to complete scientific pipelines.
 Every chapter ends with a link to the next.
 
+**All AI agents must first read [the Workflow agent instructions](AGENTS.md).**
+
 ## Learning path
 
 1. [Overview](guide/1-overview.md)
@@ -50,8 +52,8 @@ Use [operations](guide/10-running-and-monitoring.md) when launching a study.
 
 - [Architecture and subsystem ownership](architecture.md).
 - [Tests and validation commands](tests.md).
-- [Guide for coding agents](agent-guide.md).
+- [Required instructions for AI agents](AGENTS.md).
 - [Repository contribution instructions](../AGENTS.md).
 
-The current guides describe Rust 0.15.1 and Python companion 0.5.0. This Rust
+The current guides describe Rust 0.15.2 and Python companion 0.5.0. This Rust
 patch updates documentation; scientific APIs and recording formats are unchanged.
