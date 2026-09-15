@@ -440,3 +440,16 @@ tests and 20 integration tests, three doctests, rustdoc, explicit coordinated
 NPY handoff, 35 Python tests, and package verification. No scientific or runtime
 source changed. Subsystem API contracts remain valid; the architecture guide
 records the new documentation entry point.
+
+
+Release commit `f90678b` passed both GitHub CI jobs. Tag `v0.15.2` was pushed
+before publication. The live crates.io README contains the mandatory agent link,
+and the release's `docs/AGENTS.md` matches the checked-in document byte for byte.
+Both bundled examples resolve registry Workflow 0.15.2; Clippy passes and the
+dependency pipeline completed with values `[7, 8, 9, 10, 11, 12]`.
+
+The first post-publication workspace test run encountered `WouldBlock` in the
+unchanged `timestamp_collisions_cleanup_scope_and_project_leases` test. Its
+isolated rerun and a subsequent complete workspace run both passed without
+source changes. This transient failure is retained here rather than being
+reported as an uninterrupted pass.
