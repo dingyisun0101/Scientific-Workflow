@@ -1,6 +1,6 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.15.2 and Python
+This map is the release-qualification baseline for Rust 0.15.3 and Python
 companion 0.5.0.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
@@ -453,3 +453,26 @@ unchanged `timestamp_collisions_cleanup_scope_and_project_leases` test. Its
 isolated rerun and a subsequent complete workspace run both passed without
 source changes. This transient failure is retained here rather than being
 reported as an uninterrupted pass.
+
+
+## Project-migration documentation release 0.15.3
+
+The agent instructions now contain an eight-step procedure for converting an
+existing general-purpose scientific project to Workflow. Both READMEs advertise
+that procedure, with direct links from the documentation index and AI guide.
+The procedure distinguishes external-task orchestration from typed Rust member
+recording, preserves scientific baselines and legacy data, and defines cutover
+criteria. No runtime or scientific API changed; existing subsystem contracts and
+architecture remain valid.
+
+All 302 Markdown links and anchors pass, the two new JSON examples parse, and
+the crate README's settings reference remains synchronized with chapter 4.
+The migration example's exact manifest and parameters ran with two small Python
+fixture tasks in a real PTY against published Workflow 0.15.2, whose runtime is
+unchanged in this patch. It produced four tasks and two summaries: rate 0.1
+mapped to 1.0 and rate 0.2 mapped to 2.0. Each analysis task verified that its
+selected producer matched its resolved global configuration.
+
+Local release validation passed formatting, warnings-denied Clippy, 156 Rust
+unit tests, 20 integration tests, three doctests, rustdoc, the explicit coordinated
+NPY handoff, 35 Python tests, and Cargo package verification.

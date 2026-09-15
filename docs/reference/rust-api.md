@@ -327,5 +327,5 @@ See [`src/state/api.md`](../../rust/src/state/api.md),
 [`src/ui/api.md`](../../rust/src/ui/api.md),
 [`src/error/api.md`](../../rust/src/error/api.md),
 [`src/prelude/api.md`](../../rust/src/prelude/api.md), and the repository
-[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.2/docs/architecture.md).
+[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/architecture.md).
 

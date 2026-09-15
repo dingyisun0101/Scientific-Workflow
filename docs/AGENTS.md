@@ -11,6 +11,9 @@ requirement to copy their scientific settings. Use the contracts of the Workflow
 version the application actually consumes; older applications may use different
 runtime policies or companion versions.
 
+**Migrating an existing project?** Follow the [migration procedure](#13-migrate-an-existing-project-to-workflow)
+after reading the ownership and scientific-contract rules below.
+
 ## 1. Start with scientific intent and existing components
 
 Identify the scientific question, independent variables, controls, replicate
@@ -314,10 +317,211 @@ In the handoff, state what changed, task/member counts when relevant, versions,
 checks and measured results, artifact locations, and unresolved limits. Update
 associated documentation and keep completed evidence distinguishable from plans.
 
+## 13. Migrate an existing project to Workflow
+
+Use this procedure when a general-purpose Rust, Python, or mixed-language project
+currently runs experiments through scripts, notebooks, command-line loops, or a
+custom driver. The goal is to preserve its science while transferring experiment
+orchestration to Workflow. Do not combine that migration with an unrequested
+change to algorithms or scientific assumptions.
+
+### Step 1: Inventory the current project and capture a baseline
+
+Trace one small experiment from inputs through initialization, evolution,
+recording, analysis, and presentation. Identify the actual implementations behind
+launch scripts and notebooks. Record:
+
+- Entry commands, dependencies, environment, input assets, and configuration.
+- Scientific constants and units, parameter axes, controls, and replicates.
+- State ownership, step/time definitions, stopping rules, and checkpoint content.
+- RNG algorithms, seed derivation, pairing assumptions, and thread sensitivity.
+- Output formats, consumer expectations, and plots or reports that must survive.
+
+Run or inspect an existing bounded reference with known inputs. Retain its source
+revision, settings, outputs, and the comparison criteria for the migration. Decide
+whether equivalence means exact values, numerical tolerance, or a statistical
+property. A new scheduler or seed derivation can alter bitwise results; do not
+promise identical replay without checking it.
+
+**Deliverable:** a short inventory, a reproducible baseline, and an old-to-new
+responsibility map. Keep original inputs and outputs intact.
+
+### Step 2: Map infrastructure to native Workflow concepts
+
+| Existing project mechanism | Workflow destination |
+| --- | --- |
+| Launcher that loops over independent experiments | One ordinary runner plus JSON project instances. |
+| Nested loops assembling parameter products | Global/local `$sweep` or correlated `$cases`, after checking scope. |
+| Repeated runs with hand-built output names | `replicates` and Workflow-owned execution/task identities. |
+| Shell ordering or subprocess chains | Named phases with explicit `after` dependencies. |
+| Per-run command-line scientific settings | Typed unit constants or shared program settings in `parameters.json`. |
+| Generated inputs written back into source config | Preparation task artifacts and a versioned dependency handoff. |
+| Model-owned serialization of each Rust state | `SystemState`, an observation plan, and automatic recording. |
+| Custom conversion of Workflow recordings | The reserved task-free `$npy` phase. |
+| File searches and “latest run” selection in analysis | Typed dependencies and resolved project accessors. |
+| Combined numerical analysis and plotting script | Measurement, comparison, and presentation components as needed. |
+| Custom progress UI, scheduler, or run-level thread pool | Workflow runtime policy, reporting helpers, and dashboard. |
+| “Already exists” or `--skip-simulation` execution shortcuts | Validated completed-phase reuse with `reuse_from`. |
+
+Retain domain algorithms, external scientific file formats that are still needed,
+and genuinely reusable scientific libraries. Do not relabel old orchestration as
+an execution unit while keeping its nested experiment scheduler alive inside it.
+
+### Step 3: Choose the integration boundary
+
+**Existing Python or executable science:** use native Python/program tasks first.
+Keep the scientific implementation in its existing language. Each task performs
+one resolved scientific job, reads Workflow's captured parameters, and writes its
+own domain artifacts. Separate preparation and analysis when they are distinct
+stages. This is Workflow-native orchestration; external program outputs do not
+automatically become typed Workflow member-state recordings.
+
+**Rust science with inspectable evolving state:** implement and register
+`ExecutionUnit`. Move initialization into `initialize`, expose owned state through
+`member`, advance the model through `step`, and declare observations in `preflight`.
+Use one member per independently recorded state. Keep ensembles only when their
+shared scientific lifecycle is intentional. Follow the complete
+[model integration guide](guide/5-scientific-models.md).
+
+A mature monolithic executable can remain a program task if it cannot expose
+step boundaries without a substantial rewrite. Document the resulting limits on
+scientific progress visibility, cooperative control, and automatic state recording.
+Do not invent a Python `ExecutionUnit` API or promise Rust member recording for an
+arbitrary process. Do not rewrite a working numerical library solely to change
+its orchestration language.
+
+**Deliverable:** one small task that runs through Workflow while using the
+existing scientific implementation.
+
+### Step 4: Create the project configuration and a thin entry point
+
+Install the published Rust package and the appropriate Python companion through
+[the installation guide](guide/2-installation.md). Create the required
+`wf_configs/study.json` and `wf_configs/parameters.json`. Register project schemas
+when the Rust units need them. Keep custom settings out of Workflow-owned objects.
+The application entry point selects a project root and invokes `run(&Path)`; it
+does not assemble a task graph in Rust.
+
+For an external Python model, this is a complete manifest shape once the two
+named scripts exist and follow the task contract:
+
+```json
+{
+  "workflow_schema": 1,
+  "threads": 4,
+  "compute": {"mode": "isolated"},
+  "phases": {
+    "simulate": {
+      "max_concurrency": 2,
+      "tasks": [{"python": {
+        "script": "scripts/simulate.py",
+        "environment": {"manager": "system"}
+      }}]
+    },
+    "analyze": {
+      "after": ["simulate"],
+      "tasks": [{"python": {
+        "script": "scripts/analyze.py",
+        "environment": {"manager": "system"}
+      }}]
+    }
+  }
+}
+```
+
+An illustrative `parameters.json` for those scripts is:
+
+```json
+{
+  "experiment": {"rate": {"$sweep": [0.1, 0.2]}, "steps": 10},
+  "analysis": {"filename": "summary.json"}
+}
+```
+
+Here `experiment` is global because there is no registered execution-unit task
+with that name. It produces two simulation tasks and two analysis tasks, with
+analysis correlated to the matching global configuration. The simulation reads
+`project.parameters("experiment")`; analysis selects
+`Dependencies.from_env().programs().in_phase("simulate").one()` and consumes its
+artifacts. Both scripts write through `project.output_directory()` and use the
+existing scientific code. These settings are illustrative; retain the original
+model's real names and units when migrating it.
+
+Do not add `$npy` to convert arbitrary files produced by these scripts. If the
+simulation instead becomes a Rust execution unit with member recordings, insert
+`$npy` after it and make analysis consume the verified NPY batch. See the complete
+[simulation-to-figure example](guide/9-python-analysis-and-visualization.md).
+
+### Step 5: Move state and dependency handoffs
+
+For Rust units, initialize every payload using the supplied schema, preserve the
+model's time and completion definitions, and select streams and cadence explicitly.
+Replace redundant per-step custom recording only after verified readback contains
+the state the original analysis needs. Preserve any still-required domain export
+as a separate scientific operation.
+
+If preparation creates a matrix, checkpoint, mesh, or other generated input,
+publish it in the producer's task artifacts and discover it through dependencies.
+Use a thin adapter where a downstream model needs generated descriptors at
+initialization; do not mutate source JSON between phases. Keep pure preflight
+validation separate from validation of facts that only exist after preparation.
+
+Historical results are not Workflow recordings merely because they are placed
+under `output/`. Keep legacy readers available for old datasets, or implement an
+explicit application-owned import task with provenance. Do not fabricate Workflow
+metadata, completion receipts, or `reuse_from` compatibility for old outputs.
+
+### Step 6: Port analysis without changing its scientific meaning
+
+Replace hardcoded paths and directory scans with resolved parameters, typed
+prerequisites, and task output accessors. Preserve metrics, units, alignment,
+controls, and unavailable-data behavior. Move repeated plotting/measurement code
+into reusable analysis modules with thin task entry points.
+
+Use standard verified readers for Workflow state/NPY data and the existing
+scientific reader for external domain artifacts. Retain coordinate-aware alignment
+and provenance through measurement, comparison, and presentation. Check both
+numerical results and the figures or reports promised by the original project.
+
+### Step 7: Validate equivalence, resources, and control
+
+Compare a bounded migrated project with the baseline before expanding its sweep.
+Check task/member counts, initialization, selected states, final values, stopping
+rules, seed provenance, output completeness, and analysis results. If seed
+allocation changes, document that change and use a justified equivalence test.
+
+Exercise dependencies and failure handling, then the applicable pause, timeout,
+completed-result reuse, and interrupted-output behavior. Preserve the original
+scientific thread policy; choose auto mode only with a valid invariance promise.
+Estimate queue capacity and storage from representative state sizes. A small run
+checks the integration, not production-scale convergence or resource limits.
+
+**Deliverable:** a validation record tying the migrated outputs to the baseline,
+with explained differences and any remaining limitations.
+
+### Step 8: Cut over and remove duplicate orchestration
+
+Once the migrated path is validated, make the thin Workflow runner and JSON the
+documented route. Remove superseded sweep loops, orchestration-only launchers,
+manual Workflow I/O, duplicated schedulers/UIs, and obsolete configuration fields
+within the authorized scope. Preserve scientific libraries, historical readers,
+input assets, and existing results. Avoid maintaining two competing authorities
+for the same settings.
+
+Update the README with installation, launch, output discovery, and old-to-new
+configuration guidance. Link project agent instructions to this file. Record any
+intentional compatibility break and how users can still interpret old datasets.
+
+Migration is complete when one documented entry point runs the declared graph,
+study variations live in JSON, dependencies and outputs use the appropriate
+Workflow contracts, required science and analysis pass the agreed baseline
+checks, and remaining integration limits are explicit.
+
 ## Read only the references needed next
 
 | Task | Reference |
 | --- | --- |
+| Convert an existing project | [Migration procedure](#13-migrate-an-existing-project-to-workflow) |
 | First integration | [First study](guide/3-first-study.md), [scientific models](guide/5-scientific-models.md) |
 | JSON field, default, or validation | [Configuration guide](guide/4-project-configuration.md), [Config contract](../rust/src/config/api.md) |
 | Scope, cases, and replicates | [Sweep guide](guide/7-parameter-sweeps-and-replicates.md) |

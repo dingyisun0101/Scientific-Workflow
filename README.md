@@ -15,7 +15,7 @@ writing custom orchestration code for each study.
 
 > **Breaking generation: Rust 0.15.0 / Python 0.5.0** supersedes the Rust 0.14.x /
 > Python 0.4.x runtime-policy generation. No compatibility aliases restore the old
-> execution names or JSON rewrite behavior. Rust 0.15.2 retains this generation;
+> execution names or JSON rewrite behavior. Rust 0.15.3 retains this generation;
 > scientific APIs and recording formats 7/8 remain compatible. Read the
 > [migration guide](docs/migration-0.15.0.md) before upgrading.
 
@@ -43,6 +43,14 @@ to set up reusable components so later experiments can stay in configuration.
 
 *Live progress, compute allocations, messages, and resource usage across a study.
 Some project names and paths are redacted.*
+
+## Bring an existing project
+
+Already have a Rust, Python, or mixed-language scientific project?
+**[Migration instructions are available in `docs/AGENTS.md`](docs/AGENTS.md#13-migrate-an-existing-project-to-workflow).**
+They guide you and your AI assistant through preserving the science, replacing
+custom orchestration with Workflow configuration, connecting existing code and
+analysis, and validating the migrated results against a baseline.
 
 ## From a model to an experiment
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Rust 0.15.3 / Python 0.5.0 unchanged — 2026-09-15
+
+- Add an eight-step migration procedure to `docs/AGENTS.md` for existing Rust,
+  Python, and mixed-language projects, including baseline validation and cutover.
+- Distinguish external program orchestration from typed Rust member recording;
+  include a complete external-Python task graph and parameter-sweep example.
+- Advertise existing migration instructions in both READMEs and documentation
+  entry points. Runtime, scientific APIs, and recording formats are unchanged.
+
 ## Rust 0.15.2 / Python 0.5.0 unchanged — 2026-09-15
 
 - Add canonical `docs/AGENTS.md` instructions distilled from real scientific

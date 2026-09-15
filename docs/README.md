@@ -40,6 +40,12 @@ Use [operations](guide/10-running-and-monitoring.md) when launching a study.
 - Recording protocols [v7](../protocol/recording-v7.md), [v8](../protocol/recording-v8.md),
   [NPY v2](../protocol/npy-v2.md), and [compatibility](../protocol/compatibility.md).
 
+## Migrating an existing project
+
+Follow the [eight-step migration procedure](AGENTS.md#13-migrate-an-existing-project-to-workflow)
+for general-purpose Rust, Python, or mixed-language projects. It covers inventory,
+integration boundaries, configuration, handoffs, analysis, validation, and cutover.
+
 ## Examples and support
 
 - [Worked examples](examples.md).
@@ -55,5 +61,5 @@ Use [operations](guide/10-running-and-monitoring.md) when launching a study.
 - [Required instructions for AI agents](AGENTS.md).
 - [Repository contribution instructions](../AGENTS.md).
 
-The current guides describe Rust 0.15.2 and Python companion 0.5.0. This Rust
+The current guides describe Rust 0.15.3 and Python companion 0.5.0. This Rust
 patch updates documentation; scientific APIs and recording formats are unchanged.

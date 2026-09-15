@@ -7,6 +7,9 @@ You need a project that already builds and a successful small study.
 **All AI agents must read [the Workflow agent instructions](../AGENTS.md)
 before working on the project.**
 
+If your project does not yet use Workflow, first follow the
+[migration procedure](../AGENTS.md#13-migrate-an-existing-project-to-workflow).
+
 ## Set up once
 
 Give the agent a compact project map:

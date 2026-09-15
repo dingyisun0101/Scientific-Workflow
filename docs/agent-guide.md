@@ -8,6 +8,8 @@ semantics, generated-input adapters, seeds and pairing, verified recording and
 NumPy access, scientific analysis stages, provenance, resource policy, and
 bounded validation. They also link to the relevant API contracts.
 
+For an existing project, use the [migration procedure](AGENTS.md#13-migrate-an-existing-project-to-workflow).
+
 For a worked verbal-request-to-JSON example, continue to
 [AI-assisted studies](guide/12-ai-assisted-studies.md). Use the
 [documentation index](README.md) for the complete numbered learning path.
