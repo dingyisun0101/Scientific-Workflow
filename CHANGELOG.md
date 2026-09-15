@@ -1,5 +1,12 @@
 # Changelog
 
+## Rust 0.15.4 / Python 0.5.0 unchanged — 2026-09-15
+
+- Update the PiP development dependency to published 4.1.1-alpha after its
+  documentation release. Workflow runtime code, APIs, and recording formats are
+  unchanged. Synchronize current Rust version references and compatibility metadata.
+
+
 ## Rust 0.15.3 / Python 0.5.0 unchanged — 2026-09-15
 
 - Add an eight-step migration procedure to `docs/AGENTS.md` for existing Rust,

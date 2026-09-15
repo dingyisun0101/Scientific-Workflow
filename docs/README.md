@@ -61,5 +61,5 @@ integration boundaries, configuration, handoffs, analysis, validation, and cutov
 - [Required instructions for AI agents](AGENTS.md).
 - [Repository contribution instructions](../AGENTS.md).
 
-The current guides describe Rust 0.15.3 and Python companion 0.5.0. This Rust
+The current guides describe Rust 0.15.4 and Python companion 0.5.0. This Rust
 patch updates documentation; scientific APIs and recording formats are unchanged.

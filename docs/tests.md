@@ -485,3 +485,11 @@ correct section link. The required AI notice, screenshot, and parameter tables
 remain present. The migration fixture reran against published 0.15.3 and retained
 both correctly correlated results. Bundled examples now resolve registry 0.15.3
 and the consumer workspace passes warnings-denied Clippy.
+
+## PiP dependency patch 0.15.4
+
+The development dependency now consumes published PiP 4.1.1-alpha. No Workflow
+runtime source or recording format changed. Validation passed workspace tests,
+Clippy with warnings denied, doctests, the explicitly enabled coordinated NPY
+handoff test, rustdoc with warnings denied, and the publication dry run.
+The current documentation's 302 links resolve against the release tree.

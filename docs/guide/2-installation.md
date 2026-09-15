@@ -51,7 +51,7 @@ interpreter selection for ordinary Python tasks.
 Inside an existing Cargo application:
 
 ```sh
-cargo add scientific-workflow@0.15.3
+cargo add scientific-workflow@0.15.4
 cargo add serde --features derive
 ```
 

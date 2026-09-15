@@ -15,13 +15,13 @@ writing custom orchestration code for each study.
 
 > **Breaking generation: Rust 0.15.0 / Python 0.5.0** supersedes the Rust 0.14.x /
 > Python 0.4.x runtime-policy generation. No compatibility aliases restore the old
-> execution names or JSON rewrite behavior. Rust 0.15.3 retains this generation;
+> execution names or JSON rewrite behavior. Rust 0.15.4 retains this generation;
 > scientific APIs and recording formats 7/8 remain compatible. Read the
-> [migration guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/migration-0.15.0.md) before upgrading.
+> [migration guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/migration-0.15.0.md) before upgrading.
 
 ## Describe your study. Let AI configure it.
 
-> **All AI agents must read [docs/AGENTS.md](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/AGENTS.md) before working
+> **All AI agents must read [docs/AGENTS.md](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/AGENTS.md) before working
 > with Workflow or a Workflow-based scientific project.**
 
 > “Sweep these two parameters, run five replicates per combination, convert the
@@ -36,10 +36,10 @@ spent doing so.
 **More scientific iteration. Less infrastructure code. Less AI context to maintain.**
 
 New scientific models and analysis algorithms still need implementation. The
-[AI-assisted studies guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/guide/12-ai-assisted-studies.md) shows how
+[AI-assisted studies guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/guide/12-ai-assisted-studies.md) shows how
 to set up reusable components so later experiments can stay in configuration.
 
-![Scientific Workflow dashboard showing task progress, allocated threads, live messages, and resource usage](https://raw.githubusercontent.com/dingyisun0101/Scientific-Workflow/v0.15.3/docs/assets/UI-3.png)
+![Scientific Workflow dashboard showing task progress, allocated threads, live messages, and resource usage](https://raw.githubusercontent.com/dingyisun0101/Scientific-Workflow/v0.15.4/docs/assets/UI-3.png)
 
 *Follow a running study: task progress, thread allocations, resource usage, and
 live logs in one terminal dashboard. Some project names and paths are redacted.*
@@ -47,7 +47,7 @@ live logs in one terminal dashboard. Some project names and paths are redacted.*
 ## Bring an existing project
 
 Already have a Rust, Python, or mixed-language scientific project?
-**[Migration instructions are available in `docs/AGENTS.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/AGENTS.md#13-migrate-an-existing-project-to-workflow).**
+**[Migration instructions are available in `docs/AGENTS.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/AGENTS.md#13-migrate-an-existing-project-to-workflow).**
 They guide you and your AI assistant through preserving the science, replacing
 custom orchestration with Workflow configuration, connecting existing code and
 analysis, and validating the migrated results against a baseline.
@@ -69,24 +69,24 @@ analysis, and validating the migrated results against a baseline.
 
 ## Start your next study
 
-- **[Start the numbered guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/guide/1-overview.md)** — from setup to
+- **[Start the numbered guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/guide/1-overview.md)** — from setup to
   a working model, parameter sweeps, and analysis.
-- **[Build your first study](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/guide/3-first-study.md)** — every file,
+- **[Build your first study](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/guide/3-first-study.md)** — every file,
   the run command, and a verified result.
-- **[Browse worked examples](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/examples.md)** — complete scientific pipelines.
-- **[Documentation index](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/README.md)** ·
-  **[Rust API](https://docs.rs/scientific-workflow/0.15.3/scientific_workflow/)** ·
-  **[Python API](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/python/src/scientific_workflow/api.md)**.
+- **[Browse worked examples](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/examples.md)** — complete scientific pipelines.
+- **[Documentation index](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/README.md)** ·
+  **[Rust API](https://docs.rs/scientific-workflow/0.15.4/scientific_workflow/)** ·
+  **[Python API](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/python/src/scientific_workflow/api.md)**.
 
 **Requirements:** Linux, Rust 1.97+, and an interactive terminal dashboard.
 Python conversion and companion utilities require Python 3.14+ and companion
-0.5.0. See [installation](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/guide/2-installation.md).
+0.5.0. See [installation](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/guide/2-installation.md).
 
 ## `study.json` system settings
 
 
 This reference covers the operational settings in `wf_configs/study.json` for
-Rust 0.15.3 / Python 0.5.0. Settings are captured when the study loads; editing
+Rust 0.15.4 / Python 0.5.0. Settings are captured when the study loads; editing
 the file does not reconfigure an active run. Unknown fields are rejected.
 Defaults below apply when a field is omitted, including when its optional
 parent object is omitted. Required fields have no inferred default.
@@ -115,7 +115,7 @@ including while paused. At `max(0, pause_at_percent - 2)` percent used space
 and Enter. Space recovery alone never resumes work; an early command is rejected.
 Polling interval and recovery margin are fixed behavior, not JSON settings.
 In-flight work may take time to pause. See
-[disk guard behavior](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/guide/10-running-and-monitoring.md#disk-guard-and-npy-resource-policy) for process handling
+[disk guard behavior](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/guide/10-running-and-monitoring.md#disk-guard-and-npy-resource-policy) for process handling
 and monitor failures. To bypass it, use `"disk":{"pause_at_percent":null}`;
 omitting `disk` or using `"disk":{}` keeps the 95% default.
 
@@ -172,7 +172,7 @@ the standard converter; `$npy` has no authored `python.environment` override.
 Selection keeps phase indices, task identities, output ordinals, and seed
 identities stable. Imported prerequisites must have completed successfully with
 matching scientific inputs before new output is created. See
-[phase and execution-unit selection](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/guide/11-reusing-results.md#optional-phase-and-execution-unit-selection)
+[phase and execution-unit selection](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/guide/11-reusing-results.md#optional-phase-and-execution-unit-selection)
 for index ordering and reuse restrictions.
 
 ### Python task environments
@@ -193,7 +193,7 @@ Only the fields listed for the chosen manager are accepted.
 Directory paths must exist; relative paths resolve against the project root.
 Manager/interpreter commands resolve through the project root or `PATH` during
 study loading. Environment names must be nonblank and cannot begin with `-`.
-See the [Config reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/rust/src/config/api.md) for full path validation rules.
+See the [Config reference](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/rust/src/config/api.md) for full path validation rules.
 
 ### Scientific workload fields
 
@@ -221,8 +221,8 @@ keys are errors; parameter sweeps belong in `parameters.json`.
 
 ### Workload fields and fixed runtime behavior
 
-Worked scientific definitions are documented in the [project configuration guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/docs/guide/4-project-configuration.md)
-and [Config grammar](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/rust/src/config/api.md): `seed`, `paths.states`, phase `after`
+Worked scientific definitions are documented in the [project configuration guide](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/docs/guide/4-project-configuration.md)
+and [Config grammar](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/rust/src/config/api.md): `seed`, `paths.states`, phase `after`
 and `tasks`, task execution-unit/state/program/script selection, arguments, and
 task seed derivation. `replicates.count` also describes the experiment (default
 `1`, positive integer). `$npy.exclude_streams` selects conversion content
@@ -244,4 +244,4 @@ backend selector, process RAM cap, or CPU-utilization target in this grammar.
 ## Project status and license
 
 Scientific Workflow is pre-1.0 software. Review migration notes before upgrading.
-Licensed under [MIT](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.3/rust/LICENSE).
+Licensed under [MIT](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.4/rust/LICENSE).

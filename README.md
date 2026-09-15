@@ -15,7 +15,7 @@ writing custom orchestration code for each study.
 
 > **Breaking generation: Rust 0.15.0 / Python 0.5.0** supersedes the Rust 0.14.x /
 > Python 0.4.x runtime-policy generation. No compatibility aliases restore the old
-> execution names or JSON rewrite behavior. Rust 0.15.3 retains this generation;
+> execution names or JSON rewrite behavior. Rust 0.15.4 retains this generation;
 > scientific APIs and recording formats 7/8 remain compatible. Read the
 > [migration guide](docs/migration-0.15.0.md) before upgrading.
 

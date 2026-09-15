@@ -1,6 +1,6 @@
 [package]
 name = "scientific-workflow"
-version = "0.15.3"
+version = "0.15.4"
 edition = "2024"
 rust-version = "1.97"
 authors = ["Dingyi Sun"]
@@ -39,4 +39,4 @@ unicode-width = "0.2"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-physics_in_parallel = "=4.1.0-alpha"
+physics_in_parallel = "=4.1.1-alpha"
