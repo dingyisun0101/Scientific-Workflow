@@ -47,7 +47,7 @@ retain the verified conversion object rather than repeatedly reopening it.
 
 The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
 one thread to each execution-unit task within the global two-thread budget.
-The example consumes published Workflow 0.15.2 and the Python 0.5.0 companion
+The example consumes published Workflow 0.15.3 and the Python 0.5.0 companion
 pinned in `examples/requirements.txt`. Execution requires the dashboard; run
 inside screen/tmux. Disk pauses require freeing space and typing `resume`.
 Leave NPY worker settings unset for the default gradual auto allocation unless

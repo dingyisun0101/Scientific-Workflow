@@ -476,3 +476,12 @@ selected producer matched its resolved global configuration.
 Local release validation passed formatting, warnings-denied Clippy, 156 Rust
 unit tests, 20 integration tests, three doctests, rustdoc, the explicit coordinated
 NPY handoff, 35 Python tests, and Cargo package verification.
+
+
+Release commit `759eab6` passed both GitHub CI jobs before `v0.15.3` was pushed
+and the crate published. The published agent document matches the checked-in
+file, and the live crates.io README advertises migration instructions with the
+correct section link. The required AI notice, screenshot, and parameter tables
+remain present. The migration fixture reran against published 0.15.3 and retained
+both correctly correlated results. Bundled examples now resolve registry 0.15.3
+and the consumer workspace passes warnings-denied Clippy.
