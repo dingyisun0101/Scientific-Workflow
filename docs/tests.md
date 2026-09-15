@@ -1,6 +1,6 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.15.0 and Python
+This map is the release-qualification baseline for Rust 0.15.1 and Python
 companion 0.5.0.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
@@ -385,3 +385,23 @@ Release examples run their real dashboard through
 `scripts/run_dashboard_check.py`, which types exit after a terminal outcome
 and checks terminal restoration. This harness is for qualification; users
 launch inside screen/tmux.
+
+## Documentation release 0.15.1
+
+This patch changes documentation and release metadata only. The twelve numbered
+chapters live in `docs/guide/`; their navigation, local Markdown targets and
+anchors, and release-pinned README targets were checked. All 15 fenced JSON
+examples and fragments parse. The complete `study.json` tables in the crate
+README and chapter 4 were compared for synchronization.
+
+The first-study source and semantic-loading snippet compile against the published
+0.15.0 API (unchanged in 0.15.1). The first study ran in a real PTY and its Python
+readback verified iterations 0–5, final population 15, and cumulative births 5.
+The chapter 9 pipeline completed conversion and produced the expected SVG; the
+chapter 11 selection reused its completed prerequisites and reran plotting.
+
+Release validation also passed workspace formatting, warnings-denied Clippy,
+Rust tests, rustdoc, doctests, coordinated NPY handoff, 35 Python tests, and Cargo
+package verification. No source API or architectural boundary changed; subsystem
+API contracts remain in place. Architecture documentation now maps the new user
+documentation directories.

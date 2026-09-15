@@ -1,5 +1,17 @@
 # Changelog
 
+## Rust 0.15.1 / Python 0.5.0 unchanged — 2026-09-15
+
+- Reframe the repository and crate READMEs around scientific work and AI-assisted
+  JSON configuration; add the real terminal dashboard screenshot.
+- Introduce twelve numbered guides with sequential navigation, complete first-run
+  and plotting examples, and dedicated reference and troubleshooting pages.
+- Retain and complete the crate README’s `study.json` parameter tables; expand
+  their explanations in the configuration guide.
+- Preserve the previous setup/getting-started entry points as guide links.
+- Documentation-only patch: Rust behavior, scientific APIs, recording formats,
+  and the Python companion are unchanged.
+
 ## Rust 0.15.0 / Python 0.5.0 — 2026-09-12
 
 - Use UTC timestamp execution names and timestamp every physical live-log line.

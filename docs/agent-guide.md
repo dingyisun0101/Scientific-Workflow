@@ -5,6 +5,10 @@ projects, author or update the project JSON beneath `wf_configs/`; do not edit
 Workflow itself unless the requested behavior cannot be expressed through its
 documented contracts.
 
+For project setup and a worked verbal-request-to-JSON example, see
+[AI-assisted studies](guide/12-ai-assisted-studies.md). Use the
+[documentation index](README.md) to load only the guide relevant to the task.
+
 ## Author strict JSON
 
 - Write standards-compliant JSON: double-quoted keys and strings, no comments,

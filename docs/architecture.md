@@ -201,6 +201,15 @@ fully preflighted Study and its retained Config.
 
 ## Source tree and file responsibilities
 
+User documentation starts at [`docs/README.md`](README.md). The twelve numbered
+`docs/guide/` chapters progress from setup through AI-assisted studies and link
+to each other. `docs/reference/` holds the Rust API overview and output layout;
+exhaustive subsystem contracts remain beside their implementation. Both product
+READMEs link to the guides; the crate README also retains the complete compact
+`study.json` tables, synchronized with chapter 4. `rust/getting-started.md` and
+`docs/setup.md` retain navigation for existing entry links.
+
+
 ```text
 workflow/
 ├── Cargo.toml                       virtual workspace for all Rust packages
