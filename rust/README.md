@@ -75,7 +75,7 @@ Python conversion and companion utilities require Python 3.14+ and companion
 
 
 This reference covers the operational settings in `wf_configs/study.json` for
-Rust 0.15.0 / Python 0.5.0. Settings are captured when the study loads; editing
+Rust 0.15.1 / Python 0.5.0. Settings are captured when the study loads; editing
 the file does not reconfigure an active run. Unknown fields are rejected.
 Defaults below apply when a field is omitted, including when its optional
 parent object is omitted. Required fields have no inferred default.
