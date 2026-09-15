@@ -405,3 +405,16 @@ Rust tests, rustdoc, doctests, coordinated NPY handoff, 35 Python tests, and Car
 package verification. No source API or architectural boundary changed; subsystem
 API contracts remain in place. Architecture documentation now maps the new user
 documentation directories.
+
+
+The release commit passed both GitHub CI jobs before tag `v0.15.1` was pushed
+and Rust 0.15.1 was published. The published README's rendered HTML contains the
+screenshot, parameter tables, and numbered-guide links; the release screenshot
+matches the checked-in image byte for byte.
+
+The first study was rerun against registry 0.15.1. Both bundled examples now
+resolve registry 0.15.1 and completed through real dashboards; the consumer
+workspace passes Clippy and Rust tests. Additional tutorial checks verified
+chapter 6's sampled iterations `[0, 2, 4, 5]` and checkpoint `[0, 5]`, and chapter
+12's 40-task study with five resulting figures. No local upstream overrides
+were used for these checks.
