@@ -179,7 +179,7 @@ impl DashboardTerminal {
 
 fn dashboard_areas(area: Rect) -> [Rect; 5] {
     Layout::vertical([
-        Constraint::Length(if area.height >= 24 { 6 } else { 5 }),
+        Constraint::Length(7),
         Constraint::Min(4),
         Constraint::Length(if area.height >= 24 { 7 } else { 5 }),
         Constraint::Length(3),
@@ -244,48 +244,52 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
         .output
         .as_deref()
         .map_or_else(|| "planning".to_owned(), |path| path.display().to_string());
-    let phase = if snapshot.phase_count == 0 {
-        "phase=-/-".to_owned()
-    } else {
-        format!("phase={}/{}", snapshot.current_phase, snapshot.phase_count)
-    };
+    let [title_area, study_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    frame.render_widget(
+        Paragraph::new("Scientific Workflow").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        title_area,
+    );
+    let statuses = [
+        ("running", counts.running, Color::Blue),
+        ("pending", counts.pending, Color::Yellow),
+        ("completed", counts.completed, Color::Green),
+        ("failed", counts.failed, Color::Red),
+        ("cancelled", counts.cancelled, Color::Magenta),
+        ("skipped", counts.skipped, Color::Gray),
+    ];
     let text = vec![
-        Line::from(vec![
-            Span::styled(
-                "Scientific Workflow",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                " · Total time {elapsed} · {}",
-                if snapshot.execution_finished {
-                    "finished"
-                } else {
-                    snapshot.control_status
-                }
-            )),
-        ]),
         Line::from(format!(
-            "running={} pending={} completed={} failed={} cancelled={} skipped={}",
-            counts.running,
-            counts.pending,
-            counts.completed,
-            counts.failed,
-            counts.cancelled,
-            counts.skipped
+            "Total time {elapsed} · {}",
+            if snapshot.execution_finished {
+                "finished"
+            } else {
+                snapshot.control_status
+            }
         )),
+        Line::from(
+            statuses
+                .into_iter()
+                .map(|(name, count, color)| {
+                    Span::styled(format!("{name}={count} "), Style::default().fg(color))
+                })
+                .collect::<Vec<_>>(),
+        ),
         Line::from(format!(
-            "replicates={} · visible active tasks={}",
+            "replicates={}/{} · visible active tasks={}",
+            snapshot.current_replicate,
             snapshot.replicate_count,
             snapshot.tasks.len()
         )),
-        Line::from(phase.to_string()),
         Line::from(format!("output={output}")),
     ];
     frame.render_widget(
         Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Study ")),
-        area,
+        study_area,
     );
 }
 
@@ -314,9 +318,9 @@ fn render_tasks(
         .header(header)
         .column_spacing(1)
         .block(Block::default().borders(Borders::ALL).title(format!(
-            " Tasks · page {}/{} · {} tasks · PgUp/PgDn ",
-            offset / page_capacity(area) + 1,
-            snapshot.tasks.len().max(1).div_ceil(page_capacity(area)),
+            " Phase={}/{}: {} Tasks · PgUp/PgDn ",
+            snapshot.current_phase,
+            snapshot.phase_count,
             snapshot.tasks.len()
         )));
     frame.render_widget(table, area);
@@ -360,7 +364,7 @@ fn progress_count(task: &TaskSnapshot) -> String {
 fn task_row(task: &TaskSnapshot, tick: usize, now: Instant, progress_width: usize) -> Row<'static> {
     let status_style = match task.status {
         TaskStatus::Pending | TaskStatus::Skipped => Style::default().fg(Color::DarkGray),
-        TaskStatus::Running => Style::default().fg(Color::Cyan),
+        TaskStatus::Running => Style::default().fg(Color::Blue),
         TaskStatus::Completed => Style::default().fg(Color::Green),
         TaskStatus::Failed => Style::default().fg(Color::Red),
         TaskStatus::Cancelled => Style::default().fg(Color::Yellow),
@@ -384,7 +388,7 @@ fn task_row(task: &TaskSnapshot, tick: usize, now: Instant, progress_width: usiz
             "0".into()
         }),
         Cell::from(task.status.label()).style(status_style),
-        Cell::from(progress).style(Style::default().fg(Color::Cyan)),
+        Cell::from(progress).style(Style::default().fg(Color::Blue)),
         Cell::from(timing),
     ])
 }
@@ -777,5 +781,41 @@ mod progress_tests {
         assert_eq!(progress_text(&task, 0, 2), "..");
         assert_eq!(progress_text(&task, 0, 0), "");
         assert!(progress_text(&task, 0, 60).starts_with(&progress_count(&task)));
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    #[test]
+    fn page_title_study_rows_and_task_title_have_agreed_colors_and_positions() {
+        let mut snapshot = super::super::state::DashboardState::new().snapshot();
+        snapshot.current_replicate = 2;
+        snapshot.replicate_count = 5;
+        snapshot.current_phase = 1;
+        snapshot.phase_count = 3;
+        let mut terminal = Terminal::new(TestBackend::new(140, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_header(frame, Rect::new(0, 0, 140, 7), &snapshot);
+                render_tasks(frame, Rect::new(0, 7, 140, 5), &snapshot, 0, 0);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("Scientific Workflow"));
+        assert!(text.contains("Total time"));
+        assert!(text.contains("replicates=2/5"));
+        assert!(text.contains("Phase=1/3: 0 Tasks · PgUp/PgDn"));
+        assert_eq!(buffer[(0, 0)].fg, Color::Cyan);
+        assert_eq!(buffer[(1, 3)].fg, Color::Blue);
+        assert!(
+            buffer
+                .content
+                .iter()
+                .enumerate()
+                .all(|(index, cell)| cell.fg != Color::Cyan || index < 140)
+        );
     }
 }

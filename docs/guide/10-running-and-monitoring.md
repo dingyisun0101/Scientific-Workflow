@@ -5,12 +5,14 @@ Start with a working study; chapter 4 contains the complete parameter tables.
 
 ![Scientific Workflow dashboard with task progress and resource usage](../assets/UI-3.png)
 
+*Screenshot from 0.15.4; the 0.15.5 layout is described below.*
+
 ## Read the dashboard
 
 | Area | What it tells you |
 | --- | --- |
-| Study | Wall-clock total time, lifecycle counts, replicates, and phase progress. |
-| Tasks | Active groups, per-task status, progress, thread allocation, elapsed time, and ETA. |
+| Study | Wall-clock total time, colored lifecycle counts, and current replicate / total. |
+| Tasks (phase progress in title) | Active groups, per-task status, progress, thread allocation, elapsed time, and ETA. |
 | Messages | Recent outcomes and diagnostics; complete history is in execution `log.txt`. |
 | Usage | Allocated compute threads and sampled CPU, RAM, and disk usage. |
 | Command | Interactive pause, resume, exit, and forced-exit controls. |
@@ -175,3 +177,18 @@ for study-level reuse; it does not append to interrupted scientific recordings.
 **Previous:** [9. Python analysis and visualization](9-python-analysis-and-visualization.md) · **Guide index:** [Documentation](../README.md)
 
 **Next:** [11. Reusing results](11-reusing-results.md)
+
+## Dashboard display in Rust 0.15.5
+
+The cyan **Scientific Workflow** page title sits above the Study panel.
+Its first row starts with **Total time**, and the second row uses blue for
+running, yellow for pending, green for completed, red for failed, magenta for
+cancelled, and gray for skipped. Cyan is reserved for titles. The replicate
+counter is one-based current index / total (`0/total` before a replicate starts).
+For parallel runs, current means the latest replicate-start event's index;
+completion events do not turn it into a completed-count counter. The task panel
+title is `Phase=a/b: x Tasks · PgUp/PgDn`, using the latest phase-start event.
+Active groups still coexist in plan order; each row retains its replicate/phase.
+CPU utilization is a rolling one-second average refreshed with the dashboard.
+The monitor interpolates counter values at the window boundary for irregular
+refresh intervals and averages available history during the first second.

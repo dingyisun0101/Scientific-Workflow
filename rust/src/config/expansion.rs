@@ -25,6 +25,19 @@ fn expand_at(
         return Ok(vec![value.clone()]);
     };
 
+    for marker in ["linspace", "logspace"] {
+        if object.contains_key(marker) {
+            if object.len() != 1 {
+                return Err(ConfigError::invalid(
+                    path,
+                    pointer,
+                    "a spacing marker must contain no sibling fields",
+                ));
+            }
+            return expand_spacing(path, pointer, marker, &object[marker]);
+        }
+    }
+
     if let Some(choices) = object.get("$sweep") {
         if object.len() != 1 {
             return Err(ConfigError::invalid(
@@ -83,6 +96,75 @@ fn expand_at(
         combinations = product_insert(path, combinations, key, &expanded)?;
     }
     Ok(combinations.into_iter().map(Value::Object).collect())
+}
+
+/// Numeric axes use the same deterministic product ordering as explicit sweeps.
+fn expand_spacing(
+    path: &Path,
+    pointer: &str,
+    marker: &str,
+    value: &Value,
+) -> Result<Vec<Value>, ConfigError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Spacing {
+        start: f64,
+        stop: f64,
+        num: usize,
+        #[serde(default = "include_endpoint")]
+        endpoint: bool,
+        #[serde(default)]
+        base: Option<f64>,
+    }
+    fn include_endpoint() -> bool {
+        true
+    }
+    let spec: Spacing = serde_json::from_value(value.clone())
+        .map_err(|error| ConfigError::invalid(path, pointer, error.to_string()))?;
+    let base = spec.base.unwrap_or(10.0);
+    if !spec.start.is_finite()
+        || !spec.stop.is_finite()
+        || spec.num == 0
+        || (marker == "linspace" && spec.base.is_some())
+        || (marker == "logspace" && (!base.is_finite() || base <= 0.0))
+    {
+        return Err(ConfigError::invalid(
+            path,
+            pointer,
+            "spacing requires finite bounds, positive num, and a finite positive base only for logspace",
+        ));
+    }
+    let mut values = Vec::new();
+    values
+        .try_reserve(spec.num)
+        .map_err(|_| ConfigError::ExpansionOverflow {
+            path: path.to_path_buf(),
+        })?;
+    let denominator = if spec.endpoint {
+        spec.num.saturating_sub(1).max(1)
+    } else {
+        spec.num
+    } as f64;
+    for index in 0..spec.num {
+        let fraction = index as f64 / denominator;
+        let exponent = if index == 0 {
+            spec.start
+        } else if spec.endpoint && index + 1 == spec.num {
+            spec.stop
+        } else {
+            spec.start * (1.0 - fraction) + spec.stop * fraction
+        };
+        let number = if marker == "logspace" {
+            base.powf(exponent)
+        } else {
+            exponent
+        };
+        let number = serde_json::Number::from_f64(number).ok_or_else(|| {
+            ConfigError::invalid(path, pointer, "spacing produced a nonfinite value")
+        })?;
+        values.push(Value::Number(number));
+    }
+    Ok(values)
 }
 
 fn expand_cases(
@@ -217,7 +299,7 @@ fn reject_reserved_markers(path: &Path, pointer: &str, value: &Value) -> Result<
     match value {
         Value::Object(object) => {
             for (key, value) in object {
-                if key.starts_with('$') {
+                if key.starts_with('$') || matches!(key.as_str(), "linspace" | "logspace") {
                     return Err(ConfigError::invalid(
                         path,
                         child_pointer(pointer, key),
@@ -337,6 +419,93 @@ mod nested_sweep_tests {
             json!({"$sweep": [{"$cases": [{"size": {"$sweep": [2, 4]}}]}]}),
         ] {
             assert!(expand(Path::new("parameters.json"), &input).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod spacing_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn numeric_axes_join_existing_cartesian_sweeps() {
+        let values = expand(
+            Path::new("parameters.json"),
+            &json!({
+                "mu": {"linspace": {"start": 0, "stop": 1, "num": 3}},
+                "noise": {"logspace": {"start": -2, "stop": 0, "num": 3}},
+                "literal": [1, 2]
+            }),
+        )
+        .unwrap();
+        assert_eq!(values.len(), 9);
+        assert_eq!(
+            values[0],
+            json!({"mu": 0.0, "noise": 0.01, "literal": [1, 2]})
+        );
+        assert_eq!(
+            values[4],
+            json!({"mu": 0.5, "noise": 0.1, "literal": [1, 2]})
+        );
+        assert_eq!(
+            values[8],
+            json!({"mu": 1.0, "noise": 1.0, "literal": [1, 2]})
+        );
+    }
+
+    #[test]
+    fn spacing_handles_excluded_endpoints_descending_and_singleton_axes() {
+        let path = Path::new("parameters.json");
+        assert_eq!(
+            expand(
+                path,
+                &json!({"linspace": {"start": 1, "stop": 0, "num": 4, "endpoint": false}})
+            )
+            .unwrap(),
+            json!([1.0, 0.75, 0.5, 0.25]).as_array().unwrap().clone()
+        );
+        assert_eq!(
+            expand(
+                path,
+                &json!({"logspace": {"start": 3, "stop": 0, "num": 4, "base": 2}})
+            )
+            .unwrap(),
+            json!([8.0, 4.0, 2.0, 1.0]).as_array().unwrap().clone()
+        );
+        assert_eq!(
+            expand(
+                path,
+                &json!({"linspace": {"start": 2, "stop": 9, "num": 1}})
+            )
+            .unwrap(),
+            vec![json!(2.0)]
+        );
+        // Avoid overflow in the interpolation of opposite extreme bounds.
+        let values = expand(
+            path,
+            &json!({"linspace": {"start": -1e308, "stop": 1e308, "num": 3}}),
+        )
+        .unwrap();
+        assert_eq!(values[1], json!(0.0));
+    }
+
+    #[test]
+    fn invalid_spacing_and_spacing_hidden_in_cases_fail_before_expansion() {
+        for value in [
+            json!({"linspace": {"start": 0, "stop": 1, "num": 0}}),
+            json!({"linspace": {"start": 0, "stop": 1, "num": 2.5}}),
+            json!({"linspace": {"start": 0, "stop": 1, "num": 2, "base": 10}}),
+            json!({"logspace": {"start": 0, "stop": 1, "num": 2, "base": 0}}),
+            json!({"logspace": {"start": 0, "stop": 400, "num": 2}}),
+            json!({"linspace": {"start": 0, "stop": 1, "num": 2, "typo": true}}),
+            json!({"linspace": {"start": 0, "stop": 1, "num": 2}, "fixed": 2}),
+            json!({"$cases": [{"mu": {"linspace": {"start": 0, "stop": 1, "num": 2}}}]}),
+        ] {
+            assert!(
+                expand(Path::new("parameters.json"), &value).is_err(),
+                "{value}"
+            );
         }
     }
 }

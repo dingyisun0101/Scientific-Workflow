@@ -23,7 +23,7 @@ loading: editing a file affects a future invocation, not the running study.
 ## `study.json` system settings
 
 This reference covers the operational settings in `wf_configs/study.json` for
-Rust 0.15.4 / Python 0.5.0. Settings are captured when the study loads; editing
+Rust 0.15.5 / Python 0.5.0. Settings are captured when the study loads; editing
 the file does not reconfigure an active run. Unknown fields are rejected.
 Defaults below apply when a field is omitted, including when its optional
 parent object is omitted. Required fields have no inferred default.
@@ -111,6 +111,33 @@ identities stable. Imported prerequisites must have completed successfully with
 matching scientific inputs before new output is created. See
 [phase and execution-unit selection](../../docs/guide/11-reusing-results.md#optional-phase-and-execution-unit-selection)
 for index ordering and reuse restrictions.
+
+
+### Automatic task names (Rust 0.15.5)
+
+Enable concise display labels per phase in `study.json`:
+
+```json
+"task_names": {"mode": "auto", "prefix": "run"}
+```
+
+`prefix` is optional (default empty), trimmed, and must contain no control
+characters; unknown fields and modes fail configuration loading. Omit
+`task_names` to retain the existing labels. Automatic labels include only
+resolved parameter fields whose value or presence varies across tasks in that
+phase. They compare the task's local constants and shared global parameters;
+fixed fields and other units' unresolved parameter sections add no name text.
+Nested fields use their shortest unambiguous leaf name, with full dotted paths
+when leaf names collide. Values retain JSON precision and keys sort
+lexicographically by full path. For example, shared `K=400` and `noise=0.2`
+with varying `mu` produce `run mu=0.1` and `run mu=0.2`.
+
+Arrays are displayed as single JSON values. Parameter-free labels fall back to
+`task 1`, `task 2`; equal nonempty labels receive distinct phase-order `#1`,
+`#2` suffixes. The prefix is included once. Names apply to execution-unit and
+program tasks, including Python. They change plan labels and runtime presentation
+only: stable task identities, output ordinals, dependency selectors and seed
+identities retain their existing derivation. Comparison stays inside each phase.
 
 ### Python task environments
 

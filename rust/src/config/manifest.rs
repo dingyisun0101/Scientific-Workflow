@@ -153,6 +153,7 @@ pub(crate) struct ParsedManifest {
 
 #[derive(Clone)]
 pub(crate) struct ParsedPhase {
+    pub(crate) auto_name_prefix: Option<Box<str>>,
     pub(crate) name: Box<str>,
     pub(crate) dependencies: Box<[Box<str>]>,
     pub(crate) tasks: Vec<ParsedTask>,
@@ -567,7 +568,20 @@ pub(crate) fn parse(path: &Path, value: Value) -> Result<ParsedManifest, ConfigE
             });
         }
 
+        if let Some(naming) = &raw.task_names
+            && naming.prefix.chars().any(char::is_control)
+        {
+            return Err(ConfigError::invalid(
+                path,
+                format!("{phase_pointer}/task_names/prefix"),
+                "task name prefix must not contain control characters",
+            ));
+        }
         phases.push(ParsedPhase {
+            auto_name_prefix: raw.task_names.map(|naming| {
+                let RawTaskNameMode::Auto = naming.mode;
+                naming.prefix.trim().into()
+            }),
             name: name.into_boxed_str(),
             dependencies: dependencies.into_boxed_slice(),
             tasks,
@@ -775,6 +789,8 @@ impl Default for RawReplicatePolicy {
 #[serde(deny_unknown_fields)]
 struct RawPhase {
     #[serde(default)]
+    task_names: Option<RawTaskNames>,
+    #[serde(default)]
     threads: Option<NonZeroUsize>,
     #[serde(default)]
     mode: RawNpyMode,
@@ -792,6 +808,20 @@ struct RawPhase {
     timeout_ms: Option<u64>,
     #[serde(default)]
     failure_policy: RawFailurePolicy,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTaskNames {
+    mode: RawTaskNameMode,
+    #[serde(default)]
+    prefix: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RawTaskNameMode {
+    Auto,
 }
 
 #[derive(Deserialize)]

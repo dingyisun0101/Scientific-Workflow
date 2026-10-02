@@ -54,6 +54,7 @@ impl ResolvedTask {
 /// One validated phase with resolved generic tasks and effective policy.
 #[derive(Clone, Debug)]
 pub(crate) struct PhaseSpecification {
+    pub(crate) auto_name_prefix: Option<Box<str>>,
     pub(crate) name: Box<str>,
     pub(crate) dependencies: Box<[Box<str>]>,
     pub(crate) tasks: Box<[ResolvedTask]>,
@@ -305,6 +306,7 @@ impl ProjectSpecification {
                 }
             }
             phases.push(PhaseSpecification {
+                auto_name_prefix: phase.auto_name_prefix,
                 name: phase.name,
                 dependencies: phase.dependencies,
                 tasks: tasks.into_boxed_slice(),

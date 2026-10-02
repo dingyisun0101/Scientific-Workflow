@@ -54,6 +54,7 @@ pub(super) struct DashboardSnapshot {
     pub(super) thread_budget: usize,
     pub(super) output: Option<PathBuf>,
     pub(super) replicate_count: u64,
+    pub(super) current_replicate: u64,
     pub(super) current_phase: usize,
     pub(super) phase_count: usize,
     pub(super) tasks: Vec<TaskSnapshot>,
@@ -85,6 +86,7 @@ pub(super) struct DashboardState {
     message_sequence: u64,
     output: Option<PathBuf>,
     replicate_count: u64,
+    current_replicate: u64,
     active_phase: Option<(u64, Box<str>)>,
     phase_plan: Vec<Box<str>>,
     tasks: BTreeMap<(u64, Box<str>), TaskSnapshot>,
@@ -108,6 +110,7 @@ impl DashboardState {
             message_sequence: 0,
             output: None,
             replicate_count: 0,
+            current_replicate: 0,
             active_phase: None,
             phase_plan: Vec::new(),
             tasks: BTreeMap::new(),
@@ -183,6 +186,9 @@ impl DashboardState {
             } => {
                 self.output = Some((*output_directory).to_path_buf());
                 self.replicate_count = *replicate_count;
+            }
+            RuntimeEvent::ReplicateStarted { index } => {
+                self.current_replicate = index + 1;
             }
             RuntimeEvent::PhaseStarted {
                 replicate, name, ..
@@ -414,6 +420,7 @@ impl DashboardState {
             control_status: self.control.status(),
             output: self.output.clone(),
             replicate_count: self.replicate_count,
+            current_replicate: self.current_replicate,
             tasks: self
                 .task_order
                 .iter()
@@ -835,5 +842,26 @@ mod tests {
         });
 
         assert_eq!(state.tasks[&(0, Box::from("task"))].detail, "cancelled");
+    }
+}
+
+#[cfg(test)]
+mod replicate_tests {
+    use super::*;
+    #[test]
+    fn replicate_counter_uses_one_based_latest_started_ordinal() {
+        let mut state = DashboardState::new();
+        assert_eq!(state.snapshot().current_replicate, 0);
+        state.apply(&RuntimeEvent::ExecutionStarted {
+            output_directory: std::path::Path::new("output/run"),
+            replicate_count: 4,
+            task_count_per_replicate: 0,
+        });
+        state.apply(&RuntimeEvent::ReplicateStarted { index: 0 });
+        assert_eq!(state.snapshot().current_replicate, 1);
+        state.apply(&RuntimeEvent::ReplicateStarted { index: 2 });
+        state.apply(&RuntimeEvent::ReplicateCompleted { index: 0 });
+        assert_eq!(state.snapshot().current_replicate, 3);
+        assert_eq!(state.snapshot().replicate_count, 4);
     }
 }

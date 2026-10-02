@@ -1,7 +1,9 @@
 //! Best-effort host resource sampling for the interactive dashboard.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct UsageSnapshot {
@@ -12,7 +14,7 @@ pub(super) struct UsageSnapshot {
 
 #[derive(Default)]
 pub(super) struct UsageMonitor {
-    previous_cpu: Option<CpuCounters>,
+    cpu_history: VecDeque<(Instant, CpuCounters)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,25 +25,47 @@ struct CpuCounters {
 
 impl UsageMonitor {
     pub(super) fn sample(&mut self, output: Option<&Path>) -> UsageSnapshot {
-        let current_cpu = read_cpu_counters();
-        let cpu_percent = current_cpu
-            .zip(self.previous_cpu)
-            .and_then(|(current, previous)| {
-                percentage(
-                    current
-                        .total
-                        .saturating_sub(previous.total)
-                        .saturating_sub(current.idle.saturating_sub(previous.idle)),
-                    current.total.saturating_sub(previous.total),
-                )
-            });
-        self.previous_cpu = current_cpu;
+        let cpu_percent = self.sample_cpu(Instant::now(), read_cpu_counters());
 
         UsageSnapshot {
             cpu_percent,
             ram_percent: read_ram_usage(),
             disk_percent: read_disk_usage(output.unwrap_or_else(|| Path::new("."))),
         }
+    }
+
+    fn sample_cpu(&mut self, now: Instant, current: Option<CpuCounters>) -> Option<f64> {
+        let Some(current) = current else {
+            self.cpu_history.clear();
+            return None;
+        };
+        if self.cpu_history.back().is_some_and(|(_, previous)| {
+            current.total < previous.total || current.idle < previous.idle
+        }) {
+            self.cpu_history.clear();
+        }
+        self.cpu_history.push_back((now, current));
+        let cutoff = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
+        // Keep the sample bracketing the cutoff so irregular refreshes still
+        // cover a full second, and interpolate the counters at the boundary.
+        while self.cpu_history.len() > 2 && self.cpu_history[1].0 <= cutoff {
+            self.cpu_history.pop_front();
+        }
+        let &(first_time, first) = self.cpu_history.front()?;
+        let (mut total, mut idle) = (first.total as f64, first.idle as f64);
+        if first_time < cutoff
+            && let Some(&(second_time, second)) = self.cpu_history.get(1)
+        {
+            let interval = second_time.duration_since(first_time).as_secs_f64();
+            if interval > 0.0 {
+                let weight = cutoff.duration_since(first_time).as_secs_f64() / interval;
+                total += (second.total as f64 - total) * weight;
+                idle += (second.idle as f64 - idle) * weight;
+            }
+        }
+        let elapsed = current.total as f64 - total;
+        (elapsed > 0.0)
+            .then(|| ((elapsed - (current.idle as f64 - idle)) * 100.0 / elapsed).clamp(0.0, 100.0))
     }
 }
 
@@ -125,5 +149,70 @@ mod tests {
         );
         assert_eq!(percentage(3, 4), Some(75.0));
         assert_eq!(percentage(1, 0), None);
+    }
+}
+
+#[cfg(test)]
+mod averaging_tests {
+    use super::*;
+
+    #[test]
+    fn cpu_window_interpolates_cutoff_and_discards_old_samples() {
+        let mut monitor = UsageMonitor::default();
+        let start = Instant::now();
+        assert_eq!(
+            monitor.sample_cpu(start, Some(CpuCounters { total: 0, idle: 0 })),
+            None
+        );
+        assert_eq!(
+            monitor.sample_cpu(
+                start + Duration::from_millis(400),
+                Some(CpuCounters {
+                    total: 40,
+                    idle: 40
+                })
+            ),
+            Some(0.0)
+        );
+        let average = monitor
+            .sample_cpu(
+                start + Duration::from_millis(1200),
+                Some(CpuCounters {
+                    total: 120,
+                    idle: 40,
+                }),
+            )
+            .unwrap();
+        assert!((average - 80.0).abs() < 1e-10);
+        assert_eq!(
+            monitor.sample_cpu(
+                start + Duration::from_millis(1400),
+                Some(CpuCounters {
+                    total: 140,
+                    idle: 60
+                })
+            ),
+            Some(80.0)
+        );
+        assert_eq!(monitor.cpu_history.len(), 3);
+        assert_eq!(
+            monitor.sample_cpu(start + Duration::from_secs(2), None),
+            None
+        );
+        assert!(monitor.cpu_history.is_empty());
+        assert_eq!(
+            monitor.sample_cpu(
+                start + Duration::from_secs(3),
+                Some(CpuCounters { total: 5, idle: 2 })
+            ),
+            None
+        );
+        assert_eq!(
+            monitor.sample_cpu(
+                start + Duration::from_secs(4),
+                Some(CpuCounters { total: 1, idle: 0 })
+            ),
+            None
+        );
     }
 }

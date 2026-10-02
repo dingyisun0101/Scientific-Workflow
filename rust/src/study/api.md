@@ -21,6 +21,14 @@ Ordinary users express Study intent in `wf_configs/study.json` and call
 `scientific_workflow::run(project_root: &Path)`. They do not construct phases,
 tasks, identities, persistence plans, registries, or Study builders.
 
+When a phase enables `task_names.mode = "auto"`, Study infers concise labels
+from resolved parameter fields that vary in that phase, with the optional
+prefix and deterministic duplicate fallback. `TaskPlanSummary::label()` returns
+this label; identities, seeds and output ordinals retain their derivation. See
+Config's [automatic naming contract](../config/api.md#automatic-task-names-rust-0155).
+The naming pass is effect-free and does not change scientific constants or
+cross-domain binding.
+
 ## Advanced API
 
 The module root exposes `Study`, `StudyError`, and the borrowed inspection

@@ -926,3 +926,70 @@ output = Path(os.environ["WORKFLOW_TASK_OUTPUT"])
         fs::canonicalize(script).unwrap()
     );
 }
+
+#[test]
+fn automatic_labels_omit_shared_parameters_and_preserve_task_identities() {
+    let parameters =
+        r#"{"temperature":{"$sweep":[10,20]}, "counter":{"initial":{"$sweep":[1,2]}, "steps":3}}"#;
+    let manifest = serde_json::json!({"workflow_schema":1, "threads":2, "compute":{"mode":"auto"}, "phases":{
+        "simulate":{"tasks":[{"execution_unit":"counter"}]},
+        "other":{"after":["simulate"], "tasks":[{"execution_unit":"counter"}]}
+    }});
+    let baseline_project = Project::new_raw(&manifest.to_string(), parameters);
+    let baseline = Study::load(baseline_project.path()).unwrap();
+    let mut automatic = manifest;
+    automatic["phases"]["simulate"]["task_names"] =
+        serde_json::json!({"mode":"auto", "prefix":"run"});
+    let project = Project::new_raw(&automatic.to_string(), parameters);
+    let study = Study::load(project.path()).unwrap();
+    let tasks = study.phases()[0].tasks();
+    assert_eq!(
+        tasks.iter().map(|task| task.label()).collect::<Vec<_>>(),
+        [
+            "run initial=1 temperature=10",
+            "run initial=2 temperature=10",
+            "run initial=1 temperature=20",
+            "run initial=2 temperature=20"
+        ]
+    );
+    assert_eq!(
+        tasks.iter().map(|task| task.identity()).collect::<Vec<_>>(),
+        baseline.phases()[0]
+            .tasks()
+            .iter()
+            .map(|task| task.identity())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        study.phases()[1].tasks()[0].label(),
+        baseline.phases()[1].tasks()[0].label()
+    );
+}
+
+#[test]
+fn automatic_labels_distinguish_duplicate_configurations_and_reject_invalid_settings() {
+    let mut manifest = serde_json::json!({"workflow_schema":1,"threads":1,"compute":{"mode":"auto"},"phases":{
+        "simulate":{"task_names":{"mode":"auto"},"tasks":[{"execution_unit":"counter"}]}
+    }});
+    let parameters = r#"{"counter":{"initial":{"$sweep":[1,1]},"steps":2}}"#;
+    let project = Project::new_raw(&manifest.to_string(), parameters);
+    let study = Study::load(project.path()).unwrap();
+    assert_eq!(
+        study.phases()[0]
+            .tasks()
+            .iter()
+            .map(|task| task.label())
+            .collect::<Vec<_>>(),
+        ["task 1", "task 2"]
+    );
+    for setting in [
+        serde_json::json!({"mode":"typo"}),
+        serde_json::json!({"mode":"auto","prefix":"bad\nname"}),
+        serde_json::json!({"mode":"auto","typo":true}),
+    ] {
+        manifest["phases"]["simulate"]["task_names"] = setting;
+        let project = Project::new_raw(&manifest.to_string(), parameters);
+        assert!(Study::load(project.path()).is_err());
+        assert!(!project.path().join("output").exists());
+    }
+}

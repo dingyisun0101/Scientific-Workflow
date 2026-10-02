@@ -269,7 +269,7 @@ workflow/
 │   │   ├── config/document.rs        strict JSON and duplicate-key parser
 │   │   ├── config/store.rs           central immutable all-document Config snapshot
 │   │   ├── config/manifest.rs        study grammar, defaults, dependency checks
-│   │   ├── config/expansion.rs       deterministic $sweep/$cases compiler
+│   │   ├── config/expansion.rs       deterministic $sweep/$cases and numeric-axis compiler
 │   │   ├── config/parameters.rs      resolved execution unit parameters + typed decode
 │   │   ├── config/program.rs         validated resolved executable declaration
 │   │   ├── config/python.rs          nested Python environment validation/lowering
@@ -637,9 +637,9 @@ panel, a Usage panel, and the former command editor. CPU and RAM come from
 Linux `/proc`; disk is the occupied percentage of the filesystem containing
 the execution directory. UI sampling failures render `--`; the independent Runtime
 disk guard treats its own sampling failures as fatal while enabled.
-Every phase-start event replaces the visible task set. Replicate and phase
-appear once in the panel title; rows contain only the task label, a concise kind
-tag (`unit` for the internal `execution_unit` kind), allocated threads, status, progress, and timing.
+Active replicate/phase groups coexist in the visible task set and disappear
+on completion. The latest phase ordinal appears in the task panel title;
+rows retain replicate/phase context, the task label, and a concise kind tag (`unit` for the internal `execution_unit` kind), allocated threads, status, progress, and timing.
 Exact lowercase `exit` is the interactive dashboard's sole normal close command.
 When entered during active work it also requests cooperative Runtime cancellation,
 stops further admission, and waits for active execution unit/program cleanup. Ctrl+C
@@ -950,3 +950,18 @@ page are usable, and the final page may contain fewer rows.
 
 Filesystem capacity sampling and advisory directory leases use synchronous `fs4`;
 Runtime owns output leases and Persistence owns recording-writer leases.
+
+## Numeric axes, automatic names, and dashboard presentation (0.15.5)
+
+Config owns strict parsing and expansion of `linspace`/`logspace` numeric axes
+and phase-scoped `task_names` intent. Numeric axes feed the same local/global
+Cartesian expansion before Study binding. Study's private compilation pass
+compares resolved local and shared parameters within each phase to infer only
+varying display fields, optional prefixes, and duplicate fallbacks. It preserves
+the existing stable task identity/output ordinal/seed derivation. No new public
+Rust construction mechanism or dependency direction is introduced.
+
+UI owns the page title, status colors, one-based latest-started replicate
+counter, phase/task title and interpolated rolling one-second host CPU average.
+Runtime continues publishing the same lifecycle facts; CPU sampling remains
+best effort and cannot influence admission, control, or scientific state.

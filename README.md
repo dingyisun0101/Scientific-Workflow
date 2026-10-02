@@ -15,9 +15,17 @@ writing custom orchestration code for each study.
 
 > **Breaking generation: Rust 0.15.0 / Python 0.5.0** supersedes the Rust 0.14.x /
 > Python 0.4.x runtime-policy generation. No compatibility aliases restore the old
-> execution names or JSON rewrite behavior. Rust 0.15.4 retains this generation;
+> execution names or JSON rewrite behavior. Rust 0.15.5 retains this generation;
 > scientific APIs and recording formats 7/8 remain compatible. Read the
 > [migration guide](docs/migration-0.15.0.md) before upgrading.
+
+
+Rust **0.15.5** adds `linspace`/`logspace` numeric sweep axes, opt-in phase
+`task_names: {"mode": "auto", "prefix": "run"}`, and a clearer dashboard with
+current replicate / total, colored statuses, and a one-second CPU average.
+`linspace` and `logspace` are now reserved parameter marker names; rename
+existing literal fields with those names before upgrading. Scientific Rust APIs,
+task identities, and recording formats retain the 0.15 generation contract.
 
 ## Describe your study. Let AI configure it.
 
@@ -41,7 +49,7 @@ to set up reusable components so later experiments can stay in configuration.
 
 ![Scientific Workflow dashboard](docs/assets/UI-3.png)
 
-*Live progress, compute allocations, messages, and resource usage across a study.
+*Screenshot from 0.15.4. Live progress, compute allocations, messages, and resource usage across a study.
 Some project names and paths are redacted.*
 
 ## Bring an existing project

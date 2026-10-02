@@ -31,7 +31,7 @@ Crossterm alternate screen and renders a Ratatui dashboard containing:
 - study-wide pending/running/completed/failed/cancelled/skipped counts;
 - scientific iteration gauges/spinners and standard-program stage/count progress;
 - paused execution elapsed/ETA and an independent **Total time** wall clock;
-- separate study identity/status/count/phase/output rows;
+- a separate page title, study time/status/replicate/output rows, and task-panel phase title;
 - severity-colored, text-labeled, timestamped source messages (last 100 retained);
 - a Usage section directly beneath Messages showing CPU, RAM, and execution-filesystem
   disk occupation as percentages;
@@ -77,9 +77,22 @@ the ordinary crate facade.
 
 Usage sampling reads Linux `/proc/stat` and `/proc/meminfo`; disk occupation is
 the used percentage of the filesystem containing the active execution
-directory. CPU uses deltas between dashboard refreshes after its initial host
+directory. CPU uses counter deltas over a rolling one-second window after its initial host
 counter sample. Sampling is presentation-only and best effort: an unavailable
 counter is rendered as `--` and never fails, pauses, or changes execution.
+
+The cyan **Scientific Workflow** page title sits above the Study panel.
+Its first row starts with **Total time**, and the second row uses blue for
+running, yellow for pending, green for completed, red for failed, magenta for
+cancelled, and gray for skipped. Cyan is reserved for titles. The replicate
+counter is one-based current index / total (`0/total` before a replicate starts).
+For parallel runs, current means the latest replicate-start event's index;
+completion events do not turn it into a completed-count counter. The task panel
+title is `Phase=a/b: x Tasks · PgUp/PgDn`, using the latest phase-start event.
+Active groups still coexist in plan order; each row retains its replicate/phase.
+CPU utilization is a rolling one-second average refreshed with the dashboard.
+The monitor interpolates counter values at the window boundary for irregular
+refresh intervals and averages available history during the first second.
 
 ## Advanced API
 

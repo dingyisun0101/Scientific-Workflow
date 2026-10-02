@@ -493,3 +493,15 @@ runtime source or recording format changed. Validation passed workspace tests,
 Clippy with warnings denied, doctests, the explicitly enabled coordinated NPY
 handoff test, rustdoc with warnings denied, and the publication dry run.
 The current documentation's 302 links resolve against the release tree.
+
+## Numeric sweeps and dashboard patch 0.15.5
+
+Expansion unit tests cover independent numeric products, literal arrays,
+logarithmic bases, exact endpoints, excluded endpoints, descending/singleton
+axes, extreme finite bounds, strict malformed specifications, and terminal-case
+restrictions. Study boundary tests load real project JSON to verify opt-in
+phase-local naming, omission of fixed values, global/local differences,
+duplicate fallbacks, validation before output creation, and unchanged identities.
+UI tests cover latest-started one-based replicate ordinals, page/panel title
+placement and colors, and one-second CPU interpolation, history eviction,
+unavailable counters and reset recovery.
