@@ -3,6 +3,10 @@
 This example is the release-qualified end-to-end project for
 Rust `scientific-workflow` 0.16.0 and Python companion 0.6.0.
 
+The coordinated patch release is Rust 0.16.1 / Python 0.6.1. Rust 0.16.1
+accepts stable companions `>=0.6,<0.7`; this example's exact online pins are maintained
+in its Cargo manifest and `examples/requirements.txt` after publication.
+
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all
 configuration, Workflow's standard `$npy` phase converts the completed

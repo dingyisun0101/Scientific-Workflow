@@ -7,9 +7,11 @@ NPY v3. No legacy receipt adapter or compatibility alias restores old reuse.
 
 ## Install the coordinated release
 
-Use published Rust `scientific-workflow = "0.16.0"` and Python
-`scientific-workflow[npy]==0.6.0` in the environment used by the runner.
-Rust preflight checks the coordinated companion before conversion starts.
+Use current patches Rust `scientific-workflow = "0.16.1"` and Python
+`scientific-workflow[npy]==0.6.1` in the environment used by the runner.
+The migration contract originated in 0.16.0 / 0.6.0 and is unchanged. Rust
+0.16.1 accepts stable companions `>=0.6,<0.7` for conversion and reuse; the minimum
+remains 0.6.0. The initial Rust 0.16.0 release checked exactly Python 0.6.0.
 The registration macro remains published version 0.2.1.
 
 ## Captured inputs and reuse

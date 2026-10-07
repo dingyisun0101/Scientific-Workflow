@@ -1,7 +1,7 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.16.0 and Python
-companion 0.6.0.
+This map is the release-qualification baseline for Rust 0.16.1 and Python
+companion 0.6.1.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
 indices and task identities, current-receipt program and execution-unit reuse, chained
@@ -194,13 +194,17 @@ two-second `start_interval_ms`; a public
 `Study::load` test proves the complete example still passes current effect-free
 preflight.
 
-## Current 0.16.0 / 0.6.0 regression requirements
+## Current 0.16.1 / 0.6.1 regression requirements
 
 The current pass adds boundaries for durable task snapshots: exact-byte changes,
 manifest/receipt agreement, missing and older receipts, chained references,
 raw and program inputs, and permitted operational compatibility changes.
 Programs/scripts must match resolved identity without code fingerprints.
 NPY reuse requires current v3 member/batch integrity before new execution output.
+Rust 0.16.1 companion qualification must accept stable 0.6 patches for both
+conversion and reuse, retaining minimum 0.6.0 and rejecting other minor lines.
+Python 0.6.1 changes documentation and package version metadata only; retain the
+initial 0.16.0 / 0.6.0 qualification below as historical evidence.
 
 Configuration checks cover retained non-UTF-8 interpreter paths and literal
 JSON-key path identity. Task checks reject distinct identities sharing one
@@ -216,6 +220,20 @@ UI/PTY qualification must verify centered uppercase title, two-second CPU
 window, cached one-second resource refresh, immediate command/paging/resize
 feedback, startup failure before cleanup, and exact terminal restoration.
 The independent runtime disk guard remains separately qualified.
+
+## Local patch qualification: 0.16.1 / 0.6.1
+
+The patch passed 202 workspace tests, both explicitly invoked NPY integration
+tests against the installed Python 0.6.1 wheel, and all three doctests. The
+shared companion guard exercised 13 valid/invalid version cases. Conversion
+and completed-NPY reuse both accepted the patch companion, while reuse still
+rejected incompatible formats and altered array bytes.
+
+All 49 Python tests passed from the installed wheel outside the source tree.
+Formatting, warnings-denied Clippy/rustdoc, the 111-file Cargo package build,
+wheel/sdist checks, and documentation links/JSON/settings checks passed. The
+private example manifests remain on their published versions during candidate
+qualification and are refreshed only after the patch is online.
 
 ## Local release qualification: 0.16.0 / 0.6.0
 
@@ -253,7 +271,7 @@ and do not establish production-scale convergence or memory bounds.
 ## Historical qualification evidence
 
 The following release records describe checks performed for earlier versions.
-They do not replace the current 0.16.0 / 0.6.0 qualification requirements.
+They do not replace the current 0.16.1 / 0.6.1 qualification requirements.
 
 ## Refactor qualification (Rust 0.13.5 / Python 0.4.3)
 

@@ -3,6 +3,10 @@
 **Linux only. Python 3.14+ and an activated environment containing the compatible
 `scientific-workflow[npy]` package are REQUIRED. Cargo does not install Python.**
 
+The coordinated patch release is Rust 0.16.1 / Python 0.6.1. Rust 0.16.1
+accepts stable companions `>=0.6,<0.7`; this example's exact online pins are maintained
+in its Cargo manifest and `examples/requirements.txt` after publication.
+
 From the repository root, install the published companion with
 `python -m pip install -r examples/requirements.txt`, then run inside
 `tmux new -s workflow` or `screen -S workflow`:

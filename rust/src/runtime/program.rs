@@ -430,6 +430,15 @@ fn publish_progress(p: &TaskPresentation, event: Event) {
     }
 }
 
+const PYTHON_COMPANION_VERSION_GUARD: &str = "import re\nworkflow_version = scientific_workflow.__version__\nif not isinstance(workflow_version, str) or re.fullmatch(r'0\\.6\\.(?:0|[1-9][0-9]*)', workflow_version, flags=re.ASCII) is None: raise RuntimeError(f'install stable scientific-workflow[npy]>=0.6,<0.7; found {workflow_version!r}')";
+
+/// One private prerequisite probe shared by conversion launch and completed NPY reuse.
+pub(super) fn python_prerequisite_probe() -> String {
+    format!(
+        "import sys\nif sys.version_info < (3,14): raise RuntimeError('Python 3.14+ required')\nimport scientific_workflow, numpy, threadpoolctl\n{PYTHON_COMPANION_VERSION_GUARD}\nfrom scientific_workflow.npy import convert_workflow_dependencies\n"
+    )
+}
+
 pub(super) fn check_prerequisites(study: &crate::study::Study) -> Result<(), super::RuntimeError> {
     let interpreters = study
         .phase_order()
@@ -442,9 +451,10 @@ pub(super) fn check_prerequisites(study: &crate::study::Study) -> Result<(), sup
         .filter_map(|t| t.program_path())
         .collect::<std::collections::BTreeSet<_>>();
     for interpreter in interpreters {
-        let probe = "import sys\nif sys.version_info < (3,14): raise RuntimeError('Python 3.14+ required')\nimport scientific_workflow, numpy, threadpoolctl\nif scientific_workflow.__version__ != '0.6.0': raise RuntimeError('install scientific-workflow[npy] 0.6.0')\nfrom scientific_workflow.npy import convert_workflow_dependencies";
+        let probe = python_prerequisite_probe();
         let output = Command::new(interpreter)
-            .args(["-c", probe])
+            .arg("-c")
+            .arg(probe)
             .output()
             .map_err(|source| super::RuntimeError::PythonPrerequisite {
                 interpreter: interpreter.to_path_buf(),
@@ -462,6 +472,41 @@ pub(super) fn check_prerequisites(study: &crate::study::Study) -> Result<(), sup
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn companion_guard_accepts_stable_patch_releases_and_rejects_other_generations() {
+        use super::*;
+        let script = format!(
+            "import json, sys, types\nscientific_workflow = types.SimpleNamespace(__version__=json.loads(sys.argv[1]))\n{PYTHON_COMPANION_VERSION_GUARD}"
+        );
+        for (version, accepted) in [
+            (serde_json::json!("0.6.0"), true),
+            (serde_json::json!("0.6.1"), true),
+            (serde_json::json!("0.6.25"), true),
+            (serde_json::json!("0.5.99"), false),
+            (serde_json::json!("0.7.0"), false),
+            (serde_json::json!("0.6"), false),
+            (serde_json::json!("0.6.1rc1"), false),
+            (serde_json::json!("0.6.1.dev1"), false),
+            (serde_json::json!("0.6.01"), false),
+            (serde_json::json!("0.6.\u{0661}"), false),
+            (serde_json::json!("0.6.1+local"), false),
+            (serde_json::Value::Null, false),
+            (serde_json::json!(6), false),
+        ] {
+            let output = Command::new("python3")
+                .args(["-c", &script])
+                .arg(serde_json::to_string(&version).unwrap())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                accepted,
+                "version {version}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn noncooperative_process_group_suspends_resumes_and_cleans_up() {

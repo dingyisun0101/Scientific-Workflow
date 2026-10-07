@@ -243,9 +243,13 @@ fn validate_result(
             let interpreter = expected
                 .executable
                 .ok_or_else(|| invalid("NPY plan has no interpreter"))?;
-            let probe = "import sys, json, scientific_workflow\nif scientific_workflow.__version__ != '0.6.0': raise RuntimeError('NPY reuse requires scientific-workflow[npy] 0.6.0')\nfrom scientific_workflow.npy import open_npy_batch\nbatch = open_npy_batch(sys.argv[1])\nwith open(sys.argv[2], encoding='utf-8') as source: config = json.load(source)\nexpected = sorted(config['study']['phases']['$npy'].get('exclude_streams', []))\nif batch.manifest['exclude_streams'] != expected: raise RuntimeError('completed NPY exclusions differ from captured input')";
+            let probe = format!(
+                "{}import json\nfrom scientific_workflow.npy import open_npy_batch\nbatch = open_npy_batch(sys.argv[1])\nwith open(sys.argv[2], encoding='utf-8') as source: config = json.load(source)\nexpected = sorted(config['study']['phases']['$npy'].get('exclude_streams', []))\nif batch.manifest['exclude_streams'] != expected: raise RuntimeError('completed NPY exclusions differ from captured input')",
+                super::super::program::python_prerequisite_probe(),
+            );
             let output = std::process::Command::new(interpreter)
-                .args(["-c", probe])
+                .arg("-c")
+                .arg(probe)
                 .arg(&processed)
                 .arg(result.output_directory.join("workflow-config.json"))
                 .output()?;

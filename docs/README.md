@@ -63,6 +63,7 @@ integration boundaries, configuration, handoffs, analysis, validation, and cutov
 - [Required instructions for AI agents](AGENTS.md).
 - [Repository contribution instructions](../AGENTS.md).
 
-The current guides describe Rust 0.16.0 and Python companion 0.6.0.
+The current guides describe Rust 0.16.1 and Python companion 0.6.1.
+These patches preserve the initial 0.16.0 / 0.6.0 breaking contracts.
 This release requires current verified receipts and writes NPY v3; raw
 recording formats 7/8 and the scientific unit-authoring APIs remain supported.

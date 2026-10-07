@@ -19,11 +19,15 @@ writing custom orchestration code for each study.
 > restores the older receipt contract. Scientific Rust APIs and raw recording
 > formats 7/8 remain supported. Read the [migration guide](docs/migration-0.16.0.md) before upgrading.
 
+Current patches are Rust **0.16.1** and Python **0.6.1**. The Rust patch accepts
+stable Python companions `>=0.6,<0.7` during conversion and reuse; the Python
+patch corrects documentation links. APIs, scientific behavior, and storage
+formats remain unchanged from the 0.16.0 / 0.6.0 breaking release.
 
-Rust **0.16.0** preserves `linspace`/`logspace` sweeps and automatic task labels,
-adds durable output-owned configuration checksums, corrects lossless numeric
-conversion and scalar shapes, and uses a centered uppercase dashboard title
-with a two-second CPU average and one-second resource refresh.
+
+Rust **0.16.1** retains numeric sweeps, automatic task labels, durable captured
+inputs, lossless conversion, and preserved scalar shapes. Its dashboard has a
+centered uppercase title, a two-second CPU average, and one-second resource refresh.
 Historical NPY v2/v3 interpretation belongs to downstream analysis.
 
 ## Describe your study. Let AI configure it.
@@ -96,7 +100,8 @@ Already have an integrated project? Start with
 [AI-assisted studies](docs/guide/12-ai-assisted-studies.md).
 
 **Requirements:** Linux, Rust 1.97+, and an interactive terminal dashboard.
-Python conversion and companion utilities require Python 3.14+ and companion 0.6.0.
+Python conversion and companion utilities require Python 3.14+ and a companion
+matching stable `>=0.6,<0.7`; the current documentation patch is 0.6.1.
 
 ## Explore the project
 

@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.1 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -286,10 +286,13 @@ This non-exhaustive enum reports failures after a valid Study is available:
 - `Reuse { phase: String, path: PathBuf, reason: String }`: required completed outputs are missing, failed, or incompatible; detected before output creation.
 
 - `PythonPrerequisite { interpreter: PathBuf, reason: String }`: the active
-  interpreter cannot import the coordinated Python 0.6.0 tools, NumPy and
+  interpreter cannot import stable Python companion 0.6.x tools, NumPy and
   threadpoolctl, or is older than Python 3.14. The error names the selected
   interpreter and setup remedy. Runtime probes before scientific work and output
   creation; Study::load performs no subprocess probe.
+  Conversion preflight and NPY reuse share one private generation probe. It
+  accepts canonical stable `0.6.<patch>` versions (minimum 0.6.0), while other
+  generations, prereleases, malformed versions, and non-ASCII version digits fail.
 - `ExecutionCancelled`: the interactive `exit` command or Ctrl+C requested
   cooperative cancellation;
 - `Presentation { source }`: the selected automatic presentation adapter could
@@ -498,7 +501,7 @@ Reuse verifies the source's exact `workflow-config.json` and
 references, then compares parsed scientific inputs separately. Ordinary resolved
 executable paths and canonical Python scientific-script paths must match; Python
 launchers and environment managers remain operational provenance. Source code
-contents are not hashed. NPY imports additionally require Python companion 0.6.0
+contents are not hashed. NPY imports additionally require a stable Python companion in `>=0.6,<0.7`
 and fully verified current v3 batch/member manifests and arrays with matching
 stream exclusions. Raw recording chunks are verified by supported readers when
 consumed; receipt verification checks completion and member provenance.
@@ -513,7 +516,7 @@ use the maximum final member iteration. ETA uses this same task clock; member
 recordings and completion policies are unchanged.
 
 The reserved `$npy` phase passes exact stream exclusions as repeated
-`--exclude-stream=NAME` arguments to Python 0.6.0. Filtering affects conversion
+`--exclude-stream=NAME` arguments to Python companion 0.6.x. Filtering affects conversion
 only. All included data retains ordinary validation, locking, cancellation,
 worker limits, and atomic publication. Filter identity is checked before reusing
 member outputs or an existing batch; different filters never silently reuse data.

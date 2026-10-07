@@ -1,7 +1,7 @@
 # Workflow architecture
 
-This document describes the reviewed architecture for Rust package 0.16.0 and
-its recording-v7/v8 integration with Python companion 0.6.0.
+This document describes the reviewed architecture for Rust package 0.16.1 and
+its recording-v7/v8 integration with Python companion 0.6.1.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -756,7 +756,7 @@ conveniences. It owns no behavior or alternative implementation path.
   unwinding, and reports renderer failure as fatal presentation failure rather
   than cancellation.
 
-## Current integrity, conversion, and UI contract (0.16.0 / 0.6.0)
+## Current integrity, conversion, and UI contract (0.16.1 / 0.6.1)
 
 Persistence's private `inputs.rs` stores task-root `workflow-config.json` and
 `workflow-dependencies.json`, plus `workflow-inputs.json` containing canonical
@@ -780,6 +780,10 @@ otherwise JSON bytes retain a lossless fallback. Typed envelopes are validated,
 scalar rank is preserved, and opening verifies coordinate roles/layouts. The
 latest raw-record reader verifies the entire newest chunk. Historical converted
 results and explicit v2/v3 interpretation belong to downstream analysis.
+
+Rust 0.16.1 preflight and reuse accept stable Python companions `>=0.6,<0.7`;
+Python 0.6.1 changes documentation links only. Raw and converted formats remain
+unchanged from the initial 0.16.0 / 0.6.0 release.
 
 Python conversion respects the selected/default multiprocessing context and
 passes current control configuration through private initialization. Native

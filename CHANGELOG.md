@@ -1,5 +1,14 @@
 # Changelog
 
+## Rust 0.16.1 / Python 0.6.1 — 2026-10-07
+
+- Accept stable compatible Python companion patches `>=0.6,<0.7` for standard
+  conversion and completed-NPY reuse, retaining minimum companion 0.6.0.
+- Python 0.6.1 is a documentation-only patch: correct the published README's
+  recording-protocol/compatibility links and synchronize current version guides.
+- Scientific APIs, raw recording formats 7/8, NPY v3, and v2 receipts/program
+  metadata remain unchanged from the initial 0.16.0 / 0.6.0 breaking release.
+
 ## Rust 0.16.0 / Python 0.6.0 — 2026-10-06
 
 - Require v2 receipts/program metadata with durable output-owned configuration

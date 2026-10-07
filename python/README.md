@@ -30,7 +30,7 @@ Use the online [Python environment setup guide](https://github.com/dingyisun0101
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.16.0#subdirectory=python"
+  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@python-v0.6.1#subdirectory=python"
 ```
 
 Python 3.14 or newer is required. The core reader has no runtime dependencies.
@@ -39,10 +39,11 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 
 ```bash
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.16.0#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@python-v0.6.1#subdirectory=python"
 ```
 
-This guide documents release 0.6.0.
+This guide documents release 0.6.1. Python 0.6.1 updates documentation links;
+its APIs, scientific behavior, and storage formats are unchanged from 0.6.0.
 
 ## Reading a recording
 
@@ -95,15 +96,15 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.6.0 supports
+Release 0.6.1 supports
 `scientific-workflow-jsonl` format versions 7 and 8, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
 
 The normative language-neutral contract is the repository's
-[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/protocol/recording-v7.md),
+[recording v7 protocol](https://github.com/dingyisun0101/Scientific-Workflow/blob/python-v0.6.1/protocol/recording-v7.md),
 with a strict structural JSON Schema and a package
-[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.0/protocol/compatibility.md). This package is the
+[compatibility matrix](https://github.com/dingyisun0101/Scientific-Workflow/blob/python-v0.6.1/protocol/compatibility.md). This package is the
 v7/v8 reader listed there; it does not expose a supported writer.
 
 The record containers cannot be reassigned and their value mappings are
