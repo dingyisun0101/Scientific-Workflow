@@ -239,6 +239,17 @@ resource sampling remain one second, and CPU averaging is two seconds.
 Markdown local/release-link, JSON-fence, settings-table, and API-heading checks
 passed. These are local results, not a claim of CI or production-scale convergence.
 
+## Post-publication consumer qualification
+
+Rust 0.16.0 and Python 0.6.0 were published after main/tag pushes and successful
+Rust/Python CI. Both private example manifests now consume online Workflow
+0.16.0 and the published Python 0.6 companion. A temporary dependency-pipeline
+copy completed in a real PTY with verified values 7–12 at iterations 0–5 and v3
+member/batch manifests. A temporary six-case attractor copy completed its 5000
+steps per case, conversion, and SVG publication; each trajectory has 501 records.
+Terminal restoration passed. These checks preserve production configs/results
+and do not establish production-scale convergence or memory bounds.
+
 ## Historical qualification evidence
 
 The following release records describe checks performed for earlier versions.
