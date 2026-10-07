@@ -1,11 +1,11 @@
 # Two-dimensional attractor study
 
 This example is the release-qualified end-to-end project for
-Rust `scientific-workflow` 0.16.0 and Python companion 0.6.0.
+Rust `scientific-workflow` 0.16.1 and Python companion 0.6.1.
 
 The coordinated patch release is Rust 0.16.1 / Python 0.6.1. Rust 0.16.1
-accepts stable companions `>=0.6,<0.7`; this example's exact online pins are maintained
-in its Cargo manifest and `examples/requirements.txt` after publication.
+accepts stable companions `>=0.6,<0.7`; this example consumes the online patches
+pinned in its Cargo manifest and `examples/requirements.txt`.
 
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all
@@ -243,7 +243,7 @@ Runtime creates output.
 
 The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
 one thread to each execution-unit task within the global four-thread budget.
-The example consumes published Workflow 0.16.0 and the Python 0.6.0 companion
+The example consumes published Workflow 0.16.1 and the Python 0.6.1 companion
 pinned in `examples/requirements.txt`. Execution requires the dashboard; run
 inside screen/tmux. Disk pauses require freeing space and typing `resume`.
 Leave NPY worker settings unset for the default gradual auto allocation unless

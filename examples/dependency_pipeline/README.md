@@ -4,8 +4,8 @@
 `scientific-workflow[npy]` package are REQUIRED. Cargo does not install Python.**
 
 The coordinated patch release is Rust 0.16.1 / Python 0.6.1. Rust 0.16.1
-accepts stable companions `>=0.6,<0.7`; this example's exact online pins are maintained
-in its Cargo manifest and `examples/requirements.txt` after publication.
+accepts stable companions `>=0.6,<0.7`; this example consumes the online patches
+pinned in its Cargo manifest and `examples/requirements.txt`.
 
 From the repository root, install the published companion with
 `python -m pip install -r examples/requirements.txt`, then run inside
@@ -57,7 +57,7 @@ retain the verified conversion object rather than repeatedly reopening it.
 
 The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
 one thread to each execution-unit task within the global two-thread budget.
-The example consumes published Workflow 0.16.0 and the Python 0.6.0 companion
+The example consumes published Workflow 0.16.1 and the Python 0.6.1 companion
 pinned in `examples/requirements.txt`. Execution requires the dashboard; run
 inside screen/tmux. Disk pauses require freeing space and typing `resume`.
 Leave NPY worker settings unset for the default gradual auto allocation unless

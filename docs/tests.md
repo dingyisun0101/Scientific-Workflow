@@ -261,6 +261,17 @@ passed. These are local results, not a claim of CI or production-scale convergen
 
 ## Post-publication consumer qualification
 
+The 0.16.1 / 0.6.1 patch release passed CI `37591501904`; the candidate-wheel
+CI correction passed `37591726811`. Both releases were merged into `main` and
+pushed with their tags before publication. The examples now consume these online
+patches. A fresh dependency-pipeline copy passed its PTY run and values 7–12
+at iterations 0–5. The checked-in six-case attractor produced a fresh completed
+execution with 501 trajectory records per member and its SVG plot; both terminal
+restoration checks passed. Patch readback artifacts are under
+`/tmp/workflow-0161-examples-cw9kbr5e`; its attractor output link refers to the
+new validation execution in the example's output directory. Existing saved
+executions and scientific configuration were preserved.
+
 Rust 0.16.0 and Python 0.6.0 were published after main/tag pushes and successful
 Rust/Python CI. Both private example manifests now consume online Workflow
 0.16.0 and the published Python 0.6 companion. A temporary dependency-pipeline

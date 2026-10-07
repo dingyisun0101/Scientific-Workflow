@@ -12,6 +12,8 @@ Use current patches Rust `scientific-workflow = "0.16.1"` and Python
 The migration contract originated in 0.16.0 / 0.6.0 and is unchanged. Rust
 0.16.1 accepts stable companions `>=0.6,<0.7` for conversion and reuse; the minimum
 remains 0.6.0. The initial Rust 0.16.0 release checked exactly Python 0.6.0.
+Refresh existing Cargo manifests and lockfiles to Rust 0.16.1 before installing
+Python 0.6.1; a lockfile retaining Rust 0.16.0 retains its exact-version check.
 The registration macro remains published version 0.2.1.
 
 ## Captured inputs and reuse
