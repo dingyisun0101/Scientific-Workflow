@@ -234,6 +234,8 @@ Formatting, warnings-denied Clippy/rustdoc, the 111-file Cargo package build,
 wheel/sdist checks, and documentation links/JSON/settings checks passed. The
 private example manifests remain on their published versions during candidate
 qualification and are refreshed only after the patch is online.
+CI installs the candidate wheel's optional dependencies without replacing it
+with a previous published companion, and checks module/installed metadata agree.
 
 ## Local release qualification: 0.16.0 / 0.6.0
 
