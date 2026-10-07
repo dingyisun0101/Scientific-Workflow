@@ -58,16 +58,24 @@ disk policy, and Python environment-manager settings are operational provenance
 and do not invalidate completed work. If a resource setting changes scientific
 meaning, express that choice in scientific parameters.
 A reused phase cannot depend on a phase selected to execute again. Missing,
-failed, incompatible, or ambiguous legacy inputs fail without launching work.
+failed, incompatible, or unsupported receipt inputs fail without launching work.
 Programs and `$npy` receive the original completed recording/artifact paths.
 Recordings are never appended to or rewritten.
 
-New executions commit private `workflow-result.json` receipts after each
-successful phase, including references for reused tasks, so reuse can be chained.
-Pre-0.13.9 program outputs may be imported from their successful `program.json`
-and captured config. Legacy execution-unit imports additionally require an
-authoritative matching summary in a dependent program's captured dependency
-file; Workflow never guesses a final iteration from sampling cadence.
+New executions commit private v2 `workflow-result.json` receipts after each
+successful phase. Every task retains output-owned `workflow-config.json` and
+`workflow-dependencies.json` snapshots with persisted SHA-256 references.
+Workflow verifies the captured bytes before completion and reuse. Source JSON
+remains editable for future runs; old runs retain their captured inputs.
+Integrity verification uses exact stored bytes, while compatibility compares
+scientific settings separately so allowed operational changes remain reusable.
+
+Only current receipts are accepted. Missing or older receipts require rerunning
+the necessary prerequisites; Workflow does not reconstruct legacy completion
+or migrate historical results. Downstream analysis owns historical result
+interpretation and explicit NPY v2/v3 support. A completed NPY prerequisite must
+satisfy the current v3 conversion contract. Reused tasks preserve their original
+verified output references, so current receipts can be chained.
 
 ## Check compatibility before retrying
 

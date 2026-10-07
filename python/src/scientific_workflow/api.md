@@ -1,7 +1,7 @@
 # Python companion API
 
 Python distribution/import: `scientific-workflow` / `scientific_workflow`, version
-0.5.0. Python 3.14+; Linux is the supported execution platform. The base package
+0.6.0. Python 3.14+; Linux is the supported execution platform. The base package
 has no runtime dependencies; `[npy]` installs NumPy. Imports have no environment,
 logging, working-directory, subprocess, or output-creation side effects.
 
@@ -15,15 +15,19 @@ validation. Directory parameters accept `str | pathlib.Path`. Root reexports
 remain available for the reader, state containers, and recording errors; the old
 `scientific_workflow_reader` import package is not provided.
 
-`RecordingReader(directory, decoders=None)` validates metadata but permits
-inspection of incomplete recordings. Properties: `directory`, `format_version`
+`RecordingReader(directory, decoders=None)` validates metadata and requires a
+successfully completed recording. Running and failed recordings are rejected
+before returning a reader. Properties: `directory`, `format_version`
 (the file's actual 7 or 8), `stream_names` (ordered tuple), `user_metadata`,
 `terminal_metadata`, `timing`. Methods: `stream_record_count(stream)`,
 `stream_encoded_bytes(stream)`, `read_stream(stream)`, `read_all_streams()`,
 `read_latest(stream)`, `iter_verified_records(stream)`. Complete reads are
 transactional; the iterator verifies a bounded chunk before yielding and may
 fail later after prior chunks were yielded. Decoders are mappings from field
-name to callable; ordinary JSON values are the default. See the Python README
+name to callable; ordinary JSON values are the default. `read_latest` verifies
+all framing, descriptor endpoints, record counts, and iteration order in the
+newest chunk, then calls application decoders only for its final record. Complete
+reads validate a chunk before calling its application decoders. See the Python README
 for integrity/lifecycle details and custom-decoder examples.
 
 `FORMAT_NAME` identifies scientific-workflow-jsonl; `FORMAT_VERSION` is the
@@ -38,7 +42,8 @@ scientific partial series is returned by complete reads.
 ### Dependencies
 
 `scientific_workflow.dependencies.Dependencies(snapshot)` validates an owned
-copy of a dependency JSON array. `load(path)` reads an explicit snapshot;
+copy of a dependency JSON array. `load(path)` reads an explicit captured
+`workflow-dependencies.json` with verified task-input evidence;
 `from_env()` requires WORKFLOW_DEPENDENCIES_PATH. Both are class methods.
 `recordings()`, `programs()`, `npy_batches()` return typed `Selection` objects.
 `raw_json()` returns an independent mutable JSON copy including unknown kinds.
@@ -88,6 +93,22 @@ preserved. File existence and scientific correctness are checked by the reader.
 - `ProjectLayoutError(ValueError)`: identifies the required variable/file/layout
   and chains underlying read/parse failures.
 
+`parameters` and `Dependencies.load` require the sibling `workflow-inputs.json`
+with format `scientific-workflow-inputs.v1`. Its `config` and `dependencies`
+descriptors each contain exactly a canonical `path` and `sha256:` checksum with
+64 lowercase hexadecimal digits. Both captured files are read and verified before
+the selected JSON is decoded, including exact whitespace bytes. Missing evidence,
+malformed descriptors, and changed or missing files fail through the owning
+accessor's contextual error.
+
+If `program.json` or `workflow-result.json` exists beside those inputs, it must
+use current program v2 or receipt v2 format and its `inputs` descriptors must
+match the sidecar. There is no legacy fallback. Standalone captured-input
+fixtures may use the sidecar without those lifecycle files; this establishes
+input byte consistency, not completed-task reuse or authenticity. The in-memory
+`Dependencies(snapshot)` constructor validates selection structure without
+claiming external-file verification.
+
 Accessors synchronously read files/environment. They do not create files, mutate
 cwd, configure logging, activate environments or implement a second resolver.
 Use explicit paths outside a Workflow program; from-env calls require the launch
@@ -116,7 +137,15 @@ Both require the standard manifest directory, not an individual `.npy` path.
 
 Omit logical_path for wholly numeric fields. Structured fields require an exact
 projection path, including JSON-pointer escaping. Missing or ambiguous projections
-raise `NpyConversionError`. Opening verifies checksums/layout up front; series
+raise `NpyConversionError`. Scalars retain rank zero: scalar-series values have shape `(records,)`, and
+record access returns a NumPy scalar. Typed numeric envelopes require valid
+Boolean/integer kinds and integer ranges, allow ordinary declared float rounding,
+and reject overflow/nonfinite results. Untyped values without an exact supported
+numeric representation retain their original JSON through the structured fallback;
+a whole-field numeric series is then unavailable. The same exactness rule applies
+to projections. See the [NPY v3 protocol](../../../protocol/npy-v3.md).
+
+Opening verifies checksums/layout up front; series
 access does not repeat that complete validation or reconstruct every JSON record.
 Callers must not mutate metadata dictionaries or source files after opening.
 
@@ -136,11 +165,11 @@ is read-only and has no cancellation or publication effects.
 converts a completed recording, returning its manifest. Default output is the
 recording sibling suffixed `-npy`. Conflicts fail; verified matching output is
 reused. Successful publication is atomic after complete validation. Source files
-must remain immutable. NPY_FORMAT and NPY_BATCH_FORMAT remain v2;
+must remain immutable. NPY_FORMAT and NPY_BATCH_FORMAT are v3; Workflow readers reject historical v2;
 MANIFEST_FILE is `manifest.json`. NpyConversionError(ValueError) reports storage
 contract failures; recording errors and I/O failures retain their own types.
 
-`convert_workflow_dependencies(dependencies_path, output_directory, *, exclude_streams=())` converts
+`convert_workflow_dependencies(dependencies_path, output_directory, *, exclude_streams=(), worker_mode="auto")` converts
 completed prerequisite recordings and publishes a batch in stable source order.
 The installed CLI `scientific-workflow-to-npy` and `python -m
 scientific_workflow.npy` call `main()`. Consult `--help` for CLI flags; public
@@ -200,10 +229,22 @@ the parent emitter rather than writing progress directly. See program-events-v1.
 
 `convert_workflow_dependencies` uses min(WORKFLOW_THREADS, unique recordings),
 with a standalone default of one. Rust supplies/reserves the allowance across
-replicates. Spawn workers own their verified reader and arrays; threadpoolctl
+replicates. Workers follow Python’s default or the embedding application’s
+selected multiprocessing context; the converter never sets the process-global
+start method. On ordinary Linux/Python 3.14, this is forkserver. Workers own
+their verified reader and arrays; threadpoolctl
 limits native numeric pools to one thread each. There is no new mandatory public
 argument. Progress reports planning, writing, verification, member reuse/completion,
 and batch totals. Completion order never changes manifest member order.
+
+Direct parallel batch calls from a script require an import-safe entry point,
+normally `if __name__ == "__main__":`. Standard CLI launchers already supply it.
+Reader calls, direct `convert_recording`, and one-worker batches create no pool.
+Parallel notebook/interactive entry points are not qualified; use Workflow's
+reserved `$npy` phase or the installed converter in an ordinary Python process.
+Each batch explicitly passes its current private control configuration to worker
+initialization, including when a forkserver predates the batch. Queues use the
+same context as their workers. Private context overrides are not public API.
 
 Linux directory flock serializes competing publishers. Unique temporary paths
 avoid same-process collisions. Failure terminates/joins workers, publishes no
@@ -239,8 +280,8 @@ recordings, checkpoint production, member identities, and phase indices do not
 change. If every stream is excluded, a valid metadata-only member dataset is
 published.
 
-Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
-v2 manifests without this field mean no exclusions. Reuse requires identical
+Both v3 member and batch manifests require a sorted `exclude_streams` list.
+Historical v2 interpretation belongs to downstream analysis. Reuse requires identical
 filters and source metadata; use a different output directory for a different
 selection. Serial and parallel conversion have the same filtering semantics.
 No shell interpretation or glob matching is performed.

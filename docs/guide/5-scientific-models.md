@@ -57,6 +57,12 @@ impl ExecutionUnit for PopulationUnit {
 
     type Constants = Constants;
 
+    fn preflight(constants: &Constants, _schema: &SystemStateSchema) -> UnitResult<ObservationPlan> {
+        constants.initial_population.checked_add(constants.steps)
+            .ok_or("initial population plus steps exceeds u64")?;
+        Ok(ObservationPlan::all_fields())
+    }
+
     // initialize, member_count, member, and step fulfill the contract.
 }
 ```
@@ -175,14 +181,16 @@ impl ExecutionUnit for PopulationUnit {
     }
 
     fn step(&mut self) -> UnitResult {
-        let (population, cumulative_births) = self
-            .state
-            .borrow_payloads_mut::<(u64, u64)>(
-                ("population", "cumulative_births"),
-            )?;
-        *population += 1;
-        *cumulative_births += 1;
-        self.state.advance_time(None)?;
+        let next_time = self.state.time().checked_advance(None)?;
+        let (population, births) = self.state
+            .borrow_payloads::<(u64, u64)>(("population", "cumulative_births"))?;
+        let next_population = population.checked_add(1).ok_or("population exceeds u64")?;
+        let next_births = births.checked_add(1).ok_or("birth count exceeds u64")?;
+        let (population, births) = self.state
+            .borrow_payloads_mut::<(u64, u64)>(("population", "cumulative_births"))?;
+        *population = next_population;
+        *births = next_births;
+        self.state.replace_time(next_time);
         Ok(())
     }
 }

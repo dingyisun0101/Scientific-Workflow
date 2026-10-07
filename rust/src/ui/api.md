@@ -1,6 +1,6 @@
 # UI API
 
-This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
 
 The `ui` subsystem is the sole presentation interface for execution facts
 already known by Runtime. It does not inspect execution units, scientific payloads,
@@ -9,7 +9,7 @@ messages, increment counters, or receive a UI handle.
 
 Runtime owns the planned-task, lifecycle, progress, path, and outcome fact
 vocabulary plus the observer port. Crate-level composition attaches UI's
-automatic adapter after Runtime allocates the execution scope. UI alone owns
+automatic adapter before output cleanup or allocation. UI alone owns
 terminal detection, its inferred refresh policy, the Ratatui dashboard state,
 command editing, live execution logging, best-effort host usage sampling, and
 the exit request observed through the Runtime port. Study has no UI dependency.
@@ -65,6 +65,11 @@ the interactive dashboard remains on screen with its command editor active.
 `UiSession::finish` waits for an explicit `exit` submission before restoring the
 terminal and allowing `runtime::execute` to return.
 
+If startup fails before execution begins, `UiSession::abort_startup` stops and
+joins the renderer immediately and restores the terminal without waiting for
+an `exit` command. This includes failures preparing or cleaning output after
+the dashboard has initialized.
+
 There is no `ui` object in `wf_configs/study.json`: no refresh rate, theme,
 field list, message callback, progress counter, renderer, or cancellation
 handle is user-defined. UI is the sole presentation interface, so failure to
@@ -77,11 +82,13 @@ the ordinary crate facade.
 
 Usage sampling reads Linux `/proc/stat` and `/proc/meminfo`; disk occupation is
 the used percentage of the filesystem containing the active execution
-directory. CPU uses counter deltas over a rolling one-second window after its initial host
+directory. CPU uses counter deltas over a rolling two-second window after its initial host
 counter sample. Sampling is presentation-only and best effort: an unavailable
 counter is rendered as `--` and never fails, pauses, or changes execution.
 
-The cyan **Scientific Workflow** page title sits above the Study panel.
+The centered cyan, bold **SCIENTIFIC WORKFLOW** page title sits above the Study
+panel. Terminal font size is controlled by the terminal application; Workflow
+does not set a separate widget font size or add a multirow banner.
 Its first row starts with **Total time**, and the second row uses blue for
 running, yellow for pending, green for completed, red for failed, magenta for
 cancelled, and gray for skipped. Cyan is reserved for titles. The replicate
@@ -90,17 +97,21 @@ For parallel runs, current means the latest replicate-start event's index;
 completion events do not turn it into a completed-count counter. The task panel
 title is `Phase=a/b: x Tasks · PgUp/PgDn`, using the latest phase-start event.
 Active groups still coexist in plan order; each row retains its replicate/phase.
-CPU utilization is a rolling one-second average refreshed with the dashboard.
+Normal dashboard redraws and host resource sampling occur once per second.
+Input is polled every 20 ms; command editing, paging, and resize events request
+an immediate redraw at the next poll. These interaction redraws reuse cached
+resource values until the one-second sample interval elapses.
+CPU utilization is a rolling two-second average refreshed with those samples.
 The monitor interpolates counter values at the window boundary for irregular
-refresh intervals and averages available history during the first second.
+refresh intervals and averages available history during the first two seconds.
 
 ## Advanced API
 
 Runtime and UI meet through crate-visible boundaries owned by Runtime:
 
 - `RuntimeEvent` is the borrowed synchronous fact vocabulary;
-- `RuntimeObserver` is the downstream publication, cancellation, and final
-  join port;
+- `RuntimeObserver` is the downstream publication, cancellation, startup-abort,
+  and final join port;
 - `RuntimePresentation` is Runtime's clone-cheap adapter handle; and
 - `TaskPresentation` publishes iteration/target facts for one inferred task.
 
@@ -118,8 +129,9 @@ include all planned work, including groups no longer visible.
 Concurrent Runtime workers share one clone-cheap session. A
 mutex protects dashboard presentation state and a second serializes the live
 log. State reduction and log append share one lock order so concurrent event
-messages remain in display sequence. A single bounded-refresh thread owns
-interactive terminal input, resource sampling, and drawing.
+messages remain in display sequence. A single thread owns interactive terminal
+input, cached resource sampling, and drawing, with independent input polling
+and ordinary redraw intervals.
 
 Interactive initialization uses a renderer-thread handshake, so setup failure
 returns before a usable session is published. Later terminal IO failures are
@@ -140,6 +152,9 @@ For an interactive dashboard it marks execution finished, waits for the renderer
 to receive `exit`, and then joins it before Runtime returns. Alternate-screen,
 raw-mode, cursor, and mouse state are restored on success, workflow failure,
 cancellation, presentation error, or unexpected panic.
+Startup failures instead call `abort_startup`, which signals the same renderer
+to close and joins it without user input; it preserves any retained presentation
+failure while still completing teardown.
 
 ## Example
 
@@ -156,10 +171,9 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
 Running it in a terminal shows the dashboard. Typing `exit` and pressing Enter
 cancels active work or closes an already finished dashboard. Successful completion
 otherwise remains visible until that command is submitted. Redirecting standard
-error selects plain lifecycle lines automatically and does not wait for input.
-During either mode, `tail -f <execution>/log.txt` follows the complete message
-history. No
-execution unit or JSON change is involved.
+input or error rejects execution with the terminal requirement error. While a
+run is active, `tail -f <execution>/log.txt` follows the complete message history.
+No execution unit or JSON change is involved.
 
 ## Not API
 
@@ -241,8 +255,8 @@ as zero. NPY auto ramp-up reports the reserved allowance. The private
 set so UI never combines partial rebalancing updates into an inflated total.
 
 PageUp/PageDown move by the task table's visible data-row capacity, excluding
-borders and its header. The footer no longer replaces a task row. The title
-shows the current page and page count. Resizing recalculates capacity and clamps
+borders and its header. The footer no longer replaces a task row. Resizing
+recalculates capacity and clamps
 to a valid page; an existing first-row anchor is retained where possible, and a
 disappearing active-group anchor resets to the first page. All rows on a full
 page are usable, and the final page may contain fewer rows.

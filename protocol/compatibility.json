@@ -6,12 +6,12 @@
   },
   "project_configuration": {
     "workflow_schema": 1,
-    "rust_package_version": "0.15.5"
+    "rust_package_version": "0.16.0"
   },
   "implementations": {
     "rust": {
       "package": "scientific-workflow",
-      "version": "0.15.5",
+      "version": "0.16.0",
       "writes": [
         7,
         8
@@ -23,12 +23,19 @@
     },
     "python": {
       "package": "scientific-workflow",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "writes": [],
       "reads": [
         7,
         8
       ]
     }
-  }
+  },
+  "converted_data": {
+    "member": "scientific-workflow-npy.v3",
+    "batch": "scientific-workflow-npy-batch.v3"
+  },
+  "task_result": "scientific-workflow-task-result.v2",
+  "program": "scientific-workflow-program-v2",
+  "task_inputs": "scientific-workflow-inputs.v1"
 }

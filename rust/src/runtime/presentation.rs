@@ -14,6 +14,10 @@ pub(crate) trait RuntimeObserver: Send + Sync + 'static {
         super::RunControl::default()
     }
     fn finish(&self) -> Result<(), PresentationFailure>;
+    /// Tears down presentation without waiting for user input before execution starts.
+    fn abort_startup(&self) -> Result<(), PresentationFailure> {
+        Ok(())
+    }
 }
 
 /// Clone-cheap Runtime handle around one selected presentation adapter.
@@ -56,6 +60,12 @@ impl RuntimePresentation {
     pub(crate) fn finish(&self) -> Result<(), RuntimeError> {
         self.observer
             .finish()
+            .map_err(RuntimeError::presentation_boxed)
+    }
+
+    pub(crate) fn abort_startup(&self) -> Result<(), RuntimeError> {
+        self.observer
+            .abort_startup()
             .map_err(RuntimeError::presentation_boxed)
     }
 

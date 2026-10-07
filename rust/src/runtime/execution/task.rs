@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use crate::config::ConfigSnapshot;
 use crate::persistence::{
     MemberRecordingProvenance, PersistencePlan, PersistenceSession, ProgramLaunch,
-    ProgramPersistenceSession,
+    ProgramPersistenceSession, TaskInputSnapshots,
 };
 use crate::state::SystemState;
 use crate::study::StudyTask;
@@ -157,6 +157,15 @@ pub(super) fn run_task(
             task: task.identity().to_owned(),
         });
     }
+    if let Some(inputs) = &host.inputs
+        && let Err(source) = inputs.validate()
+    {
+        host.fail(&source.to_string());
+        return Err(RuntimeError::Task {
+            task: task.identity().to_owned(),
+            source: Box::new(source),
+        });
+    }
     let kind = match task.kind() {
         TaskKind::ExecutionUnit => TaskRunKind::ExecutionUnit {
             execution_unit: task
@@ -215,6 +224,7 @@ pub(crate) struct RuntimeTaskHost {
     program_seed: Option<ProgramSeed>,
     threads: usize,
     persistence: Vec<Option<PersistenceSession>>,
+    inputs: Option<TaskInputSnapshots>,
     member_iterations: Vec<u64>,
     member_targets: Vec<Option<u64>>,
     member_identities: Vec<Option<Box<str>>>,
@@ -309,6 +319,7 @@ impl RuntimeTaskHost {
             program_seed: launch.program_seed,
             threads: launch.threads,
             persistence: Vec::new(),
+            inputs: None,
             member_iterations: Vec::new(),
             member_targets: Vec::new(),
             member_identities: Vec::new(),
@@ -484,6 +495,13 @@ impl TaskExecutionHost for RuntimeTaskHost {
         self.member_identities[index] = Some(identity.into());
         self.member_directories[index] = Some(directory);
         self.persistence[index] = Some(persistence);
+        if self.inputs.is_none() {
+            self.inputs = Some(TaskInputSnapshots::create(
+                &self.output_directory,
+                self.environment.config_snapshot.bytes(),
+                &self.environment.dependencies_json,
+            )?);
+        }
         self.publish_progress();
         Ok(())
     }
@@ -517,6 +535,10 @@ impl TaskExecutionHost for RuntimeTaskHost {
         if self.cancellation_requested() {
             return Ok(());
         }
+        self.inputs
+            .as_ref()
+            .expect("member recording retains task input snapshots")
+            .validate()?;
         self.persistence[index]
             .as_mut()
             .expect("begin_member precedes final observation")

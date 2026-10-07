@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
@@ -13,7 +13,8 @@ use super::state::DashboardState;
 use super::terminal::{self, DashboardTerminal};
 use crate::runtime::{PresentationFailure, RuntimeEvent, RuntimeObserver};
 
-const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Clone-cheap, thread-safe UI session shared by Runtime workers.
 #[derive(Clone)]
@@ -42,6 +43,7 @@ struct UiSessionInner {
     live_log: Mutex<LiveLog>,
     cancellation_requested: AtomicBool,
     finished: AtomicBool,
+    startup_aborted: AtomicBool,
     renderer: Mutex<Option<JoinHandle<()>>>,
     render_health: RenderHealth,
 }
@@ -94,6 +96,7 @@ impl UiSession {
             live_log: Mutex::new(LiveLog::default()),
             cancellation_requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
+            startup_aborted: AtomicBool::new(false),
             renderer: Mutex::new(None),
             render_health: RenderHealth::default(),
         });
@@ -146,6 +149,17 @@ impl UiSession {
         if self.inner.finished.swap(true, Ordering::AcqRel) {
             return self.inner.render_health.check();
         }
+        self.join_renderer()
+    }
+
+    /// Restores the terminal when startup fails before execution begins.
+    pub(crate) fn abort_startup(&self) -> Result<(), UiFailure> {
+        self.inner.startup_aborted.store(true, Ordering::Release);
+        self.inner.finished.store(true, Ordering::Release);
+        self.join_renderer()
+    }
+
+    fn join_renderer(&self) -> Result<(), UiFailure> {
         if let Some(renderer) = lock(&self.inner.renderer).take()
             && renderer.join().is_err()
         {
@@ -172,6 +186,10 @@ impl RuntimeObserver for UiSession {
     fn finish(&self) -> Result<(), PresentationFailure> {
         UiSession::finish(self).map_err(|source| Box::new(source) as _)
     }
+
+    fn abort_startup(&self) -> Result<(), PresentationFailure> {
+        UiSession::abort_startup(self).map_err(|source| Box::new(source) as _)
+    }
 }
 
 fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), String>>) {
@@ -188,7 +206,11 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
         }
     };
     let mut close_requested = false;
+    let mut next_refresh = Instant::now();
     loop {
+        if inner.startup_aborted.load(Ordering::Acquire) {
+            break;
+        }
         match terminal.poll_command() {
             Ok(Some(CommandSubmission::Parsed(UiCommand::Pause))) => {
                 if !inner.finished.load(Ordering::Acquire) {
@@ -279,17 +301,26 @@ fn render_loop(inner: &Arc<UiSessionInner>, ready: mpsc::SyncSender<Result<(), S
                 return;
             }
         }
-        let snapshot = lock(&inner.state).snapshot();
-        if let Err(source) = terminal.draw(&snapshot) {
-            inner
-                .render_health
-                .fail(format!("terminal drawing failed: {source}"));
-            return;
+        let interaction = terminal.take_redraw_request();
+        let now = Instant::now();
+        if refresh_due(now, next_refresh, interaction) {
+            let snapshot = lock(&inner.state).snapshot();
+            if let Err(source) = terminal.draw(&snapshot) {
+                inner
+                    .render_health
+                    .fail(format!("terminal drawing failed: {source}"));
+                return;
+            }
+            if now >= next_refresh {
+                next_refresh = now + REFRESH_INTERVAL;
+            }
         }
-        if renderer_should_close(inner.finished.load(Ordering::Acquire), close_requested) {
+        if inner.startup_aborted.load(Ordering::Acquire)
+            || renderer_should_close(inner.finished.load(Ordering::Acquire), close_requested)
+        {
             break;
         }
-        thread::sleep(REFRESH_INTERVAL);
+        thread::sleep(INPUT_POLL_INTERVAL);
     }
 }
 
@@ -343,6 +374,10 @@ const fn renderer_should_close(execution_finished: bool, exit_submitted: bool) -
     execution_finished && exit_submitted
 }
 
+fn refresh_due(now: Instant, next_refresh: Instant, interaction: bool) -> bool {
+    interaction || now >= next_refresh
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
@@ -351,7 +386,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderHealth, renderer_should_close};
+    use super::*;
 
     #[test]
     fn a_recorded_render_failure_is_returned_to_the_runtime_facing_boundary() {
@@ -367,5 +402,30 @@ mod tests {
         assert!(!renderer_should_close(true, false));
         assert!(!renderer_should_close(false, true));
         assert!(renderer_should_close(true, true));
+    }
+
+    #[test]
+    fn normal_redraw_waits_one_second_but_interaction_redraws_immediately() {
+        let now = Instant::now();
+        let next = now + REFRESH_INTERVAL;
+        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
+        assert!(INPUT_POLL_INTERVAL <= Duration::from_millis(100));
+        assert!(!refresh_due(now + Duration::from_millis(999), next, false));
+        assert!(refresh_due(next, next, false));
+        assert!(refresh_due(now + Duration::from_millis(1), next, true));
+    }
+
+    #[test]
+    fn startup_abort_signals_and_joins_renderer_without_exit_submission() {
+        let session = UiSession::testing().unwrap();
+        let inner = Arc::clone(&session.inner);
+        *lock(&session.inner.renderer) = Some(thread::spawn(move || {
+            while !inner.startup_aborted.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+        }));
+        session.abort_startup().unwrap();
+        assert!(session.inner.finished.load(Ordering::Acquire));
+        assert!(lock(&session.inner.renderer).is_none());
     }
 }

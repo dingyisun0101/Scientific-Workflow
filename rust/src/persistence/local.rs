@@ -145,9 +145,8 @@ impl RecordingTiming {
 /// adding physical-time sampling later will not require overloading the word
 /// `step` or changing the surrounding stream API.
 ///
-/// Human-authored configuration may use the concise JSON value `10` for every
-/// ten iterations. Deserialization also accepts the stable tagged form
-/// `{"iterations": 10}` emitted by serialization.
+/// Stored metadata uses the strict tagged form `{"iterations": 10}` emitted
+/// by serialization, or `{"initial_and_final": true}` for boundary sampling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SamplingInterval {
@@ -160,8 +159,6 @@ pub(crate) enum SamplingInterval {
 #[derive(Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 enum SamplingIntervalInput {
-    /// Concise configuration form: `10` means every ten iterations.
-    Iterations(NonZeroU64),
     /// Stable tagged form emitted by [`SamplingInterval`]'s serializer.
     Tagged {
         iterations: NonZeroU64,
@@ -177,8 +174,7 @@ impl<'de> Deserialize<'de> for SamplingInterval {
         D: serde::Deserializer<'de>,
     {
         match SamplingIntervalInput::deserialize(deserializer)? {
-            SamplingIntervalInput::Iterations(interval)
-            | SamplingIntervalInput::Tagged {
+            SamplingIntervalInput::Tagged {
                 iterations: interval,
             } => Ok(Self::Iterations(interval)),
             SamplingIntervalInput::Boundaries {

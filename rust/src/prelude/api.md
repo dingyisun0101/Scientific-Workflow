@@ -1,6 +1,6 @@
 # Prelude API
 
-This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
 
 `scientific_workflow::prelude::*` is the single ordinary execution-unit
 authoring import. It owns no behavior and importing it performs no IO,
@@ -57,6 +57,7 @@ impl ExecutionUnit for ExampleUnit {
         schema: &SystemStateSchema,
         _context: &InitializationContext,
     ) -> UnitResult<Self> {
+        constants.initial.checked_add(constants.steps).ok_or("population exceeds u64")?;
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
         state.initialize_payload("population", constants.initial)?;
         Ok(Self { state, target: constants.steps })
@@ -75,8 +76,10 @@ impl ExecutionUnit for ExampleUnit {
     }
 
     fn step(&mut self) -> UnitResult {
-        *self.state.payload_mut::<u64>("population")? += 1;
-        self.state.advance_time(None)?;
+        let next_time = self.state.time().checked_advance(None)?;
+        let next = self.state.payload::<u64>("population")?.checked_add(1).ok_or("population exceeds u64")?;
+        *self.state.payload_mut::<u64>("population")? = next;
+        self.state.replace_time(next_time);
         Ok(())
     }
 }

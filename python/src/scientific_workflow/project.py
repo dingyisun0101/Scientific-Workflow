@@ -3,9 +3,10 @@
 These helpers do not discover relocated files, activate environments, change
 working directories, or create output. Program snapshots contain resolved values.
 """
-import json
 import os
 from pathlib import Path
+
+from ._snapshots import read as _read_snapshot
 
 
 class ProjectLayoutError(ValueError):
@@ -48,7 +49,7 @@ def parameters(section: str | None = None, *, snapshot: str | Path | None = None
     """
     path = Path(snapshot) if snapshot is not None else _environment_path("WORKFLOW_CONFIG_PATH", directory=False)
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))["config"]["parameters.json"]
+        value = _read_snapshot(path, "config")["config"]["parameters.json"]
         if not isinstance(value, dict):
             raise ValueError("parameters.json must contain an object")
         return value if section is None else value[section]

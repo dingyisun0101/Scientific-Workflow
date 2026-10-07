@@ -594,6 +594,38 @@ fn execution_rejects_changed_state_owner_schema_and_nonadvancing_steps() {
 }
 
 #[test]
+fn execution_rejects_distinct_members_that_alias_one_state() {
+    struct AliasedUnit(CountingUnit);
+    impl ExecutionUnit for AliasedUnit {
+        type Constants = LocalConstants;
+        fn initialize(
+            constants: Self::Constants,
+            schema: &SystemStateSchema,
+            context: &InitializationContext,
+        ) -> TaskResult<Self> {
+            CountingUnit::initialize(constants, schema, context).map(Self)
+        }
+        fn member_count(&self) -> usize {
+            2
+        }
+        fn member(&self, index: usize) -> Option<MemberView<'_>> {
+            ["alpha", "beta"]
+                .get(index)
+                .map(|identity| MemberView::new(identity, &self.0.state, None, Some(self.0.steps)))
+        }
+        fn step(&mut self) -> TaskResult {
+            self.0.step()
+        }
+    }
+    let mut host = RecordingHost::default();
+    let error = definition::<AliasedUnit>(serde_json::json!({"steps": 1}))
+        .execute(&mut host)
+        .unwrap_err();
+    assert!(error.to_string().contains("shares its SystemState owner"));
+    assert!(host.events.is_empty());
+}
+
+#[test]
 fn execution_rejects_invalid_target_progression() {
     for (mode, expected) in [
         ("before", "before current iteration"),

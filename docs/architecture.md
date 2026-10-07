@@ -1,7 +1,7 @@
 # Workflow architecture
 
-This document describes the reviewed architecture for Rust package 0.15.0 and
-its recording-v7/v8 integration with Python companion 0.5.0.
+This document describes the reviewed architecture for Rust package 0.16.0 and
+its recording-v7/v8 integration with Python companion 0.6.0.
 
 This is the first-time map of the Workflow repository: what users author, how
 one run moves through the system, where each responsibility lives, and what
@@ -182,7 +182,7 @@ Dependency direction is one-way:
 ```text
 observation ──► state
 persistence ─► observation + state
-task        ──► config + observation + state
+task        ──► config + observation + persistence + state
 study       ──► config + observation + persistence + state + task
 runtime     ──► config + persistence + state + study + task
 ui          ──► runtime-owned lifecycle observer contract
@@ -314,6 +314,7 @@ workflow/
 │   │   ├── persistence/fs.rs         shared durable file and directory primitives
 │   │   ├── persistence/operational_time.rs UTC formatting and duration conversion
 │   │   ├── persistence/plan.rs       private effective operational settings
+│   │   ├── persistence/inputs.rs     durable task snapshots and SHA-256 references
 │   │   ├── persistence/session.rs    member recording/program workspace lifecycle
 │   │   ├── persistence/local.rs      private local recording coordinator/lease
 │   │   ├── persistence/local/error.rs exact read/write persistence failures
@@ -530,7 +531,7 @@ reserve their effective `resources.threads` count and receive that value as
 `WORKFLOW_THREADS` and `RAYON_NUM_THREADS`. External tasks may overlap each
 other when their aggregate fits, but do not overlap execution-unit tasks.
 Runtime then creates
-`output/execution-<pid>-<sequence>`, isolated
+`output/execution-YYYYMMDDTHHMMSS.nnnnnnnnnZ`, isolated
 `replicate-NNNNNN` directories, and deterministic task recording paths. It
 topologically schedules generic tasks, applies concurrency/start intervals and
 fail-fast/finish-all policy, checks cooperative cancellation between execution-unit
@@ -613,7 +614,8 @@ external task's effective permit request, which is also supplied to the child.
 Runtime owns the borrowed execution, replicate, phase, task, iteration,
 outcome, and path fact vocabulary plus the observer and task-progress ports.
 Crate-level composition checks terminal stdin/stderr before Runtime can clean
-or create output, then starts one clone-cheap `UiSession` after output creation. UI owns its
+or create output. Runtime starts the clone-cheap `UiSession` before destructive
+cleanup and execution creation; startup failure restores the terminal. UI owns its
 private zero-configuration refresh
 policy; nothing is authored in `wf_configs/study.json`, and Study has no UI
 dependency.
@@ -637,8 +639,8 @@ panel, a Usage panel, and the former command editor. CPU and RAM come from
 Linux `/proc`; disk is the occupied percentage of the filesystem containing
 the execution directory. UI sampling failures render `--`; the independent Runtime
 disk guard treats its own sampling failures as fatal while enabled.
-Active replicate/phase groups coexist in the visible task set and disappear
-on completion. The latest phase ordinal appears in the task panel title;
+The latest phase selects the visible task panel; completed outcomes remain in
+Messages. The latest phase ordinal appears in the task panel title;
 rows retain replicate/phase context, the task label, and a concise kind tag (`unit` for the internal `execution_unit` kind), allocated threads, status, progress, and timing.
 Exact lowercase `exit` is the interactive dashboard's sole normal close command.
 When entered during active work it also requests cooperative Runtime cancellation,
@@ -707,7 +709,8 @@ conveniences. It owns no behavior or alternative implementation path.
     completely resolved during Study loading; there is no global environment
     registry or runtime environment discovery.
 17. Config is the only composed-Workflow reader/parser of authored project
-    JSON; Runtime never reparses derived config values.
+    JSON; Runtime consumes captured intent and parses verified saved snapshots
+    only for receipt compatibility, rather than rereading authored JSON.
 18. Persistence is the only owner of Workflow recording IO and format
     interpretation; Runtime owns only scope orchestration around that boundary.
 19. Closed subsystem coupling is expressed through explicitly named
@@ -730,7 +733,7 @@ conveniences. It owns no behavior or alternative implementation path.
   cadence, clone-free borrowing, deterministic encoded order, and the owned
   canonical-record handoff to Persistence.
 - A task replacement preserves config-owned constants decode, stable
-  execution-unit/execution unit/state boundaries, independent execution unit observation and
+  execution-unit/member/state boundaries, independent execution unit observation and
   completion, and generic program
   delegation without public adapters.
 - A config replacement preserves the grammar, typed-path containment,
@@ -752,6 +755,48 @@ conveniences. It owns no behavior or alternative implementation path.
   handles concurrent publishers, restores terminal state on return and while
   unwinding, and reports renderer failure as fatal presentation failure rather
   than cancellation.
+
+## Current integrity, conversion, and UI contract (0.16.0 / 0.6.0)
+
+Persistence's private `inputs.rs` stores task-root `workflow-config.json` and
+`workflow-dependencies.json`, plus `workflow-inputs.json` containing canonical
+filenames and exact-byte SHA-256 references. Every task kind uses this boundary.
+Program metadata v2 and task receipts v2 carry matching `inputs` descriptors.
+Supported Rust/Python snapshot readers verify these references before decoding;
+Runtime verifies them before completion and importing prerequisite receipts.
+Authored source configs remain editable for subsequent runs. Compatibility
+compares scientific projections separately from exact saved-byte integrity.
+Program/script source files are not fingerprinted, and legacy receipt import
+and reconstruction are removed. See [the snapshot contract](../protocol/task-inputs-v1.md).
+
+Config preserves stable numeric sweep ordering, compares escaped correlated
+case paths, validates retained interpreter paths, and reuses local expansion
+within one load. Task validates distinct member state addresses. State cloning
+invokes payload-defined `Clone`; mutable storage may remain shared unless the
+application payload isolates it.
+
+The current converter writes NPY v3. Direct numeric storage must preserve values;
+otherwise JSON bytes retain a lossless fallback. Typed envelopes are validated,
+scalar rank is preserved, and opening verifies coordinate roles/layouts. The
+latest raw-record reader verifies the entire newest chunk. Historical converted
+results and explicit v2/v3 interpretation belong to downstream analysis.
+
+Python conversion respects the selected/default multiprocessing context and
+passes current control configuration through private initialization. Native
+worker pools remain limited to one thread each. Context changes do not alter
+scientific identities or NPY output ordering.
+
+Required dashboard readiness precedes destructive `--clean`, with early abort
+restoring the terminal. The page title is centered bold `SCIENTIFIC WORKFLOW`.
+CPU uses a rolling two-second window; resource sampling and normal redraws use
+one-second cadence. Fast input polling and interaction redraws reuse cached
+resource values; Runtime's disk monitor remains independent.
+
+## Historical architecture notes through 0.15.5
+
+The following sections record earlier release behavior and validation context.
+They are historical evidence; current contracts above and owning API guides
+supersede legacy receipt/reuse, conversion-version, and UI timing descriptions.
 
 ## Dependency and Python utility refactor (0.13.5 / 0.4.3)
 

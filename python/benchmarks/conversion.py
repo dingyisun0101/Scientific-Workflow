@@ -40,8 +40,15 @@ def main():
             metadata["streams"][0]["chunks"][0].update(records=count, bytes=len(data), checksum="sha256:"+hashlib.sha256(data).hexdigest(), first_iteration=0, last_iteration=count-1)
             metadata_path.write_text(json.dumps(metadata))
             members.append({"identity": str(ordinal), "final_iteration": count-1, "output_directory": str(recording)})
-        deps = root / "dependencies.json"
+        deps = root / "workflow-dependencies.json"
         deps.write_text(json.dumps([{"phase":"simulate","tasks":[{"identity":"simulation","output_directory":str(root),"workload":{"kind":"execution_unit","execution_unit":"benchmark","members":members}}]}]))
+        config = root / "workflow-config.json"
+        config.write_text(json.dumps({"config": {"parameters.json": {}}}))
+        (root / "workflow-inputs.json").write_text(json.dumps({
+            "format": "scientific-workflow-inputs.v1",
+            "config": {"path": config.name, "checksum": "sha256:" + hashlib.sha256(config.read_bytes()).hexdigest()},
+            "dependencies": {"path": deps.name, "checksum": "sha256:" + hashlib.sha256(deps.read_bytes()).hexdigest()},
+        }))
         measurements = []
         for workers in (1, 4):
             stopped = threading.Event()

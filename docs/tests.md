@@ -1,10 +1,10 @@
 # Test structure
 
-This map is the release-qualification baseline for Rust 0.15.3 and Python
-companion 0.5.0.
+This map is the release-qualification baseline for Rust 0.16.0 and Python
+companion 0.6.0.
 
 Explicit-phase coverage checks required numeric selection, stable dependency-order
-indices and task identities, completed-program and legacy-unit reuse, chained
+indices and task identities, current-receipt program and execution-unit reuse, chained
 source references, and rejection of missing, failed, changed, or stale inputs
 before creating new execution output.
 
@@ -194,6 +194,56 @@ two-second `start_interval_ms`; a public
 `Study::load` test proves the complete example still passes current effect-free
 preflight.
 
+## Current 0.16.0 / 0.6.0 regression requirements
+
+The current pass adds boundaries for durable task snapshots: exact-byte changes,
+manifest/receipt agreement, missing and older receipts, chained references,
+raw and program inputs, and permitted operational compatibility changes.
+Programs/scripts must match resolved identity without code fingerprints.
+NPY reuse requires current v3 member/batch integrity before new execution output.
+
+Configuration checks cover retained non-UTF-8 interpreter paths and literal
+JSON-key path identity. Task checks reject distinct identities sharing one
+state. Examples check overflow and finite/failure-atomic next state/time.
+Payload Clone documentation follows each payload's copy/share semantics.
+
+Python regressions cover exact numeric fallback, invalid typed values, scalar
+rank, coordinate/component ownership, latest-chunk structure, verified input
+reads, and repeated batches with changed control paths. Exercise forkserver and
+spawn explicitly; a test name containing spawn alone does not select its context.
+
+UI/PTY qualification must verify centered uppercase title, two-second CPU
+window, cached one-second resource refresh, immediate command/paging/resize
+feedback, startup failure before cleanup, and exact terminal restoration.
+The independent runtime disk guard remains separately qualified.
+
+## Local release qualification: 0.16.0 / 0.6.0
+
+The final local workspace run passed 201 tests (177 library tests, 20 integration
+checks, and four scientific example checks); two NPY integration tests were
+ignored by that ordinary command and both passed when invoked explicitly.
+Clippy and rustdoc passed with warnings denied, all three doctests passed,
+and Cargo package verification built the 111-file crate against registry
+upstreams. The examples still consumed the previous published Workflow during
+candidate qualification; their registry dependencies are updated after publication.
+
+The final Python wheel passed all 49 tests from outside the source tree under
+Python 3.14.4, NumPy 2.5.3, and threadpoolctl 3.7.0. Eight targeted tests passed
+under each of forkserver and spawn, including a second batch after its previous
+control file was removed. Wheel/sdist metadata checks and required private
+snapshot/JSON modules were verified. The final wheel's reader matches source.
+
+PTY checks passed startup abort/terminal restoration and responsive prompt
+editing; the measured echo was 77 ms with 20 ms input polling. Normal redraw and
+resource sampling remain one second, and CPU averaging is two seconds.
+Markdown local/release-link, JSON-fence, settings-table, and API-heading checks
+passed. These are local results, not a claim of CI or production-scale convergence.
+
+## Historical qualification evidence
+
+The following release records describe checks performed for earlier versions.
+They do not replace the current 0.16.0 / 0.6.0 qualification requirements.
+
 ## Refactor qualification (Rust 0.13.5 / Python 0.4.3)
 
 The runnable `examples/dependency_pipeline` covers the new public Rust imports,
@@ -345,7 +395,7 @@ extra, so the ordinary Rust suite marks it ignored. CI and release qualification
 run it explicitly after installing the matching companion:
 
 ```bash
-cargo test --manifest-path rust/Cargo.toml --lib coordinated_npy_handoff --locked -- --ignored
+cargo test --manifest-path rust/Cargo.toml --lib --locked -- --ignored
 ```
 
 It exercises real Rust recordings through the synthesized Python invocation in

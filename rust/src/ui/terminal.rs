@@ -14,7 +14,7 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
@@ -40,6 +40,7 @@ pub(super) struct DashboardTerminal {
     task_offset: usize,
     task_anchor: Option<(u64, String)>,
     usage: UsageMonitor,
+    redraw_requested: bool,
 }
 
 impl DashboardTerminal {
@@ -82,6 +83,7 @@ impl DashboardTerminal {
             task_offset: 0,
             task_anchor: None,
             usage: UsageMonitor::default(),
+            redraw_requested: true,
         })
     }
 
@@ -92,6 +94,7 @@ impl DashboardTerminal {
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
                     if key.code == KeyCode::PageDown {
+                        self.redraw_requested = true;
                         let size = self.terminal.size()?;
                         let capacity = page_capacity(
                             dashboard_areas(Rect::new(0, 0, size.width, size.height))[1],
@@ -101,6 +104,7 @@ impl DashboardTerminal {
                         continue;
                     }
                     if key.code == KeyCode::PageUp {
+                        self.redraw_requested = true;
                         let size = self.terminal.size()?;
                         let capacity = page_capacity(
                             dashboard_areas(Rect::new(0, 0, size.width, size.height))[1],
@@ -112,14 +116,17 @@ impl DashboardTerminal {
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
+                        self.redraw_requested = true;
                         return Ok(Some(CommandSubmission::Parsed(UiCommand::Interrupt)));
                     }
-                    if let Some(action) = edit_action(key.code, key.modifiers)
-                        && let Some(submission) = self.command.edit(action)
-                    {
-                        return Ok(Some(submission));
+                    if let Some(action) = edit_action(key.code, key.modifiers) {
+                        self.redraw_requested = true;
+                        if let Some(submission) = self.command.edit(action) {
+                            return Ok(Some(submission));
+                        }
                     }
                 }
+                Event::Resize(_, _) => self.redraw_requested = true,
                 _ => {}
             }
         }
@@ -128,6 +135,11 @@ impl DashboardTerminal {
 
     pub(super) fn clear_command(&mut self) {
         self.command.clear();
+        self.redraw_requested = true;
+    }
+
+    pub(super) fn take_redraw_request(&mut self) -> bool {
+        std::mem::take(&mut self.redraw_requested)
     }
 
     pub(super) fn draw(&mut self, snapshot: &DashboardSnapshot) -> io::Result<()> {
@@ -247,11 +259,13 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Dashboar
     let [title_area, study_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     frame.render_widget(
-        Paragraph::new("Scientific Workflow").style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Paragraph::new("SCIENTIFIC WORKFLOW")
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
         title_area,
     );
     let statuses = [
@@ -804,11 +818,32 @@ mod layout_tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-        assert!(text.contains("Scientific Workflow"));
+        assert!(text.contains("SCIENTIFIC WORKFLOW"));
         assert!(text.contains("Total time"));
         assert!(text.contains("replicates=2/5"));
         assert!(text.contains("Phase=1/3: 0 Tasks · PgUp/PgDn"));
-        assert_eq!(buffer[(0, 0)].fg, Color::Cyan);
+        let header: String = buffer
+            .content
+            .iter()
+            .take(140)
+            .map(|cell| cell.symbol())
+            .collect();
+        let title_start = header.find("SCIENTIFIC WORKFLOW").unwrap();
+        let right_padding = 140 - title_start - "SCIENTIFIC WORKFLOW".len();
+        assert!(title_start.abs_diff(right_padding) <= 1);
+        assert_eq!(
+            buffer[(u16::try_from(title_start).unwrap(), 0)].symbol(),
+            "S"
+        );
+        assert_eq!(
+            buffer[(u16::try_from(title_start).unwrap(), 0)].fg,
+            Color::Cyan
+        );
+        assert!(
+            buffer[(u16::try_from(title_start).unwrap(), 0)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
         assert_eq!(buffer[(1, 3)].fg, Color::Blue);
         assert!(
             buffer

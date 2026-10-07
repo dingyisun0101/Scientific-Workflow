@@ -14,7 +14,7 @@ or copy its path to retain it. No dependency on Runtime summary types exists.
 | Method | Contract |
 |---|---|
 | `from_json(Value) -> Result<Self, DependencyError>` | Own and structurally validate a snapshot; no filesystem access |
-| `load(&Path) -> Result<Self, DependencyError>` | Read a JSON snapshot and validate it atomically |
+| `load(&Path) -> Result<Self, DependencyError>` | Verify both task inputs using the sibling checksum sidecar, then validate canonical dependency JSON |
 | `from_env() -> Result<Self, DependencyError>` | Load WORKFLOW_DEPENDENCIES_PATH; no cwd discovery |
 | `recordings() -> Selection<RecordingDependency>` | Completed execution-unit member recordings |
 | `programs() -> Selection<ProgramDependency>` | External and Python program artifacts |
@@ -81,3 +81,9 @@ For multiple producers, add `.in_phase("prepare")` or `.task(identity)`.
 Parsing structs, storage vectors, Runtime summary conversion, scope correlation,
 and task scheduling are private. No public writer, artifact registry, environment
 manager, or scheduler handle is introduced.
+
+File-based loading requires the canonical `workflow-dependencies.json` filename
+and sibling `workflow-config.json` / `workflow-inputs.json` evidence. Both snapshot
+byte digests and any current program-v2/receipt-v2 references must agree; malformed
+or changed evidence returns an error before publishing a selection. `from_json`
+remains a pure structural constructor and does not claim filesystem verification.

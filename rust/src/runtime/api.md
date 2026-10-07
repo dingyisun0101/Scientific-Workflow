@@ -1,6 +1,6 @@
 # Runtime API
 
-This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
 
 The `runtime` subsystem is the ultimate coordinator of active execution. It
 accepts immutable intent from Study and owns output creation, replicate
@@ -70,8 +70,11 @@ task, iteration, target, outcome, and recording-path fact vocabulary.
 Crate-level composition requires terminal stdin and stderr before Runtime may
 create or clean output. Noninteractive launches return `RuntimeError::Presentation`
 with instructions to use `screen` or `tmux`. Study contains no UI policy.
-After output creation, UI starts the required Ratatui dashboard and live
-`<execution>/log.txt`; renderer initialization/input/drawing and log failures
+After prerequisite and cleanup-protection validation, UI initializes the required
+Ratatui dashboard before cleanup or execution-directory creation. Startup failure
+preserves prior results; a later cleanup/creation failure aborts and joins the UI
+without requiring `exit`, restoring terminal ownership. The live `<execution>/log.txt`
+starts with execution. Renderer initialization/input/drawing and log failures
 are fatal presentation errors. There is no headless or plain renderer and no
 `terminal-ui` feature switch. Loading a Study or reading recordings remains
 independent of execution and needs no terminal.
@@ -283,14 +286,14 @@ This non-exhaustive enum reports failures after a valid Study is available:
 - `Reuse { phase: String, path: PathBuf, reason: String }`: required completed outputs are missing, failed, or incompatible; detected before output creation.
 
 - `PythonPrerequisite { interpreter: PathBuf, reason: String }`: the active
-  interpreter cannot import the coordinated Python 0.5.0 tools, NumPy and
+  interpreter cannot import the coordinated Python 0.6.0 tools, NumPy and
   threadpoolctl, or is older than Python 3.14. The error names the selected
   interpreter and setup remedy. Runtime probes before scientific work and output
   creation; Study::load performs no subprocess probe.
 - `ExecutionCancelled`: the interactive `exit` command or Ctrl+C requested
   cooperative cancellation;
 - `Presentation { source }`: the selected automatic presentation adapter could
-  not start, publish plain/dashboard output, poll input, draw, or finish; it is
+  not start, publish dashboard output, poll input, draw, or finish; it is
   never a cancellation result;
 - `OutputScope { path, source }`: unique execution or replicate directory could
   not be created;
@@ -479,16 +482,27 @@ disk policy, and Python environment-manager settings are operational provenance
 and do not invalidate completed work. If a resource setting changes scientific
 meaning, express that choice in scientific parameters.
 A reused phase cannot depend on a phase selected to execute again. Missing,
-failed, incompatible, or ambiguous legacy inputs fail without launching work.
+failed, incompatible, missing, or unsupported receipts fail without launching work.
 Programs and `$npy` receive the original completed recording/artifact paths.
 Recordings are never appended to or rewritten.
 
-New executions commit private `workflow-result.json` receipts after each
-successful phase, including references for reused tasks, so reuse can be chained.
-Pre-0.13.9 program outputs may be imported from their successful `program.json`
-and captured config. Legacy execution-unit imports additionally require an
-authoritative matching summary in a dependent program's captured dependency
-file; Workflow never guesses a final iteration from sampling cadence.
+New executions commit private `workflow-result.json` receipts using
+`scientific-workflow-task-result.v2` after each successful phase. Receipts retain
+the source output directory and required `inputs` checksum descriptors; reused
+tasks retain original paths and descriptors so reuse can be chained. Older,
+missing, or malformed receipts are rejected. Workflow does not import historical
+results or retrospectively certify their inputs.
+
+Reuse verifies the source's exact `workflow-config.json` and
+`workflow-dependencies.json` bytes against the receipt and `workflow-inputs.json`
+references, then compares parsed scientific inputs separately. Ordinary resolved
+executable paths and canonical Python scientific-script paths must match; Python
+launchers and environment managers remain operational provenance. Source code
+contents are not hashed. NPY imports additionally require Python companion 0.6.0
+and fully verified current v3 batch/member manifests and arrays with matching
+stream exclusions. Raw recording chunks are verified by supported readers when
+consumed; receipt verification checks completion and member provenance.
+
 ## Ensemble progress and filtered conversion
 
 Runtime reports the maximum current member iteration and maximum declared target,
@@ -499,7 +513,7 @@ use the maximum final member iteration. ETA uses this same task clock; member
 recordings and completion policies are unchanged.
 
 The reserved `$npy` phase passes exact stream exclusions as repeated
-`--exclude-stream=NAME` arguments to Python 0.5.0. Filtering affects conversion
+`--exclude-stream=NAME` arguments to Python 0.6.0. Filtering affects conversion
 only. All included data retains ordinary validation, locking, cancellation,
 worker limits, and atomic publication. Filter identity is checked before reusing
 member outputs or an existing batch; different filters never silently reuse data.
@@ -508,9 +522,20 @@ member outputs or an existing batch; different filters never silently reuse data
 ## JSON lifecycle guarantees
 
 Source configuration is captured once and source edits affect subsequent runs.
-Generated `workflow-config.json` and `workflow-dependencies.json` are checked
-against their captured byte digests during execution and before program success;
-a changed or missing file fails the task. Runtime control JSON is mutable IPC.
+Each execution unit snapshot replaces its own constants section with that task's
+selected local values while preserving its correlated global values. Programs
+retain the global snapshot without selecting another unit's local constants.
+Every task persists output-owned `workflow-config.json` and
+`workflow-dependencies.json`, together with `workflow-inputs.json` using
+`scientific-workflow-inputs.v1`. The sidecar contains `config` and `dependencies`
+objects, each with a canonical `path` and `checksum` (`sha256:` plus 64 lowercase
+hex digits). Program metadata uses `scientific-workflow-program-v2`; it and v2
+receipts require the same descriptors under `inputs`. Program inputs are checked
+during execution and before success; Rust member/task completion checks its
+retained references. Supported snapshot accessors and reuse verify both files
+and any current program/receipt authority. A changed or missing input, malformed
+checksum, unsupported authority, or disagreement fails without returning data.
+Runtime control JSON is mutable IPC.
 Active recording/program metadata may advance to one terminal state, which the
 writer cannot subsequently replace. Completed task receipts and NPY batch
 manifests use publication that refuses replacement. A verified matching NPY

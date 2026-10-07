@@ -1,8 +1,9 @@
-"""Verified eager reader for Scientific Workflow JSONL format version 7."""
+"""Verified readers for Scientific Workflow JSONL formats 7 and 8."""
 
 from __future__ import annotations
 
 from . import _control
+from ._json import decode as _decode_json
 
 import hashlib
 import json
@@ -29,7 +30,7 @@ FORMAT_VERSION = 8
 METADATA_FILE = "metadata.json"
 
 Decoder = Callable[[Any], Any]
-_CHECKSUM = re.compile(r"^([a-z0-9]+):([0-9a-f]+)$")
+_CHECKSUM = re.compile(r"^sha256:[0-9a-f]{64}$")
 _UTC_RFC3339 = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
 )
@@ -46,26 +47,9 @@ _TOP_LEVEL_KEYS = {
 }
 
 
-def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    output: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in output:
-            raise ValueError(f"duplicate object key {key!r}")
-        output[key] = value
-    return output
-
-
-def _reject_constant(value: str) -> None:
-    raise ValueError(f"nonstandard JSON number {value}")
-
-
 def _load_json(data: bytes, location: Path) -> Any:
     try:
-        return json.loads(
-            data,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_constant,
-        )
+        return _decode_json(data)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
         raise MetadataError(f"invalid JSON at {location}: {error}") from error
 
@@ -423,23 +407,15 @@ class RecordingReader:
         )
 
     def read_latest(self, stream: str) -> StateRecord:
-        """Verifies the newest chunk and reconstructs only its final state."""
+        """Verifies every record in the newest chunk and decodes its final state."""
         declaration = self._stream(stream)
         fields = self._fields(declaration)
         self._require_decoders(fields)
         if not declaration["chunks"]:
             raise RecordError(f"stream {stream!r} contains no recorded state")
         chunk = declaration["chunks"][-1]
-        data = self._verified_chunk_bytes(declaration, chunk)
-        if not data.endswith(b"\n"):
-            raise RecordError("latest chunk is not newline terminated")
-        line = data[:-1].rsplit(b"\n", 1)[-1]
-        if not line:
-            raise RecordError("latest record is empty")
-        record = self._decode_record(line, declaration, chunk["records"])
-        if record.iteration != chunk["last_iteration"]:
-            raise RecordError("latest record differs from chunk descriptor")
-        return record
+        records, _ = self._validated_chunk_records(declaration, chunk, None, latest_only=True)
+        return self._apply_decoders(records[-1])
 
     def _stream(self, name: str) -> dict[str, Any]:
         try:
@@ -495,6 +471,17 @@ class RecordingReader:
         chunk: dict[str, Any],
         previous: int | None,
     ) -> tuple[list[StateRecord], int | None]:
+        records, previous = self._validated_chunk_records(declaration, chunk, previous)
+        return [self._apply_decoders(record) for record in records], previous
+
+    def _validated_chunk_records(
+        self,
+        declaration: dict[str, Any],
+        chunk: dict[str, Any],
+        previous: int | None,
+        *,
+        latest_only: bool = False,
+    ) -> tuple[list[StateRecord], int | None]:
         data = self._verified_chunk_bytes(declaration, chunk)
         if not data.endswith(b"\n"):
             raise RecordError(f"chunk {chunk['file']!r} is not newline terminated")
@@ -502,19 +489,26 @@ class RecordingReader:
         if any(not line for line in raw_lines):
             raise RecordError(f"chunk {chunk['file']!r} contains an empty record")
         records: list[StateRecord] = []
+        first_iteration = None
         for line_number, line in enumerate(raw_lines, 1):
+            _control.checkpoint()
             record = self._decode_record(line, declaration, line_number)
             if previous is not None and record.iteration <= previous:
                 raise RecordError(
                     f"iteration {record.iteration} is not greater than {previous}"
                 )
             previous = record.iteration
-            records.append(record)
-        if len(records) != chunk["records"]:
+            if first_iteration is None:
+                first_iteration = record.iteration
+            if latest_only:
+                records[:] = [record]
+            else:
+                records.append(record)
+        if len(raw_lines) != chunk["records"]:
             raise IntegrityError("chunk record count differs from descriptor")
         if not records:
             raise IntegrityError("committed chunk is empty")
-        if records[0].iteration != chunk["first_iteration"]:
+        if first_iteration != chunk["first_iteration"]:
             raise IntegrityError("chunk first iteration differs from descriptor")
         if records[-1].iteration != chunk["last_iteration"]:
             raise IntegrityError("chunk last iteration differs from descriptor")
@@ -524,11 +518,7 @@ class RecordingReader:
         self, line: bytes, declaration: dict[str, Any], line_number: int
     ) -> StateRecord:
         try:
-            document = json.loads(
-                line,
-                object_pairs_hook=_strict_object,
-                parse_constant=_reject_constant,
-            )
+            document = _decode_json(line)
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
             raise RecordError(f"invalid record at line {line_number}: {error}") from error
         if not isinstance(document, dict):
@@ -547,7 +537,10 @@ class RecordingReader:
         if physical is not None:
             if isinstance(physical, bool) or not isinstance(physical, (int, float)):
                 raise RecordError(f"record at line {line_number} has invalid physical time")
-            physical = float(physical)
+            try:
+                physical = float(physical)
+            except OverflowError as error:
+                raise RecordError(f"record at line {line_number} has nonfinite physical time") from error
             if not math.isfinite(physical):
                 raise RecordError(f"record at line {line_number} has nonfinite physical time")
         raw_values = document["values"]
@@ -561,15 +554,22 @@ class RecordingReader:
             )
         decoded: dict[str, Any] = {}
         for name, value in zip(expected, raw_values, strict=True):
-            if self._decoders is not None:
-                try:
-                    value = self._decoders[name](value)
-                except Exception as error:
-                    raise DecoderError(
-                        f"decoder for field {name!r} failed at iteration {iteration}"
-                    ) from error
             decoded[name] = value
         return StateRecord.create(iteration, physical, decoded)
+
+    def _apply_decoders(self, record: StateRecord) -> StateRecord:
+        if self._decoders is None:
+            return record
+        values = {}
+        for name, value in record.values.items():
+            _control.checkpoint()
+            try:
+                values[name] = self._decoders[name](value)
+            except Exception as error:
+                raise DecoderError(
+                    f"decoder for field {name!r} failed at iteration {record.iteration}"
+                ) from error
+        return StateRecord.create(record.iteration, record.physical_time, values)
 
 
 def open_completed_recording(

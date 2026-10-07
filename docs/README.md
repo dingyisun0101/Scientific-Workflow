@@ -37,8 +37,9 @@ Use [operations](guide/10-running-and-monitoring.md) when launching a study.
 - [State API and schemas](../rust/src/state/api.md).
 - [Python reader, project helpers, dependencies, and NumPy API](../python/src/scientific_workflow/api.md).
 - [Output layout](reference/output-layout.md).
+- [Verified task snapshots and current receipts](../protocol/task-inputs-v1.md).
 - Recording protocols [v7](../protocol/recording-v7.md), [v8](../protocol/recording-v8.md),
-  [NPY v2](../protocol/npy-v2.md), and [compatibility](../protocol/compatibility.md).
+  [NPY v3](../protocol/npy-v3.md), and [compatibility](../protocol/compatibility.md).
 
 ## Migrating an existing project
 
@@ -50,7 +51,8 @@ integration boundaries, configuration, handoffs, analysis, validation, and cutov
 
 - [Worked examples](examples.md).
 - [Troubleshooting](troubleshooting.md).
-- [Migration to Rust 0.15.0 / Python 0.5.0](migration-0.15.0.md),
+- [Migration to Rust 0.16.0 / Python 0.6.0](migration-0.16.0.md),
+  [0.15.0 / 0.5.0](migration-0.15.0.md),
   [0.14.0](migration-0.14.0.md), and [0.13.5](migration-0.13.5.md).
 - [Changelog](../CHANGELOG.md).
 
@@ -61,5 +63,6 @@ integration boundaries, configuration, handoffs, analysis, validation, and cutov
 - [Required instructions for AI agents](AGENTS.md).
 - [Repository contribution instructions](../AGENTS.md).
 
-The current guides describe Rust 0.15.5 and Python companion 0.5.0. This Rust
-patch updates documentation; scientific APIs and recording formats are unchanged.
+The current guides describe Rust 0.16.0 and Python companion 0.6.0.
+This release requires current verified receipts and writes NPY v3; raw
+recording formats 7/8 and the scientific unit-authoring APIs remain supported.

@@ -1,6 +1,6 @@
 //! Configuration-driven scientific workflow execution.
 //!
-//! An ordinary application defines a registered [`ExecutionUnit`]
+//! An ordinary application defines registered [`ExecutionUnit`]
 //! implementations, writes `wf_configs/study.json`, its declared named
 //! state-schema documents, and the central `wf_configs/parameters.json`, then
 //! calls [`run`] with the project root. Workflow infers task
@@ -32,6 +32,12 @@
 //! impl ExecutionUnit for ExampleUnit {
 //!     type Constants = Constants;
 //!
+//!     fn preflight(constants: &Constants, _schema: &SystemStateSchema) -> UnitResult<ObservationPlan> {
+//!         constants.initial.checked_add(constants.steps)
+//!             .ok_or("initial population plus steps exceeds u64")?;
+//!         Ok(ObservationPlan::all_fields())
+//!     }
+//!
 //!     fn initialize(
 //!         constants: Constants,
 //!         schema: &SystemStateSchema,
@@ -57,14 +63,16 @@
 //!         ))
 //!     }
 //!     fn step(&mut self) -> UnitResult {
-//!         let (population, cumulative_births) = self
-//!             .state
-//!             .borrow_payloads_mut::<(u64, u64)>(
-//!                 ("population", "cumulative_births"),
-//!             )?;
-//!         *population += 1;
-//!         *cumulative_births += 1;
-//!         self.state.advance_time(None)?;
+//!         let next_time = self.state.time().checked_advance(None)?;
+//!         let (population, births) = self.state
+//!             .borrow_payloads::<(u64, u64)>(("population", "cumulative_births"))?;
+//!         let next_population = population.checked_add(1).ok_or("population exceeds u64")?;
+//!         let next_births = births.checked_add(1).ok_or("birth count exceeds u64")?;
+//!         let (population, births) = self.state
+//!             .borrow_payloads_mut::<(u64, u64)>(("population", "cumulative_births"))?;
+//!         *population = next_population;
+//!         *births = next_births;
+//!         self.state.replace_time(next_time);
 //!         Ok(())
 //!     }
 //! }
@@ -77,7 +85,7 @@
 //! - [`study`] composes parsed declarations, state semantics, and compiled execution-unit
 //!   registrations into immutable, output-free intent.
 //! - [`runtime`] consumes a completed Study and owns active execution/output.
-//! - The crate root owns the execution-unit contract and automatic observation boundaries.
+//! - [`task`] owns execution-unit contracts and automatic lifecycle observation; the crate root re-exports ordinary authoring types.
 //! - [`state`] owns canonical scientific state and schema.
 //! - [`observation`] owns scientific observation meaning, not persistence mechanics.
 //! - [`persistence`] owns automatic durable output and verified reading.
@@ -125,10 +133,8 @@ pub use task::{
 ///
 /// This is the sole ordinary application entry point. Project loading and
 /// Study compilation finish before Runtime receives the validated immutable
-/// Study. Successful completion returns `()`; advanced integrations can load
-/// an embedding integration can load a [`study::Study`] and call
-/// [`runtime::execute`] to
-/// retain a read-only run summary.
+/// Study. Successful completion returns `()`; embedding integrations can load
+/// a [`study::Study`] and call [`runtime::execute`] to retain a read-only run summary.
 ///
 /// Recognizes `--clean` in process arguments before an optional `--` delimiter.
 /// After preflight, this clears `<project_root>/output` while holding exclusive

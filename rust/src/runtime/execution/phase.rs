@@ -13,6 +13,7 @@ use super::super::event::RuntimeEvent;
 use super::super::presentation::RuntimePresentation;
 use super::super::resources::{ResourceCoordinator, TaskResourceLease, TaskResourceRequirement};
 use super::super::reuse;
+use super::super::summary::TaskRunKind;
 use super::super::summary::{PhaseRunSummary, TaskRunSummary};
 use super::dependency_snapshot;
 use super::task::{TaskRuntime, run_task};
@@ -118,6 +119,21 @@ fn run_phase_inner(
     let mut first_error = None;
     let mut phase_timed_out = false;
     let mut execution_cancelled = false;
+    let npy_recording_count = phase.tasks().iter().any(|task| task.is_npy()).then(|| {
+        let ancestors = super::transitive_dependencies(phase, context.study.phases());
+        context
+            .completed_phases
+            .iter()
+            .filter(|summary| ancestors.contains(summary.name()))
+            .flat_map(|summary| summary.tasks())
+            .filter_map(|task| match task.kind() {
+                TaskRunKind::ExecutionUnit { members, .. } => Some(members),
+                _ => None,
+            })
+            .flat_map(|members| members.iter().map(|member| member.output_directory()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    });
 
     while !pending.is_empty() || !active.is_empty() {
         context
@@ -161,22 +177,8 @@ fn run_phase_inner(
         {
             let task = pending.front().expect("checked nonempty task queue");
             let requirement = if task.is_npy() {
-                let bytes = dependency_snapshot(
-                    phase,
-                    context.study.phases(),
-                    context.completed_phases,
-                    task.configuration(),
-                    true,
-                );
-                let raw = serde_json::from_slice(&bytes).expect("Runtime dependency JSON");
-                let deps = crate::task::dependencies::Dependencies::from_json(raw)
-                    .expect("Runtime dependencies");
-                let count = deps
-                    .recordings()
-                    .iter()
-                    .map(|r| r.directory())
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len();
+                let count =
+                    npy_recording_count.expect("NPY phase retains its source recording count");
                 TaskResourceRequirement::External {
                     threads: task
                         .program_threads()

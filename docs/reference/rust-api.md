@@ -37,9 +37,9 @@ The main entry points are:
 | `prelude` | Glob import; no parameters | Re-exports `run`, registration attributes, ordinary state, observation, unit, and workflow-error APIs. |
 
 Config, Study, Persistence, Runtime, State, and Observation expose their
-specialized public APIs directly at their module roots. Task, UI, and the
-facade-error implementation remain private subsystems; unit authoring and
-`WorkflowError` are exposed at the crate root.
+specialized public APIs directly at their module roots. Task exposes its supported contracts and project/dependency accessors at its
+module root. UI and the facade-error implementation remain private; ordinary
+unit authoring and `WorkflowError` are also exposed at the crate root.
 
 ### Execution-unit API
 
@@ -148,7 +148,7 @@ Study binds them to the execution unit task's selected schema during preflight.
 | `state.borrow_payloads_mut::<Q>(keys)` | tuple type `Q`; matching tuple of 2-8 field names | Returns checked disjoint mutable references after complete validation. |
 | `state.take_payload::<T>(key)` | `key: &str`; `T: Any + Send` | Moves a payload out without cloning while retaining the field's type contract. |
 
-`SystemState` is `Clone`; cloning deep-clones every populated payload. It is
+`SystemState` is `Clone`; cloning invokes each populated payload's `Clone` implementation. It is
 `Send` but not `Sync`, so shared cross-thread mutation requires external
 synchronization.
 
@@ -175,7 +175,7 @@ synchronization.
 | `PayloadInsertError<T>::into_parts()` | owned `self` | Returns `(StateError, T)` without cloning. |
 
 `StateSeries` supports `IntoIterator` for owned and borrowed series. Explicit
-`Clone` deep-clones its states and payloads. `StateError` is non-exhaustive and
+`Clone` invokes each state/payload's `Clone`; backing storage may be copied or shared according to the payload type. `StateError` is non-exhaustive and
 currently exposes `TemplateRead`, `TemplateParse`, `EmptyFieldName`,
 `DuplicateField`, `UnknownField`, `RepeatedPayloadBorrow`, `MissingPayload`,
 `TypeMismatch`, `PayloadAlreadyInitialized`, `IterationOverflow`,
@@ -309,9 +309,9 @@ Embedding consumers may use `Study::load` and `runtime::execute`, but
 ordinary projects should not.
 
 The repository's [`attractor_2d`](../../rust/../examples/attractor_2d) project combines
-these pieces end to end: six swept Rust execution unit tasks feed one directly declared
-Python plotting phase that opens the verified recordings and emits an SVG in
-the configured `output/plots` directory.
+these pieces end to end: six swept Rust execution-unit tasks feed the native
+`$npy` conversion phase. The dependent Python plotting task opens verified NPY v3
+member/batch data and emits an SVG in the configured `output/plots` directory.
 
 Each public subsystem owns one module-root API. The single prelude contains the
 small execution-unit author surface. Persistence writing is automatic and
@@ -327,5 +327,5 @@ See [`src/state/api.md`](../../rust/src/state/api.md),
 [`src/ui/api.md`](../../rust/src/ui/api.md),
 [`src/error/api.md`](../../rust/src/error/api.md),
 [`src/prelude/api.md`](../../rust/src/prelude/api.md), and the repository
-[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.15.5/docs/architecture.md).
+[`architecture.md`](https://github.com/dingyisun0101/Scientific-Workflow/blob/v0.16.0/docs/architecture.md).
 

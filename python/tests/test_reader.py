@@ -54,6 +54,42 @@ def replace_json_pointer(document: object, pointer: str, value: object) -> None:
 
 
 class ReaderTests(unittest.TestCase):
+    def test_latest_checks_all_newest_chunk_structure_before_calling_decoder(self):
+        for defect in ("ordering", "count", "first", "blank", "width"):
+            with self.subTest(defect=defect):
+                temporary, recording = self.copied_fixture()
+                with temporary:
+                    path = recording / "streams/signal/chunk-000000.jsonl"
+                    records = [json.loads(line) for line in path.read_bytes().splitlines()]
+                    if defect == "ordering": records[0]["iteration"] = 3
+                    if defect == "width": records[0]["values"] = []
+                    data = b"".join(json.dumps(record).encode() + b"\n" for record in records)
+                    if defect == "blank": data = b"\n" + data
+                    path.write_bytes(data)
+                    metadata_path = recording / "metadata.json"
+                    metadata = json.loads(metadata_path.read_text())
+                    chunk = metadata["streams"][0]["chunks"][0]
+                    chunk.update(bytes=len(data), checksum="sha256:" + hashlib.sha256(data).hexdigest())
+                    if defect == "count": chunk["records"] = 3
+                    if defect == "first": chunk["first_iteration"] = 1
+                    metadata_path.write_text(json.dumps(metadata))
+                    calls = []
+                    reader = open_completed_recording(recording, decoders={
+                        "population": lambda value: calls.append(value) or value,
+                        "label": str,
+                    })
+                    with self.assertRaises(RecordingError): reader.read_latest("signal")
+                    self.assertEqual(calls, [])
+
+    def test_latest_decodes_only_final_payload_after_structural_validation(self):
+        calls = []
+        reader = open_completed_recording(FIXTURE, decoders={
+            "population": lambda value: calls.append(value) or value,
+            "label": str,
+        })
+        self.assertEqual(reader.read_latest("signal").iteration, 2)
+        self.assertEqual(calls, [[1.0, 2.0]])
+
     def copied_fixture(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         destination = Path(temporary.name) / "recording"

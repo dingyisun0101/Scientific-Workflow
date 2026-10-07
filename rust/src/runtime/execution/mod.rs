@@ -58,9 +58,10 @@ where
                 source,
             }
         })?;
+    let mut protected = Vec::new();
+    let config_root = study.project_root().join("wf_configs");
     if clean {
-        let config_root = study.project_root().join("wf_configs");
-        let mut protected = vec![config_root.as_path()];
+        protected.push(config_root.as_path());
         protected.extend(study.reuse_from());
         for phase in study.phases() {
             for task in phase.tasks() {
@@ -83,17 +84,34 @@ where
                 }
             }
         }
-        super::output::clean_output(study.output_root(), &protected).map_err(|source| {
-            RuntimeError::OutputScope {
+        super::output::validate_clean_output(study.output_root(), &protected).map_err(
+            |source| RuntimeError::OutputScope {
                 path: study.output_root().to_path_buf(),
                 source,
-            }
-        })?;
+            },
+        )?;
     }
     let resources = ResourceCoordinator::new(study.threads(), study.compute_mode());
-    let output = create_execution(study.output_root())?;
     let observer = create_observer().map_err(RuntimeError::presentation_boxed)?;
     let presentation = RuntimePresentation::new(observer);
+    let startup = (|| {
+        if clean {
+            super::output::clean_output(study.output_root(), &protected).map_err(|source| {
+                RuntimeError::OutputScope {
+                    path: study.output_root().to_path_buf(),
+                    source,
+                }
+            })?;
+        }
+        create_execution(study.output_root())
+    })();
+    let output = match startup {
+        Ok(output) => output,
+        Err(error) => {
+            presentation.abort_startup()?;
+            return Err(error);
+        }
+    };
     let outcome = execute_with_presentation(study, resources, output, &presentation, &reused);
     let finish = presentation.finish();
     finish?;

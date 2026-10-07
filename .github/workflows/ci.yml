@@ -29,7 +29,7 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --all-targets --all-features --locked
       - name: Test coordinated NPY handoff
-        run: cargo test --manifest-path rust/Cargo.toml --lib coordinated_npy_handoff -- --ignored
+        run: cargo test --manifest-path rust/Cargo.toml --lib --locked -- --ignored
       - name: Run dependency pipeline
         shell: bash
         run: |
@@ -72,6 +72,6 @@ jobs:
           python -m build python
           python -m pip install python/dist/*.whl
           python -c "import scientific_workflow; from scientific_workflow import dependencies, project, reporting"
-          python -m pip install "scientific-workflow[npy]==0.5.0"
+          python -m pip install "scientific-workflow[npy]==0.6.0"
       - name: Test installed Python companion
         run: python -m unittest discover -s python/tests -v

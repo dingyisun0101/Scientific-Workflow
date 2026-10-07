@@ -24,7 +24,7 @@ For a new environment, run from your application directory:
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install 'scientific-workflow[npy]==0.5.0'
+python -m pip install 'scientific-workflow[npy]==0.6.0'
 ```
 
 If `venv` reports that `ensurepip` is unavailable, install your Linux
@@ -40,7 +40,7 @@ Verify the actual interpreter and imports:
 python3 -c 'import sys, scientific_workflow, numpy, threadpoolctl; print(sys.executable, scientific_workflow.__version__)'
 ```
 
-Expect your selected environment's interpreter and companion version `0.5.0`.
+Expect your selected environment's interpreter and companion version `0.6.0`.
 The standard converter resolves `python3` from the active `PATH`. Activate the
 same environment before every launch, including in new shells and multiplexer
 sessions. [Chapter 9](9-python-analysis-and-visualization.md) explains explicit
@@ -51,7 +51,7 @@ interpreter selection for ordinary Python tasks.
 Inside an existing Cargo application:
 
 ```sh
-cargo add scientific-workflow@0.15.5
+cargo add scientific-workflow@0.16.0
 cargo add serde --features derive
 ```
 

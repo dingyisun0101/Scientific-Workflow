@@ -1,7 +1,7 @@
 # Two-dimensional attractor study
 
 This example is the release-qualified end-to-end project for
-Rust `scientific-workflow` 0.15.4 and Python companion 0.5.0.
+Rust `scientific-workflow` 0.16.0 and Python companion 0.6.0.
 
 This is a complete small scientific project rather than a collection of API
 fragments. Rust owns the stateful Hopf model, JSON owns the study and all
@@ -55,6 +55,13 @@ it from the bundled example: the workload otherwise finishes too quickly to
 demonstrate live concurrent progress. It never changes scientific time or
 persisted constants.
 
+The model uses explicit Euler with a positive finite timestep. Preflight checks
+finite coefficients, initial coordinates, and initial radius. Each step
+validates the next physical time, point, and radius before assigning any of
+them; rejected steps preserve the previous complete state. Nonfinite dynamics
+stop the task with an error. These checks do not establish numerical stability
+or convergence for an arbitrary timestep.
+
 Its custom `ObservationPlan` records:
 
 - the phase-space trajectory every 10 iterations;
@@ -74,8 +81,9 @@ Top-level `study.json.workflow_schema: 1` selects the supported authored
 configuration grammar. Top-level `study.json.threads` is the required global
 compute budget. This example uses isolated compute with one thread per unit; the
 phase's `max_concurrency` controls task admission and does not create additional
-model pools. The synthesized `$npy` converter and final Python plot task each
-reserve one external-task thread after simulation has completed.
+model pools. The synthesized `$npy` converter reserves up to four worker threads
+from the root budget, bounded by its input recordings, after simulation. The
+final Python plot task reserves one thread.
 
 ### How parameters reach `AttractorConstants`
 
@@ -125,8 +133,8 @@ into their deterministic three-by-two Cartesian product before decoding. Study
 deserializes each complete object once to validate its constants type and to
 call `HopfModel::preflight` during preflight. This model-owned hook runs during
 effect-free `Study::load`, before Runtime creates output or executes anything.
-This model needs no additional domain check and therefore does not inspect the
-schema argument. Its observation builders validate stream names, field
+The model validates its finite scientific inputs and positive timestep without
+inspecting the schema argument. Its observation builders validate stream names, field
 selections, and sampling intervals while producing the `ObservationPlan` that
 tells Workflow what to record and at what cadence. Workflow then binds that
 plan to the selected schema, which verifies that the named fields exist.
@@ -160,7 +168,7 @@ The reserved `$npy` phase needs only its prerequisite:
 
 Workflow synthesizes the conversion task, gives it every transitively
 prerequisite execution-unit recording in the replicate, and writes a
-`scientific-workflow-npy-batch.v2` manifest plus C-contiguous arrays at
+`scientific-workflow-npy-batch.v3` manifest plus C-contiguous arrays at
 `output/<execution>/processed/replicate-000000`. Project authors provide no converter
 script, paths, arguments, or duplicated recording selectors.
 
@@ -210,11 +218,11 @@ cargo run -p attractor-2d
 ```
 
 Workflow creates a unique Rust execution beneath `examples/attractor_2d/output`.
-Python owns its configured `output/plots` destination directly. When stdin and
-stderr are interactive, the automatic Ratatui dashboard shows task rows,
+Python owns its configured `output/plots` destination directly. Terminal stdin
+and stderr are required. The automatic Ratatui dashboard shows task rows,
 progress, timing, messages, and an `exit` command. The task section shows every active phase group and removes completed
-groups; their outcomes remain in Messages. Redirected runs use plain lifecycle
-lines. The execution unit and plotter do not construct tasks, phases,
+groups; their outcomes remain in Messages. Run inside `screen` or `tmux` for a
+long study. The execution unit and plotter do not construct tasks, phases,
 persistence sessions, progress counters, or message channels.
 
 The omitted replicate, timeout, UI, and persistence settings use Workflow's
@@ -230,8 +238,8 @@ Runtime creates output.
 
 
 The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
-one thread to each execution-unit task within the global two-thread budget.
-The example consumes published Workflow 0.15.4 and the Python 0.5.0 companion
+one thread to each execution-unit task within the global four-thread budget.
+The example consumes published Workflow 0.16.0 and the Python 0.6.0 companion
 pinned in `examples/requirements.txt`. Execution requires the dashboard; run
 inside screen/tmux. Disk pauses require freeing space and typing `resume`.
 Leave NPY worker settings unset for the default gradual auto allocation unless

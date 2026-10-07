@@ -98,6 +98,64 @@ fn cleaning_run_replaces_previous_output_after_preflight() {
 }
 
 #[test]
+#[cfg(unix)]
+fn dashboard_startup_failure_preserves_existing_output_before_clean() {
+    let project = Project::new(
+        serde_json::json!({"phases":{"run":{"tasks":[{"program":"/bin/true"}]}}}),
+        serde_json::json!({}),
+    );
+    fs::create_dir(project.path().join("output")).unwrap();
+    let keep = project.path().join("output/keep");
+    fs::write(&keep, b"previous result").unwrap();
+    let result = super::execute_with_observer_options::<FailingObserver, _>(
+        Study::load(project.path()).unwrap(),
+        || Err(std::io::Error::other("dashboard already owned").into()),
+        true,
+    );
+    assert!(matches!(result, Err(RuntimeError::Presentation { .. })));
+    assert_eq!(fs::read(&keep).unwrap(), b"previous result");
+    assert_eq!(
+        fs::read_dir(project.path().join("output")).unwrap().count(),
+        1
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn output_creation_failure_aborts_started_observer_without_waiting_for_exit() {
+    use std::sync::{Arc, atomic::AtomicBool};
+    struct Observer(Arc<AtomicBool>);
+    impl RuntimeObserver for Observer {
+        fn publish(&self, _: RuntimeEvent<'_>) -> Result<(), PresentationFailure> {
+            Ok(())
+        }
+        fn cancellation_requested(&self) -> Result<bool, PresentationFailure> {
+            Ok(false)
+        }
+        fn finish(&self) -> Result<(), PresentationFailure> {
+            panic!("startup failure must not wait for normal finish")
+        }
+        fn abort_startup(&self) -> Result<(), PresentationFailure> {
+            self.0.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
+    let project = Project::new(
+        serde_json::json!({"phases":{"run":{"tasks":[{"program":"/bin/true"}]}}}),
+        serde_json::json!({}),
+    );
+    let aborted = Arc::new(AtomicBool::new(false));
+    let result = execute_with_observer(Study::load(project.path()).unwrap(), || {
+        // The lease owns the old directory; replace its pathname to force creation failure.
+        fs::remove_dir(project.path().join("output")).unwrap();
+        fs::write(project.path().join("output"), b"blocked").unwrap();
+        Ok(Observer(aborted.clone()))
+    });
+    assert!(matches!(result, Err(RuntimeError::OutputScope { .. })));
+    assert!(aborted.load(Ordering::Acquire));
+}
+
+#[test]
 #[ignore = "requires the installed coordinated Python 3.14+ companion with the npy extra"]
 fn coordinated_npy_handoff_respects_phase_limits_and_worker_modes() {
     for (threads, mode) in [(1, "fixed"), (2, "auto")] {
@@ -132,6 +190,72 @@ fn coordinated_npy_handoff_respects_phase_limits_and_worker_modes() {
                 .unwrap();
         assert_eq!(batch["members"].as_array().unwrap().len(), 2);
     }
+}
+
+#[test]
+#[ignore = "requires the coordinated Python 3.14+ companion with the npy extra"]
+fn npy_reuse_requires_current_v3_members_and_verified_array_bytes() {
+    use sha2::{Digest, Sha256};
+    let mut study = execution_unit_study("runtime-ensemble", None);
+    study["seed"] = 42.into();
+    study["phases"]["$npy"] = serde_json::json!({"after":["run"]});
+    study["phases"]["consume"] =
+        serde_json::json!({"after":["$npy"],"tasks":[{"program":"/bin/true"}]});
+    let project = Project::new(study, serde_json::json!({"runtime-ensemble":{}}));
+    let first = execute(Study::load(project.path()).unwrap()).unwrap();
+    let TaskRunKind::Npy {
+        processed_directory,
+        ..
+    } = first.replicates()[0].phases()[1].tasks()[0].kind()
+    else {
+        panic!("expected NPY result")
+    };
+    select_phases(&project, &[2], Some(first.output_directory()));
+    let reused = execute(Study::load(project.path()).unwrap()).unwrap();
+    assert!(reused.replicates()[0].phases()[1].was_reused());
+    let batch_path = processed_directory.join("manifest.json");
+    let batch_bytes = fs::read(&batch_path).unwrap();
+    let mut batch: serde_json::Value = serde_json::from_slice(&batch_bytes).unwrap();
+    batch["format"] = "scientific-workflow-npy-batch.v2".into();
+    fs::write(&batch_path, serde_json::to_vec(&batch).unwrap()).unwrap();
+    assert!(matches!(
+        execute(Study::load(project.path()).unwrap()),
+        Err(RuntimeError::Reuse { .. })
+    ));
+    fs::write(&batch_path, &batch_bytes).unwrap();
+    batch = serde_json::from_slice(&batch_bytes).unwrap();
+    let member_path = processed_directory.join(batch["members"][0]["manifest"].as_str().unwrap());
+    let member_bytes = fs::read(&member_path).unwrap();
+    let mut member: serde_json::Value = serde_json::from_slice(&member_bytes).unwrap();
+    member["format"] = "scientific-workflow-npy.v2".into();
+    let changed = serde_json::to_vec(&member).unwrap();
+    fs::write(&member_path, &changed).unwrap();
+    let checksum = Sha256::digest(&changed)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    batch["members"][0]["manifest_checksum"] = format!("sha256:{checksum}").into();
+    fs::write(&batch_path, serde_json::to_vec(&batch).unwrap()).unwrap();
+    assert!(matches!(
+        execute(Study::load(project.path()).unwrap()),
+        Err(RuntimeError::Reuse { .. })
+    ));
+    fs::write(&member_path, &member_bytes).unwrap();
+    fs::write(&batch_path, &batch_bytes).unwrap();
+    member = serde_json::from_slice(&member_bytes).unwrap();
+    let array = member_path
+        .parent()
+        .unwrap()
+        .join(member["arrays"][0]["path"].as_str().unwrap());
+    fs::write(array, b"corrupted NPY array").unwrap();
+    assert!(matches!(
+        execute(Study::load(project.path()).unwrap()),
+        Err(RuntimeError::Reuse { .. })
+    ));
+    assert_eq!(
+        fs::read_dir(project.path().join("output")).unwrap().count(),
+        2
+    );
 }
 
 struct Project(PathBuf);
@@ -1349,7 +1473,7 @@ fn reuse_rejects_missing_failed_or_changed_inputs_before_creating_output() {
 
 #[test]
 #[cfg(unix)]
-fn completed_legacy_unit_results_remain_available_to_new_dependent_programs() {
+fn reuse_requires_current_receipts_even_when_legacy_summaries_exist() {
     let project = Project::new(
         serde_json::json!({
             "paths":{"states":{"value":"wf_configs/states/value.json"}},
@@ -1361,45 +1485,161 @@ fn completed_legacy_unit_results_remain_available_to_new_dependent_programs() {
         serde_json::json!({"runtime-slow":{"sleep_ms":0}}),
     );
     let first = execute(Study::load(project.path()).unwrap()).unwrap();
-    let phases = first.replicates()[0].phases();
-    for phase in phases {
-        for task in phase.tasks() {
-            fs::remove_file(task.output_directory().join("workflow-result.json")).unwrap();
-        }
-    }
-    let config = phases[1].tasks()[0]
-        .output_directory()
-        .join("workflow-config.json");
-    let mut snapshot: serde_json::Value =
-        serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
-    snapshot["study"]
-        .as_object_mut()
-        .unwrap()
-        .remove("active_phases");
-    fs::write(config, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    let task = &first.replicates()[0].phases()[0].tasks()[0];
+    let receipt = task.output_directory().join("workflow-result.json");
+    let original = fs::read(&receipt).unwrap();
     select_phases(&project, &[1], Some(first.output_directory()));
-    let second = execute(Study::load(project.path()).unwrap()).unwrap();
-    let reused = &second.replicates()[0].phases()[0];
-    assert!(reused.was_reused());
-    match reused.tasks()[0].kind() {
-        TaskRunKind::ExecutionUnit { members, .. } => {
-            assert_eq!(members.len(), 1);
-            assert_eq!(members[0].final_iteration(), 1);
-            assert_eq!(
-                members[0].output_directory(),
-                phases[0].tasks()[0].output_directory()
-            );
+    for mode in 0..3 {
+        if mode < 2 {
+            let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            if mode == 0 {
+                value["format"] = "scientific-workflow-task-result.v1".into();
+            } else {
+                value["inputs"]["config"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("checksum");
+            }
+            fs::write(&receipt, serde_json::to_vec(&value).unwrap()).unwrap();
+        } else {
+            fs::remove_file(&receipt).unwrap();
         }
-        _ => panic!("expected imported execution unit"),
+        assert!(matches!(
+            execute(Study::load(project.path()).unwrap()),
+            Err(RuntimeError::Reuse { .. })
+        ));
+        assert_eq!(
+            fs::read_dir(project.path().join("output")).unwrap().count(),
+            1
+        );
     }
-    let dependencies = second.replicates()[0].phases()[1].tasks()[0]
-        .output_directory()
-        .join("workflow-dependencies.json");
-    let value: serde_json::Value =
-        serde_json::from_slice(&fs::read(dependencies).unwrap()).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn reuse_rejects_modified_stored_inputs_for_program_and_execution_unit_tasks() {
+    for unit in [false, true] {
+        let producer = if unit {
+            serde_json::json!({"execution_unit":"runtime-slow","state":"value"})
+        } else {
+            serde_json::json!({"program":"/bin/true"})
+        };
+        let project = Project::new(
+            serde_json::json!({
+                "paths":{"states":{"value":"wf_configs/states/value.json"}},
+                "phases":{
+                    "prepare":{"tasks":[producer]},
+                    "consume":{"after":["prepare"],"tasks":[{"program":"/bin/true"}]}
+                }
+            }),
+            serde_json::json!({"runtime-slow":{"sleep_ms":0}}),
+        );
+        let first = execute(Study::load(project.path()).unwrap()).unwrap();
+        let output = first.replicates()[0].phases()[0].tasks()[0].output_directory();
+        select_phases(&project, &[1], Some(first.output_directory()));
+        for file in ["workflow-config.json", "workflow-dependencies.json"] {
+            let path = output.join(file);
+            let original = fs::read(&path).unwrap();
+            let mut changed = original.clone();
+            changed.push(b' '); // Even a semantic no-op changes the committed bytes.
+            fs::write(&path, changed).unwrap();
+            assert!(matches!(
+                execute(Study::load(project.path()).unwrap()),
+                Err(RuntimeError::Reuse { .. })
+            ));
+            assert!(
+                crate::task::project::parameters_from_snapshot::<serde_json::Value>(
+                    &output.join("workflow-config.json"),
+                    None
+                )
+                .is_err()
+            );
+            assert!(
+                crate::task::dependencies::Dependencies::load(
+                    &output.join("workflow-dependencies.json")
+                )
+                .is_err()
+            );
+            assert_eq!(
+                fs::read_dir(project.path().join("output")).unwrap().count(),
+                1
+            );
+            fs::write(&path, original).unwrap();
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn reuse_rejects_a_changed_resolved_executable_even_with_the_same_command_name() {
+    use std::os::unix::fs::symlink;
+    let project = Project::new(
+        serde_json::json!({"phases":{
+            "prepare":{"tasks":[{"program":"producer"}]},
+            "consume":{"after":["prepare"],"tasks":[{"program":"/bin/true"}]}
+        }}),
+        serde_json::json!({}),
+    );
+    for (name, executable) in [("a", "/bin/true"), ("b", "/bin/false")] {
+        fs::create_dir(project.path().join(name)).unwrap();
+        fs::copy(executable, project.path().join(name).join("producer")).unwrap();
+    }
+    let link = project.path().join("producer");
+    symlink(project.path().join("a/producer"), &link).unwrap();
+    let first = execute(Study::load(project.path()).unwrap()).unwrap();
+    fs::remove_file(&link).unwrap();
+    symlink(project.path().join("b/producer"), &link).unwrap();
+    select_phases(&project, &[1], Some(first.output_directory()));
+    let error = execute(Study::load(project.path()).unwrap()).unwrap_err();
+    assert!(error.to_string().contains("resolved executable differs"));
     assert_eq!(
-        value[0]["tasks"][0]["workload"]["members"][0]["final_iteration"],
+        fs::read_dir(project.path().join("output")).unwrap().count(),
         1
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn python_reuse_ignores_launcher_changes_but_rejects_changed_resolved_scientific_scripts() {
+    use std::os::unix::fs::symlink;
+    let project = Project::new(
+        serde_json::json!({"phases":{
+            "prepare":{"tasks":[{"python":{"script":"producer.py","environment":{"manager":"system","executable":"/bin/true"}}}]},
+            "consume":{"after":["prepare"],"tasks":[{"program":"/bin/true"}]}
+        }}),
+        serde_json::json!({}),
+    );
+    for name in ["a", "b"] {
+        fs::create_dir(project.path().join(name)).unwrap();
+        fs::write(
+            project.path().join(name).join("producer.py"),
+            b"# scientific entry point\n",
+        )
+        .unwrap();
+    }
+    let link = project.path().join("producer.py");
+    symlink(project.path().join("a/producer.py"), &link).unwrap();
+    let first = execute(Study::load(project.path()).unwrap()).unwrap();
+    select_phases(&project, &[1], Some(first.output_directory()));
+    let manifest = project.path().join("wf_configs/study.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    value["phases"]["prepare"]["tasks"][0]["python"]["environment"]["executable"] =
+        "/bin/false".into();
+    fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    // A different launcher is operational and never executes during this import.
+    assert!(execute(Study::load(project.path()).unwrap()).is_ok());
+    fs::remove_file(&link).unwrap();
+    symlink(project.path().join("b/producer.py"), &link).unwrap();
+    let error = execute(Study::load(project.path()).unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("resolved scientific script differs")
+    );
+    assert_eq!(
+        fs::read_dir(project.path().join("output")).unwrap().count(),
+        2
     );
 }
 

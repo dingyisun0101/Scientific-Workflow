@@ -331,7 +331,7 @@ fn changed_program_input_json_cannot_commit_success() {
             .complete(Some(0))
             .unwrap_err()
             .to_string()
-            .contains("immutable program input JSON")
+            .contains("immutable task input snapshot")
     );
     let metadata: Value =
         serde_json::from_slice(&fs::read(workspace.run().join("program.json")).unwrap()).unwrap();

@@ -33,5 +33,30 @@
     "name": "malformed chunk checksum",
     "pointer": "/streams/0/chunks/0/checksum",
     "value": "sha256:not-a-digest"
+  },
+  {
+    "name": "empty stream path component",
+    "pointer": "/streams/0/directory",
+    "value": "streams//signal"
+  },
+  {
+    "name": "dot stream path component",
+    "pointer": "/streams/0/directory",
+    "value": "streams/./signal"
+  },
+  {
+    "name": "untagged stored sampling",
+    "pointer": "/streams/0/sampling_interval",
+    "value": 1
+  },
+  {
+    "name": "unsupported chunk checksum algorithm",
+    "pointer": "/streams/0/chunks/0/checksum",
+    "value": "md5:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "wrong chunk checksum length",
+    "pointer": "/streams/0/chunks/0/checksum",
+    "value": "sha256:abc"
   }
 ]

@@ -5,7 +5,7 @@ Start with a working study; chapter 4 contains the complete parameter tables.
 
 ![Scientific Workflow dashboard with task progress and resource usage](../assets/UI-3.png)
 
-*Screenshot from 0.15.4; the 0.15.5 layout is described below.*
+*Screenshot from 0.15.4; the current layout is described below.*
 
 ## Read the dashboard
 
@@ -178,9 +178,10 @@ for study-level reuse; it does not append to interrupted scientific recordings.
 
 **Next:** [11. Reusing results](11-reusing-results.md)
 
-## Dashboard display in Rust 0.15.5
+## Dashboard display in Rust 0.16.0
 
-The cyan **Scientific Workflow** page title sits above the Study panel.
+The centered cyan bold **SCIENTIFIC WORKFLOW** title sits above the Study panel.
+Its font size is controlled by the terminal application.
 Its first row starts with **Total time**, and the second row uses blue for
 running, yellow for pending, green for completed, red for failed, magenta for
 cancelled, and gray for skipped. Cyan is reserved for titles. The replicate
@@ -189,6 +190,8 @@ For parallel runs, current means the latest replicate-start event's index;
 completion events do not turn it into a completed-count counter. The task panel
 title is `Phase=a/b: x Tasks · PgUp/PgDn`, using the latest phase-start event.
 Active groups still coexist in plan order; each row retains its replicate/phase.
-CPU utilization is a rolling one-second average refreshed with the dashboard.
+CPU utilization is a rolling two-second average. Resource values and normal
+dashboard redraws refresh once per second; commands, prompt editing, paging,
+and resize feedback remain responsive.
 The monitor interpolates counter values at the window boundary for irregular
-refresh intervals and averages available history during the first second.
+refresh intervals and averages available history during the first two seconds.

@@ -3,7 +3,6 @@ from __future__ import annotations
 import multiprocessing
 import os
 import queue
-import sys
 import time
 
 from threadpoolctl import threadpool_limits
@@ -17,19 +16,24 @@ _THREAD_LIMIT = None
 
 
 def _worker_context() -> multiprocessing.context.BaseContext:
-    if os.name == "posix" and sys.platform.startswith("linux"):
-        default = "fork"
-    else:
-        default = "spawn"
-    requested = os.environ.get("WORKFLOW_NPY_CONTEXT", default).strip().lower()
+    requested = os.environ.get("WORKFLOW_NPY_CONTEXT", "").strip().lower()
     if requested in {"fork", "spawn", "forkserver"}:
         return multiprocessing.get_context(requested)
-    return multiprocessing.get_context(default)
+    return multiprocessing.get_context()
 
 
-def _worker_setup(updates):
+def _worker_setup(updates, control_path):
     global _PROGRESS_QUEUE, _THREAD_LIMIT
     _PROGRESS_QUEUE = updates
+    # Forkserver may predate this batch's environment. Every worker receives
+    # the parent's current control configuration explicitly.
+    if control_path is None:
+        os.environ.pop("WORKFLOW_CONTROL_PATH", None)
+    else:
+        os.environ["WORKFLOW_CONTROL_PATH"] = control_path
+    _control._LAST_CHECK = 0.0
+    _control._PAUSE_STARTED = None
+    _control._PAUSE_TOTAL = 0.0
     _THREAD_LIMIT = threadpool_limits(limits=1)
 
 

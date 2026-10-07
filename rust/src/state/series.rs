@@ -19,7 +19,8 @@
 //! A rejected append returns [`StateSeriesPushError`], which retains the unchanged state.
 //!
 //! Explicitly cloning a `StateSeries` is intentionally expensive: every
-//! populated payload is deep-cloned through [`SystemState::clone`]. Prefer a
+//! populated payload is cloned through [`SystemState::clone`], using that
+//! payload type's copy or sharing semantics. Prefer a
 //! borrowed `&StateSeries` for scoped immutable access or an application-owned
 //! `Arc<StateSeries>` when shared ownership is required.
 //!
@@ -244,15 +245,15 @@ impl StateSeries {
 }
 
 impl Clone for StateSeries {
-    /// Creates a fully independent deep copy of all states and payloads.
+    /// Clones each state using its payload types' `Clone` implementations.
     ///
     /// # Performance warning
     ///
-    /// Cost scales with the complete populated payload volume and may involve
-    /// gigabytes of allocation and copying. This method is appropriate only
-    /// when analysis requires independent mutable payload ownership. Use
-    /// borrowing `&StateSeries` or an `Arc<StateSeries>` for lightweight sharing.
-    /// The immutable specification allocation remains shared.
+    /// Cost depends on the payload types and may include large allocations.
+    /// Immutable backing storage may remain shared safely, while shared mutable
+    /// storage can let changes affect both series. Use this for independent
+    /// branches only when each payload's cloning semantics isolate mutations.
+    /// Borrow `&StateSeries` for lightweight access. The schema remains shared.
     fn clone(&self) -> Self {
         Self {
             spec: self.spec.clone(),

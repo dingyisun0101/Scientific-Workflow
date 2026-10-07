@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+from snapshot_fixture import seal_inputs
 from unittest.mock import patch
 
 from scientific_workflow import IntegrityError
@@ -38,7 +40,7 @@ def mixed_recording(root: Path) -> Path:
 
 
 def dependencies(root: Path, recordings: list[Path]) -> Path:
-    path = root / "dependencies.json"
+    path = root / "workflow-dependencies.json"
     path.write_text(json.dumps([{"phase": "evolve", "tasks": [{
         "identity": "ensemble", "output_directory": str(root),
         "workload": {"kind": "execution_unit", "execution_unit": "fixture",
@@ -46,6 +48,7 @@ def dependencies(root: Path, recordings: list[Path]) -> Path:
                                   "output_directory": str(source)}
                                  for n, source in enumerate(recordings)]},
     }]}]))
+    seal_inputs(path.parent)
     return path
 
 

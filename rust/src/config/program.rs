@@ -236,14 +236,16 @@ fn resolve_executable_inner(
             reason: "resolved program is not an executable regular file".to_owned(),
         });
     }
-    Ok(if preserve_link {
+    let selected = if preserve_link {
         std::path::absolute(candidate).map_err(|source| ConfigError::InvalidProgram {
             path: authored.to_path_buf(),
             reason: source.to_string(),
         })?
     } else {
         resolved
-    })
+    };
+    ensure_utf8(&selected, "resolved executable")?;
+    Ok(selected)
 }
 
 fn file_subject(path: &Path, fallback: &str) -> Box<str> {
@@ -298,6 +300,28 @@ mod interpreter_tests {
         let _ = std::fs::remove_file(&link);
         symlink("/bin/sh", &link).unwrap();
         assert_eq!(resolve_interpreter(&root, &link).unwrap(), link);
+        assert_eq!(
+            resolve_executable(&root, &link).unwrap(),
+            std::fs::canonicalize("/bin/sh").unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preserved_interpreter_path_must_be_utf8_even_when_target_is_utf8() {
+        use std::os::unix::{ffi::OsStringExt as _, fs::symlink};
+        let root = std::env::temp_dir().join(format!(
+            "workflow-python-invalid-link-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let link = root.join(std::ffi::OsString::from_vec(b"python-\xff".to_vec()));
+        symlink("/bin/sh", &link).unwrap();
+        assert!(matches!(
+            resolve_interpreter(&root, &link),
+            Err(ConfigError::NonUtf8Path { path, .. }) if path == link
+        ));
+        // Generic executables retain their canonical UTF-8 identity.
         assert_eq!(
             resolve_executable(&root, &link).unwrap(),
             std::fs::canonicalize("/bin/sh").unwrap()

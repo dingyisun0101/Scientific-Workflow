@@ -9,6 +9,7 @@
 //! root exposes verified state-recording readers, never write-session construction.
 
 mod fs;
+mod inputs;
 mod local;
 mod operational_time;
 mod plan;
@@ -23,6 +24,7 @@ mod persistence_workflow_tests;
 #[cfg(test)]
 #[path = "persistence/tests/python_reader_conformance.rs"]
 mod python_reader_conformance_tests;
+pub(crate) use inputs::{TaskInputReferences, TaskInputSnapshots};
 pub use local::{
     JsonPayloadDecoder, JsonPayloadDecoderRegistry, PersistenceError, RecordingTiming,
     StoredStateSeriesReader,

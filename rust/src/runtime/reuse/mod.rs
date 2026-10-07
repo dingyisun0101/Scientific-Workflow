@@ -77,11 +77,6 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
     let mut reused = ReusedPhases::new();
     for replicate in 0..study.replicate_policy().count() {
         let directory = source.join(format!("replicate-{replicate:06}"));
-        let legacy = receipt::legacy_results(&directory).map_err(|error| RuntimeError::Reuse {
-            phase: study.phases()[*skipped[0].1].name().to_owned(),
-            path: directory.clone(),
-            reason: error.to_string(),
-        })?;
         for &(index, &position) in &skipped {
             let phase = &study.phases()[position];
             let mut predecessors = HashSet::new();
@@ -102,6 +97,8 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
                     configuration: task.configuration(),
                     snapshot: snapshot.bytes(),
                     execution_unit: task.execution_unit(),
+                    executable: task.program_path(),
+                    python_script: task.python_script(),
                     constants: provenance.as_ref().map(|p| p.constants()),
                     state: provenance.as_ref().map(|p| p.state()),
                     parameter_ordinal: provenance.as_ref().map(|p| p.parameter_ordinal()),
@@ -113,7 +110,7 @@ pub(super) fn prepare(study: &Study) -> Result<ReusedPhases, RuntimeError> {
                         task.kind_name()
                     },
                 };
-                let result = receipt::load_result(&path, &expected, &legacy)
+                let result = receipt::load_result(&path, &expected)
                     .and_then(|result| {
                         let workload: StoredWorkload = serde_json::from_value(result.workload)?;
                         Ok(TaskRunSummary {
@@ -161,7 +158,6 @@ pub(super) fn persist_phase(
             task.configuration(),
             result.output_directory(),
             dependency_workload(result.kind()),
-            task.config_snapshot().bytes(),
         )
         .map_err(|source| RuntimeError::Task {
             task: task.identity().to_owned(),

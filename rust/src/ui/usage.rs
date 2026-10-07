@@ -5,6 +5,9 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+const RESOURCE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const CPU_AVERAGE_WINDOW: Duration = Duration::from_secs(2);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct UsageSnapshot {
     pub(super) cpu_percent: Option<f64>,
@@ -15,6 +18,8 @@ pub(super) struct UsageSnapshot {
 #[derive(Default)]
 pub(super) struct UsageMonitor {
     cpu_history: VecDeque<(Instant, CpuCounters)>,
+    last_sample: Option<Instant>,
+    cached: UsageSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,13 +30,34 @@ struct CpuCounters {
 
 impl UsageMonitor {
     pub(super) fn sample(&mut self, output: Option<&Path>) -> UsageSnapshot {
-        let cpu_percent = self.sample_cpu(Instant::now(), read_cpu_counters());
+        self.sample_with(Instant::now(), || {
+            (
+                read_cpu_counters(),
+                read_ram_usage(),
+                read_disk_usage(output.unwrap_or_else(|| Path::new("."))),
+            )
+        })
+    }
 
-        UsageSnapshot {
-            cpu_percent,
-            ram_percent: read_ram_usage(),
-            disk_percent: read_disk_usage(output.unwrap_or_else(|| Path::new("."))),
+    fn sample_with(
+        &mut self,
+        now: Instant,
+        read: impl FnOnce() -> (Option<CpuCounters>, Option<f64>, Option<f64>),
+    ) -> UsageSnapshot {
+        if self
+            .last_sample
+            .is_some_and(|last| now.saturating_duration_since(last) < RESOURCE_REFRESH_INTERVAL)
+        {
+            return self.cached;
         }
+        let (cpu, ram_percent, disk_percent) = read();
+        self.cached = UsageSnapshot {
+            cpu_percent: self.sample_cpu(now, cpu),
+            ram_percent,
+            disk_percent,
+        };
+        self.last_sample = Some(now);
+        self.cached
     }
 
     fn sample_cpu(&mut self, now: Instant, current: Option<CpuCounters>) -> Option<f64> {
@@ -45,9 +71,9 @@ impl UsageMonitor {
             self.cpu_history.clear();
         }
         self.cpu_history.push_back((now, current));
-        let cutoff = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
+        let cutoff = now.checked_sub(CPU_AVERAGE_WINDOW).unwrap_or(now);
         // Keep the sample bracketing the cutoff so irregular refreshes still
-        // cover a full second, and interpolate the counters at the boundary.
+        // cover the full window, and interpolate counters at the boundary.
         while self.cpu_history.len() > 2 && self.cpu_history[1].0 <= cutoff {
             self.cpu_history.pop_front();
         }
@@ -183,36 +209,98 @@ mod averaging_tests {
                 }),
             )
             .unwrap();
-        assert!((average - 80.0).abs() < 1e-10);
-        assert_eq!(
-            monitor.sample_cpu(
+        assert!((average - 200.0 / 3.0).abs() < 1e-10);
+        let average = monitor
+            .sample_cpu(
                 start + Duration::from_millis(1400),
                 Some(CpuCounters {
                     total: 140,
+                    idle: 60,
+                }),
+            )
+            .unwrap();
+        assert!((average - 400.0 / 7.0).abs() < 1e-10);
+        assert_eq!(
+            monitor.sample_cpu(
+                start + Duration::from_millis(2400),
+                Some(CpuCounters {
+                    total: 240,
                     idle: 60
-                })
+                }),
+            ),
+            Some(90.0)
+        );
+        assert_eq!(
+            monitor.sample_cpu(
+                start + Duration::from_millis(2600),
+                Some(CpuCounters {
+                    total: 260,
+                    idle: 80
+                }),
             ),
             Some(80.0)
         );
-        assert_eq!(monitor.cpu_history.len(), 3);
         assert_eq!(
-            monitor.sample_cpu(start + Duration::from_secs(2), None),
+            monitor.cpu_history.front().unwrap().0,
+            start + Duration::from_millis(400)
+        );
+        assert_eq!(
+            monitor.sample_cpu(start + Duration::from_secs(3), None),
             None
         );
         assert!(monitor.cpu_history.is_empty());
         assert_eq!(
             monitor.sample_cpu(
-                start + Duration::from_secs(3),
+                start + Duration::from_secs(4),
                 Some(CpuCounters { total: 5, idle: 2 })
             ),
             None
         );
         assert_eq!(
             monitor.sample_cpu(
-                start + Duration::from_secs(4),
+                start + Duration::from_secs(5),
                 Some(CpuCounters { total: 1, idle: 0 })
             ),
             None
+        );
+    }
+
+    #[test]
+    fn interaction_redraws_reuse_resources_until_the_next_second() {
+        let mut monitor = UsageMonitor::default();
+        let start = Instant::now();
+        let first = monitor.sample_with(start, || {
+            (
+                Some(CpuCounters { total: 0, idle: 0 }),
+                Some(25.0),
+                Some(50.0),
+            )
+        });
+        for milliseconds in [1, 50, 500, 999] {
+            assert_eq!(
+                monitor.sample_with(start + Duration::from_millis(milliseconds), || {
+                    panic!("interaction must not resample host resources")
+                }),
+                first
+            );
+        }
+        let next = monitor.sample_with(start + Duration::from_secs(1), || {
+            (
+                Some(CpuCounters {
+                    total: 100,
+                    idle: 25,
+                }),
+                Some(30.0),
+                Some(55.0),
+            )
+        });
+        assert_eq!(
+            next,
+            UsageSnapshot {
+                cpu_percent: Some(75.0),
+                ram_percent: Some(30.0),
+                disk_percent: Some(55.0),
+            }
         );
     }
 }

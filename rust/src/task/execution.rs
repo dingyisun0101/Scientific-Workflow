@@ -346,6 +346,7 @@ where
     M: ExecutionUnit,
 {
     let mut identities = std::collections::HashSet::with_capacity(member_count);
+    let mut states = std::collections::HashSet::with_capacity(member_count);
     let mut members = Vec::with_capacity(member_count);
     for index in 0..member_count {
         let member = required_member(unit, index)?;
@@ -356,6 +357,9 @@ where
             });
         }
         validate_state(member.state(), schema, member.state() as *const SystemState)?;
+        if !states.insert(member.state() as *const SystemState) {
+            return Err(MemberContractError::SharedStateOwner { index });
+        }
         members.push(MemberSnapshot {
             identity: member.identity().into(),
             state_address: member.state() as *const SystemState,
@@ -445,6 +449,8 @@ fn validate_target_progress(
 
 #[derive(Debug, Error)]
 enum MemberContractError {
+    #[error("member index {index} shares its SystemState owner with another member")]
+    SharedStateOwner { index: usize },
     #[error("a scientific execution unit must expose at least one member")]
     EmptyExecutionUnit,
     #[error("execution unit did not expose declared member index {index}")]

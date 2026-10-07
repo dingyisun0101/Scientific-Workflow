@@ -6,11 +6,12 @@ The core module has no NumPy dependency. See api.md for the complete contract.
 from __future__ import annotations
 
 import copy
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, Iterator, TypeVar
+
+from ._snapshots import read as _read_snapshot
 
 
 class DependencyError(ValueError):
@@ -172,7 +173,7 @@ class Dependencies:
     def load(cls, path: str | Path) -> Dependencies:
         """Load an explicit snapshot; failures identify its expected path."""
         try:
-            return cls(json.loads(Path(path).read_text(encoding="utf-8")))
+            return cls(_read_snapshot(Path(path), "dependencies"))
         except (OSError, ValueError) as error:
             raise DependencyError(f"cannot load dependency snapshot {path}: {error}") from error
 

@@ -360,7 +360,8 @@ impl<'a> MemberView<'a> {
 /// not distinguish a standalone unit from a coordinated ensemble. A normal
 /// unit returns one [`MemberView`]; an ensemble returns one view per member and
 /// keeps all internal parallelism, shared inputs, and synchronization private.
-/// Each exposed member owns a distinct [`SystemState`].
+/// Each exposed member owns a distinct [`SystemState`]; Workflow rejects
+/// duplicate state addresses before beginning member recordings.
 ///
 /// Member count, index order, identities, state owners, and schema allocations
 /// must remain stable after initialization. One successful [`Self::step`] must

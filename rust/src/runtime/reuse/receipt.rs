@@ -1,6 +1,5 @@
-//! Private completed-task receipts and read-only import of legacy task outputs.
+//! Current completed-task receipts and verified task-owned input snapshots.
 
-use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -8,11 +7,13 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::persistence::{JsonPayloadDecoderRegistry, StoredStateSeriesReader};
+use crate::persistence::{
+    JsonPayloadDecoderRegistry, StoredStateSeriesReader, TaskInputReferences, TaskInputSnapshots,
+};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
-const FORMAT: &str = "scientific-workflow-task-result.v1";
+const FORMAT: &str = "scientific-workflow-task-result.v2";
 const RECEIPT: &str = "workflow-result.json";
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -23,16 +24,16 @@ pub(crate) struct CompletedTaskResult {
     pub(crate) configuration: usize,
     pub(crate) output_directory: PathBuf,
     pub(crate) workload: Value,
-    snapshot: Value,
+    inputs: TaskInputReferences,
 }
-
-pub(crate) type LegacyResults = BTreeMap<String, Vec<CompletedTaskResult>>;
 
 pub(crate) struct TaskReuseExpectation<'a> {
     pub(crate) identity: &'a str,
     pub(crate) configuration: usize,
     pub(crate) snapshot: &'a [u8],
     pub(crate) execution_unit: Option<&'a str>,
+    pub(crate) executable: Option<&'a Path>,
+    pub(crate) python_script: Option<&'a Path>,
     pub(crate) constants: Option<&'a Value>,
     pub(crate) state: Option<&'a str>,
     pub(crate) parameter_ordinal: Option<u64>,
@@ -104,118 +105,18 @@ fn comparable(mut snapshot: Value, npy_filter_is_input: bool) -> Value {
     snapshot
 }
 
-/// Captures authoritative legacy execution-unit summaries written to dependent programs.
-pub(crate) fn legacy_results(replicate: &Path) -> Result<LegacyResults> {
-    let mut results = LegacyResults::new();
-    for entry in fs::read_dir(replicate)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let directory = entry.path();
-        let dependencies = directory.join("workflow-dependencies.json");
-        if !dependencies.is_file() {
-            continue;
-        }
-        let snapshot = document(&directory.join("workflow-config.json"))?;
-        // Modern executions require a committed result receipt. Never treat an
-        // incomplete new phase as a legacy completed phase.
-        if snapshot["study"].get("active_phases").is_some() {
-            continue;
-        }
-        let dependencies = document(&dependencies)?;
-        let phases = dependencies
-            .as_array()
-            .ok_or_else(|| invalid("invalid dependency snapshot"))?;
-        for phase in phases {
-            let tasks = phase["tasks"]
-                .as_array()
-                .ok_or_else(|| invalid("invalid dependency tasks"))?;
-            for task in tasks {
-                let identity = task["identity"]
-                    .as_str()
-                    .ok_or_else(|| invalid("missing dependency identity"))?;
-                let output_directory = serde_json::from_value(task["output_directory"].clone())?;
-                results
-                    .entry(identity.to_owned())
-                    .or_default()
-                    .push(CompletedTaskResult {
-                        format: FORMAT.into(),
-                        identity: identity.into(),
-                        configuration: 0,
-                        output_directory,
-                        workload: task["workload"].clone(),
-                        snapshot: snapshot.clone(),
-                    });
-            }
-        }
-    }
-    Ok(results)
-}
-
-/// Loads a completed receipt, or the bounded legacy evidence needed by old studies.
+/// Loads only the current committed receipt and verifies its original input files.
 pub(crate) fn load_result(
     directory: &Path,
     expected: &TaskReuseExpectation<'_>,
-    legacy: &LegacyResults,
 ) -> Result<CompletedTaskResult> {
-    let snapshot = comparable(
-        serde_json::from_slice(expected.snapshot)?,
-        expected.npy_filter_is_input,
-    );
-    let receipt = directory.join(RECEIPT);
-    let result: CompletedTaskResult = if receipt.is_file() {
-        serde_json::from_value(document(&receipt)?)?
-    } else if expected.execution_unit.is_none() && expected.kind != "npy" {
-        let stored_snapshot = document(&directory.join("workflow-config.json"))?;
-        if stored_snapshot["study"].get("active_phases").is_some() {
-            return Err(invalid("phase has no committed task result"));
-        }
-        let program = document(&directory.join("program.json"))?;
-        CompletedTaskResult {
-            format: FORMAT.into(),
-            identity: expected.identity.into(),
-            configuration: expected.configuration,
-            output_directory: directory.to_path_buf(),
-            workload: serde_json::json!({
-                "kind": program["kind"], "executable": program["program"],
-                "python_script": program["python_script"],
-            }),
-            snapshot: stored_snapshot,
-        }
-    } else {
-        let mut candidates = legacy
-            .get(expected.identity)
-            .into_iter()
-            .flatten()
-            .filter(|result| {
-                comparable(result.snapshot.clone(), expected.npy_filter_is_input) == snapshot
-            });
-        let candidate = candidates.next().ok_or_else(|| {
-            invalid("no committed result or matching legacy dependent-program summary")
-        })?;
-        if candidates.any(|other| {
-            other.workload != candidate.workload
-                || other.output_directory != candidate.output_directory
-        }) {
-            return Err(invalid("ambiguous legacy completed-task summaries"));
-        }
-        let mut result = candidate.clone();
-        result.configuration = expected.configuration;
-        if fs::canonicalize(&result.output_directory)? != fs::canonicalize(directory)? {
-            return Err(invalid(
-                "legacy task directory does not match the planned output ordinal",
-            ));
-        }
-        result
-    };
+    let result: CompletedTaskResult = serde_json::from_value(document(&directory.join(RECEIPT))?)?;
     if result.format != FORMAT
         || result.identity.as_ref() != expected.identity
         || result.configuration != expected.configuration
-        || comparable(result.snapshot.clone(), expected.npy_filter_is_input) != snapshot
     {
         return Err(invalid(
-            "completed task identity or captured study inputs differ from this plan",
+            "unsupported receipt or completed task identity differs from this plan",
         ));
     }
     if !result.output_directory.is_absolute()
@@ -225,6 +126,17 @@ pub(crate) fn load_result(
         return Err(invalid(
             "completed output must be an existing absolute UTF-8 directory",
         ));
+    }
+    let [config, _] =
+        TaskInputSnapshots::verify_references(&result.output_directory, &result.inputs)?;
+    if comparable(
+        serde_json::from_slice(&config)?,
+        expected.npy_filter_is_input,
+    ) != comparable(
+        serde_json::from_slice(expected.snapshot)?,
+        expected.npy_filter_is_input,
+    ) {
+        return Err(invalid("captured study inputs differ from this plan"));
     }
     validate_result(&result, expected)?;
     Ok(result)
@@ -290,7 +202,10 @@ fn validate_result(
         }
     } else {
         let program = document(&result.output_directory.join("program.json"))?;
-        if program["format"] != "scientific-workflow-program-v1"
+        if program["format"] != "scientific-workflow-program-v2"
+            || serde_json::from_value::<TaskInputReferences>(program["inputs"].clone())?
+                != result.inputs
+            || program["kind"] != kind
             || program["status"] != "complete"
             || program["exit_code"] != 0
             || !result.output_directory.join("artifacts").is_dir()
@@ -299,11 +214,46 @@ fn validate_result(
                 "program output is missing or did not complete successfully",
             ));
         }
+        if kind == "program" {
+            let executable: PathBuf =
+                serde_json::from_value(result.workload["executable"].clone())?;
+            if Some(executable.as_path()) != expected.executable
+                || serde_json::from_value::<PathBuf>(program["program"].clone())? != executable
+            {
+                return Err(invalid(
+                    "completed resolved executable differs from this plan",
+                ));
+            }
+        } else if kind == "python" {
+            let script: PathBuf = serde_json::from_value(result.workload["python_script"].clone())?;
+            if Some(script.as_path()) != expected.python_script
+                || serde_json::from_value::<PathBuf>(program["python_script"].clone())? != script
+            {
+                return Err(invalid(
+                    "completed resolved scientific script differs from this plan",
+                ));
+            }
+        }
         if kind == "npy" {
             let processed: PathBuf =
                 serde_json::from_value(result.workload["processed_directory"].clone())?;
             if !processed.is_absolute() || processed.to_str().is_none() || !processed.is_dir() {
                 return Err(invalid("completed NumPy output is missing"));
+            }
+            let interpreter = expected
+                .executable
+                .ok_or_else(|| invalid("NPY plan has no interpreter"))?;
+            let probe = "import sys, json, scientific_workflow\nif scientific_workflow.__version__ != '0.6.0': raise RuntimeError('NPY reuse requires scientific-workflow[npy] 0.6.0')\nfrom scientific_workflow.npy import open_npy_batch\nbatch = open_npy_batch(sys.argv[1])\nwith open(sys.argv[2], encoding='utf-8') as source: config = json.load(source)\nexpected = sorted(config['study']['phases']['$npy'].get('exclude_streams', []))\nif batch.manifest['exclude_streams'] != expected: raise RuntimeError('completed NPY exclusions differ from captured input')";
+            let output = std::process::Command::new(interpreter)
+                .args(["-c", probe])
+                .arg(&processed)
+                .arg(result.output_directory.join("workflow-config.json"))
+                .output()?;
+            if !output.status.success() {
+                return Err(invalid(format!(
+                    "completed NPY batch verification failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
             }
         }
     }
@@ -317,7 +267,6 @@ pub(crate) fn write_result(
     configuration: usize,
     output_directory: &Path,
     workload: Value,
-    snapshot: &[u8],
 ) -> Result<()> {
     fs::create_dir_all(directory)?;
     let path = directory.join(RECEIPT);
@@ -330,7 +279,9 @@ pub(crate) fn write_result(
         configuration,
         output_directory: output_directory.to_path_buf(),
         workload,
-        snapshot: serde_json::from_slice(snapshot)?,
+        inputs: TaskInputSnapshots::open(output_directory)?
+            .references()
+            .clone(),
     };
     let temporary = directory.join(format!(".{RECEIPT}.tmp-{}", std::process::id()));
     let mut file = OpenOptions::new()

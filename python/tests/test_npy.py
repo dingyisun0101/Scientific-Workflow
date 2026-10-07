@@ -7,6 +7,8 @@ import shutil
 import tempfile
 import unittest
 
+from snapshot_fixture import seal_inputs
+
 import numpy as np
 
 from scientific_workflow import IntegrityError
@@ -282,7 +284,7 @@ class NpyConversionTests(unittest.TestCase):
             second = root / "second"
             shutil.copytree(FIXTURE, first)
             shutil.copytree(FIXTURE, second)
-            dependencies = root / "dependencies.json"
+            dependencies = root / "workflow-dependencies.json"
             dependencies.write_text(
                 json.dumps(
                     [
@@ -321,6 +323,7 @@ class NpyConversionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            seal_inputs(dependencies.parent)
             output = root / "processed"
 
             manifest = convert_workflow_dependencies(dependencies, output)
@@ -335,9 +338,6 @@ class NpyConversionTests(unittest.TestCase):
                 batch.members[0].reconstruct("signal", "label", 0), "start"
             )
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 class SeriesTests(unittest.TestCase):
     def test_fixed_and_ragged_views_reuse_maps_and_validate_indices(self):
@@ -372,8 +372,9 @@ class ParallelBatchTests(unittest.TestCase):
                 source = root / f"source-{n}"
                 shutil.copytree(FIXTURE, source)
                 sources.append(source)
-            deps = root / "deps.json"
+            deps = root / "workflow-dependencies.json"
             deps.write_text(json.dumps([{"phase":"run", "tasks":[{"identity":"t", "output_directory":str(root), "workload":{"kind":"execution_unit", "execution_unit":"fixture", "members":[{"identity":str(n), "final_iteration":1, "output_directory":str(source)} for n,source in enumerate(sources)]}}]}]))
+            seal_inputs(deps.parent)
             with patch.dict(os.environ, {"WORKFLOW_THREADS":"1"}):
                 serial = convert_workflow_dependencies(deps, root / "serial")
             with patch.dict(os.environ, {"WORKFLOW_THREADS":"2"}):
@@ -411,8 +412,9 @@ class ConversionControlTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "recording"
             shutil.copytree(FIXTURE, source)
-            deps = root / "deps.json"
+            deps = root / "workflow-dependencies.json"
             deps.write_text(json.dumps([{"phase":"run", "tasks":[{"identity":"t", "output_directory":str(root), "workload":{"kind":"execution_unit","execution_unit":"fixture","members":[{"identity":"one","final_iteration":1,"output_directory":str(source)}]}}]}]))
+            seal_inputs(deps.parent)
             control = root / "control.json"
             def write_control(paused, cancelled):
                 staged = control.with_suffix(".tmp")
@@ -454,7 +456,7 @@ class ConversionControlTests(unittest.TestCase):
             self.assertEqual(open_npy_conversion(root / "same").stream_names, ("signal",))
 
 class ParallelPauseTests(unittest.TestCase):
-    def test_active_spawn_workers_acknowledge_pause_and_cancel_without_success_batch(self):
+    def test_active_workers_acknowledge_pause_and_cancel_without_success_batch(self):
         import os
         import subprocess
         import sys
@@ -464,8 +466,9 @@ class ParallelPauseTests(unittest.TestCase):
             source = recording_with_fields(root, ["values"], [(n, float(n), [[float(n)] * 32]) for n in range(20000)])
             second = root / "second"
             shutil.copytree(source, second)
-            deps = root / "deps.json"
+            deps = root / "workflow-dependencies.json"
             deps.write_text(json.dumps([{"phase":"run","tasks":[{"identity":"t","output_directory":str(root),"workload":{"kind":"execution_unit","execution_unit":"fixture","members":[{"identity":str(n),"final_iteration":19999,"output_directory":str(path)} for n,path in enumerate((source, second))]}}]}]))
+            seal_inputs(deps.parent)
             control = root / "control.json"
             output = root / "output"
             def write(paused, cancelled):
@@ -492,3 +495,165 @@ class ParallelPauseTests(unittest.TestCase):
                     self.assertFalse((output / "manifest.json").exists())
                 finally:
                     if child.poll() is None: child.kill(); child.wait()
+
+
+class NumericIntegrityTests(unittest.TestCase):
+    def test_unrepresentable_integer_mixtures_retain_exact_json_and_projections(self):
+        values = [-1, 9223372036854775809]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = recording_with_fields(root, ["whole", "nested"], [
+                (0, 0.0, [values, {"numbers": values}]),
+            ])
+            from scientific_workflow import open_completed_recording
+            self.assertEqual(open_completed_recording(source).read_stream("signal")[0].values["whole"], values)
+            convert_recording(source, root / "processed")
+            conversion = open_npy_conversion(root / "processed")
+            self.assertEqual(conversion.reconstruct("signal", "whole", 0), values)
+            self.assertEqual(conversion.reconstruct("signal", "nested", 0), {"numbers": values})
+            with self.assertRaises(NpyConversionError):
+                conversion.series("signal", "whole")
+            with self.assertRaises(NpyConversionError):
+                conversion.projection("signal", "nested", "/numbers", 0)
+            self.assertEqual(int(conversion.projection("signal", "nested", "/numbers/1", 0)), values[1])
+
+    def test_large_integer_float_and_boolean_mixtures_are_lossless_fallbacks(self):
+        for value in ([9007199254740993, 1.0], [True, 1], [2**80, 1]):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = recording_with_fields(root, ["values"], [(0, 0.0, [value])])
+                convert_recording(source, root / "processed")
+                conversion = open_npy_conversion(root / "processed")
+                self.assertEqual(conversion.field("signal", "values")["representation"], "structured")
+                restored = conversion.reconstruct("signal", "values", 0)
+                self.assertEqual(restored, value)
+                self.assertEqual([type(item) for item in restored], [type(item) for item in value])
+
+    def test_numeric_scalars_and_scalar_envelopes_preserve_rank(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = recording_with_fields(root, ["scalar", "envelope", "nested"], [
+                (n, float(n), [value, {"scalar": "f64", "shape": [], "data": [value]}, {"energy": value, "label": "a"}])
+                for n, value in enumerate((3.25, 4.5))
+            ])
+            convert_recording(source, root / "processed")
+            conversion = open_npy_conversion(root / "processed")
+            for field in ("scalar", "envelope"):
+                self.assertEqual(conversion.field("signal", field)["dataset"]["rank"], 0)
+                self.assertEqual(conversion.series("signal", field).values.shape, (2,))
+                self.assertEqual(conversion.reconstruct("signal", field, 0).shape, ())
+            self.assertEqual(conversion.series("signal", "nested", "/energy").values.shape, (2,))
+
+    def test_declared_numeric_types_reject_coercion_and_overflow(self):
+        for scalar, data in (("i8", [1.9]), ("i8", [128]), ("u8", [-1]),
+                             ("bool", ["false"]), ("bool", [0]),
+                             ("f32", [1e100]), ("f64", [True])):
+            with self.subTest(scalar=scalar, data=data), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = recording_with_fields(root, ["typed"], [(0, 0.0, [{"scalar": scalar, "shape": [1], "data": data}])])
+                with self.assertRaises(NpyConversionError):
+                    convert_recording(source, root / "processed")
+                self.assertFalse((root / "processed").exists())
+                self.assertFalse(list(root.glob(".processed.tmp-*")))
+
+    def test_declared_float32_allows_its_normal_rounding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = recording_with_fields(root, ["typed"], [(0, 0.0, [{"scalar": "f32", "shape": [1], "data": [0.1]}])])
+            convert_recording(source, root / "processed")
+            result = open_npy_conversion(root / "processed").reconstruct("signal", "typed", 0)
+            self.assertEqual(result.dtype, np.dtype("float32"))
+            self.assertEqual(result[0], np.float32(0.1))
+
+
+class LayoutIntegrityTests(unittest.TestCase):
+    def test_role_ownership_missing_coordinates_and_legacy_formats_fail_at_open(self):
+        import copy
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = recording_with_fields(root, ["values"], [(0, 0.0, [[1., 2.]]), (1, 1.0, [[3., 4.]])])
+            output = root / "processed"
+            original = convert_recording(source, output)
+            mutations = (
+                lambda m: m.update(format="scientific-workflow-npy.v2"),
+                lambda m: m["arrays"][0].update(role="unused"),
+                lambda m: m["arrays"][-1].update(role="iterations"),
+                lambda m: m["arrays"][-1].update(stream="different"),
+                lambda m: m["arrays"][-1].update(logical_path="/wrong"),
+                lambda m: m["streams"][0].update(records=True),
+            )
+            for mutate in mutations:
+                manifest = copy.deepcopy(original)
+                mutate(manifest)
+                (output / "manifest.json").write_text(json.dumps(manifest))
+                with self.subTest(manifest=manifest), self.assertRaises(NpyConversionError):
+                    open_npy_conversion(output)
+
+    def test_coordinate_dtype_shape_order_and_finiteness_are_checked_independently_of_hashes(self):
+        mutations = (
+            ("iterations", np.array([0., 1.], dtype=np.float64)),
+            ("iterations", np.array([[0], [1]], dtype=np.uint64)),
+            ("iterations", np.array([0], dtype=np.uint64)),
+            ("iterations", np.array([1, 0], dtype=np.uint64)),
+            ("iterations", np.array([0, 0], dtype=np.uint64)),
+            ("physical_times", np.array([0., np.inf], dtype=np.float64)),
+        )
+        for role, value in mutations:
+            with self.subTest(role=role, value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = recording_with_fields(root, ["values"], [(0, 0.0, [[1.]]), (1, 1.0, [[2.]])])
+                output = root / "processed"
+                manifest = convert_recording(source, output)
+                descriptor = next(entry for entry in manifest["arrays"] if entry["role"] == role)
+                path = output / descriptor["path"]
+                np.save(path, value, allow_pickle=False)
+                descriptor.update(dtype=value.dtype.str, shape=list(value.shape), checksum="sha256:" + hashlib.sha256(path.read_bytes()).hexdigest())
+                (output / "manifest.json").write_text(json.dumps(manifest))
+                with self.assertRaises(NpyConversionError):
+                    open_npy_conversion(output)
+
+
+class RepeatedBatchControlTests(unittest.TestCase):
+    def test_later_batches_receive_current_control_configuration(self):
+        import os
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            shutil.copytree(FIXTURE, source)
+            second = root / "second"
+            shutil.copytree(source, second)
+            deps = root / "workflow-dependencies.json"
+            deps.write_text(json.dumps([{"phase": "run", "tasks": [{"identity": "t", "output_directory": str(root), "workload": {
+                "kind": "execution_unit", "execution_unit": "fixture", "members": [
+                    {"identity": str(n), "final_iteration": 2, "output_directory": str(path)} for n, path in enumerate((source, second))
+                ]}}]}]))
+            seal_inputs(root)
+            script = root / "batch_runner.py"
+            script.write_text('''import json, os, sys
+from pathlib import Path
+from scientific_workflow.npy import convert_workflow_dependencies, open_npy_batch
+def main():
+    root = Path(sys.argv[1])
+    os.environ["WORKFLOW_THREADS"] = "2"
+    first = root / "first-control.json"
+    second = root / "second-control.json"
+    for path in (first, second):
+        path.write_text(json.dumps({"paused": False, "cancelled": False}))
+    os.environ["WORKFLOW_CONTROL_PATH"] = str(first)
+    convert_workflow_dependencies(root / "workflow-dependencies.json", root / "first-output")
+    first.unlink()
+    os.environ["WORKFLOW_CONTROL_PATH"] = str(second)
+    convert_workflow_dependencies(root / "workflow-dependencies.json", root / "second-output")
+    assert len(open_npy_batch(root / "second-output").members) == 2
+if __name__ == "__main__":
+    main()
+''')
+            result = subprocess.run([sys.executable, str(script), str(root)], env=os.environ.copy(),
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,7 +1,10 @@
 # Scientific Workflow Python utilities
 
-> **BREAKING IMPORT CHANGE — 0.4.4:** use `scientific_workflow`; the old
-> `scientific_workflow_reader` namespace is not provided.
+> **BREAKING UPDATE — 0.6.0:** coordinated with Workflow 0.16.0, this release
+> writes and verifies NPY v3 only and requires durable captured-input checksum
+> evidence. It supersedes companion 0.5/NPY v2; there are no compatibility aliases
+> or historical-output migration mode. Downstream analysis owns v2/v3 reading.
+> Use `scientific_workflow`; `scientific_workflow_reader` is not provided.
 > **LINUX ONLY. Python 3.14+ REQUIRED.** Activate the environment containing
 > `scientific-workflow[npy]` before every Workflow launch, in every new shell.
 > **REQUIRED LAYOUT:** keep `<study>/wf_configs/study.json` and `parameters.json`.
@@ -27,7 +30,7 @@ Use the online [Python environment setup guide](https://github.com/dingyisun0101
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install \
-  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.15.0#subdirectory=python"
+  "scientific-workflow @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.16.0#subdirectory=python"
 ```
 
 Python 3.14 or newer is required. The core reader has no runtime dependencies.
@@ -36,10 +39,10 @@ Install the optional NumPy converter when a project uses Workflow's reserved
 
 ```bash
 python -m pip install \
-  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.15.0#subdirectory=python"
+  "scientific-workflow[npy] @ git+https://github.com/dingyisun0101/Scientific-Workflow.git@v0.16.0#subdirectory=python"
 ```
 
-This guide documents release 0.5.0.
+This guide documents release 0.6.0.
 
 ## Reading a recording
 
@@ -92,7 +95,7 @@ exception chained as their cause.
 - structurally read-only `StateField`, `StateRecord`, and `StateSeries`
 - typed exceptions rooted at `RecordingError`
 
-Release 0.5.0 supports
+Release 0.6.0 supports
 `scientific-workflow-jsonl` format versions 7 and 8, positional JSON payload encoding, JSON Lines
 framing, and `sha256:` chunk checksums. Unknown versions and algorithms fail
 closed.
@@ -168,6 +171,14 @@ accepts the same recording and `--output` arguments.
 
 Python callers may use
 `scientific_workflow.npy.convert_recording(recording, output=None)`.
+Numeric conversion preserves scalar rank and exact ordinary JSON values.
+When a common numeric dtype would round an integer or change a Boolean, the field
+retains its lossless JSON fallback; callers can reconstruct it, while a direct
+whole-field numeric series is unavailable. Numeric projections follow the same
+rule. Typed envelopes enforce declared kinds and ranges, permit normal `f32`/`f64`
+rounding, and reject overflow or nonfinite results. A scalar stream has array
+shape `(records,)`, rather than `(records, 1)`.
+
 The resulting member directory is valid only with its required
 `manifest.json`. Open and verify it before accessing arrays:
 
@@ -187,12 +198,27 @@ or file-name inference.
 
 Workflow itself invokes the same module in batch mode for the reserved `$npy`
 phase and publishes one member directory plus a
-`scientific-workflow-npy-batch.v2` manifest at the standard
+`scientific-workflow-npy-batch.v3` manifest at the standard
 `<execution>/processed/replicate-NNNNNN` path. Use
 `open_npy_batch()` to verify that manifest and every referenced member.
 
 The normative converted-data contract is
-[`protocol/npy-v2.md`](../protocol/npy-v2.md).
+[`protocol/npy-v3.md`](../protocol/npy-v3.md).
+
+Batch workers use Python's default or the application's selected multiprocessing
+context. Workflow does not change the global start method. The usual Linux/Python
+3.14 default is forkserver; native numeric pools remain limited to one thread in
+each worker. Direct parallel calls from scripts need an import-safe
+`if __name__ == "__main__":` entry point. Standard CLI entry points provide it.
+Readers, direct member conversion, and one-worker batches create no pool.
+
+Standard `project.parameters` and `Dependencies.load` calls verify both task-owned
+`workflow-config.json` and `workflow-dependencies.json` against sibling
+`workflow-inputs.json` hashes before returning decoded data. Existing program-v2
+or receipt-v2 `inputs` must agree with that sidecar. Missing evidence, changed
+bytes, old lifecycle metadata, and invalid paths fail contextually. Authored
+project files remain editable and are captured for each subsequent run. See the
+[API reference](src/scientific_workflow/api.md) for explicit snapshot contracts.
 
 ## Development
 
@@ -225,8 +251,8 @@ recordings, checkpoint production, member identities, and phase indices do not
 change. If every stream is excluded, a valid metadata-only member dataset is
 published.
 
-Both member and batch manifests retain a sorted `exclude_streams` list. Legacy
-v2 manifests without this field mean no exclusions. Reuse requires identical
+Both v3 member and batch manifests require a sorted `exclude_streams` list.
+Historical v2 interpretation belongs to downstream analysis. Reuse requires identical
 filters and source metadata; use a different output directory for a different
 selection. Serial and parallel conversion have the same filtering semantics.
 No shell interpretation or glob matching is performed.

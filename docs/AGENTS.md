@@ -280,15 +280,17 @@ does not divide a scientific record. Per-stream queues, payloads, converter
 workers, and analysis arrays all contribute to memory. Use a small scientific
 run plus a representative-size record check when scale makes this material.
 
-Workflow 0.15 requires an interactive dashboard; use `screen` or `tmux` for long
+Workflow 0.16 requires an interactive dashboard; use `screen` or `tmux` for long
 runs. The default disk pause requires freeing space and explicitly typing
 `resume`. Do not disable protection to hide a storage-planning problem.
 
 Omit `active_phases` for a full run. Use supported selection and `reuse_from`
 for compatible completed prerequisites. Do not add custom `--skip-simulation`
-or filename-existence shortcuts. Resource changes can preserve reuse; scientific
-inputs and relevant conversion filters must satisfy the documented compatibility
-checks. Never assume changing analysis JSON or a script guarantees reuse.
+or filename-existence shortcuts. Resource changes can preserve reuse; current v2 receipts and exact saved
+configuration/dependency snapshot checksums are required. Scientific inputs and
+relevant conversion filters must satisfy the documented compatibility checks.
+Workflow does not reconstruct older receipts; historical NPY v2/v3 interpretation
+belongs to downstream analysis. Never assume changing analysis JSON or a script guarantees reuse.
 `--clean` removes all output contents after guarded preflight, not just one run.
 
 ## 12. Validate the claim, then report the evidence

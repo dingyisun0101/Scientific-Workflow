@@ -25,9 +25,10 @@
 //! tensor containers.
 //!
 //! Explicitly cloning a `SystemState` is different: it shares the immutable
-//! specification but deep-clones every populated payload. Persistence should
-//! borrow a live state during synchronous serialization rather than invoke
-//! this expensive clone.
+//! specification and invokes `Clone` for every populated payload. Each payload
+//! type determines whether its backing storage is copied or shared. Independent
+//! scientific branches require clone semantics that isolate later mutations.
+//! Persistence should borrow a live state during synchronous serialization.
 //!
 //! # Mutation
 //!
@@ -722,7 +723,10 @@ impl_state_tuple!(
 );
 
 impl Clone for SystemState {
-    /// Shares the immutable specification and deep-clones populated payloads.
+    /// Shares the schema and invokes each populated payload's `Clone`.
+    ///
+    /// Payload-defined cloning may copy or share backing storage. This method
+    /// does not guarantee independent mutable scientific values.
     fn clone(&self) -> Self {
         Self {
             spec: self.spec.clone(),

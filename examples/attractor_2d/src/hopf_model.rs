@@ -57,7 +57,7 @@ impl ExecutionUnit for HopfModel {
     ///
     /// `Study::load` calls `preflight` with decoded constants and the selected
     /// state schema before Runtime creates output or starts the model. This
-    /// model needs no extra domain or schema checks, so `_schema` is unused; the
+    /// model checks finite coefficients and a positive finite timestep; the
     /// observation builders validate stream names, field selections, and
     /// sampling intervals while constructing the complete recording plan.
     /// Workflow then binds that plan to the schema and rejects missing fields.
@@ -68,6 +68,20 @@ impl ExecutionUnit for HopfModel {
         constants: &Self::Constants,
         _schema: &SystemStateSchema,
     ) -> UnitResult<ObservationPlan> {
+        if constants
+            .initial_point
+            .iter()
+            .any(|value| !value.is_finite())
+            || !constants.initial_point[0]
+                .hypot(constants.initial_point[1])
+                .is_finite()
+            || !constants.mu.is_finite()
+            || !constants.angular_frequency.is_finite()
+            || !constants.physical_time_increment_per_step.is_finite()
+            || constants.physical_time_increment_per_step <= 0.0
+        {
+            return Err("Hopf coefficients and initial point must be finite; timestep must be positive and finite".into());
+        }
         Ok(ObservationPlan::streams([
             ObservationStream::fields("trajectory", [POINT_FIELD])?
                 .every_iterations(constants.trajectory_sampling_interval)?,
@@ -140,6 +154,10 @@ impl ExecutionUnit for HopfModel {
     /// payload updates succeed, then applies the example-only dashboard delay.
     /// An error stops the task and is recorded by Workflow.
     fn step(&mut self) -> UnitResult {
+        let next_time = self
+            .state
+            .time()
+            .checked_advance(Some(self.constants.physical_time_increment_per_step))?;
         {
             // A tuple borrow gives simultaneous mutable access to two
             // distinct slots while preserving SystemState's aliasing rules.
@@ -158,20 +176,114 @@ impl ExecutionUnit for HopfModel {
                 self.constants.angular_frequency * x + self.constants.mu * y - radius_squared * y;
             let next_x = x + self.constants.physical_time_increment_per_step * dx;
             let next_y = y + self.constants.physical_time_increment_per_step * dy;
+            let next_radius = next_x.hypot(next_y);
+
+            if !next_x.is_finite() || !next_y.is_finite() || !next_radius.is_finite() {
+                return Err("Hopf Euler step produced a nonfinite point or radius".into());
+            }
 
             point[0] = next_x;
             point[1] = next_y;
-            *radius = next_x.hypot(next_y);
+            *radius = next_radius;
         }
 
-        // Time advances only after every scientific payload was updated
-        // successfully, so the timestamp always describes the stored state.
-        self.state
-            .advance_time(Some(self.constants.physical_time_increment_per_step))?;
+        // The next time and payloads were validated before any assignment.
+        // Committing time cannot fail after the scientific payloads change.
+        self.state.replace_time(next_time);
 
         // Keep this presentation delay: without it, the bundled calculation
         // finishes too quickly for developers to inspect the live dashboard.
         std::thread::sleep(Self::DEMONSTRATION_STEP_DELAY);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(point: [f64; 2], timestep: f64, time: StateTime) -> HopfModel {
+        let schema = SystemStateSchema::load_json_template(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("wf_configs/states/attractor.json"),
+        )
+        .unwrap();
+        let mut state = schema.create_empty_state(time);
+        state
+            .initialize_payload(POINT_FIELD, point.to_vec())
+            .unwrap();
+        state
+            .initialize_payload(RADIUS_FIELD, point[0].hypot(point[1]))
+            .unwrap();
+        HopfModel {
+            state,
+            constants: AttractorConstants {
+                initial_point: point,
+                physical_time_increment_per_step: timestep,
+                step_count: 2,
+                trajectory_sampling_interval: 1,
+                radius_sampling_interval: 1,
+                checkpoint_sampling_interval: 1,
+                mu: 1.0,
+                angular_frequency: 1.0,
+            },
+        }
+    }
+
+    fn time(physical: f64) -> StateTime {
+        StateTime::from_iteration_and_physical_time(0, physical).unwrap()
+    }
+
+    #[test]
+    fn euler_step_uses_the_same_pre_step_point_and_commits_matching_time() {
+        let mut model = model([0.25, 0.0], 0.01, time(0.0));
+        model.step().unwrap();
+        let point = model.state.payload::<Vec<f64>>(POINT_FIELD).unwrap();
+        assert_eq!(point, &[0.25234375, 0.0025]);
+        assert_eq!(
+            *model.state.payload::<f64>(RADIUS_FIELD).unwrap(),
+            point[0].hypot(point[1])
+        );
+        assert_eq!(
+            model.state.time(),
+            StateTime::from_iteration_and_physical_time(1, 0.01).unwrap()
+        );
+    }
+
+    #[test]
+    fn rejected_euler_or_time_advance_preserves_the_complete_state() {
+        for mut model in [
+            model([1e200, 1.0], 0.01, time(0.0)),
+            model([0.25, 0.0], f64::MAX, time(f64::MAX)),
+        ] {
+            let before_point = model
+                .state
+                .payload::<Vec<f64>>(POINT_FIELD)
+                .unwrap()
+                .clone();
+            let before_radius = *model.state.payload::<f64>(RADIUS_FIELD).unwrap();
+            let before_time = model.state.time();
+            assert!(model.step().is_err());
+            assert_eq!(
+                model.state.payload::<Vec<f64>>(POINT_FIELD).unwrap(),
+                &before_point
+            );
+            assert_eq!(
+                *model.state.payload::<f64>(RADIUS_FIELD).unwrap(),
+                before_radius
+            );
+            assert_eq!(model.state.time(), before_time);
+        }
+    }
+
+    #[test]
+    fn preflight_rejects_invalid_timestep_and_initial_radius() {
+        for model in [
+            model([0.25, 0.0], 0.0, time(0.0)),
+            model([0.25, 0.0], -0.01, time(0.0)),
+            model([f64::MAX, f64::MAX], 0.01, time(0.0)),
+        ] {
+            assert!(HopfModel::preflight(&model.constants, model.state.schema()).is_err());
+        }
     }
 }

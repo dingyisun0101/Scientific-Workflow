@@ -1,6 +1,6 @@
 # Persistence API
 
-This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
 
 The `persistence` subsystem owns every Workflow-managed durable task output and
 verified member-state reconstruction. Config parses optional operational sizing,
@@ -64,7 +64,8 @@ task-NNNNNN/
 └── artifacts/
 ```
 
-`program.json` is atomically replaced from `running` to `complete` or `failed`
+`program.json` uses `scientific-workflow-program-v2`, with required `inputs`
+checksum references described below. It is atomically replaced from `running` to `complete` or `failed`
 and records `kind` (`program`, `python`, or Workflow's synthesized `npy`), the resolved launcher executable,
 arguments, the authoritative `threads` count, exit code/reason, format name,
 and fixed workspace filenames. Each
@@ -347,37 +348,50 @@ wall time; paused execution budgets are separately owned by Runtime.
 
 ## Completed task reuse
 
-Runtime's private `reuse` subsystem owns atomic completed-task receipts and the
-read-only legacy import adapter. Persistence supplies its verified recording and
-program-workspace readers. Runtime supplies semantic task identities,
-configuration snapshots, and workload results only after phase success.
-Receipts preserve original output paths when a task is reused; they do not copy
-scientific artifacts or reopen any writer. Import compares captured inputs
-(excluding phase selection and reuse source), validates successful program
-status, and uses `StoredStateSeriesReader::open_completed_recording` to check
-member completion and metadata provenance. Ordinary readers still verify chunk
-contents on consumption. Legacy unit final iterations come from captured
-dependency summaries, never inferred observation cadence. Missing modern
-receipts are failures, not an invitation to fall back to incomplete outputs.
-Receipt IO failures preserve their source error under `RuntimeError::Task`;
-import failures become contextual `RuntimeError::Reuse` errors.
-No public write handle, serialization trait, or recording-format change is added.
+Runtime's private `reuse` subsystem owns atomic current v2 completed-task
+receipts. Persistence's private `TaskInputSnapshots` mechanism owns uniform
+task-level config/dependency files and checksum evidence. Runtime supplies
+semantic task identities and workload results only after phase success.
 
-For Rust 0.13.11, Runtime also supplies whether the imported phase is `$npy`
-or has `$npy` as a transitive prerequisite. Only when it is neither does
-Persistence omit `study.phases.$npy.exclude_streams` from snapshot comparison.
-This applies equally to committed receipts and legacy matching. All other
-snapshot values, scientific parameters, workload identities, completion markers,
-and member provenance still must match. NPY and its consumers retain exact
-filter identity; source receipts and recordings are never rewritten.
+Receipts preserve original output paths and checksum references when a task is
+reused; they do not copy scientific artifacts or reopen writers. Import verifies
+both source snapshot files, compares scientific inputs separately from operational
+settings, validates successful v2 program status, and uses
+`StoredStateSeriesReader::open_completed_recording` to check member completion and
+metadata provenance. Ordinary readers verify raw chunks on consumption. NPY reuse
+fully verifies current v3 batches through the coordinated Python reader. Older,
+missing, or unsupported receipts fail; there is no historical import adapter.
 
+Only when the imported phase is neither `$npy` nor a transitive consumer may
+comparison omit `study.phases.$npy.exclude_streams`. Scientific parameters,
+schemas, seeds, ordinary executable/scientific-script paths, arguments, replicate
+count, phase dependencies, and member provenance still must match. Allocation,
+scheduling, timeouts, buffering, disk policy, and Python launcher/environment
+settings remain operational provenance. Snapshot checksum verification is always
+exact, even where parsed compatibility omits operational values.
 
 ## JSON lifecycle guarantees
 
 Source configuration is captured once and source edits affect subsequent runs.
-Generated `workflow-config.json` and `workflow-dependencies.json` are checked
-against their captured byte digests during execution and before program success;
-a changed or missing file fails the task. Runtime control JSON is mutable IPC.
+Every task records `workflow-config.json` and `workflow-dependencies.json`
+at its task root. Program sessions write them before launch; execution units
+write them when the first member recording starts, before steps and completion.
+`workflow-inputs.json` has strict format `scientific-workflow-inputs.v1` and
+`config`/`dependencies` descriptors of the form
+`{"path":"workflow-config.json","checksum":"sha256:<64 lowercase hex>"}`.
+The dependency descriptor uses `workflow-dependencies.json`. Descriptors permit
+only these exact filenames, and reject malformed checksums/unknown fields.
+Program-v2 metadata and task-result-v2 receipts require the same object under
+`inputs`; receipts no longer embed an independent parsed snapshot authority.
+
+`TaskInputSnapshots` retains creation-time descriptors in memory, checks them
+against the durable sidecar, and verifies both files before completion. Program
+monitoring also checks them during execution. Supported snapshot reads and reuse
+verify bytes and consistency with current program/receipt references when present;
+missing files, old metadata, or mismatched evidence fail. Authored project JSON
+may change for subsequent runs and is never overwritten by these mechanisms.
+This adds task sidecars, not raw metadata structural keys: recordings remain v7/v8.
+Runtime control JSON is mutable IPC.
 Active recording/program metadata may advance to one terminal state, which the
 writer cannot subsequently replace. Completed task receipts and NPY batch
 manifests use publication that refuses replacement. A verified matching NPY

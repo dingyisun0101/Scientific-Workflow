@@ -13,11 +13,13 @@ from typing import Any
 import numpy as np
 
 from .. import _control
+from .._json import decode as _decode_json
 
-NPY_FORMAT = "scientific-workflow-npy.v2"
-NPY_BATCH_FORMAT = "scientific-workflow-npy-batch.v2"
+NPY_FORMAT = "scientific-workflow-npy.v3"
+NPY_BATCH_FORMAT = "scientific-workflow-npy-batch.v3"
 MANIFEST_FILE = "manifest.json"
 JsonPath = tuple[str, ...]
+_CHECKSUM = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 class NpyConversionError(ValueError):
     """A recording or converted dataset violates the NPY contract."""
@@ -37,10 +39,13 @@ def _normalize_exclusions(names: Iterable[str]) -> tuple[str, ...]:
 
 
 def _manifest_exclusions(document: Mapping[str, object]) -> tuple[str, ...]:
-    names = document.get("exclude_streams", [])
+    names = document.get("exclude_streams")
     if not isinstance(names, list):
         raise NpyConversionError("manifest exclude_streams must be an array")
-    return _normalize_exclusions(names)
+    canonical = _normalize_exclusions(names)
+    if list(canonical) != names:
+        raise NpyConversionError("manifest exclude_streams must be sorted")
+    return canonical
 
 
 def _sha256(path: Path) -> str:
@@ -73,8 +78,8 @@ def _write_json(path: Path, document: Mapping[str, object]) -> None:
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        document = _decode_json(path.read_bytes())
+    except (OSError, UnicodeError, ValueError) as error:
         raise NpyConversionError(f"cannot read conversion manifest {path}") from error
     if not isinstance(document, dict):
         raise NpyConversionError(f"conversion manifest must be an object: {path}")
@@ -85,7 +90,11 @@ def _component_path(root: Path, value: object) -> Path:
     if not isinstance(value, str):
         raise NpyConversionError("array descriptor path must be a string")
     path = Path(value)
-    if path.is_absolute() or ".." in path.parts:
+    if (
+        path.is_absolute()
+        or "\\" in value
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+    ):
         raise NpyConversionError(f"array path is not safe and relative: {value!r}")
     try:
         resolved = (root / path).resolve(strict=True)
@@ -96,23 +105,63 @@ def _component_path(root: Path, value: object) -> Path:
     return resolved
 
 
-def _validate_arrays(root: Path, document: Mapping[str, object]) -> None:
+def _keys(value: Mapping[str, object], required: set[str], optional: set[str], context: str) -> None:
+    missing = required - value.keys()
+    unknown = value.keys() - required - optional
+    if missing or unknown:
+        raise NpyConversionError(
+            f"{context} has missing keys {sorted(missing)} and unknown keys {sorted(unknown)}"
+        )
+
+
+def _uint(value: object, context: str, *, positive: bool = False) -> int:
+    if type(value) is not int or not (int(positive) <= value <= 2**64 - 1):
+        raise NpyConversionError(f"{context} must be a {'positive ' if positive else ''}u64")
+    return value
+
+
+def _absolute_source(value: object) -> None:
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise NpyConversionError("source_recording must be an absolute path")
+
+
+def _checksum(value: object, context: str) -> None:
+    if not isinstance(value, str) or _CHECKSUM.fullmatch(value) is None:
+        raise NpyConversionError(f"{context} must be a SHA-256 checksum")
+
+
+def _validate_arrays(root: Path, document: Mapping[str, object]) -> dict[str, np.ndarray[Any, Any]]:
     arrays = document.get("arrays")
     if not isinstance(arrays, list):
         raise NpyConversionError("conversion manifest arrays must be an array")
-    seen: set[str] = set()
+    loaded = {}
+    resolved_paths: set[Path] = set()
     for raw in arrays:
         if not isinstance(raw, dict):
             raise NpyConversionError("conversion array descriptor must be an object")
-        relative = raw.get("path")
-        if not isinstance(relative, str) or relative in seen:
+        _keys(raw, {"role", "stream", "path", "dtype", "shape", "c_contiguous", "checksum"},
+              {"field", "logical_path"}, "array descriptor")
+        relative = raw["path"]
+        if not isinstance(relative, str) or relative in loaded:
             raise NpyConversionError("conversion array paths must be unique strings")
-        seen.add(relative)
         path = _component_path(root, relative)
+        if path.suffix != ".npy" or not path.is_file():
+            raise NpyConversionError("array component must be one .npy file")
+        if path in resolved_paths:
+            raise NpyConversionError("conversion array paths alias the same component")
+        resolved_paths.add(path)
+        _checksum(raw["checksum"], "array checksum")
+        if not isinstance(raw["shape"], list):
+            raise NpyConversionError("array descriptor shape must be an array")
+        for extent in raw["shape"]:
+            _uint(extent, "array extent")
         try:
             array = np.load(path, mmap_mode="r", allow_pickle=False)
         except (OSError, ValueError) as error:
             raise NpyConversionError(f"cannot open converted array: {path}") from error
+        if not isinstance(array, np.ndarray):
+            array.close()
+            raise NpyConversionError(f"component is not one NPY array: {path}")
         if (
             array.dtype.str != raw.get("dtype")
             or list(array.shape) != raw.get("shape")
@@ -121,17 +170,31 @@ def _validate_arrays(root: Path, document: Mapping[str, object]) -> None:
             or _sha256(path) != raw.get("checksum")
         ):
             raise NpyConversionError(f"converted array does not match manifest: {path}")
+        loaded[relative] = array
+    return loaded
 
 
-def _declared_component(
-    root: Path, declared: set[str], dataset: Mapping[str, object], key: str
-) -> np.ndarray[Any, Any]:
-    relative = dataset.get(key)
-    if not isinstance(relative, str) or relative not in declared:
-        raise NpyConversionError(f"dataset {key!r} must name a declared array")
-    return np.load(
-        _component_path(root, relative), mmap_mode="r", allow_pickle=False
-    )
+def _finite(array: np.ndarray[Any, Any], context: str) -> None:
+    flat = array.reshape(-1)
+    for start in range(0, len(flat), 65536):
+        _control.checkpoint()
+        if not np.all(np.isfinite(flat[start:start + 65536])):
+            raise NpyConversionError(f"{context} contains nonfinite values")
+
+
+def _ordered(array: np.ndarray[Any, Any], *, strict: bool, context: str) -> None:
+    previous = None
+    for start in range(0, len(array), 65536):
+        _control.checkpoint()
+        part = array[start:start + 65536]
+        if not len(part):
+            continue
+        if previous is not None and (part[0] <= previous if strict else part[0] < previous):
+            raise NpyConversionError(f"{context} are not ordered")
+        invalid = part[1:] <= part[:-1] if strict else part[1:] < part[:-1]
+        if np.any(invalid):
+            raise NpyConversionError(f"{context} are not ordered")
+        previous = part[-1]
 
 
 def _validate_offsets(offsets: np.ndarray[Any, Any], count: int, size: int) -> None:
@@ -139,13 +202,11 @@ def _validate_offsets(offsets: np.ndarray[Any, Any], count: int, size: int) -> N
         raise NpyConversionError("offsets must be a uint64 array of record_count + 1")
     if int(offsets[0]) != 0 or int(offsets[-1]) != size:
         raise NpyConversionError("offsets do not span their complete data array")
-    if np.any(offsets[1:] < offsets[:-1]):
-        raise NpyConversionError("offsets must be nondecreasing")
+    _ordered(offsets, strict=False, context="offsets")
 
 
 def _validate_numeric_dataset(
-    root: Path,
-    declared: set[str],
+    component,
     dataset: Mapping[str, object],
     count: int,
 ) -> None:
@@ -156,21 +217,28 @@ def _validate_numeric_dataset(
         raise NpyConversionError("numeric dataset dtype must be a string")
     if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
         raise NpyConversionError("numeric dataset rank must be unsigned")
-    data = _declared_component(root, declared, dataset, "data")
+    _keys(dataset, {"logical_path", "storage", "dtype", "rank", "data"},
+          {"offsets", "shapes"} if storage == "ragged" else set(), "numeric dataset")
+    data = component(dataset, "data", "")
     if data.dtype.str != dtype:
         raise NpyConversionError("numeric dataset dtype differs from its data array")
+    if data.dtype.kind not in {"b", "i", "u", "f"}:
+        raise NpyConversionError("numeric data must have Boolean, integer, or float dtype")
+    if data.dtype.kind == "f":
+        _finite(data, "numeric data")
     if storage == "fixed":
         if data.ndim != rank + 1 or data.shape[0] != count:
             raise NpyConversionError("fixed dataset shape does not match rank and records")
         return
     if storage != "ragged" or data.ndim != 1:
         raise NpyConversionError(f"unknown or invalid numeric storage mode: {storage!r}")
-    offsets = _declared_component(root, declared, dataset, "offsets")
-    shapes = _declared_component(root, declared, dataset, "shapes")
+    offsets = component(dataset, "offsets", "_offsets")
+    shapes = component(dataset, "shapes", "_shapes")
     _validate_offsets(offsets, count, len(data))
     if shapes.dtype != np.dtype("uint64") or shapes.shape != (count, rank):
         raise NpyConversionError("ragged shapes must be uint64 with record/rank shape")
     for index in range(count):
+        _control.checkpoint()
         elements = math.prod(int(extent) for extent in shapes[index])
         if int(offsets[index + 1]) - int(offsets[index]) != elements:
             raise NpyConversionError(
@@ -179,53 +247,95 @@ def _validate_numeric_dataset(
 
 
 def _validate_json_fallback(
-    root: Path,
-    declared: set[str],
+    component,
     fallback: Mapping[str, object],
     count: int,
 ) -> None:
     if fallback.get("storage") != "json_bytes" or fallback.get("encoding") != "utf-8-json":
         raise NpyConversionError("structured fallback must use UTF-8 JSON bytes")
-    data = _declared_component(root, declared, fallback, "data")
-    offsets = _declared_component(root, declared, fallback, "offsets")
+    _keys(fallback, {"storage", "encoding", "data", "offsets"}, set(), "JSON fallback")
+    data = component(fallback, "data", "")
+    offsets = component(fallback, "offsets", "_offsets")
     if data.dtype != np.dtype("uint8") or data.ndim != 1:
         raise NpyConversionError("structured fallback data must be flat uint8")
     _validate_offsets(offsets, count, len(data))
     for index in range(count):
         start, stop = int(offsets[index]), int(offsets[index + 1])
         try:
-            json.loads(bytes(data[start:stop]).decode("utf-8"))
-        except (UnicodeError, json.JSONDecodeError) as error:
+            _control.checkpoint()
+            _decode_json(bytes(data[start:stop]))
+        except (UnicodeError, ValueError) as error:
             raise NpyConversionError(
                 f"structured fallback record {index} is not valid JSON"
             ) from error
 
 
-def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
+def _validate_layout(document: Mapping[str, object], loaded: Mapping[str, np.ndarray[Any, Any]]) -> None:
+    _keys(document, {"format", "source_format", "source_version", "source_recording",
+                     "source_metadata_checksum", "exclude_streams", "user_metadata",
+                     "terminal_metadata", "streams", "arrays"}, set(), "member manifest")
+    if document["source_format"] != "scientific-workflow-jsonl" or (
+        type(document["source_version"]) is not int or document["source_version"] not in (7, 8)
+    ):
+        raise NpyConversionError("member source must be a format-7/8 Workflow recording")
+    _absolute_source(document["source_recording"])
+    _checksum(document["source_metadata_checksum"], "source metadata checksum")
+    for key in ("user_metadata", "terminal_metadata"):
+        if not isinstance(document[key], dict):
+            raise NpyConversionError(f"{key} must be an object")
     excluded = _manifest_exclusions(document)
     arrays = document.get("arrays")
     streams = document.get("streams")
     if not isinstance(arrays, list) or not isinstance(streams, list):
         raise NpyConversionError("conversion manifest arrays and streams must be arrays")
-    declared = {
-        descriptor["path"]
-        for descriptor in arrays
-        if isinstance(descriptor, dict) and isinstance(descriptor.get("path"), str)
-    }
+    descriptors = {descriptor["path"]: descriptor for descriptor in arrays}
+    used: set[str] = set()
+
+    def claim(relative, role, stream, field=None, logical_path=None):
+        if not isinstance(relative, str) or relative not in loaded:
+            raise NpyConversionError("dataset must name a declared array")
+        if relative in used:
+            raise NpyConversionError("array component has more than one dataset owner")
+        descriptor = descriptors[relative]
+        expected = {"role": role, "stream": stream}
+        for key, value in (("field", field), ("logical_path", logical_path)):
+            if value is None:
+                if key in descriptor:
+                    raise NpyConversionError(f"array role {role!r} must not contain {key}")
+            else:
+                expected[key] = value
+        if any(descriptor.get(key) != value for key, value in expected.items()):
+            raise NpyConversionError("array descriptor role or ownership differs from dataset")
+        used.add(relative)
+        return loaded[relative]
     stream_names: set[str] = set()
     for stream in streams:
         if not isinstance(stream, Mapping):
             raise NpyConversionError("converted stream metadata must be an object")
+        _keys(stream, {"name", "records", "fields"}, set(), "converted stream")
         name = stream.get("name")
         count = stream.get("records")
         fields = stream.get("fields")
-        if not isinstance(name, str) or not name or name in stream_names:
+        if not isinstance(name, str) or not name.strip() or name in stream_names:
             raise NpyConversionError("converted stream names must be unique nonempty strings")
         if name in excluded:
             raise NpyConversionError(f"excluded stream is present in converted output: {name!r}")
         stream_names.add(name)
-        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
-            raise NpyConversionError("converted stream record count must be positive")
+        _uint(count, "converted stream record count", positive=True)
+        for role in ("iterations", "physical_times"):
+            matches = [entry for entry in arrays if entry.get("stream") == name and entry.get("role") == role]
+            if role == "physical_times" and not matches:
+                continue
+            if len(matches) != 1:
+                raise NpyConversionError(f"stream {name!r} requires exactly one {role} array")
+            coordinate = claim(matches[0]["path"], role, name)
+            expected_dtype = np.dtype("uint64" if role == "iterations" else "float64")
+            if coordinate.dtype != expected_dtype or coordinate.shape != (count,):
+                raise NpyConversionError(f"{role} must be a {expected_dtype} vector aligned to records")
+            if role == "iterations":
+                _ordered(coordinate, strict=True, context="iterations")
+            else:
+                _finite(coordinate, "physical times")
         if not isinstance(fields, list) or not fields:
             raise NpyConversionError("converted stream fields must be a nonempty array")
         field_names: set[str] = set()
@@ -235,7 +345,7 @@ def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
             field_name = field.get("name")
             if (
                 not isinstance(field_name, str)
-                or not field_name
+                or not field_name.strip()
                 or field_name in field_names
             ):
                 raise NpyConversionError(
@@ -243,11 +353,20 @@ def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
                 )
             field_names.add(field_name)
             representation = field.get("representation")
+            _keys(field, {"name", "representation", "dataset"} if representation == "numeric"
+                  else {"name", "representation", "fallback", "projections"}, set(), "converted field")
+
+            def numeric_component(dataset, key, suffix):
+                logical = dataset.get("logical_path")
+                role = "field_data" if representation == "numeric" else "projection_data"
+                return claim(dataset.get(key), role + suffix, name, field_name, logical)
             if representation == "numeric":
                 dataset = field.get("dataset")
                 if not isinstance(dataset, Mapping):
                     raise NpyConversionError("numeric field must contain dataset metadata")
-                _validate_numeric_dataset(root, declared, dataset, count)
+                if dataset.get("logical_path") != "":
+                    raise NpyConversionError("whole numeric field logical_path must be empty")
+                _validate_numeric_dataset(numeric_component, dataset, count)
                 continue
             if representation != "structured":
                 raise NpyConversionError(
@@ -259,7 +378,11 @@ def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
                 raise NpyConversionError(
                     "structured field must contain fallback and projection metadata"
                 )
-            _validate_json_fallback(root, declared, fallback, count)
+            def json_component(dataset, key, suffix):
+                role = "json_data" if key == "data" else "json_offsets"
+                return claim(dataset.get(key), role, name, field_name)
+
+            _validate_json_fallback(json_component, fallback, count)
             paths: set[str] = set()
             for projection in projections:
                 if not isinstance(projection, Mapping):
@@ -267,8 +390,12 @@ def _validate_layout(root: Path, document: Mapping[str, object]) -> None:
                 path = projection.get("logical_path")
                 if not isinstance(path, str) or path in paths:
                     raise NpyConversionError("numeric projection paths must be unique strings")
+                if path and (not path.startswith("/") or re.search(r"~(?![01])", path)):
+                    raise NpyConversionError("numeric projection path must be an escaped JSON pointer")
                 paths.add(path)
-                _validate_numeric_dataset(root, declared, projection, count)
+                _validate_numeric_dataset(numeric_component, projection, count)
+    if used != loaded.keys():
+        raise NpyConversionError("manifest contains an unowned or unknown-role array component")
 
 
 def _existing(
@@ -281,7 +408,7 @@ def _existing(
     if not manifest_path.is_file():
         return None
     try:
-        document = _read_json(manifest_path)
+        document = open_npy_conversion(output).manifest
         if (
             document.get("format") != NPY_FORMAT
             or document.get("source_recording") != str(recording)
@@ -289,8 +416,6 @@ def _existing(
             or _manifest_exclusions(document) != exclude_streams
         ):
             return None
-        _validate_arrays(output, document)
-        _validate_layout(output, document)
     except NpyConversionError:
         return None
     return document
@@ -443,8 +568,8 @@ class NpyConversion:
         _check_record(record, len(offsets) - 1)
         start, stop = int(offsets[record]), int(offsets[record + 1])
         try:
-            return json.loads(bytes(data[start:stop]).decode("utf-8"))
-        except (UnicodeError, json.JSONDecodeError) as error:
+            return _decode_json(bytes(data[start:stop]))
+        except (UnicodeError, ValueError) as error:
             raise NpyConversionError("structured field fallback is not valid JSON") from error
 
     def projection(
@@ -511,9 +636,11 @@ def open_npy_conversion(directory: str | Path) -> NpyConversion:
         )
     if not isinstance(manifest.get("streams"), list):
         raise NpyConversionError("conversion manifest streams must be an array")
-    _validate_arrays(root, manifest)
-    _validate_layout(root, manifest)
-    return NpyConversion(root, manifest)
+    arrays = _validate_arrays(root, manifest)
+    _validate_layout(manifest, arrays)
+    conversion = NpyConversion(root, manifest)
+    conversion._arrays = arrays
+    return conversion
 
 
 def open_npy_batch(directory: str | Path) -> NpyBatch:
@@ -526,20 +653,32 @@ def open_npy_batch(directory: str | Path) -> NpyBatch:
         raise NpyConversionError(
             f"unsupported NPY batch format: {manifest.get('format')!r}"
         )
+    _keys(manifest, {"format", "exclude_streams", "members"}, set(), "batch manifest")
     excluded = _manifest_exclusions(manifest)
     entries = manifest.get("members")
     if not isinstance(entries, list) or not entries:
         raise NpyConversionError("NPY batch members must be a nonempty array")
     members: list[NpyConversion] = []
     seen: set[str] = set()
+    sources: set[str] = set()
     for ordinal, entry in enumerate(entries):
-        if not isinstance(entry, Mapping) or entry.get("ordinal") != ordinal:
+        if not isinstance(entry, Mapping):
+            raise NpyConversionError("NPY batch member must be an object")
+        _keys(entry, {"ordinal", "source_recording", "manifest", "manifest_checksum"}, set(), "batch member")
+        if _uint(entry["ordinal"], "batch member ordinal") != ordinal:
             raise NpyConversionError("NPY batch member ordinals must be contiguous")
+        _absolute_source(entry["source_recording"])
+        if entry["source_recording"] in sources:
+            raise NpyConversionError("NPY batch source recordings must be unique")
+        sources.add(entry["source_recording"])
         relative = entry.get("manifest")
         checksum = entry.get("manifest_checksum")
+        _checksum(checksum, "member manifest checksum")
         if not isinstance(relative, str) or relative in seen:
             raise NpyConversionError("NPY batch member manifests must be unique paths")
         seen.add(relative)
+        if relative != f"member-{ordinal:06d}/{MANIFEST_FILE}":
+            raise NpyConversionError("NPY batch member manifest must match its ordinal directory")
         path = _component_path(root, relative)
         if path.name != MANIFEST_FILE or _sha256(path) != checksum:
             raise NpyConversionError("NPY batch member manifest checksum mismatch")

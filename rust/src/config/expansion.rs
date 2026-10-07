@@ -319,23 +319,24 @@ fn reject_reserved_markers(path: &Path, pointer: &str, value: &Value) -> Result<
     Ok(())
 }
 
-fn flattened_paths(object: &Map<String, Value>) -> Vec<String> {
-    fn visit(prefix: &str, value: &Value, paths: &mut Vec<String>) {
+fn flattened_paths(object: &Map<String, Value>) -> Vec<Vec<String>> {
+    fn visit(prefix: &mut Vec<String>, value: &Value, paths: &mut Vec<Vec<String>>) {
         if let Value::Object(object) = value
             && !object.is_empty()
         {
             for (key, value) in object {
-                let path = format!("{prefix}/{key}");
-                visit(&path, value, paths);
+                prefix.push(key.clone());
+                visit(prefix, value, paths);
+                prefix.pop();
             }
         } else {
-            paths.push(prefix.to_owned());
+            paths.push(prefix.clone());
         }
     }
 
     let mut paths = Vec::new();
     for (key, value) in object {
-        visit(&format!("/{key}"), value, &mut paths);
+        visit(&mut vec![key.clone()], value, &mut paths);
     }
     paths.sort_unstable();
     paths

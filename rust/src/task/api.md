@@ -1,6 +1,6 @@
 # Task API
 
-This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
 
 Task owns Workflow's uniform scientific execution boundary. A configured
 scientific task selects one registered `ExecutionUnit`, one resolved constants
@@ -15,7 +15,8 @@ Task -> ExecutionUnit -> MemberView[0..N] -> one SystemState per member
 An execution unit owns one lifecycle and one coordinated `step`. Its members
 retain independent identities, completion predicates, targets, observations,
 recordings, and final results. Every member in one unit uses the task's selected
-schema, but each owns a distinct state instance.
+schema, but each owns a distinct state instance. Initial inspection rejects
+duplicate state addresses before beginning any member recording.
 
 ## Basic API
 
@@ -330,7 +331,10 @@ under `task::dependencies`.
 `task::project` provides focused, standard-layout accessors. **REQUIRED LAYOUT:**
 project declarations remain in `<root>/wf_configs/study.json` and
 `parameters.json`; programs use Runtime's resolved `workflow-config.json` snapshot.
-Missing/moved required paths fail with the expected path; discovery is not supported.
+Execution-unit snapshots contain that task's selected local constants and
+correlated global values; program snapshots retain global values and authored
+registered-unit sections. Missing/moved required paths fail with the expected
+path; discovery is not supported.
 
 - `project_root() -> Result<PathBuf, ProjectLayoutError>` reads and verifies the
   directory from WORKFLOW_PROJECT_ROOT.
@@ -342,7 +346,10 @@ Missing/moved required paths fail with the expected path; discovery is not suppo
   reads WORKFLOW_CONFIG_PATH and deserializes all resolved parameters or one exact
   top-level key. No scientific validation beyond T's deserializer is performed.
 - `parameters_from_snapshot<T>(&Path, Option<&str>)` provides the same operation
-  using an explicit runtime snapshot for standalone use/tests.
+  using an explicit canonical `workflow-config.json` snapshot. Both config and
+  dependency bytes are verified against sibling `workflow-inputs.json` and any
+  current program/receipt checksum authority before typed deserialization.
+  Unaccompanied legacy JSON files and changed snapshot bytes are rejected.
 - `ProjectLayoutError`: Error + Send + Sync with a contextual Display and an
   underlying cause for file/JSON/deserialization failures; fields are private.
 

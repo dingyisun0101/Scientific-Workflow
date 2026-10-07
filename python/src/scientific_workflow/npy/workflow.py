@@ -207,7 +207,8 @@ def convert_workflow_dependencies(
                     progress("conversion", len(results), len(recordings), unit="members")
             else:
                 updates = context.Queue(maxsize=128)
-                pool = ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_worker_setup, initargs=(updates,))
+                pool = ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_worker_setup,
+                                           initargs=(updates, os.environ.get("WORKFLOW_CONTROL_PATH")))
                 pending = {}
                 next_ordinal = 0
                 admitted_limit = 1 if worker_mode == "auto" else workers

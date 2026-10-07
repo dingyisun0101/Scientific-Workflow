@@ -27,7 +27,13 @@ The `initialize` unit records its already-complete value once using
 recording through typed dependencies, decodes `u64` with `with_json_field`, moves
 its payload into a new state, and advances five steps. Its periodic recording
 uses format 7. The standard `$npy` task receives both transitive recordings and
-converts them with gradual admission of up to two shared-budget workers. NPY remains format 2.
+converts them with gradual admission of up to two shared-budget workers. NPY
+uses format 3.
+
+Simulation initialization rejects a checkpoint value whose sum with the
+requested step count exceeds `u64`. Each step checks both the next count and
+iteration before assigning either, so overflow returns an error with the
+previous state intact in debug and release builds.
 
 Python locates the aggregate batch using `Dependencies.from_env()`, selects
 simulation members using `execution_unit`, and reads a cached whole-series view.
@@ -47,7 +53,7 @@ retain the verified conversion object rather than repeatedly reopening it.
 
 The checked-in study explicitly selects `compute.mode = "isolated"` and assigns
 one thread to each execution-unit task within the global two-thread budget.
-The example consumes published Workflow 0.15.4 and the Python 0.5.0 companion
+The example consumes published Workflow 0.16.0 and the Python 0.6.0 companion
 pinned in `examples/requirements.txt`. Execution requires the dashboard; run
 inside screen/tmux. Disk pauses require freeing space and typing `resume`.
 Leave NPY worker settings unset for the default gradual auto allocation unless

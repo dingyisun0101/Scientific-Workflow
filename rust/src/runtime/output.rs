@@ -53,6 +53,23 @@ impl Drop for OutputLease {
 }
 
 pub(crate) fn clean_output(root: &Path, protected: &[&Path]) -> std::io::Result<()> {
+    validate_clean_output(root, protected)?;
+    if !root.exists() {
+        return Ok(());
+    }
+    // Preserve the validated root itself. Child symlinks are removed, never followed.
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        } else {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_clean_output(root: &Path, protected: &[&Path]) -> std::io::Result<()> {
     let metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -70,15 +87,6 @@ pub(crate) fn clean_output(root: &Path, protected: &[&Path]) -> std::io::Result<
             return Err(std::io::Error::other(
                 "--clean would delete protected project inputs or reused output",
             ));
-        }
-    }
-    // Preserve the validated root itself. Child symlinks are removed, never followed.
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            fs::remove_dir_all(entry.path())?;
-        } else {
-            fs::remove_file(entry.path())?;
         }
     }
     Ok(())

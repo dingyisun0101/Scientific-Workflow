@@ -1,6 +1,6 @@
 # State API
 
-This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
 
 The `state` subsystem owns validated field layouts, heterogeneous in-memory
 payloads, scientific time, and ordered in-memory state series. Its canonical
@@ -95,8 +95,13 @@ between threads. The private erased payload boundary deliberately does not
 require `Sync`, so `SystemState` and `StateSeries` are not `Sync` even when a
 particular set of concrete payloads would be. Cross-thread shared ownership
 therefore requires synchronization such as `Arc<Mutex<SystemState>>`. Explicit
-state cloning invokes every populated payload's `Clone`; ordinary insertion,
-borrowing, mutation, extraction, and series movement do not clone payloads.
+state cloning invokes every populated payload's `Clone`; each payload type
+determines whether backing storage is copied or shared. Shared immutable data
+can preserve independent scientific behavior. Shared mutable storage can let a
+change affect both states; independent scientific branches require payload
+cloning semantics that isolate subsequent mutations. Workflow does not impose
+or infer a generic deep-copy guarantee. Ordinary insertion, borrowing, mutation,
+extraction, and series movement do not clone payloads.
 
 The primary methods are:
 
@@ -162,9 +167,10 @@ not an ordering key.
   moves states out.
 
 Borrowing `&StateSeries` is the canonical lightweight view; there is no
-separate view type. Cloning a series deep-clones every populated payload and
-should be reserved for analysis that truly needs independent owners. Series
-operations perform no I/O or background work.
+separate view type. Cloning a series invokes each state's payload-defined
+cloning; it may copy or share backing storage and its cost depends on those
+types. It guarantees neither deep copying nor isolation of shared mutable
+payloads. Series operations perform no I/O or background work.
 
 ### Basic error types
 

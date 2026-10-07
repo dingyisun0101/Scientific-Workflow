@@ -1,6 +1,6 @@
 # Config API
 
-This guide documents the `scientific-workflow` 0.15.0 subsystem contract.
+This guide documents the `scientific-workflow` 0.16.0 subsystem contract.
 
 The `config` subsystem is the sole reader and parser of project JSON. One load
 captures `wf_configs/study.json`, every named state schema declared by
@@ -292,9 +292,9 @@ Config infers scope from `study.json`. Every top-level key named by an
 execution-unit task is that unit's local constants section. All other
 top-level values form the shared parameter object. Config first expands the
 shared object into global configurations, then instantiates every task in every
-phase once per configuration. Within each task copy, a selected execution-unit
-section is expanded independently, so its `$sweep` and `$cases` markers remain
-local to that unit.
+phase once per configuration. Each selected execution-unit section is expanded
+once and its ordered local choices are bound to the task copies, so its `$sweep`
+and `$cases` markers remain local to that unit.
 
 For `{"execution_unit":"population","state":"population"}` or
 `{"execution_unit":"population"}`, Config selects the `population` section,
@@ -313,6 +313,10 @@ Config owns two expansion markers wherever selection is allowed:
   flattened field set without overlapping fixed values. Fixed siblings and
   case values cannot contain further selection markers: a `$cases` object is
   the terminal correlated choice at that subtree.
+
+Flattened field identity compares the complete sequence of literal object-key
+segments. A key containing `/` or `~`, or an empty key, is distinct from a
+different nested path; punctuation cannot make incompatible cases pass.
 
 Choices and cases must be nonempty. A `$sweep` object has no siblings.
 Unknown `$...` keys are rejected. `$cases` remains terminal: fixed siblings and
@@ -367,8 +371,11 @@ compatibility, but the supported ordinary layout puts every custom project
 parameter in `parameters.json` rather than fragmenting it across files.
 
 Every task is bound to a deterministic language-neutral snapshot in which the
-shared selections are resolved. Generic program and Python tasks receive that
-snapshot through Runtime:
+shared selections are resolved. An execution-unit task's snapshot also replaces
+its own local parameter section with its complete chosen constants; other units'
+sections remain authored selections. This captures the actual task inputs in
+the bytes retained for persistence and verification. Generic program and Python
+tasks receive the global-resolved snapshot through Runtime:
 
 ```json
 {
@@ -641,7 +648,9 @@ contextual errors, and the no-output-before-Study boundary.
 `$npy` resolves python3 exclusively from inherited PATH and preserves interpreter
 symlink paths so virtual-environment identity is not lost. Explicit Python
 interpreter/environment-manager launch paths also preserve their final symlink;
-script/config paths remain canonicalized. Runtime performs version/import probes
+both the canonical target and the retained launcher path must be valid UTF-8.
+A non-UTF-8 PATH entry cannot bypass this check by linking to a UTF-8 target.
+Script/config paths remain canonicalized. Runtime performs version/import probes
 before scientific work, keeping Study::load subprocess-free. No environment is
 created/installed automatically and no NPY-specific override is added.
 

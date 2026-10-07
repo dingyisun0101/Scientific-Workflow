@@ -74,8 +74,12 @@ impl ExecutionUnit for Evolve {
         let mut checkpoint =
             StoredStateSeriesReader::open_completed_recording(recording.directory(), decoders)?
                 .read_latest_state_from_stream("checkpoint")?;
+        let value = checkpoint.take_payload::<u64>("value")?;
+        value
+            .checked_add(constants.steps)
+            .ok_or("initial value plus requested steps exceeds u64")?;
         let mut state = schema.create_empty_state(StateTime::from_iteration(0));
-        state.initialize_payload("value", checkpoint.take_payload::<u64>("value")?)?;
+        state.initialize_payload("value", value)?;
         Ok(Self {
             state,
             target: constants.steps,
@@ -96,8 +100,14 @@ impl ExecutionUnit for Evolve {
         })
     }
     fn step(&mut self) -> UnitResult {
-        *self.state.payload_mut::<u64>("value")? += 1;
-        self.state.advance_time(None)?;
+        let next_time = self.state.time().checked_advance(None)?;
+        let next_value = self
+            .state
+            .payload::<u64>("value")?
+            .checked_add(1)
+            .ok_or("simulation value exceeds u64")?;
+        *self.state.payload_mut::<u64>("value")? = next_value;
+        self.state.replace_time(next_time);
         Ok(())
     }
 }
@@ -107,4 +117,33 @@ fn main() -> Result<(), scientific_workflow::WorkflowError> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")));
     scientific_workflow::run(&root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(value: u64, iteration: u64) -> Evolve {
+        let schema = SystemStateSchema::load_json_template(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("wf_configs/states/value.json"),
+        )
+        .unwrap();
+        let mut state = schema.create_empty_state(StateTime::from_iteration(iteration));
+        state.initialize_payload("value", value).unwrap();
+        Evolve {
+            state,
+            target: iteration.saturating_add(1),
+        }
+    }
+
+    #[test]
+    fn overflow_rejects_the_step_without_changing_value_or_time() {
+        for mut model in [model(u64::MAX, 0), model(7, u64::MAX)] {
+            let value = *model.state.payload::<u64>("value").unwrap();
+            let time = model.state.time();
+            assert!(model.step().is_err());
+            assert_eq!(*model.state.payload::<u64>("value").unwrap(), value);
+            assert_eq!(model.state.time(), time);
+        }
+    }
 }

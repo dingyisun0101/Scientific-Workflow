@@ -184,12 +184,25 @@ impl Dependencies {
         Ok(result)
     }
 
-    /// Loads and validates a standard dependency snapshot from an explicit file.
+    /// Verifies both task input files and loads a canonical dependency snapshot.
+    ///
+    /// Requires sibling `workflow-inputs.json` checksum evidence; current
+    /// program/receipt references, when present, must agree with that evidence.
     pub fn load(path: &Path) -> Result<Self, DependencyError> {
-        let bytes = std::fs::read(path).map_err(|source| DependencyError::Io {
-            path: path.to_owned(),
-            source,
-        })?;
+        if path
+            .file_name()
+            .is_none_or(|name| name != "workflow-dependencies.json")
+        {
+            return Err(DependencyError::Invalid(
+                "expected canonical workflow-dependencies.json snapshot path".into(),
+            ));
+        }
+        let directory = path
+            .parent()
+            .ok_or_else(|| DependencyError::Invalid("snapshot path has no parent".into()))?;
+        let inputs =
+            crate::persistence::TaskInputSnapshots::open(directory).map_err(snapshot_error)?;
+        let [_, bytes] = inputs.read_verified().map_err(snapshot_error)?;
         Self::from_json(
             serde_json::from_slice(&bytes)
                 .map_err(|error| DependencyError::Invalid(error.to_string()))?,
@@ -221,6 +234,15 @@ impl Dependencies {
     /// Selects aggregate NPY batches; this does not filter members within a batch.
     pub fn npy_batches(&self) -> Selection<'_, NpyDependency> {
         Selection::new(&self.npy_batches)
+    }
+}
+
+fn snapshot_error(error: crate::persistence::PersistenceError) -> DependencyError {
+    match error {
+        crate::persistence::PersistenceError::Io { path, source, .. } => {
+            DependencyError::Io { path, source }
+        }
+        other => DependencyError::Invalid(other.to_string()),
     }
 }
 

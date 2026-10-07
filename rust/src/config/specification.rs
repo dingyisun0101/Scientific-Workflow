@@ -162,8 +162,23 @@ impl ProjectSpecification {
             .filter(|(key, _)| !execution_units.contains(key.as_str()))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
+        // Unit sections do not depend on global selections. Expand each once,
+        // then bind their ordered values to each task's configuration snapshot.
+        let expanded_units = execution_units
+            .iter()
+            .map(|key| {
+                let value = parameter_sections.get(key).ok_or_else(|| {
+                    ConfigError::invalid(
+                        parameters_path,
+                        child_pointer("/", key),
+                        format!("registered execution unit `{key}` has no parameter section"),
+                    )
+                })?;
+                Ok((key.clone(), expansion::expand(parameters_path, value)?))
+            })
+            .collect::<Result<BTreeMap<_, _>, ConfigError>>()?;
         let expanded_shared = expansion::expand(parameters_path, &Value::Object(shared))?;
-        let mut resolved_parameters = Vec::with_capacity(expanded_shared.len());
+        let mut resolved_snapshots = Vec::with_capacity(expanded_shared.len());
         for shared in expanded_shared {
             let Value::Object(mut resolved) = shared else {
                 unreachable!("expanding an object produces objects");
@@ -175,7 +190,7 @@ impl ProjectSpecification {
             }
             let value = Value::Object(resolved);
             let snapshot = config.snapshot_with_parameters(&value, parsed.manifest.active_phases());
-            resolved_parameters.push((value, snapshot));
+            resolved_snapshots.push(snapshot);
         }
 
         let mut phases = Vec::with_capacity(parsed.phases.len());
@@ -199,39 +214,37 @@ impl ProjectSpecification {
                                 state: state.to_owned(),
                             });
                         }
-                        for (configuration, (resolved, snapshot)) in
-                            resolved_parameters.iter().enumerate()
-                        {
-                            let value = resolved
-                                .get(execution_unit.as_ref())
-                                .ok_or_else(|| {
-                                    ConfigError::invalid(
-                                        parameters_path,
-                                        child_pointer("/", &execution_unit),
-                                        format!("registered execution unit `{execution_unit}` has no parameter section"),
-                                    )
-                                })?;
-                            let expanded = expansion::expand(parameters_path, value)?;
+                        let expanded = &expanded_units[execution_unit.as_ref()];
+                        for (configuration, snapshot) in resolved_snapshots.iter().enumerate() {
                             tasks.try_reserve(expanded.len()).map_err(|_| {
                                 ConfigError::ExpansionOverflow {
                                     path: parameters_path.to_path_buf(),
                                 }
                             })?;
-                            for (ordinal, value) in expanded.into_iter().enumerate() {
+                            for (ordinal, value) in expanded.iter().enumerate() {
                                 let ordinal = u64::try_from(ordinal).map_err(|_| {
                                     ConfigError::ExpansionOverflow {
                                         path: parameters_path.to_path_buf(),
                                     }
                                 })?;
+                                let mut task_parameters = snapshot.parameters().clone();
+                                task_parameters
+                                    .as_object_mut()
+                                    .expect("resolved project parameters are an object")
+                                    .insert(execution_unit.to_string(), value.clone());
+                                let task_snapshot = config.snapshot_with_parameters(
+                                    &task_parameters,
+                                    parsed.manifest.active_phases(),
+                                );
                                 tasks.push(ResolvedTask::ExecutionUnit {
                                     active,
                                     configuration,
-                                    snapshot: snapshot.clone(),
+                                    snapshot: task_snapshot,
                                     parameters: ResolvedExecutionUnitParameters::new(
                                         execution_unit.clone(),
                                         parameters_path.to_path_buf(),
                                         ordinal,
-                                        value,
+                                        value.clone(),
                                         timeout,
                                     ),
                                     state: state.clone(),
@@ -250,8 +263,7 @@ impl ProjectSpecification {
                         let program = resolve_executable(config.project_root(), &program)?;
                         let program =
                             ResolvedProgramTask::new(program, args, seed_purpose, timeout, threads);
-                        for (configuration, (_, snapshot)) in resolved_parameters.iter().enumerate()
-                        {
+                        for (configuration, snapshot) in resolved_snapshots.iter().enumerate() {
                             tasks.push(ResolvedTask::Program {
                                 configuration,
                                 snapshot: snapshot.clone(),
@@ -272,8 +284,7 @@ impl ProjectSpecification {
                             timeout,
                             threads,
                         )?;
-                        for (configuration, (_, snapshot)) in resolved_parameters.iter().enumerate()
-                        {
+                        for (configuration, snapshot) in resolved_snapshots.iter().enumerate() {
                             tasks.push(ResolvedTask::Program {
                                 configuration,
                                 snapshot: snapshot.clone(),
@@ -292,10 +303,9 @@ impl ProjectSpecification {
                             threads,
                             auto,
                         );
-                        let snapshot = resolved_parameters
+                        let snapshot = resolved_snapshots
                             .first()
                             .expect("parameter expansion always produces one configuration")
-                            .1
                             .clone();
                         tasks.push(ResolvedTask::Program {
                             configuration: 0,

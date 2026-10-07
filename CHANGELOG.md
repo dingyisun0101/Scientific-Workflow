@@ -1,5 +1,27 @@
 # Changelog
 
+## Rust 0.16.0 / Python 0.6.0 — 2026-10-06
+
+- Require v2 receipts/program metadata with durable output-owned configuration
+  and dependency snapshot checksums; remove legacy receipt imports.
+- Produce NPY v3 with lossless numeric fallback, strict typed values, preserved
+  scalar rank, and complete coordinate verification. Historical v2/v3 handling
+  belongs to downstream analysis.
+- Validate resolved invocation identity, distinct member states, interpreter
+  path provenance, stored grammar, and correlated-case paths.
+- Preserve payload-defined Clone semantics and correct deep-copy documentation.
+- Initialize the required dashboard before destructive cleanup; center its
+  uppercase title and use a two-second CPU average with one-second resource
+  refresh and responsive controls.
+- Respect Python/application worker context and pass current control settings
+  explicitly; refresh compatible dependencies and synchronize contracts/guides.
+
+## Rust 0.15.5 / Python 0.5.0 unchanged — 2026-10-02
+
+- Add numeric linspace/logspace axes, optional automatic phase-local task labels,
+  and dashboard title/status/replicate presentation with rolling CPU sampling.
+
+
 ## Rust 0.15.4 / Python 0.5.0 unchanged — 2026-09-15
 
 - Update the PiP development dependency to published 4.1.1-alpha after its

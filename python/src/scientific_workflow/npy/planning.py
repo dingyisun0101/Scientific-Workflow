@@ -25,7 +25,26 @@ def _numeric(value: object) -> np.ndarray[Any, Any] | None:
         return None
     if array.dtype.kind not in {"b", "i", "u", "f"}:
         return None
-    return np.ascontiguousarray(array)
+    # NumPy may promote a signed/unsigned mixture to float64 and round large
+    # integers. Compare Python scalars, whose int/float equality is exact, before
+    # treating an untyped JSON value as one numeric array.
+    def leaves(item: object):
+        if isinstance(item, list):
+            for child in item:
+                yield from leaves(child)
+        else:
+            yield item
+
+    for original, converted in zip(leaves(value), array.flat, strict=True):
+        restored = converted.item()
+        if (
+            type(original) not in (bool, int, float)
+            or (type(original) is bool) != (type(restored) is bool)
+            or restored != original
+            or (isinstance(restored, float) and not math.isfinite(restored))
+        ):
+            return None
+    return np.asarray(array, order="C")
 
 
 def _numeric_envelope(
@@ -53,13 +72,28 @@ def _numeric_envelope(
     dtype = _SCALAR_DTYPES.get(scalar)
     if dtype is None:
         return True, None
+    if dtype.kind == "b":
+        valid = all(type(item) is bool for item in data)
+    elif dtype.kind in {"i", "u"}:
+        bounds = np.iinfo(dtype)
+        valid = all(
+            type(item) is int and bounds.min <= item <= bounds.max
+            for item in data
+        )
+    else:
+        valid = all(type(item) in (int, float) for item in data)
+    if not valid:
+        raise NpyConversionError(f"numeric envelope data violates declared {scalar} type")
     try:
-        array = np.asarray(data, dtype=dtype).reshape(tuple(shape), order="C")
-    except (TypeError, ValueError, OverflowError) as error:
+        with np.errstate(over="raise", invalid="raise"):
+            array = np.asarray(data, dtype=dtype).reshape(tuple(shape), order="C")
+        if dtype.kind == "f" and not np.all(np.isfinite(array)):
+            raise ValueError("floating values must remain finite")
+    except (TypeError, ValueError, OverflowError, FloatingPointError) as error:
         raise NpyConversionError(
             f"numeric envelope data cannot be represented as {scalar}"
         ) from error
-    return True, np.ascontiguousarray(array)
+    return True, np.asarray(array, order="C")
 
 
 def _whole_numeric(value: object) -> np.ndarray[Any, Any] | None:

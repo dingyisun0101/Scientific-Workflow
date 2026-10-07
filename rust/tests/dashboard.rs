@@ -6,7 +6,9 @@ fn dashboard_child() {
         return;
     };
     let result = scientific_workflow::run(std::path::Path::new(&project));
-    if std::env::var_os("WORKFLOW_EXPECT_CANCEL").is_some() {
+    if std::env::var_os("WORKFLOW_EXPECT_STARTUP_FAILURE").is_some() {
+        assert!(result.unwrap_err().to_string().contains("output"));
+    } else if std::env::var_os("WORKFLOW_EXPECT_CANCEL").is_some() {
         assert!(result.unwrap_err().to_string().contains("cancelled"));
     } else {
         result.unwrap();
@@ -27,4 +29,5 @@ fn dashboard_commands_disk_reminders_and_terminal_restoration() {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
+    println!("{}", String::from_utf8_lossy(&result.stdout));
 }

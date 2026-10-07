@@ -1093,6 +1093,72 @@ fn empty_and_overlapping_expansion_markers_are_rejected() {
     }
 }
 
+#[test]
+fn correlated_case_paths_preserve_literal_key_segments() {
+    for source in [
+        r#"{"$cases":[{"a/b":1},{"a":{"b":2}}]}"#,
+        r#"{"$cases":[{"":{"a":1}},{"a":2}]}"#,
+        r#"{"$cases":[{"a~1b":1},{"a/b":2}]}"#,
+    ] {
+        let project = TestProject::new(
+            r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+            &[("unit", source)],
+        );
+        assert!(matches!(
+            ProjectSpecification::load(project.path()),
+            Err(ConfigError::InvalidDocument { reason, .. })
+                if reason.contains("same flattened field set")
+        ));
+    }
+    let project = TestProject::new(
+        r#"{"phases":{"only":{"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[("unit", r#"{"$cases":[{"a/b":{"~":1}},{"a/b":{"~":2}}]}"#)],
+    );
+    assert_eq!(
+        ProjectSpecification::load(project.path()).unwrap().phases()[0]
+            .tasks()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn reused_local_expansions_preserve_order_ordinals_and_global_correlation() {
+    let project = TestProject::new(
+        r#"{"phases":{"first":{"tasks":[{"execution_unit":"unit"}]},"second":{"after":["first"],"tasks":[{"execution_unit":"unit"}]}}}"#,
+        &[
+            ("global", r#"{"$sweep":[10,20]}"#),
+            ("unit", r#"{"local":{"$sweep":[1,2]}}"#),
+        ],
+    );
+    let specification = ProjectSpecification::load(project.path()).unwrap();
+    for phase in specification.phases() {
+        let observed = phase
+            .tasks()
+            .iter()
+            .map(|task| {
+                let parameters = execution_unit_task(task);
+                (
+                    task.configuration(),
+                    parameters.ordinal(),
+                    parameters.resolved_value()["local"].as_u64().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed, [(0, 0, 1), (0, 1, 2), (1, 0, 1), (1, 1, 2)]);
+        for task in phase.tasks() {
+            let stored: serde_json::Value =
+                serde_json::from_slice(task.snapshot().bytes()).unwrap();
+            let parameters = &stored["config"]["parameters.json"];
+            assert_eq!(
+                parameters["unit"],
+                execution_unit_task(task).resolved_value().clone()
+            );
+            assert_eq!(parameters["global"], [10, 20][task.configuration()]);
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn json_file_symlinks_preserve_authored_keys_and_enforce_containment() {

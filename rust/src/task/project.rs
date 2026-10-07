@@ -60,14 +60,24 @@ pub fn parameters<T: DeserializeOwned>(section: Option<&str>) -> Result<T, Proje
 }
 /// Loads resolved parameters from an explicit standard `workflow-config.json` file.
 ///
-/// The file must contain `config["parameters.json"]`. Filesystem/JSON/typed
-/// deserialization errors retain their cause. A failed read returns no value.
+/// The canonical file must contain `config["parameters.json"]` and have sibling
+/// task checksum evidence. Both configuration and dependency snapshots are
+/// verified before decoding. Filesystem/integrity/JSON/typed deserialization
+/// errors retain their cause. A failed read returns no value.
 pub fn parameters_from_snapshot<T: DeserializeOwned>(
     path: &Path,
     section: Option<&str>,
 ) -> Result<T, ProjectLayoutError> {
     let read = || -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
-        let bytes = std::fs::read(path)?;
+        if path
+            .file_name()
+            .is_none_or(|name| name != "workflow-config.json")
+        {
+            return Err("expected canonical workflow-config.json snapshot path".into());
+        }
+        let directory = path.parent().ok_or("snapshot path has no parent")?;
+        let inputs = crate::persistence::TaskInputSnapshots::open(directory)?;
+        let [bytes, _] = inputs.read_verified()?;
         let snapshot: serde_json::Value = serde_json::from_slice(&bytes)?;
         let parameters = snapshot
             .get("config")

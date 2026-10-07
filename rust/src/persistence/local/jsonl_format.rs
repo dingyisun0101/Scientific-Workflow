@@ -669,6 +669,9 @@ fn validate_relative_path(
 ) -> Result<(), PersistenceError> {
     let path = Path::new(value);
     if value.is_empty()
+        || value
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
         || path.is_absolute()
         || !path
             .components()
@@ -682,17 +685,13 @@ fn validate_relative_path(
     Ok(())
 }
 
-/// Validates the `algorithm:lowercase-hex` checksum representation.
+/// Validates the raw protocol's exact `sha256:64-lowercase-hex` representation.
 fn valid_checksum(checksum: &str) -> bool {
-    let Some((algorithm, digest)) = checksum.split_once(':') else {
+    let Some(digest) = checksum.strip_prefix("sha256:") else {
         return false;
     };
-    !algorithm.is_empty()
-        && algorithm
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        && !digest.is_empty()
+    digest.len() == 64
         && digest
             .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
